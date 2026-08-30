@@ -102,12 +102,12 @@ fn tool_registry_skips_ws_and_sse_routes() {
     assert!(
         tools
             .iter()
-            .any(|tool| tool.name == "iroha.node.query_projection_checkpoint_plan")
+            .all(|tool| tool.name != "iroha.node.query_projection_checkpoint_plan")
     );
     assert!(
         tools
             .iter()
-            .any(|tool| tool.name == "iroha.node.query_projection_checkpoint_publish")
+            .all(|tool| tool.name != "iroha.node.query_projection_checkpoint_publish")
     );
     assert!(
         tools

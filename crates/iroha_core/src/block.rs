@@ -275,7 +275,7 @@ fn map_overlay_error(
 const fn uses_live_vm_overlay_scheduler(executable: &Executable) -> bool {
     matches!(
         executable,
-        Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_)
+        Executable::ContractCall(_) | Executable::Ivm(_)
     )
 }
 /// Return whether the executable must run once against the scheduler's live state.
@@ -357,7 +357,7 @@ mod overlay_error_tests {
             AxtPolicySnapshotValidationError, AxtRejectContext, AxtRejectReason, DataSpaceId,
             LaneId,
         },
-        transaction::{ExecutableBatchItem, IvmBytecode, IvmProved},
+        transaction::{ExecutableBatchItem, IvmBytecode},
     };
     #[test]
     fn map_overlay_error_preserves_axt_context() {
@@ -399,18 +399,6 @@ mod overlay_error_tests {
             TransactionRejectionReason::Validation(ValidationFail::InternalError(message))
                 if message == "invalid AXT policy snapshot: policy snapshot version mismatch: expected 7, found 8"
         ));
-    }
-    #[test]
-    fn ivm_proved_uses_live_overlay_scheduler_path() {
-        let proved = Executable::IvmProved(IvmProved {
-            bytecode: IvmBytecode::from_compiled(Vec::new()),
-            overlay: Vec::<InstructionBox>::new().into(),
-            events_commitment: Hash::new(b"events"),
-            gas_policy_commitment: Hash::new(b"gas-policy"),
-        });
-        assert!(uses_live_vm_overlay_scheduler(&proved));
-        let instructions = Executable::Instructions(Vec::<InstructionBox>::new().into());
-        assert!(!uses_live_vm_overlay_scheduler(&instructions));
     }
     #[test]
     fn mixed_batch_uses_live_scheduler_barrier_path() {
@@ -8494,9 +8482,9 @@ pub(crate) mod valid {
             });
             let pulse_requested = pulse_required_for_successor || parliament_requested;
             let Some(pulse) = pulse else {
-                return if pulse_required_for_successor {
+                return if pulse_requested {
                     Err(Self::npos_effects_error(
-                        "NPoS pre-boundary block is missing its finalized global beacon pulse",
+                        "block is missing a finalized global beacon pulse requested by committed pre-state",
                     ))
                 } else {
                     Ok(())
@@ -13292,7 +13280,7 @@ pub(crate) mod valid {
             // sequential merge, retain the cached overlay only while every
             // durable-state prefix read by that VM still has the same value.
             // This is deliberately narrower than re-executing arbitrary ISIs:
-            // ContractCall/IVM/IvmProved overlays with an observed stale durable read are
+            // ContractCall/IVM overlays with an observed stale durable read are
             // rebuilt selectively. Bytecode with ledger access, nested calls,
             // or other opaque dynamic access is also rebuilt because those
             // observations are not yet represented by a narrow fingerprint.
@@ -13449,21 +13437,8 @@ pub(crate) mod valid {
                         key_count: count,
                     },
                 );
-                let mut sidecar =
+                let sidecar =
                     PipelineRecoverySidecar::new(height, block_hash, dag_snapshot, txs_sidecar);
-                #[cfg(feature = "zk-preverify")]
-                {
-                    let trace_digests = crate::zk::collect_trace_digests_for_height(height);
-                    if !trace_digests.is_empty() {
-                        iroha_logger::debug!(
-                            height,
-                            count = trace_digests.len(),
-                            "attaching {} trace digests to pipeline sidecar",
-                            trace_digests.len()
-                        );
-                        sidecar.proofs = trace_digests;
-                    }
-                }
                 match state_block.kura().enqueue_pipeline_metadata(sidecar) {
                     PipelineSidecarEnqueueResult::Enqueued { .. } => {}
                     PipelineSidecarEnqueueResult::RejectedQueueFull { cap } => {
@@ -16146,7 +16121,7 @@ pub(crate) mod valid {
             },
             sorafs::pin_registry::ManifestDigest,
             transaction::{
-                Executable, ExecutionStep, IvmBytecode, IvmProved, SignedTransaction,
+                Executable, ExecutionStep, IvmBytecode, SignedTransaction,
                 TimeTriggerEntrypoint, TransactionBuilder, error::TransactionLimitError,
             },
             trigger::DataTriggerSequence,
@@ -19101,6 +19076,42 @@ pub(crate) mod valid {
                 None,
             )
             .expect("permissioned validation must not derive NPoS-only penalties");
+        }
+        #[test]
+        fn committed_parliament_request_rejects_candidate_without_pulse() {
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
+            let mut context = authenticated_permissioned_successor_context(&state, &validator_keys);
+            context.height = 12;
+            let roster = context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<Vec<_>>();
+            let (attempt_id, _request_ids, attempt) =
+                crate::beacon::tests::pending_batched_sortition_attempt(
+                    &context.network_id,
+                    &roster,
+                    context.height,
+                );
+            {
+                let mut block = state.world.block();
+                block.parliament_attempts.insert(attempt_id, attempt);
+                block.commit();
+            }
+            let candidate = npos_effects_block(&leader_private, context.height, None);
+            let error = ValidBlock::validate_npos_effects_with_state(
+                &candidate,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+                Some(&context),
+            )
+            .expect_err("a committed Parliament pulse request must reject omission");
+            assert!(matches!(
+                error,
+                BlockValidationError::NposEffectsInvalid(message)
+                    if message.contains("requested by committed pre-state")
+            ));
+            drop((kura, topology));
         }
         #[test]
         fn consensus_mode_effects_npos_still_requires_signed_parameters() {
@@ -29895,23 +29906,6 @@ mod tests {
             ValidBlock::sequential_entrypoints_for_live_execution(&ivm_block).is_none(),
             "raw IVM calls use the same durable-read validation as deployed contracts"
         );
-        let proved_tx = TransactionBuilder::new(
-            network_id,
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_executable(Executable::IvmProved(IvmProved {
-            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
-            overlay: Vec::<InstructionBox>::new().into(),
-            events_commitment: Hash::new(b"events"),
-            gas_policy_commitment: Hash::new(b"gas"),
-        }))
-        .sign(keypair.private_key());
-        let proved_block: SignedBlock = make_block(proved_tx);
-        assert!(
-            ValidBlock::sequential_entrypoints_for_live_execution(&proved_block).is_none(),
-            "proved overlays are transaction-supplied and should keep their existing path"
-        );
     }
     #[test]
     fn block_overlay_rejects_protected_contract_call_without_persisting_state() {
@@ -31670,6 +31664,5 @@ fn estimate_transaction_teu(tx: &SignedTransaction) -> u64 {
                 IVM_TEU_FALLBACK
             }
         },
-        Executable::IvmProved(proved) => crate::gas::meter_instructions(proved.overlay.as_ref()),
     }
 }

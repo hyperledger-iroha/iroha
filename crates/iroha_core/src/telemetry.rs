@@ -2150,21 +2150,13 @@ impl StateTelemetry {
             GovernanceEvent::LockRestituted(_) => {
                 self.record_governance_bond_event("lock_restituted");
             }
-            GovernanceEvent::ProposalApproved(_)
-            | GovernanceEvent::BallotAccepted(_)
+            GovernanceEvent::BallotAccepted(_)
             | GovernanceEvent::BallotRejected(_)
             | GovernanceEvent::ReferendumOpened(_)
             | GovernanceEvent::ReferendumClosed(_)
             | GovernanceEvent::ParliamentAttemptCreated(_)
             | GovernanceEvent::ParliamentLifecycleTransitionApplied(_)
-            | GovernanceEvent::ParliamentAttemptTransitioned(_)
-            | GovernanceEvent::ParliamentBodyTransitioned(_)
-            | GovernanceEvent::ParliamentBallotTransitioned(_)
-            | GovernanceEvent::ParliamentConcentrationWarning(_)
-            | GovernanceEvent::ParliamentAggregateFinalized(_)
             | GovernanceEvent::ThresholdKeyLifecycleApplied(_)
-            | GovernanceEvent::ParliamentCertificateIssued(_)
-            | GovernanceEvent::ParliamentApprovalRecorded(_)
             | GovernanceEvent::CitizenRegistered(_)
             | GovernanceEvent::CitizenRevoked(_)
             | GovernanceEvent::ReferendumDecided(_) => {}
@@ -10679,16 +10671,13 @@ mod tests {
     fn governance_events_drive_metrics_via_ingest() {
         use crate::state::GovernanceProposalStatus as GPS;
         use iroha_data_model::events::data::governance::{
-            GovernanceEvent, GovernanceProposalApproved, GovernanceProposalEnacted,
+            GovernanceEvent, GovernanceProposalEnacted,
         };
         use std::sync::Arc;
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let proposal_id = [0xAB; 32];
         telemetry.seed_governance_proposals([(proposal_id, GPS::Proposed)]);
-        telemetry.ingest_data_event(&DataEvent::Governance(GovernanceEvent::ProposalApproved(
-            GovernanceProposalApproved { id: proposal_id },
-        )));
         assert_eq!(
             metrics
                 .governance_proposals_status

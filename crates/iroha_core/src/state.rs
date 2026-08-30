@@ -50575,6 +50575,7 @@ impl<'state> StateBlock<'state> {
                 &mut transaction,
                 effects,
                 expected_beacon_anchor,
+                &topology,
                 signed_block.header().height().get(),
                 signed_block.header().view_change_index(),
                 now_ms,

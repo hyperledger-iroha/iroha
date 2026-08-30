@@ -44,15 +44,10 @@ use iroha_data_model::{
     name::Name,
     nexus::AxtRejectContext,
     prelude::{AccountId, ValidationFail},
-    proof::VerifyingKeyId,
     smart_contract::ContractAddress,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     state_path::StatePath,
     transaction::{Executable, SignedTransaction, executable::ContractInvocation},
-    zk::{
-        BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
-        OpenVerifyEnvelopeBounds as ZkOpenVerifyEnvelopeBounds, StarkFriOpenProofV1,
-    },
 };
 use ivm::host::IVMHost;
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
@@ -68,7 +63,6 @@ use std::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{Cursor, Seek, SeekFrom, Write},
     mem,
     num::NonZeroU64,
     sync::{Arc, OnceLock},
@@ -714,53 +708,6 @@ fn require_tx_gas_limit(tx: &SignedTransaction) -> Result<u64, OverlayBuildError
         OverlayBuildError::GasLimit("missing gas limit in fee payment intent".to_owned())
     })
 }
-pub(crate) fn sccp_ivm_proved_execution_binding<R>(
-    state_ro: &R,
-    tx: &SignedTransaction,
-    proved: &iroha_data_model::transaction::IvmProved,
-    gas_used: u64,
-) -> Result<crate::state::SccpIvmProvedExecutionBindingV1, OverlayBuildError>
-where
-    R: StateReadOnly,
-{
-    let gas_limit = require_tx_gas_limit(tx)?;
-    if gas_used > gas_limit {
-        return Err(OverlayBuildError::GasLimit(format!(
-            "proved IVM replay used {gas_used} gas above transaction limit {gas_limit}"
-        )));
-    }
-    let attachments = tx
-        .attachments()
-        .ok_or_else(|| OverlayBuildError::ZkProof("missing proof attachments".to_owned()))?;
-    let [attachment] = attachments.as_slice() else {
-        return Err(OverlayBuildError::ZkProof(
-            "Executable::IvmProved expects exactly one proof attachment".to_owned(),
-        ));
-    };
-    if attachment.backend != attachment.vk_ref.backend {
-        return Err(OverlayBuildError::ZkProof(
-            "proof attachment verifier-key backend mismatch".to_owned(),
-        ));
-    }
-    let vk_record = state_ro
-        .world()
-        .verifying_keys()
-        .get(&attachment.vk_ref)
-        .ok_or_else(|| {
-            OverlayBuildError::ZkProof(
-                "verified proof attachment key disappeared before SCCP execution binding"
-                    .to_owned(),
-            )
-        })?;
-    Ok(crate::state::SccpIvmProvedExecutionBindingV1 {
-        contract_artifact_sha256: Sha256::digest(proved.bytecode.as_ref()).into(),
-        vk_ref: attachment.vk_ref.clone(),
-        vk_version: vk_record.version,
-        vk_commitment: vk_record.commitment,
-        gas_limit,
-        gas_used,
-    })
-}
 #[cfg(test)]
 const TEST_GAS_LIMIT: u64 = 50_000_000;
 #[cfg(test)]
@@ -878,7 +825,6 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
         })?;
         let submitted_bytecode = match tx.instructions() {
             Executable::Ivm(bytecode) => Some(bytecode.as_ref()),
-            Executable::IvmProved(proved) => Some(proved.bytecode.as_ref()),
             Executable::Instructions(_) | Executable::ContractCall(_) | Executable::Batch(_) => {
                 None
             }
@@ -1148,7 +1094,6 @@ enum TxOverlaySource {
     Instructions,
     ContractCall,
     Ivm,
-    IvmProved,
 }
 /// Overlay of a transaction's intended operations.
 #[derive(Debug, Clone, Default)]
@@ -1163,7 +1108,6 @@ pub struct TxOverlay {
     durable_state_authorizations:
         BTreeMap<StatePath, Option<ContractEntrypointAuthorizationSnapshot>>,
     source: TxOverlaySource,
-    sccp_ivm_proved_execution_binding: Option<crate::state::SccpIvmProvedExecutionBindingV1>,
     byte_size: OnceLock<usize>,
 }
 /// Overlay plus optional host access log captured during the same VM run.
@@ -1409,36 +1353,6 @@ impl TxOverlay {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             source: TxOverlaySource::Instructions,
-            sccp_ivm_proved_execution_binding: None,
-            byte_size: OnceLock::new(),
-        }
-    }
-    #[cfg(test)]
-    fn from_ivm_proved_instructions(
-        instrs: Vec<InstructionBox>,
-        _authority: &AccountId,
-        contract_runtime_context: crate::executor::ContractRuntimeExecutionContext,
-        entrypoint_authorization: ContractEntrypointAuthorizationSnapshot,
-    ) -> Self {
-        let execution_contexts = instrs
-            .iter()
-            .map(|_| OverlayInstructionExecutionContext {
-                authority: contract_runtime_context.contract_subject.clone(),
-                contract_runtime_context: Some(contract_runtime_context.clone()),
-                entrypoint_authorization: Some(entrypoint_authorization.clone()),
-            })
-            .collect();
-        Self {
-            instructions: instrs,
-            execution_contexts: Some(execution_contexts),
-            entrypoint_authorization: Some(entrypoint_authorization),
-            lifecycle_completion: None,
-            ivm_gas_used: None,
-            completed_axt: Vec::new(),
-            durable_state_overlay: BTreeMap::new(),
-            durable_state_authorizations: BTreeMap::new(),
-            source: TxOverlaySource::IvmProved,
-            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1454,7 +1368,6 @@ impl TxOverlay {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             source: TxOverlaySource::Ivm,
-            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1479,7 +1392,6 @@ impl TxOverlay {
             durable_state_overlay,
             durable_state_authorizations,
             source: TxOverlaySource::Ivm,
-            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1505,71 +1417,8 @@ impl TxOverlay {
             durable_state_overlay,
             durable_state_authorizations,
             source: TxOverlaySource::ContractCall,
-            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
-    }
-    fn from_queued_execution(
-        queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
-        ivm_gas_used: u64,
-        completed_axt: Vec<ivm::axt::HostAxtState>,
-        durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
-        durable_state_authorizations: BTreeMap<
-            StatePath,
-            Option<ContractEntrypointAuthorizationSnapshot>,
-        >,
-        source: TxOverlaySource,
-    ) -> Self {
-        let mut instructions = Vec::with_capacity(queued.len());
-        let mut execution_contexts = Vec::with_capacity(queued.len());
-        for queued in queued {
-            instructions.push(queued.instruction);
-            execution_contexts.push(OverlayInstructionExecutionContext {
-                authority: queued.authority,
-                contract_runtime_context: queued.contract_runtime_context,
-                entrypoint_authorization: queued.entrypoint_authorization,
-            });
-        }
-        Self {
-            instructions,
-            execution_contexts: Some(execution_contexts),
-            entrypoint_authorization: None,
-            lifecycle_completion: None,
-            ivm_gas_used: Some(ivm_gas_used),
-            completed_axt,
-            durable_state_overlay,
-            durable_state_authorizations,
-            source,
-            sccp_ivm_proved_execution_binding: None,
-            byte_size: OnceLock::new(),
-        }
-    }
-    fn with_sccp_ivm_proved_execution_binding(
-        mut self,
-        binding: crate::state::SccpIvmProvedExecutionBindingV1,
-    ) -> Self {
-        debug_assert_eq!(self.source, TxOverlaySource::IvmProved);
-        self.sccp_ivm_proved_execution_binding = Some(binding);
-        self
-    }
-    fn from_ivm_proved_execution(
-        queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
-        ivm_gas_used: u64,
-        completed_axt: Vec<ivm::axt::HostAxtState>,
-        durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
-        durable_state_authorizations: BTreeMap<
-            StatePath,
-            Option<ContractEntrypointAuthorizationSnapshot>,
-        >,
-    ) -> Self {
-        Self::from_queued_execution(
-            queued,
-            ivm_gas_used,
-            completed_axt,
-            durable_state_overlay,
-            durable_state_authorizations,
-            TxOverlaySource::IvmProved,
-        )
     }
     /// Is this overlay empty?
     pub fn is_empty(&self) -> bool {
@@ -1714,10 +1563,7 @@ impl TxOverlay {
             ));
         }
         for (path, authorization) in &self.durable_state_authorizations {
-            if (self.source == TxOverlaySource::IvmProved
-                || Self::durable_path_requires_authorization(path))
-                && authorization.is_none()
-            {
+            if Self::durable_path_requires_authorization(path) && authorization.is_none() {
                 return Err(ValidationFail::NotPermitted(format!(
                     "scoped durable state path `{path}` is missing its contract authorization snapshot"
                 )));
@@ -1751,16 +1597,7 @@ impl TxOverlay {
             }
             authorization.validate_instruction_sequence(authority, &self.instructions)?;
         }
-        let prior_sccp_ivm_proved_execution_binding =
-            state_tx.sccp_ivm_proved_execution_binding.clone();
-        state_tx.sccp_ivm_proved_execution_binding = self.sccp_ivm_proved_execution_binding.clone();
-        let result = (|| -> Result<(), ValidationFail> {
-            if self.source == TxOverlaySource::IvmProved {
-                crate::validation_fee::enforce_ivm_proved_completed_axt_admission(
-                    self.completed_axt.len(),
-                    state_tx,
-                )?;
-            }
+        (|| -> Result<(), ValidationFail> {
             let has_contract_effect = self.lifecycle_completion.is_some()
                 || self.execution_contexts.as_ref().is_some_and(|contexts| {
                     contexts.iter().any(|context| {
@@ -1945,9 +1782,7 @@ impl TxOverlay {
                 }
             }
             Ok(())
-        })();
-        state_tx.sccp_ivm_proved_execution_binding = prior_sccp_ivm_proved_execution_binding;
-        result
+        })()
     }
     fn with_entrypoint_authorization(
         mut self,
@@ -2000,57 +1835,6 @@ fn tx_overlay_from_host_queued<R: StateReadOnly>(
         queued_instructions,
         execution_contexts,
         ivm_gas_used,
-        completed_axt,
-        durable_state_overlay,
-        durable_state_authorizations,
-    )
-}
-fn tx_overlay_from_ivm_proved_replay<R: StateReadOnly>(
-    state_ro: &R,
-    replay: IvmProvedReplay,
-) -> TxOverlay {
-    let IvmProvedReplay {
-        queued: replay_queued,
-        completed_axt,
-        durable_state_overlay,
-        durable_state_authorizations,
-        access_log: _,
-        gas_used,
-        events_commitment: _,
-        trace_hash: _,
-    } = replay;
-    let mut queued_instructions: Vec<_> = replay_queued
-        .iter()
-        .map(|queued| queued.instruction.clone())
-        .collect();
-    let mut execution_contexts: Vec<_> = replay_queued
-        .into_iter()
-        .map(|queued| OverlayInstructionExecutionContext {
-            authority: queued.authority,
-            contract_runtime_context: queued.contract_runtime_context,
-            entrypoint_authorization: queued.entrypoint_authorization,
-        })
-        .collect();
-    prune_redundant_contract_ops_with_metadata(
-        state_ro,
-        &mut queued_instructions,
-        Some(&mut execution_contexts),
-    );
-    let queued = queued_instructions
-        .into_iter()
-        .zip(execution_contexts)
-        .map(|(instruction, execution_context)| {
-            crate::smartcontracts::ivm::host::QueuedInstruction {
-                instruction,
-                authority: execution_context.authority,
-                contract_runtime_context: execution_context.contract_runtime_context,
-                entrypoint_authorization: execution_context.entrypoint_authorization,
-            }
-        })
-        .collect();
-    TxOverlay::from_ivm_proved_execution(
-        queued,
-        gas_used,
         completed_axt,
         durable_state_overlay,
         durable_state_authorizations,

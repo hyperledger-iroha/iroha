@@ -2785,9 +2785,9 @@ fn render_peer_config(
     root.insert("streaming".into(), Value::Table(streaming));
     let mut sorafs_storage = Table::new();
     if sora_profile.is_some() {
-        // `iroha3d --sora` enables embedded storage after ordinary TOML parsing unless the
-        // operator explicitly selected a storage value. Localnets do not provision the governed
-        // compliance controller or native signer providers, so keep storage disabled explicitly.
+        // Sora localnets install Nexus geometry but do not provision the governed compliance
+        // controller or native signer providers needed for an embedded storage-provider role.
+        // Record that non-provider posture explicitly in every generated peer configuration.
         sorafs_storage.insert("enabled".into(), Value::Boolean(false));
     }
     // Validator durability queues beneath the SoraFS root remain active even when provider

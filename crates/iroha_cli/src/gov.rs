@@ -28,7 +28,6 @@ pub enum Command {
     /// Lock helpers
     #[command(subcommand)]
     Locks(LocksCommand),
-    /// Get the latest explicitly persisted council roster.
     /// Unlock helpers (expired lock stats)
     #[command(subcommand)]
     Unlock(UnlockCommand),

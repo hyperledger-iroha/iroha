@@ -26330,7 +26330,6 @@ match &message.payload {
     | ConsensusMessageV2Payload::QuorumCertificate(_)
     | ConsensusMessageV2Payload::TimeoutVote(_)
     | ConsensusMessageV2Payload::TimeoutCertificate(_)
-    | ConsensusMessageV2Payload::PayloadManifest(_)
     | ConsensusMessageV2Payload::PayloadChunk(_)
     | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
     | ConsensusMessageV2Payload::CertifiedBodyResponse(_)

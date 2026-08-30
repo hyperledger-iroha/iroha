@@ -7347,6 +7347,8 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v4(
         request.opening.validate()?;
         if request.asset.account() != &request.payer
             || request.asset.definition().to_string().is_empty()
+            || request.leaf_index
+                >= iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2
             || request.zero_path.siblings.len()
                 != iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2
             || request.zero_path.directions.len() != request.zero_path.siblings.len()
@@ -18351,6 +18353,14 @@ mod kagemusha_bridge_tests {
         let topup_unsigned =
             kagemusha_topup_shield_build_unsigned_from_archive_v4(&topup_build_archive)
                 .expect("build genuine production DS top-up shield");
+        let mut exhausted_topup_build = topup_build.clone();
+        exhausted_topup_build.leaf_index =
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2;
+        let exhausted_topup_archive = Zeroizing::new(
+            norito::to_bytes(&exhausted_topup_build).expect("encode exhausted top-up request"),
+        );
+        kagemusha_topup_shield_build_unsigned_from_archive_v4(&exhausted_topup_archive)
+            .expect_err("the complete recursive lifecycle must remain available");
         topup_unsigned
             .validate_public_binding()
             .expect("production DS top-up unsigned binding");

@@ -180,10 +180,9 @@ impl ProductionV2Services {
             .validate(&self.context)
             .map_err(|error| error.to_string())?;
         let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
+        let validated = wire::ValidatedPayloadManifest::new(&self.context, manifest)
             .map_err(|error| error.to_string())?;
-        let manifest_hash = HashOf::new(&manifest);
+        let manifest_hash = validated.manifest_hash();
         let sender = proposal.proposer;
         let mut chunk_messages = Vec::with_capacity(chunks.len());
         for (index, bytes) in chunks.into_iter().enumerate() {
@@ -196,8 +195,9 @@ impl ProductionV2Services {
                 signature: Vec::new(),
             };
             let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
+                .signature_payload(&validated)
+                .map_err(|error| error.to_string())?
+                .signature_preimage();
             chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
                 .map_err(|error| error.to_string())?
                 .payload()
@@ -206,6 +206,7 @@ impl ProductionV2Services {
                 wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
             )?);
         }
+        let manifest = validated.into_manifest();
         let peers = self.remote_voters();
         let control = PendingExactFanout::claimed(
             vec![Self::preencode_v2_network_message(message)?],
@@ -315,10 +316,9 @@ impl ProductionV2Services {
                 "recovered Proposal output could not retain its exact retry authority".to_owned()
             })?;
         let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
+        let validated = wire::ValidatedPayloadManifest::new(&self.context, manifest)
             .map_err(|error| error.to_string())?;
-        let manifest_hash = HashOf::new(&manifest);
+        let manifest_hash = validated.manifest_hash();
         let sender = proposal.proposer;
         let mut chunk_messages = Vec::with_capacity(chunks.len());
         for (index, bytes) in chunks.into_iter().enumerate() {
@@ -331,8 +331,9 @@ impl ProductionV2Services {
                 signature: Vec::new(),
             };
             let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
+                .signature_payload(&validated)
+                .map_err(|error| error.to_string())?
+                .signature_preimage();
             chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
                 .map_err(|error| error.to_string())?
                 .payload()
@@ -341,6 +342,7 @@ impl ProductionV2Services {
                 wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
             )?);
         }
+        let manifest = validated.into_manifest();
         let peers = self.remote_voters();
         let control = PendingExactFanout::claimed(
             vec![Self::preencode_v2_network_message(message)?],
@@ -1327,21 +1329,20 @@ impl ProductionV2Services {
             .local_validator
             .ok_or_else(|| "observer cannot disperse a Sumeragi v2 proposal".to_owned())?;
         let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
+        let validated = wire::ValidatedPayloadManifest::new(&self.context, manifest)
             .map_err(|error| error.to_string())?;
         let expected_round = wire::ConsensusRound {
             context_id: self.context.id(),
             height: self.context.height,
             view: owner.view(),
         };
-        if owner != self.active_tag || manifest.round != expected_round {
+        if owner != self.active_tag || validated.manifest().round != expected_round {
             return Err(
                 "Sumeragi v2 outbound payload is not owned by the active reducer incarnation"
                     .to_owned(),
             );
         }
-        let manifest_hash = HashOf::new(&manifest);
+        let manifest_hash = validated.manifest_hash();
         let mut messages = Vec::with_capacity(chunks.len());
         for (index, bytes) in chunks.into_iter().enumerate() {
             let mut chunk = wire::PayloadChunk {
@@ -1353,8 +1354,9 @@ impl ProductionV2Services {
                 signature: Vec::new(),
             };
             let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
+                .signature_payload(&validated)
+                .map_err(|error| error.to_string())?
+                .signature_preimage();
             chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
                 .map_err(|error| error.to_string())?
                 .payload()
@@ -1363,6 +1365,7 @@ impl ProductionV2Services {
                 wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
             ));
         }
+        let manifest = validated.into_manifest();
         let retained = RetainedOutboundPayload {
             owner,
             round: manifest.round,
@@ -1445,7 +1448,7 @@ impl ProductionV2Services {
         if let Some(fetch) = live {
             match (fetch.task.manifest(), fetch.chunks.as_ref()) {
                 (Some(manifest), Some(session)) => {
-                    let expected_hash = HashOf::new(manifest);
+                    let expected_hash = session.validated_manifest().manifest_hash();
                     if session.manifest() != manifest
                         || indexed_manifests.len() != 1
                         || indexed_manifests.first() != Some(&expected_hash)

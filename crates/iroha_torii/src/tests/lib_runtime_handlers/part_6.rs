@@ -778,6 +778,114 @@ async fn cancelled_query_cannot_release_admission_before_blocking_worker_finishe
         .expect("body semaphore remains open");
     drop((query_permit, heavy_permit, body_permit));
 }
+#[test]
+fn explorer_heavy_history_routes_are_bound_to_cancellation_safe_worker() {
+    fn exact_function_source<'a>(source: &'a str, marker: &str) -> &'a str {
+        let start = source
+            .find(marker)
+            .unwrap_or_else(|| panic!("missing exact function marker `{marker}`"));
+        let open = source[start..]
+            .find('{')
+            .map(|offset| start + offset)
+            .unwrap_or_else(|| panic!("function `{marker}` has no body"));
+        let mut depth = 0_usize;
+        for (offset, byte) in source.as_bytes()[open..].iter().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth = depth
+                        .checked_sub(1)
+                        .unwrap_or_else(|| panic!("function `{marker}` has unbalanced braces"));
+                    if depth == 0 {
+                        return &source[start..=open + offset];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("function `{marker}` has an unterminated body")
+    }
+
+    fn compact(source: &str) -> String {
+        source
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect()
+    }
+
+    let lib_source = include_str!("../../lib.rs");
+    let routing_source = include_str!("../../routing.rs");
+    let routes = [
+        (
+            "handler_explorer_blocks_list",
+            "handle_v1_explorer_blocks_admitted",
+            "handle_v1_explorer_blocks_sync",
+        ),
+        (
+            "handler_explorer_transactions_list",
+            "handle_v1_explorer_transactions_admitted",
+            "handle_v1_explorer_transactions_sync",
+        ),
+        (
+            "handler_explorer_transactions_latest",
+            "handle_v1_explorer_transactions_latest_admitted",
+            "handle_v1_explorer_transactions_latest_sync",
+        ),
+        (
+            "handler_explorer_instructions_list",
+            "handle_v1_explorer_instructions_admitted",
+            "handle_v1_explorer_instructions_sync",
+        ),
+        (
+            "handler_explorer_instructions_latest",
+            "handle_v1_explorer_instructions_latest_admitted",
+            "handle_v1_explorer_instructions_latest_sync",
+        ),
+    ];
+
+    let admitted_definition_count = routing_source
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            line.starts_with("pub(crate) async fn handle_v1_explorer_")
+                && line.contains("_admitted(")
+        })
+        .count();
+    assert_eq!(
+        admitted_definition_count,
+        routes.len(),
+        "every Explorer admitted history wrapper must be inventoried here"
+    );
+
+    for (http_handler, admitted_handler, sync_handler) in routes {
+        let http = compact(exact_function_source(
+            lib_source,
+            &format!("async fn {http_handler}("),
+        ));
+        assert!(
+            http.contains("letadmission=acquire_query_admission(app.as_ref(),true).await?;"),
+            "Explorer handler `{http_handler}` must acquire heavy admission"
+        );
+        assert!(
+            http.contains(&format!("{admitted_handler}(")) && http.contains("admission,"),
+            "Explorer handler `{http_handler}` must pass admission to `{admitted_handler}`"
+        );
+
+        let admitted = compact(exact_function_source(
+            routing_source,
+            &format!("async fn {admitted_handler}("),
+        ));
+        assert!(
+            admitted.contains("admission:crate::QueryAdmissionPermit"),
+            "Explorer wrapper `{admitted_handler}` must own its admission permit"
+        );
+        assert!(
+            admitted.contains("run_admitted_blocking(admission,")
+                && admitted.contains(&format!("{sync_handler}(")),
+            "Explorer wrapper `{admitted_handler}` must retain admission in the blocking worker around `{sync_handler}`"
+        );
+    }
+}
 #[tokio::test]
 async fn finality_rate_weight_caps_to_burst_without_disabling_the_route() {
     let mut app = mk_app_state_for_tests();

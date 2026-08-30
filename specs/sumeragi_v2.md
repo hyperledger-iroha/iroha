@@ -244,9 +244,11 @@ session and threshold signature again, checks the singleton history tail, and de
 committee-election seed and `leader_seed` from that pulse. Missing, duplicated, stale,
 foreign-chain, or otherwise inconsistent pulse state fails context construction.
 
-Committed Parliament sortition and timed-ballot requests use the same producer, but their slots are
-optional for chain liveness so the governance reducer can classify objective pulse absence and
-advance to a fresh attempt.
+Committed Parliament sortition and timed-ballot requests use the same producer, and every requested
+slot is consensus-mandatory. Candidate construction waits for its exact height/view pulse and block
+validation rejects omission, so a proposer cannot selectively abort an unfavourable pulse and
+advance Parliament to fresh randomness. A malformed restored-state absence remains fail-closed;
+there is no alternate entropy path.
 
 The pre-release per-validator VRF commit/reveal protocol is not part of the wire enum, runner, or
 signed effects schema. Pre-release frames and effects therefore fail exact decoding instead of

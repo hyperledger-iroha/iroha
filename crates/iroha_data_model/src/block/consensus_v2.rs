@@ -22,7 +22,7 @@ use iroha_crypto::{Hash, HashOf, MerkleTree, MerkleTreeCommitment};
 use iroha_primitives::erasure::rs16;
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
-use std::{collections::BTreeSet, vec::Vec};
+use std::{collections::BTreeSet, sync::Arc, vec::Vec};
 /// Durable finality artifacts associated with canonical Sumeragi v2 blocks.
 pub mod finality;
 /// Canonical genesis/handshake fingerprint projection.
@@ -1807,6 +1807,88 @@ impl PayloadManifest {
         Ok(())
     }
 }
+/// One validated payload-manifest session reused across all of its chunks.
+///
+/// Construction validates the complete manifest and computes its canonical
+/// hash exactly once. Chunk signing and authentication then perform only the
+/// index-local length and content-hash work.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedPayloadManifest {
+    manifest: PayloadManifest,
+    manifest_hash: HashOf<PayloadManifest>,
+    total_chunks: u32,
+    chunk_size_bytes: usize,
+    epoch: u64,
+    roster: Arc<[PeerId]>,
+}
+impl ValidatedPayloadManifest {
+    /// Validate and take ownership of one manifest for repeated chunk work.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error when `manifest` is not valid for
+    /// the immutable height `context`.
+    pub fn new(
+        context: &HeightContext,
+        manifest: PayloadManifest,
+    ) -> Result<Self, ValidationError> {
+        manifest.validate(context)?;
+        let total_chunks = u32::try_from(manifest.chunk_hashes.len())
+            .map_err(|_| ValidationError::ChunkCountTooLarge)?;
+        let chunk_size_bytes = usize::try_from(manifest.layout.chunk_size_bytes)
+            .map_err(|_| ValidationError::InvalidChunkLength)?;
+        let manifest_hash = HashOf::new(&manifest);
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>()
+            .into();
+        Ok(Self {
+            manifest,
+            manifest_hash,
+            total_chunks,
+            chunk_size_bytes,
+            epoch: context.epoch,
+            roster,
+        })
+    }
+    /// Borrow the validated wire manifest.
+    #[must_use]
+    pub const fn manifest(&self) -> &PayloadManifest {
+        &self.manifest
+    }
+    /// Consume this session and recover its validated wire manifest.
+    #[must_use]
+    pub fn into_manifest(self) -> PayloadManifest {
+        self.manifest
+    }
+    /// Return the once-computed canonical manifest hash.
+    #[must_use]
+    pub const fn manifest_hash(&self) -> HashOf<PayloadManifest> {
+        self.manifest_hash
+    }
+    /// Return the exact validator identity at `index` in the validated context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::SignerOutOfRange`] when `index` is outside
+    /// the frozen roster.
+    pub fn validator(&self, index: ValidatorIndex) -> Result<&PeerId, ValidationError> {
+        let index = usize::try_from(index).map_err(|_| ValidationError::SignerOutOfRange)?;
+        self.roster
+            .get(index)
+            .ok_or(ValidationError::SignerOutOfRange)
+    }
+    fn chunk_hash(&self, index: u32) -> Result<Hash, ValidationError> {
+        let index = usize::try_from(index).map_err(|_| ValidationError::ChunkIndexOutOfRange)?;
+        self.manifest
+            .chunk_hashes
+            .get(index)
+            .copied()
+            .ok_or(ValidationError::ChunkIndexOutOfRange)
+    }
+}
 /// One encoded payload chunk.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1820,32 +1902,10 @@ pub struct PayloadChunk {
     pub bytes: Vec<u8>,
     /// Sender index in the height context roster.
     pub sender: ValidatorIndex,
-    /// Sender signature over [`Self::signature_preimage`].
+    /// Sender signature over [`PayloadChunkSignaturePayload::signature_preimage`].
     pub signature: Vec<u8>,
 }
 impl PayloadChunk {
-    /// Validate the chunk's structural commitments and signature presence.
-    ///
-    /// Cryptographic signature verification remains the caller's
-    /// responsibility and must use [`Self::signature_preimage`].
-    ///
-    /// # Errors
-    ///
-    /// Returns a structural validation error when this chunk does not match
-    /// `context` and `manifest` or carries no signature.
-    pub fn validate(
-        &self,
-        context: &HeightContext,
-        manifest: &PayloadManifest,
-    ) -> Result<(), ValidationError> {
-        if self.signature.is_empty() {
-            return Err(ValidationError::MissingChunkSignature);
-        }
-        if self.signature.len() > MAX_CONSENSUS_SIGNATURE_BYTES {
-            return Err(ValidationError::SignatureTooLarge);
-        }
-        self.signature_payload(context, manifest).map(|_| ())
-    }
     /// Build the canonical signature payload for this chunk.
     ///
     /// The total chunk count is deliberately not duplicated in
@@ -1857,68 +1917,51 @@ impl PayloadChunk {
     /// # Errors
     ///
     /// Returns a structural validation error when this chunk does not match
-    /// `context` and `manifest`.
+    /// the validated manifest session.
     pub fn signature_payload(
         &self,
-        context: &HeightContext,
-        manifest: &PayloadManifest,
+        validated: &ValidatedPayloadManifest,
     ) -> Result<PayloadChunkSignaturePayload, ValidationError> {
-        manifest.validate(context)?;
-        if self.manifest_hash != HashOf::new(manifest) {
+        let manifest = validated.manifest();
+        if self.manifest_hash != validated.manifest_hash() {
             return Err(ValidationError::ManifestHashMismatch);
         }
-        let total_chunks = u32::try_from(manifest.chunk_hashes.len())
-            .map_err(|_| ValidationError::ChunkCountTooLarge)?;
-        let index =
-            usize::try_from(self.index).map_err(|_| ValidationError::ChunkIndexOutOfRange)?;
-        let expected_hash = manifest
-            .chunk_hashes
-            .get(index)
-            .ok_or(ValidationError::ChunkIndexOutOfRange)?;
-        validate_encoded_chunk_len(manifest, self.bytes.len())?;
+        if self.bytes.len() != validated.chunk_size_bytes {
+            return Err(ValidationError::InvalidChunkLength);
+        }
+        let expected_hash = validated.chunk_hash(self.index)?;
         let chunk_hash = Hash::new(&self.bytes);
-        if &chunk_hash != expected_hash {
+        if chunk_hash != expected_hash {
             return Err(ValidationError::ChunkHashMismatch);
         }
-        if usize::try_from(self.sender)
-            .ok()
-            .is_none_or(|sender| sender >= context.roster.len())
-        {
-            return Err(ValidationError::SignerOutOfRange);
-        }
+        validated.validator(self.sender)?;
         Ok(PayloadChunkSignaturePayload {
             protocol_version: PROTOCOL_VERSION,
             context_id: manifest.round.context_id,
-            epoch: context.epoch,
+            epoch: validated.epoch,
             height: manifest.round.height,
             view: manifest.round.view,
             subject: manifest.subject,
             manifest_hash: self.manifest_hash,
             encoding: manifest.layout.encoding,
             index: self.index,
-            total_chunks,
+            total_chunks: validated.total_chunks,
             chunk_hash,
             sender: self.sender,
         })
     }
-    /// Return the domain-separated bytes that the sender must sign.
+    /// Validate signature presence and return the once-hashed signing payload.
     ///
     /// # Errors
     ///
-    /// Returns a structural validation error when this chunk does not match
-    /// `context` and `manifest`.
-    pub fn signature_preimage(
+    /// Returns a structural validation error when the signature bytes are
+    /// missing or oversized, or the chunk does not match the validated session.
+    pub fn validate_for_authentication(
         &self,
-        context: &HeightContext,
-        manifest: &PayloadManifest,
-    ) -> Result<Vec<u8>, ValidationError> {
-        const DOMAIN: &[u8] = b"iroha:sumeragi:v2:payload-chunk";
-        let payload = self.signature_payload(context, manifest)?;
-        let encoded = payload.encode();
-        let mut preimage = Vec::with_capacity(DOMAIN.len() + encoded.len());
-        preimage.extend_from_slice(DOMAIN);
-        preimage.extend_from_slice(&encoded);
-        Ok(preimage)
+        validated: &ValidatedPayloadManifest,
+    ) -> Result<PayloadChunkSignaturePayload, ValidationError> {
+        require_signature(&self.signature)?;
+        self.signature_payload(validated)
     }
 }
 /// Canonical fields authenticated by a v2 payload-chunk signature.
@@ -1950,6 +1993,13 @@ pub struct PayloadChunkSignaturePayload {
     pub chunk_hash: Hash,
     /// Sender index in the height context roster.
     pub sender: ValidatorIndex,
+}
+impl PayloadChunkSignaturePayload {
+    /// Return the domain-separated canonical bytes authenticated by a chunk signature.
+    #[must_use]
+    pub fn signature_preimage(&self) -> Vec<u8> {
+        signature_preimage(b"iroha:sumeragi:v2:payload-chunk", &self.encode())
+    }
 }
 /// Signed proposal for one round.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -2531,8 +2581,6 @@ pub enum ConsensusMessageV2Payload {
     TimeoutVote(TimeoutVote),
     /// Aggregate timeout certificate.
     TimeoutCertificate(TimeoutCertificate),
-    /// Payload manifest announcement or retransmission.
-    PayloadManifest(PayloadManifest),
     /// Encoded payload chunk.
     PayloadChunk(PayloadChunk),
     /// Request for a certified body.

@@ -7,8 +7,8 @@ use iroha_crypto::{
 };
 use iroha_data_model::{name::Name, prelude::AccountId};
 use ivm::{
-    ExecutionSummary, IVM, IVMHost, PointerType, VMError, encoding, host::DefaultHost,
-    instruction, syscalls,
+    ExecutionSummary, IVM, IVMHost, PointerType, VMError, encoding, host::DefaultHost, instruction,
+    syscalls,
 };
 use sha2::Digest as Sha2Digest;
 use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
@@ -329,13 +329,13 @@ fn test_execution_summary_syscall_returns_deterministic_summary() {
     let mut vm = IVM::new(u64::MAX);
     let prog = assemble_syscall(syscalls::SYSCALL_EXECUTION_SUMMARY as u8);
     vm.load_program(&prog).unwrap();
-    vm.run().expect("EXECUTION_SUMMARY should produce a summary");
+    vm.run()
+        .expect("EXECUTION_SUMMARY should produce a summary");
     assert_eq!(vm.register(11), 0);
     let ptr = vm.register(10);
     let tlv = vm.memory.validate_tlv(ptr).expect("summary TLV");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    let summary: ExecutionSummary =
-        norito::decode_from_bytes(tlv.payload).expect("decode summary");
+    let summary: ExecutionSummary = norito::decode_from_bytes(tlv.payload).expect("decode summary");
     assert_eq!(summary.version, ivm::EXECUTION_SUMMARY_VERSION_V1);
     assert_eq!(summary.code_hash, vm.code_hash());
     assert!(summary.gas_used > 0);
@@ -404,8 +404,7 @@ fn traced_execution_summary_quotes_and_commits_the_invocation_register_log() {
         .memory
         .validate_tlv(vm.register(10))
         .expect("summary TLV");
-    let summary: ExecutionSummary =
-        norito::decode_from_bytes(tlv.payload).expect("decode summary");
+    let summary: ExecutionSummary = norito::decode_from_bytes(tlv.payload).expect("decode summary");
     assert!(
         summary.register_log_len > 0,
         "summary generated inside the callback must include earlier register events"

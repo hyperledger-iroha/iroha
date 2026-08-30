@@ -1796,6 +1796,51 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     assert.equal(ballot.accepted, undefined);
   });
 
+  test("governance ballot drafts reject noncanonical response contracts", async () => {
+    const responses = [
+      {
+        ok: false,
+        accepted: false,
+        reason: "invalid ballot",
+        tx_instructions: [],
+      },
+      {
+        drafted: true,
+        tx_instructions: [{ wire_id: "Cast ZkBallot", payload_hex: "00" }],
+      },
+      {
+        drafted: true,
+        tx_instructions: [{ wire_id: "CastZkBallot", payload_hex: "AA" }],
+      },
+    ];
+    for (const jsonData of responses) {
+      const client = governanceBallotClient({
+        fetchImpl: async () => createResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+      });
+
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        () => client.governanceSubmitPlainBallot(
+          {
+            authority: FIXTURE_ALICE_ID,
+            networkId: GOVERNANCE_NETWORK_ID,
+            referendumId: "ref-plain",
+            owner: FIXTURE_ALICE_ID,
+            amount: "1",
+            durationBlocks: 1,
+            direction: "Aye",
+          },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
+        /unsupported fields|drafted|whitespace|lowercase/u,
+      );
+    }
+  });
+
   test("governance ballots reject retired identity keys and unbound authentication", async () => {
     let fetchCalls = 0;
     const client = new ToriiClient(BASE_URL, {
@@ -2541,7 +2586,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
           nullifier: `0x${"DD".repeat(32)}`,
           owner: SAMPLE_ACCOUNT_FORMS.i105,
           amount: "18446744073709551616.25",
-          durationBlocks: "0",
+          durationBlocks: 0,
           direction: "Nay",
         },
       },

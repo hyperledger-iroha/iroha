@@ -44528,31 +44528,13 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
     let mut referendum_id: Option<String> = None;
     match event {
         GovernanceEvent::ProposalSubmitted(payload) => {
-            let id = hex::encode(payload.id);
-            proposal_id = Some(id.clone());
-            referendum_id = Some(id);
-        }
-        GovernanceEvent::ProposalApproved(payload) => {
-            let id = hex::encode(payload.id);
-            proposal_id = Some(id.clone());
-            referendum_id = Some(id);
-            unlocks_updated = true;
+            proposal_id = Some(hex::encode(payload.id));
         }
         GovernanceEvent::ProposalRejected(payload) => {
-            let id = hex::encode(payload.id);
-            proposal_id = Some(id.clone());
-            referendum_id = Some(id);
-            unlocks_updated = true;
+            proposal_id = Some(hex::encode(payload.id));
         }
         GovernanceEvent::ProposalEnacted(payload) => {
-            let id = hex::encode(payload.id);
-            proposal_id = Some(id.clone());
-            referendum_id = Some(id);
-        }
-        GovernanceEvent::ParliamentApprovalRecorded(payload) => {
-            let id = hex::encode(payload.proposal_id);
-            proposal_id = Some(id.clone());
-            referendum_id = Some(id);
+            proposal_id = Some(hex::encode(payload.id));
         }
         GovernanceEvent::ParliamentAttemptCreated(payload) => {
             proposal_id = Some(payload.proposal_content_id.to_hex());
@@ -44560,19 +44542,7 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
         GovernanceEvent::ParliamentLifecycleTransitionApplied(payload) => {
             proposal_id = Some(payload.proposal_content_id.to_hex());
         }
-        GovernanceEvent::ParliamentAttemptTransitioned(payload) => {
-            proposal_id = Some(payload.proposal_content_id.to_hex());
-        }
-        GovernanceEvent::ParliamentAggregateFinalized(payload) => {
-            proposal_id = Some(payload.proposal_content_id.to_hex());
-        }
-        GovernanceEvent::ParliamentCertificateIssued(payload) => {
-            proposal_id = Some(payload.proposal_content_id.to_hex());
-        }
-        GovernanceEvent::ParliamentBodyTransitioned(_)
-        | GovernanceEvent::ParliamentBallotTransitioned(_)
-        | GovernanceEvent::ParliamentConcentrationWarning(_)
-        | GovernanceEvent::ThresholdKeyLifecycleApplied(_) => {}
+        GovernanceEvent::ThresholdKeyLifecycleApplied(_) => {}
         GovernanceEvent::ReferendumOpened(payload) => {
             referendum_id = Some(payload.id.clone());
             unlocks_updated = true;
@@ -44644,8 +44614,8 @@ mod governance_stream_tests {
     use iroha_data_model::{
         account::AccountId,
         events::data::governance::{
-            GovernanceEvent, GovernanceLockCreated, GovernanceProposalSubmitted,
-            GovernanceReferendumDecided,
+            GovernanceEvent, GovernanceLockCreated, GovernanceProposalEnacted,
+            GovernanceProposalRejected, GovernanceProposalSubmitted, GovernanceReferendumDecided,
         },
     };
     fn sample_account() -> AccountId {
@@ -44664,31 +44634,43 @@ mod governance_stream_tests {
                 .is_some_and(|candidate| candidate == kind)
         })
     }
-    routing_test! { sync proposal_submitted_emits_proposal_and_referendum_updates
+    routing_test! { sync typed_proposal_events_emit_only_proposal_updates
         let proposal_id = [0xAB; 32];
-        let event = GovernanceEvent::ProposalSubmitted(GovernanceProposalSubmitted {
-            id: proposal_id,
-            proposer: sample_account(),
-            contract_address: Some(
-                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
-                    .parse()
-                    .expect("contract address"),
-            ),
-        });
-        let payloads = governance_stream_payloads(&EventBox::Data(SharedDataEvent::from(
-            iroha_data_model::events::data::DataEvent::Governance(event),
-        )));
-        let proposal = find_kind(&payloads, "ProposalUpdated").expect("proposal update");
-        let referendum = find_kind(&payloads, "ReferendumUpdated").expect("referendum update");
         let expected = hex::encode(proposal_id);
-        assert_eq!(
-            proposal.get("id").and_then(Value::as_str),
-            Some(expected.as_str())
-        );
-        assert_eq!(
-            referendum.get("id").and_then(Value::as_str),
-            Some(expected.as_str())
-        );
+        let events = [
+            GovernanceEvent::ProposalSubmitted(GovernanceProposalSubmitted {
+                id: proposal_id,
+                proposer: sample_account(),
+                contract_address: Some(
+                    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                        .parse()
+                        .expect("contract address"),
+                ),
+            }),
+            GovernanceEvent::ProposalRejected(GovernanceProposalRejected { id: proposal_id }),
+            GovernanceEvent::ProposalEnacted(GovernanceProposalEnacted { id: proposal_id }),
+        ];
+        for event in events {
+            let payloads = governance_stream_payloads(&EventBox::Data(SharedDataEvent::from(
+                iroha_data_model::events::data::DataEvent::Governance(event),
+            )));
+            let proposal = find_kind(&payloads, "ProposalUpdated").expect("proposal update");
+            assert_eq!(
+                proposal.get("id").and_then(Value::as_str),
+                Some(expected.as_str())
+            );
+            for kind in [
+                "UnlockStatsUpdated",
+                "ReferendumUpdated",
+                "LocksUpdated",
+                "TallyUpdated",
+            ] {
+                assert!(
+                    find_kind(&payloads, kind).is_none(),
+                    "typed proposal event must not synthesize {kind}"
+                );
+            }
+        }
     }
     routing_test! { sync lock_created_emits_unlocks_locks_and_tally_updates
         let referendum_id = "ref-42".to_owned();
@@ -47644,7 +47626,7 @@ mod validation_fee_torii_ingress_tests {
         requirement: RequiredParliamentBodyV1,
         election_attempt_id: iroha_data_model::governance::types::BodyElectionAttemptId,
         result_tag: u8,
-    ) {
+    ) -> u64 {
         use iroha_data_model::governance::types::{
             BallotAttemptId, BeaconPulseId, BeaconSessionId, DeliberationPhaseV1,
             ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1, TleKeySessionId,
@@ -47817,6 +47799,10 @@ mod validation_fee_torii_ingress_tests {
                 assert_eq!(outcome, ParliamentAggregateOutcomeV1::Approved);
             }
         }
+        attempt
+            .body(&body_instance_id)
+            .and_then(|body| body.result_height())
+            .expect("completed authorization body result height")
     }
     fn validation_fee_test_authorization(
         state: &State,
@@ -47913,8 +47899,9 @@ mod validation_fee_torii_ingress_tests {
                 &parliament_test_governance(&requirements),
             )
             .expect("consume deterministic simultaneous Parliament draw");
+        let mut certified_at_height = 0;
         for (index, requirement) in requirements.iter().copied().enumerate() {
-            complete_parliament_body_for_authorization(
+            let result_height = complete_parliament_body_for_authorization(
                 &mut attempt,
                 requirement,
                 BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0),
@@ -47922,13 +47909,12 @@ mod validation_fee_torii_ingress_tests {
                     .checked_add(u8::try_from(index).expect("body index fits u8"))
                     .expect("result tag does not overflow"),
             );
+            certified_at_height = certified_at_height.max(result_height);
         }
         let governance_certificate = attempt
             .construct_certificate(
                 governance_attempt_id,
-                TEST_POLICY_ENACTMENT_HEIGHT
-                    .checked_sub(1)
-                    .expect("enactment follows certification"),
+                certified_at_height,
                 TEST_POLICY_ENACTMENT_HEIGHT,
             )
             .expect("construct complete validation-fee Parliament certificate");
@@ -71125,18 +71111,28 @@ pub fn handle_peers(
     }
 }
 #[cfg(feature = "telemetry")]
-#[allow(clippy::unnecessary_wraps)]
-/// Render the `/status` JSON payload or a specific nested field when requested.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Exact representation exposed by the public Torii status handlers.
+pub enum StatusView {
+    /// Complete status document with content negotiation.
+    Full,
+    /// Canonical committed block height as JSON.
+    Blocks,
+    /// Current online peer count as JSON.
+    Peers,
+}
+#[cfg(feature = "telemetry")]
+/// Render one of the explicitly supported status views.
 pub async fn handle_status(
     telemetry: &MaybeTelemetry,
     accept: Option<axum::http::HeaderValue>,
-    tail: Option<&str>,
+    view: StatusView,
     nexus_routing_policy: ActualLaneRoutingPolicy,
     authoritative_block_height: u64,
     offline: Option<iroha_torii_shared::offline_api::OfflineStatus>,
 ) -> Result<Response> {
     iroha_logger::debug!(
-        tail = tail.unwrap_or(""),
+        ?view,
         accept = ?accept,
         "serving /status"
     );
@@ -71174,47 +71170,52 @@ pub async fn handle_status(
         txs_rejected = status.txs_rejected,
         "status snapshot built"
     );
-    if let Some(tail) = tail {
-        let segment = status_value_by_path(&status, tail)
-            .ok_or_else(|| Error::StatusSegmentNotFound(eyre!("Path not found: \"{}\"", tail)))?;
-        let s = norito::json::to_json(&segment).map_err(|e| Error::StatusFailure(eyre!(e)))?;
-        let mut resp = axum::response::Response::new(axum::body::Body::from(s));
-        resp.headers_mut().insert(
-            axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/json"),
-        );
-        Ok(resp)
-    } else {
-        let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-            Ok(fmt) => fmt,
-            Err(resp) => return Ok(resp),
-        };
-        match format {
-            crate::utils::ResponseFormat::Norito => {
-                let bytes =
-                    norito::to_bytes(&status).map_err(|err| Error::StatusFailure(eyre!(err)))?;
-                let mut resp = axum::response::Response::new(axum::body::Body::from(bytes));
-                resp.headers_mut().insert(
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
-                );
-                Ok(resp)
-            }
-            crate::utils::ResponseFormat::Json => {
-                let s = norito::json::to_json_pretty(&status)
-                    .map_err(|e| Error::StatusFailure(eyre!(e)))?;
-                let mut resp = axum::response::Response::new(axum::body::Body::from(s));
-                resp.headers_mut().insert(
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::HeaderValue::from_static("application/json"),
-                );
-                Ok(resp)
+    match view {
+        StatusView::Blocks | StatusView::Peers => {
+            let value = match view {
+                StatusView::Blocks => status.blocks,
+                StatusView::Peers => status.peers,
+                StatusView::Full => unreachable!("matched exact status probes"),
+            };
+            let body = norito::json::to_json(&value)
+                .map_err(|error| Error::StatusFailure(eyre!(error)))?;
+            let mut response = axum::response::Response::new(axum::body::Body::from(body));
+            response.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            Ok(response)
+        }
+        StatusView::Full => {
+            let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+                Ok(fmt) => fmt,
+                Err(resp) => return Ok(resp),
+            };
+            match format {
+                crate::utils::ResponseFormat::Norito => {
+                    let bytes = norito::to_bytes(&status)
+                        .map_err(|err| Error::StatusFailure(eyre!(err)))?;
+                    let mut resp = axum::response::Response::new(axum::body::Body::from(bytes));
+                    resp.headers_mut().insert(
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+                    );
+                    Ok(resp)
+                }
+                crate::utils::ResponseFormat::Json => {
+                    let s = norito::json::to_json_pretty(&status)
+                        .map_err(|e| Error::StatusFailure(eyre!(e)))?;
+                    let mut resp = axum::response::Response::new(axum::body::Body::from(s));
+                    resp.headers_mut().insert(
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::HeaderValue::from_static("application/json"),
+                    );
+                    Ok(resp)
+                }
             }
         }
     }
 }
-include!("routing/status_value_by_path.rs");
-include!("routing/status_value_helpers.rs");
 // Textual inclusion keeps every routing test at its original module path.
 include!("tests/routing_account_filter_candidates.rs");
 include!("tests/routing.rs");

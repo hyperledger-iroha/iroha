@@ -13,19 +13,21 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ciborium::{de::from_reader, value::Value as CborValue};
-use dashmap::DashMap;
 use iroha_config::parameters::actual::{
     OperatorAuthLockout, OperatorWebAuthnAlgorithm, OperatorWebAuthnConfig, ToriiOperatorAuth,
 };
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
+use parking_lot::Mutex;
 use rand::rand_core::{TryCryptoRng, TryRngCore as _};
 use sha2::{Digest as _, Sha256};
 use std::{
-    collections::HashSet,
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap, HashSet},
     fs,
-    io::Write as _,
+    io::{Cursor, Write as _},
     net::IpAddr,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -35,8 +37,11 @@ const HEADER_OPERATOR_SESSION: &str = "x-iroha-operator-session";
 const HEADER_OPERATOR_TOKEN: &str = "x-iroha-operator-token";
 const HEADER_MTLS_FORWARD: &str = "x-forwarded-client-cert";
 const CREDENTIALS_FILENAME: &str = "operator_webauthn.json";
+/// Maximum accepted JSON body size for one operator WebAuthn exchange request.
+pub(crate) const CREDENTIAL_EXCHANGE_BODY_LIMIT: usize = 64 * 1024;
 const CHALLENGE_BYTES: usize = 32;
 const SESSION_TOKEN_BYTES: usize = 32;
+const MAX_CREDENTIAL_ID_BYTES: usize = 1_024;
 const P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN: usize = 65;
 const ACTION_GATE: &str = "gate";
 const ACTION_REGISTER_OPTIONS: &str = "register_options";
@@ -45,7 +50,11 @@ const ACTION_LOGIN_OPTIONS: &str = "login_options";
 const ACTION_LOGIN_VERIFY: &str = "login_verify";
 const FLAG_USER_PRESENT: u8 = 0x01;
 const FLAG_USER_VERIFIED: u8 = 0x04;
+const FLAG_BACKUP_ELIGIBLE: u8 = 0x08;
+const FLAG_BACKUP_STATE: u8 = 0x10;
 const FLAG_ATTESTED_CREDENTIAL_DATA: u8 = 0x40;
+const FLAG_EXTENSION_DATA: u8 = 0x80;
+const RESERVED_AUTHENTICATOR_FLAGS: u8 = 0x22;
 #[derive(Clone, Debug)]
 pub struct AuthContext {
     key: String,
@@ -63,9 +72,10 @@ pub struct OperatorAuthError {
     code: &'static str,
     message: String,
     metric_label: &'static str,
+    counts_toward_lockout: bool,
 }
 impl OperatorAuthError {
-    fn new(
+    fn denial(
         status: StatusCode,
         code: &'static str,
         message: impl Into<String>,
@@ -76,13 +86,28 @@ impl OperatorAuthError {
             code,
             message: message.into(),
             metric_label,
+            counts_toward_lockout: true,
+        }
+    }
+    fn operational(
+        status: StatusCode,
+        code: &'static str,
+        message: impl Into<String>,
+        metric_label: &'static str,
+    ) -> Self {
+        Self {
+            status,
+            code,
+            message: message.into(),
+            metric_label,
+            counts_toward_lockout: false,
         }
     }
     fn metric_label(&self) -> &'static str {
         self.metric_label
     }
     fn disabled() -> Self {
-        Self::new(
+        Self::operational(
             StatusCode::FORBIDDEN,
             "operator_auth_disabled",
             "operator authentication is disabled",
@@ -90,7 +115,7 @@ impl OperatorAuthError {
         )
     }
     fn missing_mtls() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::FORBIDDEN,
             "operator_mtls_required",
             "operator endpoints require mTLS at ingress",
@@ -98,7 +123,7 @@ impl OperatorAuthError {
         )
     }
     fn rate_limited() -> Self {
-        Self::new(
+        Self::operational(
             StatusCode::TOO_MANY_REQUESTS,
             "operator_auth_rate_limited",
             "operator auth rate limit exceeded",
@@ -106,7 +131,7 @@ impl OperatorAuthError {
         )
     }
     fn locked_out() -> Self {
-        Self::new(
+        Self::operational(
             StatusCode::TOO_MANY_REQUESTS,
             "operator_auth_locked",
             "operator auth temporarily locked out",
@@ -114,7 +139,7 @@ impl OperatorAuthError {
         )
     }
     fn missing_session() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::UNAUTHORIZED,
             "operator_session_missing",
             "missing operator session token",
@@ -122,7 +147,7 @@ impl OperatorAuthError {
         )
     }
     fn invalid_session() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::UNAUTHORIZED,
             "operator_session_invalid",
             "operator session token is invalid or expired",
@@ -130,7 +155,7 @@ impl OperatorAuthError {
         )
     }
     fn missing_token() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::UNAUTHORIZED,
             "operator_token_missing",
             "missing operator bootstrap token",
@@ -138,7 +163,7 @@ impl OperatorAuthError {
         )
     }
     fn invalid_token() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::UNAUTHORIZED,
             "operator_token_invalid",
             "operator bootstrap token is invalid",
@@ -146,7 +171,7 @@ impl OperatorAuthError {
         )
     }
     fn webauthn_disabled() -> Self {
-        Self::new(
+        Self::operational(
             StatusCode::FORBIDDEN,
             "operator_webauthn_disabled",
             "WebAuthn operator auth is disabled",
@@ -154,7 +179,7 @@ impl OperatorAuthError {
         )
     }
     fn no_credentials() -> Self {
-        Self::new(
+        Self::operational(
             StatusCode::CONFLICT,
             "operator_webauthn_no_credentials",
             "no operator credentials are enrolled",
@@ -162,7 +187,7 @@ impl OperatorAuthError {
         )
     }
     fn invalid_payload(message: impl Into<String>) -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::BAD_REQUEST,
             "operator_webauthn_payload_invalid",
             message,
@@ -170,7 +195,7 @@ impl OperatorAuthError {
         )
     }
     fn challenge_invalid() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::UNAUTHORIZED,
             "operator_webauthn_challenge_invalid",
             "webauthn challenge is invalid or expired",
@@ -178,7 +203,7 @@ impl OperatorAuthError {
         )
     }
     fn origin_denied() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::UNAUTHORIZED,
             "operator_webauthn_origin_denied",
             "webauthn origin is not allowed",
@@ -186,7 +211,7 @@ impl OperatorAuthError {
         )
     }
     fn credential_unknown() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::UNAUTHORIZED,
             "operator_webauthn_credential_unknown",
             "webauthn credential is not registered",
@@ -194,7 +219,7 @@ impl OperatorAuthError {
         )
     }
     fn signature_invalid() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::UNAUTHORIZED,
             "operator_webauthn_signature_invalid",
             "webauthn assertion signature failed verification",
@@ -202,7 +227,7 @@ impl OperatorAuthError {
         )
     }
     fn credential_not_allowed() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::BAD_REQUEST,
             "operator_webauthn_credential_not_allowed",
             "webauthn credential algorithm is not allowed",
@@ -210,7 +235,7 @@ impl OperatorAuthError {
         )
     }
     fn rp_id_mismatch() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::UNAUTHORIZED,
             "operator_webauthn_rp_id_mismatch",
             "webauthn rpId hash mismatch",
@@ -218,7 +243,7 @@ impl OperatorAuthError {
         )
     }
     fn user_verification_required() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::UNAUTHORIZED,
             "operator_webauthn_user_verification_required",
             "webauthn user verification is required",
@@ -226,7 +251,7 @@ impl OperatorAuthError {
         )
     }
     fn user_presence_required() -> Self {
-        Self::new(
+        Self::denial(
             StatusCode::UNAUTHORIZED,
             "operator_webauthn_user_presence_required",
             "webauthn user presence is required",
@@ -234,7 +259,7 @@ impl OperatorAuthError {
         )
     }
     fn persistence_failure(message: impl Into<String>) -> Self {
-        Self::new(
+        Self::operational(
             StatusCode::INTERNAL_SERVER_ERROR,
             "operator_webauthn_persist_failed",
             message,
@@ -242,7 +267,7 @@ impl OperatorAuthError {
         )
     }
     fn credential_state_unavailable() -> Self {
-        Self::new(
+        Self::operational(
             StatusCode::INTERNAL_SERVER_ERROR,
             "operator_webauthn_state_unavailable",
             "operator credential state is unavailable",
@@ -250,11 +275,27 @@ impl OperatorAuthError {
         )
     }
     fn random_bytes_failure(message: impl Into<String>) -> Self {
-        Self::new(
+        Self::operational(
             StatusCode::INTERNAL_SERVER_ERROR,
             "operator_auth_random_bytes_failed",
             message,
             "random_bytes",
+        )
+    }
+    fn state_capacity_exhausted() -> Self {
+        Self::operational(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "operator_auth_state_capacity_exhausted",
+            "operator authentication ephemeral state is at capacity",
+            "state_capacity_exhausted",
+        )
+    }
+    fn credential_capacity_exhausted() -> Self {
+        Self::operational(
+            StatusCode::CONFLICT,
+            "operator_webauthn_credential_capacity_exhausted",
+            "operator WebAuthn credential capacity is exhausted",
+            "credential_capacity_exhausted",
         )
     }
 }
@@ -276,6 +317,7 @@ fn operator_auth_error_response(status: StatusCode, code: &'static str, message:
 pub enum OperatorAuthInitError {
     MissingWebAuthn,
     InvalidWebAuthn(String),
+    InvalidPolicy(String),
     CredentialLoad(String),
 }
 impl std::fmt::Display for OperatorAuthInitError {
@@ -283,6 +325,7 @@ impl std::fmt::Display for OperatorAuthInitError {
         match self {
             Self::MissingWebAuthn => write!(f, "torii.operator_auth.webauthn is required"),
             Self::InvalidWebAuthn(msg) => write!(f, "{msg}"),
+            Self::InvalidPolicy(msg) => write!(f, "{msg}"),
             Self::CredentialLoad(msg) => write!(f, "failed to load operator credentials: {msg}"),
         }
     }
@@ -340,11 +383,6 @@ struct StoredCredential {
     sign_count: u32,
     created_at_ms: u64,
 }
-#[derive(Clone, Debug)]
-struct SessionEntry {
-    expires_at: Instant,
-    credential_id: Vec<u8>,
-}
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ChallengeKind {
     Registration,
@@ -353,13 +391,134 @@ enum ChallengeKind {
 #[derive(Clone, Debug)]
 struct ChallengeEntry {
     kind: ChallengeKind,
-    expires_at: Instant,
-    bytes: Vec<u8>,
 }
-#[derive(Clone)]
+#[derive(Debug)]
+struct ExpiringEntry<V> {
+    value: V,
+    expires_at: Instant,
+    generation: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ExpiryRecord {
+    expires_at: Instant,
+    key: String,
+    generation: u64,
+}
+#[derive(Debug)]
+struct BoundedExpiringStore<V> {
+    capacity: usize,
+    entries: HashMap<String, ExpiringEntry<V>>,
+    expiries: BinaryHeap<Reverse<ExpiryRecord>>,
+    next_generation: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExpiringStoreAtCapacity;
+impl<V> BoundedExpiringStore<V> {
+    fn new(capacity: NonZeroUsize) -> Self {
+        Self {
+            capacity: capacity.get(),
+            entries: HashMap::new(),
+            expiries: BinaryHeap::new(),
+            next_generation: 0,
+        }
+    }
+    fn purge_expired(&mut self, now: Instant) {
+        while self
+            .expiries
+            .peek()
+            .is_some_and(|Reverse(expiry)| expiry.expires_at <= now)
+        {
+            let Reverse(expiry) = self.expiries.pop().expect("peeked expiry must exist");
+            let matches_live_entry = self.entries.get(&expiry.key).is_some_and(|entry| {
+                entry.generation == expiry.generation && entry.expires_at <= now
+            });
+            if matches_live_entry {
+                self.entries.remove(&expiry.key);
+            }
+        }
+    }
+    fn insert(
+        &mut self,
+        key: String,
+        value: V,
+        expires_at: Instant,
+        now: Instant,
+    ) -> Result<Option<V>, ExpiringStoreAtCapacity> {
+        self.purge_expired(now);
+        if !self.entries.contains_key(&key) && self.entries.len() >= self.capacity {
+            return Err(ExpiringStoreAtCapacity);
+        }
+        let generation = self.allocate_generation();
+        let replaced = self
+            .entries
+            .insert(
+                key.clone(),
+                ExpiringEntry {
+                    value,
+                    expires_at,
+                    generation,
+                },
+            )
+            .map(|entry| entry.value);
+        self.expiries.push(Reverse(ExpiryRecord {
+            expires_at,
+            key,
+            generation,
+        }));
+        if self.expiries.len() > self.capacity.saturating_mul(2) {
+            self.rebuild_expiries();
+        }
+        Ok(replaced)
+    }
+    fn remove(&mut self, key: &str, now: Instant) -> Option<V> {
+        self.purge_expired(now);
+        self.entries.remove(key).map(|entry| entry.value)
+    }
+    fn get(&mut self, key: &str, now: Instant) -> Option<&V> {
+        self.purge_expired(now);
+        self.entries.get(key).map(|entry| &entry.value)
+    }
+    fn is_at_capacity(&mut self, now: Instant) -> bool {
+        self.purge_expired(now);
+        self.entries.len() >= self.capacity
+    }
+    fn allocate_generation(&mut self) -> u64 {
+        if self.next_generation == u64::MAX {
+            self.rebuild_expiries();
+        }
+        let generation = self.next_generation;
+        self.next_generation += 1;
+        generation
+    }
+    fn rebuild_expiries(&mut self) {
+        let mut keys: Vec<_> = self.entries.keys().cloned().collect();
+        keys.sort_unstable();
+        self.expiries.clear();
+        for (generation, key) in keys.into_iter().enumerate() {
+            let generation = u64::try_from(generation)
+                .expect("entry count cannot exceed the addressable process memory");
+            let entry = self
+                .entries
+                .get_mut(&key)
+                .expect("key collected from the same store must exist");
+            entry.generation = generation;
+            self.expiries.push(Reverse(ExpiryRecord {
+                expires_at: entry.expires_at,
+                key,
+                generation,
+            }));
+        }
+        self.next_generation = u64::try_from(self.entries.len())
+            .expect("entry count cannot exceed the addressable process memory");
+    }
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
 struct LockoutTracker {
     config: OperatorAuthLockout,
-    entries: DashMap<String, FailureEntry>,
+    entries: Mutex<BoundedExpiringStore<FailureEntry>>,
 }
 #[derive(Clone, Debug)]
 struct FailureEntry {
@@ -368,39 +527,40 @@ struct FailureEntry {
     locked_until: Option<Instant>,
 }
 impl LockoutTracker {
-    fn new(config: OperatorAuthLockout) -> Self {
+    fn new(config: OperatorAuthLockout, capacity: NonZeroUsize) -> Self {
         Self {
             config,
-            entries: DashMap::new(),
+            entries: Mutex::new(BoundedExpiringStore::new(capacity)),
         }
     }
-    fn is_locked(&self, key: &str) -> bool {
-        let Some(mut entry) = self.entries.get_mut(key) else {
-            return false;
-        };
-        let Some(until) = entry.locked_until else {
-            return false;
-        };
-        if Instant::now() >= until {
-            entry.locked_until = None;
-            entry.failures = 0;
-            entry.window_start = Instant::now();
-            return false;
+    fn is_locked(&self, key: &str) -> Result<bool, ExpiringStoreAtCapacity> {
+        let now = Instant::now();
+        let mut entries = self.entries.lock();
+        match entries.get(key, now) {
+            Some(entry) => Ok(entry.locked_until.is_some_and(|until| now < until)),
+            None if entries.is_at_capacity(now) => Err(ExpiringStoreAtCapacity),
+            None => Ok(false),
         }
-        true
     }
-    fn record_failure(&self, key: &str) -> bool {
+    fn record_failure(&self, key: &str) -> Result<bool, ExpiringStoreAtCapacity> {
         let Some(limit) = self.config.failures else {
-            return false;
+            return Ok(false);
         };
         let now = Instant::now();
-        let mut entry = self.entries.entry(key.to_string()).or_insert(FailureEntry {
+        let mut entries = self.entries.lock();
+        let mut entry = entries.remove(key, now).unwrap_or(FailureEntry {
             failures: 0,
             window_start: now,
             locked_until: None,
         });
-        if entry.locked_until.is_some() {
-            return true;
+        if let Some(locked_until) = entry.locked_until {
+            if now < locked_until {
+                entries.insert(key.to_owned(), entry, locked_until, now)?;
+                return Ok(true);
+            }
+            entry.locked_until = None;
+            entry.failures = 0;
+            entry.window_start = now;
         }
         if now.duration_since(entry.window_start) > self.config.window {
             entry.window_start = now;
@@ -408,13 +568,22 @@ impl LockoutTracker {
         }
         entry.failures = entry.failures.saturating_add(1);
         if entry.failures >= limit.get() {
-            entry.locked_until = Some(now + self.config.duration);
-            return true;
+            let locked_until = now
+                .checked_add(self.config.duration)
+                .expect("operator auth durations are validated during initialization");
+            entry.locked_until = Some(locked_until);
+            entries.insert(key.to_owned(), entry, locked_until, now)?;
+            return Ok(true);
         }
-        false
+        let expires_at = entry
+            .window_start
+            .checked_add(self.config.window)
+            .expect("operator auth durations are validated during initialization");
+        entries.insert(key.to_owned(), entry, expires_at, now)?;
+        Ok(false)
     }
     fn clear(&self, key: &str) {
-        self.entries.remove(key);
+        self.entries.lock().remove(key, Instant::now());
     }
 }
 pub struct OperatorAuth {
@@ -424,8 +593,9 @@ pub struct OperatorAuth {
     bootstrap_tokens: HashSet<String>,
     webauthn: Option<WebAuthnPolicy>,
     credentials: Arc<RwLock<Vec<StoredCredential>>>,
-    sessions: DashMap<String, SessionEntry>,
-    challenges: DashMap<String, ChallengeEntry>,
+    credential_capacity: usize,
+    sessions: Mutex<BoundedExpiringStore<()>>,
+    challenges: Mutex<BoundedExpiringStore<ChallengeEntry>>,
     limiter: limits::RateLimiter,
     lockout: LockoutTracker,
     telemetry: MaybeTelemetry,
@@ -445,9 +615,37 @@ impl OperatorAuth {
         } else {
             None
         };
+        if let Some(policy) = &webauthn {
+            validate_ephemeral_duration(
+                "torii.operator_auth.webauthn.challenge_ttl_secs",
+                policy.challenge_ttl,
+            )?;
+            validate_ephemeral_duration(
+                "torii.operator_auth.webauthn.session_ttl_secs",
+                policy.session_ttl,
+            )?;
+        }
+        if config.lockout.failures.is_some() {
+            validate_ephemeral_duration(
+                "torii.operator_auth.lockout_window_secs",
+                config.lockout.window,
+            )?;
+            validate_ephemeral_duration(
+                "torii.operator_auth.lockout_duration_secs",
+                config.lockout.duration,
+            )?;
+        }
         let credentials_path = operator_credentials_path(&data_dir);
         let credentials = if config.enabled {
-            load_credentials(&credentials_path).map_err(OperatorAuthInitError::CredentialLoad)?
+            let policy = webauthn
+                .as_ref()
+                .expect("enabled operator auth has a validated WebAuthn policy");
+            load_credentials(
+                &credentials_path,
+                &policy.allowed_algorithms,
+                config.credential_capacity,
+            )
+            .map_err(OperatorAuthInitError::CredentialLoad)?
         } else {
             Vec::new()
         };
@@ -460,6 +658,7 @@ impl OperatorAuth {
         let rate_per_minute = config.rate_per_minute.map(std::num::NonZeroU32::get);
         let burst = config.burst.map(std::num::NonZeroU32::get);
         let limiter = limits::RateLimiter::new_per_minute(rate_per_minute, burst);
+        let ephemeral_state_capacity = config.ephemeral_state_capacity;
         Ok(Self {
             enabled: config.enabled,
             require_mtls: config.require_mtls,
@@ -467,10 +666,11 @@ impl OperatorAuth {
             bootstrap_tokens,
             webauthn,
             credentials: Arc::new(RwLock::new(credentials)),
-            sessions: DashMap::new(),
-            challenges: DashMap::new(),
+            credential_capacity: config.credential_capacity.get(),
+            sessions: Mutex::new(BoundedExpiringStore::new(ephemeral_state_capacity)),
+            challenges: Mutex::new(BoundedExpiringStore::new(ephemeral_state_capacity)),
             limiter,
-            lockout: LockoutTracker::new(config.lockout),
+            lockout: LockoutTracker::new(config.lockout, ephemeral_state_capacity),
             telemetry,
             credentials_path,
         })
@@ -508,26 +708,34 @@ impl OperatorAuth {
         remote_ip: Option<IpAddr>,
         action: &'static str,
     ) -> Result<AuthContext, OperatorAuthError> {
-        if self.require_mtls && !mtls_present(headers, remote_ip, &self.mtls_trusted_proxy_nets) {
-            let err = OperatorAuthError::missing_mtls();
-            self.record_event(action, "denied", err.metric_label());
-            return Err(err);
-        }
         let key = auth_key(headers, remote_ip);
         if !self.limiter.allow(&key).await {
             let err = OperatorAuthError::rate_limited();
             self.record_event(action, "rate_limited", err.metric_label());
             return Err(err);
         }
-        if self.lockout.is_locked(&key) {
-            let err = OperatorAuthError::locked_out();
-            self.record_event(action, "locked", err.metric_label());
-            return Err(err);
+        match self.lockout.is_locked(&key) {
+            Ok(false) => {}
+            Ok(true) => {
+                let err = OperatorAuthError::locked_out();
+                self.record_event(action, "locked", err.metric_label());
+                return Err(err);
+            }
+            Err(ExpiringStoreAtCapacity) => {
+                let err = OperatorAuthError::state_capacity_exhausted();
+                self.record_event(action, "error", err.metric_label());
+                return Err(err);
+            }
         }
-        Ok(AuthContext {
+        let ctx = AuthContext {
             key,
             enrollment_authority: EnrollmentAuthority::None,
-        })
+        };
+        if self.require_mtls && !mtls_present(headers, remote_ip, &self.mtls_trusted_proxy_nets) {
+            let err = OperatorAuthError::missing_mtls();
+            return Err(self.record_error(&ctx, action, err));
+        }
+        Ok(ctx)
     }
     pub(crate) async fn authorize_operator_endpoint(
         &self,
@@ -544,12 +752,10 @@ impl OperatorAuth {
                 return Ok(());
             }
             let err = OperatorAuthError::invalid_session();
-            self.record_failure(&ctx, ACTION_GATE, err.metric_label());
-            return Err(err);
+            return Err(self.record_error(&ctx, ACTION_GATE, err));
         }
         let err = OperatorAuthError::missing_session();
-        self.record_failure(&ctx, ACTION_GATE, err.metric_label());
-        Err(err)
+        Err(self.record_error(&ctx, ACTION_GATE, err))
     }
     pub(crate) async fn authorize_bootstrap(
         &self,
@@ -569,7 +775,10 @@ impl OperatorAuth {
                 return Ok(ctx);
             }
         }
-        if !self.has_credentials()? {
+        if !self
+            .has_credentials()
+            .map_err(|err| self.record_error(&ctx, action, err))?
+        {
             match self.check_bootstrap_token(headers) {
                 TokenCheck::Valid => {
                     ctx.enrollment_authority = EnrollmentAuthority::BootstrapToken;
@@ -577,13 +786,11 @@ impl OperatorAuth {
                 }
                 TokenCheck::Missing => {
                     let err = OperatorAuthError::missing_token();
-                    self.record_failure(&ctx, action, err.metric_label());
-                    return Err(err);
+                    return Err(self.record_error(&ctx, action, err));
                 }
                 TokenCheck::Invalid => {
                     let err = OperatorAuthError::invalid_token();
-                    self.record_failure(&ctx, action, err.metric_label());
-                    return Err(err);
+                    return Err(self.record_error(&ctx, action, err));
                 }
             }
         }
@@ -592,8 +799,7 @@ impl OperatorAuth {
         } else {
             OperatorAuthError::missing_session()
         };
-        self.record_failure(&ctx, action, err.metric_label());
-        Err(err)
+        Err(self.record_error(&ctx, action, err))
     }
     pub(crate) async fn authorize_login(
         &self,
@@ -620,36 +826,53 @@ impl OperatorAuth {
         ctx: &AuthContext,
         rng: &mut R,
     ) -> Result<norito::json::Value, OperatorAuthError> {
-        let policy = self.webauthn_policy().inspect_err(|err| {
-            self.record_failure(ctx, ACTION_REGISTER_OPTIONS, err.metric_label());
-        })?;
-        self.prune_challenges();
-        let challenge_bytes = random_bytes_with_rng(CHALLENGE_BYTES, rng).inspect_err(|err| {
-            self.record_failure(ctx, ACTION_REGISTER_OPTIONS, err.metric_label());
-        })?;
+        let policy = self
+            .webauthn_policy()
+            .map_err(|err| self.record_error(ctx, ACTION_REGISTER_OPTIONS, err))?;
+        let exclude_credentials = {
+            let credentials = self
+                .credentials_read()
+                .map_err(|err| self.record_error(ctx, ACTION_REGISTER_OPTIONS, err))?;
+            credentials
+                .iter()
+                .map(|credential| {
+                    json_object(vec![
+                        json_entry("type", "public-key"),
+                        json_entry("id", encode_b64url(&credential.id)),
+                    ])
+                })
+                .collect::<Vec<_>>()
+        };
+        let challenge_bytes = random_bytes_with_rng(CHALLENGE_BYTES, rng)
+            .map_err(|err| self.record_error(ctx, ACTION_REGISTER_OPTIONS, err))?;
         let challenge_b64 = encode_b64url(&challenge_bytes);
-        let expires_at = Instant::now() + policy.challenge_ttl;
-        self.challenges.insert(
-            challenge_b64.clone(),
-            ChallengeEntry {
-                kind: ChallengeKind::Registration,
+        let now = Instant::now();
+        let expires_at = now
+            .checked_add(policy.challenge_ttl)
+            .expect("operator auth durations are validated during initialization");
+        self.challenges
+            .lock()
+            .insert(
+                challenge_b64.clone(),
+                ChallengeEntry {
+                    kind: ChallengeKind::Registration,
+                },
                 expires_at,
-                bytes: challenge_bytes,
-            },
-        );
+                now,
+            )
+            .map_err(|_| {
+                self.record_error(
+                    ctx,
+                    ACTION_REGISTER_OPTIONS,
+                    OperatorAuthError::state_capacity_exhausted(),
+                )
+            })?;
         let user_id_b64 = encode_b64url(&policy.user_id);
         let mut params = Vec::new();
         for alg in &policy.allowed_algorithms {
             params.push(json_object(vec![
                 json_entry("type", "public-key"),
                 json_entry("alg", alg.cose_alg()),
-            ]));
-        }
-        let mut exclude_credentials = Vec::new();
-        for credential in self.credentials_read()?.iter() {
-            exclude_credentials.push(json_object(vec![
-                json_entry("type", "public-key"),
-                json_entry("id", encode_b64url(&credential.id)),
             ]));
         }
         let mut public_key = norito::json::Map::new();
@@ -700,38 +923,27 @@ impl OperatorAuth {
         ctx: &AuthContext,
         payload: &norito::json::Value,
     ) -> Result<RegistrationOutcome, OperatorAuthError> {
-        let policy = self.webauthn_policy().inspect_err(|err| {
-            self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-        })?;
-        let input = parse_registration_payload(payload).inspect_err(|err| {
-            self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-        })?;
-        let client =
-            parse_client_data(&input.client_data_json, "webauthn.create").inspect_err(|err| {
-                self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-            })?;
+        let policy = self
+            .webauthn_policy()
+            .map_err(|err| self.record_error(ctx, ACTION_REGISTER_VERIFY, err))?;
+        let input = parse_registration_payload(payload)
+            .map_err(|err| self.record_error(ctx, ACTION_REGISTER_VERIFY, err))?;
+        let client = parse_client_data(&input.client_data_json, "webauthn.create")
+            .map_err(|err| self.record_error(ctx, ACTION_REGISTER_VERIFY, err))?;
         let _challenge_entry = self
             .take_challenge(&client.challenge, ChallengeKind::Registration)
-            .inspect_err(|err| {
-                self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-            })?;
+            .map_err(|err| self.record_error(ctx, ACTION_REGISTER_VERIFY, err))?;
         if !origin_allowed(&client.origin, &policy.origins) {
             let err = OperatorAuthError::origin_denied();
-            self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-            return Err(err);
+            return Err(self.record_error(ctx, ACTION_REGISTER_VERIFY, err));
         }
-        let attestation =
-            parse_attestation_object(&input.attestation_object).inspect_err(|err| {
-                self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-            })?;
-        let auth_data =
-            parse_auth_data_registration(&attestation.auth_data, policy).inspect_err(|err| {
-                self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-            })?;
+        let attestation = parse_attestation_object(&input.attestation_object)
+            .map_err(|err| self.record_error(ctx, ACTION_REGISTER_VERIFY, err))?;
+        let auth_data = parse_auth_data_registration(&attestation.auth_data, policy)
+            .map_err(|err| self.record_error(ctx, ACTION_REGISTER_VERIFY, err))?;
         if auth_data.credential_id != input.raw_id {
             let err = OperatorAuthError::invalid_payload("credential id mismatch");
-            self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-            return Err(err);
+            return Err(self.record_error(ctx, ACTION_REGISTER_VERIFY, err));
         }
         let created_at_ms = now_ms();
         let credential = StoredCredential {
@@ -743,9 +955,7 @@ impl OperatorAuth {
         };
         let total = self
             .upsert_credential(credential, ctx.enrollment_authority)
-            .inspect_err(|err| {
-                self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-            })?;
+            .map_err(|err| self.record_error(ctx, ACTION_REGISTER_VERIFY, err))?;
         self.record_success(ctx, ACTION_REGISTER_VERIFY, "ok");
         Ok(RegistrationOutcome {
             credential_id: encode_b64url(&auth_data.credential_id),
@@ -764,36 +974,51 @@ impl OperatorAuth {
         ctx: &AuthContext,
         rng: &mut R,
     ) -> Result<norito::json::Value, OperatorAuthError> {
-        let policy = self.webauthn_policy().inspect_err(|err| {
-            self.record_failure(ctx, ACTION_LOGIN_OPTIONS, err.metric_label());
-        })?;
-        self.prune_challenges();
-        let credentials = self.credentials_read()?;
-        if credentials.is_empty() {
-            let err = OperatorAuthError::no_credentials();
-            self.record_failure(ctx, ACTION_LOGIN_OPTIONS, err.metric_label());
-            return Err(err);
-        }
-        let challenge_bytes = random_bytes_with_rng(CHALLENGE_BYTES, rng).inspect_err(|err| {
-            self.record_failure(ctx, ACTION_LOGIN_OPTIONS, err.metric_label());
-        })?;
+        let policy = self
+            .webauthn_policy()
+            .map_err(|err| self.record_error(ctx, ACTION_LOGIN_OPTIONS, err))?;
+        let allow = {
+            let credentials = self
+                .credentials_read()
+                .map_err(|err| self.record_error(ctx, ACTION_LOGIN_OPTIONS, err))?;
+            if credentials.is_empty() {
+                let err = OperatorAuthError::no_credentials();
+                return Err(self.record_error(ctx, ACTION_LOGIN_OPTIONS, err));
+            }
+            credentials
+                .iter()
+                .map(|credential| {
+                    json_object(vec![
+                        json_entry("type", "public-key"),
+                        json_entry("id", encode_b64url(&credential.id)),
+                    ])
+                })
+                .collect::<Vec<_>>()
+        };
+        let challenge_bytes = random_bytes_with_rng(CHALLENGE_BYTES, rng)
+            .map_err(|err| self.record_error(ctx, ACTION_LOGIN_OPTIONS, err))?;
         let challenge_b64 = encode_b64url(&challenge_bytes);
-        let expires_at = Instant::now() + policy.challenge_ttl;
-        self.challenges.insert(
-            challenge_b64.clone(),
-            ChallengeEntry {
-                kind: ChallengeKind::Authentication,
+        let now = Instant::now();
+        let expires_at = now
+            .checked_add(policy.challenge_ttl)
+            .expect("operator auth durations are validated during initialization");
+        self.challenges
+            .lock()
+            .insert(
+                challenge_b64.clone(),
+                ChallengeEntry {
+                    kind: ChallengeKind::Authentication,
+                },
                 expires_at,
-                bytes: challenge_bytes,
-            },
-        );
-        let mut allow = Vec::new();
-        for credential in credentials.iter() {
-            allow.push(json_object(vec![
-                json_entry("type", "public-key"),
-                json_entry("id", encode_b64url(&credential.id)),
-            ]));
-        }
+                now,
+            )
+            .map_err(|_| {
+                self.record_error(
+                    ctx,
+                    ACTION_LOGIN_OPTIONS,
+                    OperatorAuthError::state_capacity_exhausted(),
+                )
+            })?;
         let mut public_key = norito::json::Map::new();
         public_key.insert("challenge".into(), json_value(&challenge_b64));
         public_key.insert("timeout".into(), json_value(&policy.challenge_timeout_ms()));
@@ -807,7 +1032,10 @@ impl OperatorAuth {
                 "preferred"
             }),
         );
-        self.record_success(ctx, ACTION_LOGIN_OPTIONS, "ok");
+        // Producing an authentication challenge does not prove the caller's identity.
+        // In particular, do not clear the failure window here: otherwise a caller can
+        // alternate options requests with invalid assertions and evade lockout forever.
+        self.record_event(ACTION_LOGIN_OPTIONS, "allowed", "ok");
         Ok(json_object(vec![json_entry(
             "publicKey",
             norito::json::Value::Object(public_key),
@@ -827,38 +1055,31 @@ impl OperatorAuth {
         payload: &norito::json::Value,
         rng: &mut R,
     ) -> Result<SessionOutcome, OperatorAuthError> {
-        let policy = self.webauthn_policy().inspect_err(|err| {
-            self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-        })?;
-        let input = parse_assertion_payload(payload).inspect_err(|err| {
-            self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-        })?;
-        let client =
-            parse_client_data(&input.client_data_json, "webauthn.get").inspect_err(|err| {
-                self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            })?;
+        let policy = self
+            .webauthn_policy()
+            .map_err(|err| self.record_error(ctx, ACTION_LOGIN_VERIFY, err))?;
+        let input = parse_assertion_payload(payload)
+            .map_err(|err| self.record_error(ctx, ACTION_LOGIN_VERIFY, err))?;
+        let client = parse_client_data(&input.client_data_json, "webauthn.get")
+            .map_err(|err| self.record_error(ctx, ACTION_LOGIN_VERIFY, err))?;
         let _challenge_entry = self
             .take_challenge(&client.challenge, ChallengeKind::Authentication)
-            .inspect_err(|err| {
-                self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            })?;
+            .map_err(|err| self.record_error(ctx, ACTION_LOGIN_VERIFY, err))?;
         if !origin_allowed(&client.origin, &policy.origins) {
             let err = OperatorAuthError::origin_denied();
-            self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            return Err(err);
+            return Err(self.record_error(ctx, ACTION_LOGIN_VERIFY, err));
         }
-        let auth_data =
-            parse_auth_data_assertion(&input.authenticator_data, policy).inspect_err(|err| {
-                self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            })?;
-        let mut credentials = self.credentials_write()?;
+        let auth_data = parse_auth_data_assertion(&input.authenticator_data, policy)
+            .map_err(|err| self.record_error(ctx, ACTION_LOGIN_VERIFY, err))?;
+        let mut credentials = self
+            .credentials_write()
+            .map_err(|err| self.record_error(ctx, ACTION_LOGIN_VERIFY, err))?;
         let Some(pos) = credentials
             .iter()
             .position(|entry| entry.id == input.raw_id)
         else {
             let err = OperatorAuthError::credential_unknown();
-            self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            return Err(err);
+            return Err(self.record_error(ctx, ACTION_LOGIN_VERIFY, err));
         };
         let credential = credentials.get(pos).expect("position valid");
         let client_hash = Sha256::digest(&input.client_data_json);
@@ -872,28 +1093,19 @@ impl OperatorAuth {
             &signed_bytes,
             &input.signature,
         )
-        .inspect_err(|err| {
-            self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-        })?;
-        if credential.sign_count != 0
-            && auth_data.sign_count != 0
-            && auth_data.sign_count <= credential.sign_count
-        {
+        .map_err(|err| self.record_error(ctx, ACTION_LOGIN_VERIFY, err))?;
+        if credential.sign_count != 0 && auth_data.sign_count <= credential.sign_count {
             let err = OperatorAuthError::invalid_payload("webauthn signCount did not advance");
-            self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            return Err(err);
+            return Err(self.record_error(ctx, ACTION_LOGIN_VERIFY, err));
         }
         let mut updated = credentials.clone();
         updated[pos].sign_count = auth_data.sign_count;
-        persist_credentials(&self.credentials_path, &updated).inspect_err(|err| {
-            self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-        })?;
+        persist_credentials(&self.credentials_path, &updated)
+            .map_err(|err| self.record_error(ctx, ACTION_LOGIN_VERIFY, err))?;
         *credentials = updated;
         let outcome = self
             .issue_session_with_rng(&input.raw_id, policy.session_ttl, rng)
-            .inspect_err(|err| {
-                self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            })?;
+            .map_err(|err| self.record_error(ctx, ACTION_LOGIN_VERIFY, err))?;
         self.record_success(ctx, ACTION_LOGIN_VERIFY, "ok");
         Ok(outcome)
     }
@@ -903,17 +1115,16 @@ impl OperatorAuth {
         ttl: Duration,
         rng: &mut R,
     ) -> Result<SessionOutcome, OperatorAuthError> {
-        self.prune_sessions();
         let token_bytes = random_bytes_with_rng(SESSION_TOKEN_BYTES, rng)?;
         let token = encode_b64url(&token_bytes);
-        let expires_at = Instant::now() + ttl;
-        self.sessions.insert(
-            token.clone(),
-            SessionEntry {
-                expires_at,
-                credential_id: credential_id.to_vec(),
-            },
-        );
+        let now = Instant::now();
+        let expires_at = now
+            .checked_add(ttl)
+            .expect("operator auth durations are validated during initialization");
+        self.sessions
+            .lock()
+            .insert(token.clone(), (), expires_at, now)
+            .map_err(|_| OperatorAuthError::state_capacity_exhausted())?;
         Ok(SessionOutcome {
             session_token: token,
             expires_in_secs: ttl.as_secs().max(1),
@@ -925,6 +1136,9 @@ impl OperatorAuth {
         credential: StoredCredential,
         authority: EnrollmentAuthority,
     ) -> Result<usize, OperatorAuthError> {
+        let policy = self.webauthn_policy()?;
+        validate_stored_credential(&credential, &policy.allowed_algorithms)
+            .map_err(OperatorAuthError::invalid_payload)?;
         let mut credentials = self.credentials_write()?;
         if authority == EnrollmentAuthority::BootstrapToken && !credentials.is_empty() {
             return Err(OperatorAuthError::missing_session());
@@ -933,6 +1147,9 @@ impl OperatorAuth {
         if let Some(pos) = updated.iter().position(|entry| entry.id == credential.id) {
             updated[pos] = credential;
         } else {
+            if updated.len() >= self.credential_capacity {
+                return Err(OperatorAuthError::credential_capacity_exhausted());
+            }
             updated.push(credential);
         }
         persist_credentials(&self.credentials_path, &updated)?;
@@ -944,13 +1161,9 @@ impl OperatorAuth {
         challenge: &str,
         kind: ChallengeKind,
     ) -> Result<ChallengeEntry, OperatorAuthError> {
-        self.prune_challenges();
-        match self.challenges.remove(challenge) {
-            Some((_key, entry)) => {
+        match self.challenges.lock().remove(challenge, Instant::now()) {
+            Some(entry) => {
                 if entry.kind != kind {
-                    return Err(OperatorAuthError::challenge_invalid());
-                }
-                if Instant::now() > entry.expires_at {
                     return Err(OperatorAuthError::challenge_invalid());
                 }
                 Ok(entry)
@@ -979,46 +1192,61 @@ impl OperatorAuth {
             telemetry.inc_torii_operator_auth_lockout(action, reason);
         });
     }
-    fn record_failure(&self, ctx: &AuthContext, action: &'static str, reason: &'static str) {
+    fn record_failure(
+        &self,
+        ctx: &AuthContext,
+        action: &'static str,
+        reason: &'static str,
+    ) -> Result<(), ExpiringStoreAtCapacity> {
         self.record_event(action, "denied", reason);
-        if self.lockout.record_failure(&ctx.key) {
+        if self.lockout.record_failure(&ctx.key)? {
             self.record_lockout(action, reason);
         }
+        Ok(())
+    }
+    fn record_error(
+        &self,
+        ctx: &AuthContext,
+        action: &'static str,
+        error: OperatorAuthError,
+    ) -> OperatorAuthError {
+        if error.counts_toward_lockout {
+            if self
+                .record_failure(ctx, action, error.metric_label())
+                .is_err()
+            {
+                let capacity_error = OperatorAuthError::state_capacity_exhausted();
+                self.record_event(action, "error", capacity_error.metric_label());
+                return capacity_error;
+            }
+        } else {
+            self.record_event(action, "error", error.metric_label());
+        }
+        error
     }
     fn record_success(&self, ctx: &AuthContext, action: &'static str, reason: &'static str) {
         self.lockout.clear(&ctx.key);
         self.record_event(action, "allowed", reason);
     }
-    fn prune_sessions(&self) {
-        let now = Instant::now();
-        let expired: Vec<String> = self
-            .sessions
-            .iter()
-            .filter(|entry| entry.expires_at <= now)
-            .map(|entry| entry.key().clone())
-            .collect();
-        for key in expired {
-            self.sessions.remove(&key);
-        }
-    }
-    fn prune_challenges(&self) {
-        let now = Instant::now();
-        let expired: Vec<String> = self
-            .challenges
-            .iter()
-            .filter(|entry| entry.expires_at <= now)
-            .map(|entry| entry.key().clone())
-            .collect();
-        for key in expired {
-            self.challenges.remove(&key);
-        }
-    }
     fn session_valid(&self, token: &str) -> bool {
-        self.prune_sessions();
-        self.sessions
-            .get(token)
-            .is_some_and(|entry| entry.expires_at > Instant::now())
+        self.sessions.lock().get(token, Instant::now()).is_some()
     }
+}
+fn validate_ephemeral_duration(
+    label: &'static str,
+    duration: Duration,
+) -> Result<(), OperatorAuthInitError> {
+    if duration.is_zero() {
+        return Err(OperatorAuthInitError::InvalidPolicy(format!(
+            "{label} must be greater than zero"
+        )));
+    }
+    if Instant::now().checked_add(duration).is_none() {
+        return Err(OperatorAuthInitError::InvalidPolicy(format!(
+            "{label} exceeds the platform timer range"
+        )));
+    }
+    Ok(())
 }
 /// Result of a successful WebAuthn registration ceremony.
 pub struct RegistrationOutcome {
@@ -1111,9 +1339,15 @@ fn decode_b64url(label: &'static str, value: &str) -> Result<Vec<u8>, OperatorAu
             "{label} must not be empty"
         )));
     }
-    URL_SAFE_NO_PAD
+    let decoded = URL_SAFE_NO_PAD
         .decode(value.as_bytes())
-        .map_err(|_| OperatorAuthError::invalid_payload(format!("{label} must be base64url")))
+        .map_err(|_| OperatorAuthError::invalid_payload(format!("{label} must be base64url")))?;
+    if URL_SAFE_NO_PAD.encode(&decoded) != value {
+        return Err(OperatorAuthError::invalid_payload(format!(
+            "{label} must use canonical unpadded base64url"
+        )));
+    }
+    Ok(decoded)
 }
 fn auth_key(headers: &HeaderMap, remote: Option<IpAddr>) -> String {
     limits::effective_remote_ip(headers, remote)
@@ -1150,7 +1384,11 @@ fn origin_allowed(origin: &str, allowed: &[Url]) -> bool {
         .iter()
         .any(|candidate| candidate.origin() == parsed_origin)
 }
-fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
+fn load_credentials(
+    path: &Path,
+    allowed_algorithms: &[OperatorWebAuthnAlgorithm],
+    capacity: NonZeroUsize,
+) -> Result<Vec<StoredCredential>, String> {
     let raw = match fs::read_to_string(path) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -1160,6 +1398,7 @@ fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "credentials payload must be a JSON object".to_string())?;
+    require_exact_json_fields(obj, &["credentials", "version"], "credentials payload")?;
     let version = obj
         .get("version")
         .and_then(norito::json::Value::as_u64)
@@ -1171,11 +1410,30 @@ fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
         .get("credentials")
         .and_then(|value| value.as_array())
         .ok_or_else(|| "credentials payload missing credentials array".to_string())?;
+    if items.len() > capacity.get() {
+        return Err(format!(
+            "credentials payload contains {} entries but credential_capacity is {}",
+            items.len(),
+            capacity
+        ));
+    }
     let mut result = Vec::with_capacity(items.len());
-    for item in items {
+    let mut ids = HashSet::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
         let item_obj = item
             .as_object()
             .ok_or_else(|| "credential entry must be an object".to_string())?;
+        require_exact_json_fields(
+            item_obj,
+            &[
+                "alg",
+                "created_at_ms",
+                "id_b64",
+                "public_key_b64",
+                "sign_count",
+            ],
+            &format!("credential entry {index}"),
+        )?;
         let id_b64 = item_obj
             .get("id_b64")
             .and_then(|value| value.as_str())
@@ -1196,26 +1454,77 @@ fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
             .get("created_at_ms")
             .and_then(norito::json::Value::as_u64)
             .ok_or_else(|| "credential entry missing created_at_ms".to_string())?;
-        let id = URL_SAFE_NO_PAD
-            .decode(id_b64.as_bytes())
-            .map_err(|_| "invalid credential id_b64".to_string())?;
-        let public_key = URL_SAFE_NO_PAD
-            .decode(public_key_b64.as_bytes())
-            .map_err(|_| "invalid credential public_key_b64".to_string())?;
+        let id = decode_canonical_stored_base64url("credential id_b64", id_b64)?;
+        let public_key =
+            decode_canonical_stored_base64url("credential public_key_b64", public_key_b64)?;
         let alg = match alg_label {
             "es256" => OperatorWebAuthnAlgorithm::Es256,
             "ed25519" => OperatorWebAuthnAlgorithm::Ed25519,
             other => return Err(format!("unsupported credential alg {other}")),
         };
-        result.push(StoredCredential {
+        let sign_count = u32::try_from(sign_count)
+            .map_err(|_| format!("credential entry {index} sign_count exceeds u32"))?;
+        let credential = StoredCredential {
             id,
             public_key,
             alg,
-            sign_count: sign_count.min(u64::from(u32::MAX)) as u32,
+            sign_count,
             created_at_ms,
-        });
+        };
+        validate_stored_credential(&credential, allowed_algorithms)
+            .map_err(|message| format!("credential entry {index}: {message}"))?;
+        if !ids.insert(credential.id.clone()) {
+            return Err(format!("credential entry {index} duplicates an earlier id"));
+        }
+        result.push(credential);
     }
     Ok(result)
+}
+fn require_exact_json_fields(
+    object: &norito::json::Map,
+    allowed: &[&str],
+    context: &str,
+) -> Result<(), String> {
+    if let Some(field) = object
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+    {
+        return Err(format!("{context} contains unknown field `{field}`"));
+    }
+    Ok(())
+}
+fn decode_canonical_stored_base64url(label: &str, encoded: &str) -> Result<Vec<u8>, String> {
+    if encoded.is_empty() {
+        return Err(format!("{label} must not be empty"));
+    }
+    let decoded = URL_SAFE_NO_PAD
+        .decode(encoded.as_bytes())
+        .map_err(|_| format!("invalid {label}"))?;
+    if URL_SAFE_NO_PAD.encode(&decoded) != encoded {
+        return Err(format!("{label} must use canonical unpadded base64url"));
+    }
+    Ok(decoded)
+}
+fn validate_stored_credential(
+    credential: &StoredCredential,
+    allowed_algorithms: &[OperatorWebAuthnAlgorithm],
+) -> Result<(), String> {
+    if credential.id.is_empty() {
+        return Err("credential id must not be empty".to_owned());
+    }
+    if credential.id.len() > MAX_CREDENTIAL_ID_BYTES {
+        return Err(format!(
+            "credential id exceeds {MAX_CREDENTIAL_ID_BYTES} bytes"
+        ));
+    }
+    if !allowed_algorithms.contains(&credential.alg) {
+        return Err(format!(
+            "credential algorithm {} is not allowed by the active WebAuthn policy",
+            credential.alg.label()
+        ));
+    }
+    validate_credential_public_key(credential.alg, &credential.public_key)
+        .map_err(|error| error.message)
 }
 fn persist_credentials(
     path: &Path,
@@ -1258,9 +1567,32 @@ fn persist_credentials(
     tmp.flush().map_err(|err| {
         OperatorAuthError::persistence_failure(format!("failed to flush credentials: {err}"))
     })?;
-    tmp.persist(path).map_err(|err| {
+    tmp.as_file().sync_all().map_err(|err| {
+        OperatorAuthError::persistence_failure(format!("failed to sync credentials: {err}"))
+    })?;
+    let persisted = tmp.persist(path).map_err(|err| {
         OperatorAuthError::persistence_failure(format!("failed to persist credentials: {err}"))
     })?;
+    persisted.sync_all().map_err(|err| {
+        OperatorAuthError::persistence_failure(format!(
+            "failed to sync persisted credentials: {err}"
+        ))
+    })?;
+    sync_parent_directory(parent)?;
+    Ok(())
+}
+#[cfg(unix)]
+fn sync_parent_directory(parent: &Path) -> Result<(), OperatorAuthError> {
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|err| {
+            OperatorAuthError::persistence_failure(format!(
+                "failed to sync operator auth directory: {err}"
+            ))
+        })
+}
+#[cfg(not(unix))]
+fn sync_parent_directory(_parent: &Path) -> Result<(), OperatorAuthError> {
     Ok(())
 }
 fn parse_registration_payload(
@@ -1269,11 +1601,24 @@ fn parse_registration_payload(
     let obj = payload.as_object().ok_or_else(|| {
         OperatorAuthError::invalid_payload("credential payload must be an object")
     })?;
+    require_exact_json_fields(
+        obj,
+        &["id", "rawId", "response", "type"],
+        "credential payload",
+    )
+    .map_err(OperatorAuthError::invalid_payload)?;
+    require_public_key_credential_type(obj)?;
     let raw_id = parse_credential_id(obj)?;
     let response = obj
         .get("response")
         .and_then(|value| value.as_object())
         .ok_or_else(|| OperatorAuthError::invalid_payload("credential response missing"))?;
+    require_exact_json_fields(
+        response,
+        &["attestationObject", "clientDataJSON"],
+        "credential response",
+    )
+    .map_err(OperatorAuthError::invalid_payload)?;
     let client_data = response
         .get("clientDataJSON")
         .and_then(|value| value.as_str())
@@ -1294,11 +1639,24 @@ fn parse_assertion_payload(
     let obj = payload.as_object().ok_or_else(|| {
         OperatorAuthError::invalid_payload("credential payload must be an object")
     })?;
+    require_exact_json_fields(
+        obj,
+        &["id", "rawId", "response", "type"],
+        "credential payload",
+    )
+    .map_err(OperatorAuthError::invalid_payload)?;
+    require_public_key_credential_type(obj)?;
     let raw_id = parse_credential_id(obj)?;
     let response = obj
         .get("response")
         .and_then(|value| value.as_object())
         .ok_or_else(|| OperatorAuthError::invalid_payload("credential response missing"))?;
+    require_exact_json_fields(
+        response,
+        &["authenticatorData", "clientDataJSON", "signature"],
+        "credential response",
+    )
+    .map_err(OperatorAuthError::invalid_payload)?;
     let client_data = response
         .get("clientDataJSON")
         .and_then(|value| value.as_str())
@@ -1318,6 +1676,14 @@ fn parse_assertion_payload(
         signature: decode_b64url("signature", signature)?,
     })
 }
+fn require_public_key_credential_type(object: &norito::json::Map) -> Result<(), OperatorAuthError> {
+    match object.get("type").and_then(norito::json::Value::as_str) {
+        Some("public-key") => Ok(()),
+        _ => Err(OperatorAuthError::invalid_payload(
+            "credential type must be `public-key`",
+        )),
+    }
+}
 fn parse_credential_id(object: &norito::json::Map) -> Result<Vec<u8>, OperatorAuthError> {
     let raw_id = object
         .get("rawId")
@@ -1329,6 +1695,11 @@ fn parse_credential_id(object: &norito::json::Map) -> Result<Vec<u8>, OperatorAu
         .ok_or_else(|| OperatorAuthError::invalid_payload("credential id missing"))?;
     let raw_id = decode_b64url("rawId", raw_id)?;
     let id = decode_b64url("id", id)?;
+    if raw_id.len() > MAX_CREDENTIAL_ID_BYTES {
+        return Err(OperatorAuthError::invalid_payload(format!(
+            "credential id must not exceed {MAX_CREDENTIAL_ID_BYTES} bytes"
+        )));
+    }
     if raw_id != id {
         return Err(OperatorAuthError::invalid_payload(
             "credential id and rawId must identify the same credential",
@@ -1383,8 +1754,7 @@ fn parse_client_data(bytes: &[u8], expected_type: &str) -> Result<ClientData, Op
     })
 }
 fn parse_attestation_object(bytes: &[u8]) -> Result<AttestationObject, OperatorAuthError> {
-    let value: CborValue = from_reader(bytes)
-        .map_err(|_| OperatorAuthError::invalid_payload("attestationObject must be CBOR"))?;
+    let value = decode_single_cbor_value(bytes, "attestationObject")?;
     let map = match value {
         CborValue::Map(map) => map,
         _ => {
@@ -1393,8 +1763,40 @@ fn parse_attestation_object(bytes: &[u8]) -> Result<AttestationObject, OperatorA
             ));
         }
     };
+    require_exact_cbor_text_keys(&map, &["attStmt", "authData", "fmt"], "attestationObject")?;
+    match expect_cbor_value_text_key(&map, "fmt")? {
+        CborValue::Text(format) if format == "none" => {}
+        _ => {
+            return Err(OperatorAuthError::invalid_payload(
+                "attestationObject fmt must be `none`",
+            ));
+        }
+    }
+    match expect_cbor_value_text_key(&map, "attStmt")? {
+        CborValue::Map(statement) if statement.is_empty() => {}
+        _ => {
+            return Err(OperatorAuthError::invalid_payload(
+                "attestationObject attStmt must be an empty CBOR map for fmt `none`",
+            ));
+        }
+    }
     let auth_data = expect_cbor_bytes(&map, "authData")?;
     Ok(AttestationObject { auth_data })
+}
+fn decode_single_cbor_value(
+    bytes: &[u8],
+    label: &'static str,
+) -> Result<CborValue, OperatorAuthError> {
+    let mut reader = Cursor::new(bytes);
+    let value: CborValue = from_reader(&mut reader).map_err(|_| {
+        OperatorAuthError::invalid_payload(format!("{label} must contain one CBOR value"))
+    })?;
+    if reader.position() != u64::try_from(bytes.len()).expect("slice length fits u64") {
+        return Err(OperatorAuthError::invalid_payload(format!(
+            "{label} contains trailing CBOR data"
+        )));
+    }
+    Ok(value)
 }
 fn parse_auth_data_registration(
     auth_data: &[u8],
@@ -1410,17 +1812,7 @@ fn parse_auth_data_registration(
         return Err(OperatorAuthError::rp_id_mismatch());
     }
     let flags = auth_data[32];
-    if flags & FLAG_USER_PRESENT == 0 {
-        return Err(OperatorAuthError::user_presence_required());
-    }
-    if policy.require_user_verification && flags & FLAG_USER_VERIFIED == 0 {
-        return Err(OperatorAuthError::user_verification_required());
-    }
-    if flags & FLAG_ATTESTED_CREDENTIAL_DATA == 0 {
-        return Err(OperatorAuthError::invalid_payload(
-            "authenticatorData missing attested credential data",
-        ));
-    }
+    validate_authenticator_flags(flags, policy.require_user_verification, true)?;
     let sign_count =
         u32::from_be_bytes(auth_data[33..37].try_into().expect("slice length verified"));
     let mut offset = 37 + 16;
@@ -1430,6 +1822,11 @@ fn parse_auth_data_registration(
             .expect("slice length verified"),
     ) as usize;
     offset += 2;
+    if credential_len == 0 || credential_len > MAX_CREDENTIAL_ID_BYTES {
+        return Err(OperatorAuthError::invalid_payload(format!(
+            "credential id length must be between 1 and {MAX_CREDENTIAL_ID_BYTES} bytes"
+        )));
+    }
     if auth_data.len() < offset + credential_len {
         return Err(OperatorAuthError::invalid_payload(
             "credential id extends past authenticatorData",
@@ -1437,8 +1834,7 @@ fn parse_auth_data_registration(
     }
     let credential_id = auth_data[offset..offset + credential_len].to_vec();
     offset += credential_len;
-    let cose_value: CborValue = from_reader(&auth_data[offset..])
-        .map_err(|_| OperatorAuthError::invalid_payload("credential public key must be CBOR"))?;
+    let cose_value = decode_single_cbor_value(&auth_data[offset..], "credential public key")?;
     let cose_key = parse_cose_key(&cose_value, &policy.allowed_algorithms)?;
     Ok(AuthDataRegistration {
         credential_id,
@@ -1460,11 +1856,11 @@ fn parse_auth_data_assertion(
         return Err(OperatorAuthError::rp_id_mismatch());
     }
     let flags = auth_data[32];
-    if flags & FLAG_USER_PRESENT == 0 {
-        return Err(OperatorAuthError::user_presence_required());
-    }
-    if policy.require_user_verification && flags & FLAG_USER_VERIFIED == 0 {
-        return Err(OperatorAuthError::user_verification_required());
+    validate_authenticator_flags(flags, policy.require_user_verification, false)?;
+    if auth_data.len() != 37 {
+        return Err(OperatorAuthError::invalid_payload(
+            "authenticatorData contains trailing bytes without extensions",
+        ));
     }
     let sign_count =
         u32::from_be_bytes(auth_data[33..37].try_into().expect("slice length verified"));
@@ -1482,6 +1878,7 @@ fn parse_cose_key(
             ));
         }
     };
+    require_unique_cbor_integer_keys(map, "credential public key")?;
     let kty = cbor_int(expect_cbor_value(map, 1)?)?;
     let alg = cbor_int(expect_cbor_value(map, 3)?)?;
     let crv = cbor_int(expect_cbor_value(map, -1)?)?;
@@ -1506,6 +1903,7 @@ fn parse_cose_key(
             if !allowed.contains(&OperatorWebAuthnAlgorithm::Ed25519) {
                 return Err(OperatorAuthError::credential_not_allowed());
             }
+            validate_credential_public_key(OperatorWebAuthnAlgorithm::Ed25519, &x)?;
             Ok(CoseKey {
                 alg: OperatorWebAuthnAlgorithm::Ed25519,
                 public_key: x,
@@ -1514,6 +1912,36 @@ fn parse_cose_key(
         _ => Err(OperatorAuthError::invalid_payload(
             "unsupported COSE key parameters",
         )),
+    }
+}
+fn validate_credential_public_key(
+    alg: OperatorWebAuthnAlgorithm,
+    public_key: &[u8],
+) -> Result<(), OperatorAuthError> {
+    match alg {
+        OperatorWebAuthnAlgorithm::Es256 => {
+            if public_key.len() != P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN
+                || public_key.first() != Some(&0x04)
+            {
+                return Err(OperatorAuthError::invalid_payload(
+                    "ES256 public key must be canonical uncompressed SEC1",
+                ));
+            }
+            parse_es256_public_key(public_key).map(|_| ())
+        }
+        OperatorWebAuthnAlgorithm::Ed25519 => {
+            let bytes: &[u8; 32] = public_key.try_into().map_err(|_| {
+                OperatorAuthError::invalid_payload("Ed25519 public key must contain 32 bytes")
+            })?;
+            let key = ed25519_dalek::VerifyingKey::from_bytes(bytes)
+                .map_err(|_| OperatorAuthError::invalid_payload("invalid Ed25519 public key"))?;
+            if key.is_weak() {
+                return Err(OperatorAuthError::invalid_payload(
+                    "weak Ed25519 public key is not allowed",
+                ));
+            }
+            Ok(())
+        }
     }
 }
 fn verify_signature(
@@ -1538,6 +1966,8 @@ fn verify_signature(
                 .map_err(|_| OperatorAuthError::signature_invalid())
         }
         OperatorWebAuthnAlgorithm::Ed25519 => {
+            validate_credential_public_key(alg, public_key)
+                .map_err(|_| OperatorAuthError::signature_invalid())?;
             if signature.len() != 64 {
                 return Err(OperatorAuthError::signature_invalid());
             }
@@ -1574,6 +2004,96 @@ fn cbor_int(value: &CborValue) -> Result<i128, OperatorAuthError> {
             "COSE value must be an integer",
         )),
     }
+}
+fn validate_authenticator_flags(
+    flags: u8,
+    require_user_verification: bool,
+    require_attested_credential_data: bool,
+) -> Result<(), OperatorAuthError> {
+    if flags & RESERVED_AUTHENTICATOR_FLAGS != 0 {
+        return Err(OperatorAuthError::invalid_payload(
+            "authenticatorData uses reserved flag bits",
+        ));
+    }
+    if flags & FLAG_BACKUP_STATE != 0 && flags & FLAG_BACKUP_ELIGIBLE == 0 {
+        return Err(OperatorAuthError::invalid_payload(
+            "authenticatorData backup-state flag requires backup eligibility",
+        ));
+    }
+    if flags & FLAG_EXTENSION_DATA != 0 {
+        return Err(OperatorAuthError::invalid_payload(
+            "authenticatorData extensions are not supported by the V1 operator profile",
+        ));
+    }
+    if flags & FLAG_USER_PRESENT == 0 {
+        return Err(OperatorAuthError::user_presence_required());
+    }
+    if require_user_verification && flags & FLAG_USER_VERIFIED == 0 {
+        return Err(OperatorAuthError::user_verification_required());
+    }
+    let has_attested_credential_data = flags & FLAG_ATTESTED_CREDENTIAL_DATA != 0;
+    if has_attested_credential_data != require_attested_credential_data {
+        return Err(OperatorAuthError::invalid_payload(if require_attested_credential_data {
+            "authenticatorData missing attested credential data"
+        } else {
+            "assertion authenticatorData must not contain attested credential data"
+        }));
+    }
+    Ok(())
+}
+fn require_exact_cbor_text_keys(
+    map: &[(CborValue, CborValue)],
+    expected: &[&str],
+    context: &str,
+) -> Result<(), OperatorAuthError> {
+    let mut keys = HashSet::with_capacity(map.len());
+    for (key, _) in map {
+        let CborValue::Text(key) = key else {
+            return Err(OperatorAuthError::invalid_payload(format!(
+                "{context} keys must be text"
+            )));
+        };
+        if !expected.contains(&key.as_str()) {
+            return Err(OperatorAuthError::invalid_payload(format!(
+                "{context} contains unknown field `{key}`"
+            )));
+        }
+        if !keys.insert(key.as_str()) {
+            return Err(OperatorAuthError::invalid_payload(format!(
+                "{context} contains duplicate field `{key}`"
+            )));
+        }
+    }
+    if keys.len() != expected.len() {
+        return Err(OperatorAuthError::invalid_payload(format!(
+            "{context} is missing a required field"
+        )));
+    }
+    Ok(())
+}
+fn require_unique_cbor_integer_keys(
+    map: &[(CborValue, CborValue)],
+    context: &str,
+) -> Result<(), OperatorAuthError> {
+    let mut keys = HashSet::with_capacity(map.len());
+    for (key, _) in map {
+        let key = cbor_int(key)?;
+        if !keys.insert(key) {
+            return Err(OperatorAuthError::invalid_payload(format!(
+                "{context} contains duplicate COSE label {key}"
+            )));
+        }
+    }
+    Ok(())
+}
+fn expect_cbor_value_text_key<'a>(
+    map: &'a [(CborValue, CborValue)],
+    key: &str,
+) -> Result<&'a CborValue, OperatorAuthError> {
+    map.iter()
+        .find(|(candidate, _)| matches!(candidate, CborValue::Text(text) if text == key))
+        .map(|(_, value)| value)
+        .ok_or_else(|| OperatorAuthError::invalid_payload("missing CBOR map entry"))
 }
 fn expect_cbor_value(
     map: &[(CborValue, CborValue)],
@@ -1686,6 +2206,7 @@ mod tests {
         elliptic_curve::rand_core::OsRng,
     };
     use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use rand::rngs::OsRng as FallibleOsRng;
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -1745,6 +2266,8 @@ mod tests {
             tokens,
             rate_per_minute: None,
             burst: None,
+            ephemeral_state_capacity: NonZeroUsize::new(4_096).expect("non-zero capacity"),
+            credential_capacity: NonZeroUsize::new(64).expect("non-zero capacity"),
             lockout,
             webauthn: Some(base_webauthn_config(algorithms)),
         }
@@ -1752,6 +2275,12 @@ mod tests {
     fn build_operator_auth(config: ToriiOperatorAuth, data_dir: &Path) -> OperatorAuth {
         OperatorAuth::new(config, data_dir.to_path_buf(), MaybeTelemetry::disabled())
             .expect("operator auth")
+    }
+    fn write_credentials_fixture(data_dir: &Path, body: &str) {
+        let path = operator_credentials_path(data_dir);
+        fs::create_dir_all(path.parent().expect("credentials parent"))
+            .expect("create credentials directory");
+        fs::write(path, body).expect("write credentials fixture");
     }
     fn base_headers() -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -1799,6 +2328,32 @@ mod tests {
         assert!(
             parse_credential_id(missing_raw_id.as_object().expect("credential object")).is_err()
         );
+    }
+    #[test]
+    fn webauthn_verify_payloads_require_exact_v1_fields() {
+        let mut assertion = build_assertion_payload(b"credential", b"client", b"auth", b"sig");
+        parse_assertion_payload(&assertion).expect("canonical assertion envelope");
+        assertion
+            .as_object_mut()
+            .expect("assertion object")
+            .insert("legacy".to_owned(), true.into());
+        assert!(parse_assertion_payload(&assertion).is_err());
+
+        let mut registration = build_registration_payload(b"credential", b"client", b"attestation");
+        parse_registration_payload(&registration).expect("canonical registration envelope");
+        registration
+            .as_object_mut()
+            .expect("registration object")
+            .insert("type".to_owned(), "not-public-key".into());
+        assert!(parse_registration_payload(&registration).is_err());
+
+        let mut response_extra = build_assertion_payload(b"credential", b"client", b"auth", b"sig");
+        response_extra
+            .get_mut("response")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("assertion response")
+            .insert("userHandle".to_owned(), norito::json::Value::Null);
+        assert!(parse_assertion_payload(&response_extra).is_err());
     }
     #[test]
     fn client_data_rejects_cross_origin_contexts() {
@@ -1850,6 +2405,30 @@ mod tests {
             .expect_err("poisoned credential state must fail closed");
         assert_eq!(err.code, "operator_webauthn_state_unavailable");
     }
+    #[test]
+    fn operator_auth_rejects_zero_ephemeral_duration() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let mut config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        config
+            .webauthn
+            .as_mut()
+            .expect("WebAuthn config")
+            .challenge_ttl = Duration::ZERO;
+
+        let error = match OperatorAuth::new(
+            config,
+            tempdir.path().to_path_buf(),
+            MaybeTelemetry::disabled(),
+        ) {
+            Ok(_) => panic!("zero challenge TTL must fail initialization"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, OperatorAuthInitError::InvalidPolicy(_)));
+    }
     #[tokio::test]
     async fn operator_auth_preserves_fractional_per_minute_rate() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -1888,7 +2467,7 @@ mod tests {
             .expect_err("registration challenge RNG failure");
         assert_eq!(err.code, "operator_auth_random_bytes_failed");
         assert!(err.message.contains("failing operator auth RNG"));
-        assert!(auth.challenges.is_empty());
+        assert_eq!(auth.challenges.lock().len(), 0);
     }
     #[test]
     fn authentication_options_reports_challenge_rng_failure() {
@@ -1917,7 +2496,49 @@ mod tests {
             .expect_err("authentication challenge RNG failure");
         assert_eq!(err.code, "operator_auth_random_bytes_failed");
         assert!(err.message.contains("failing operator auth RNG"));
-        assert!(auth.challenges.is_empty());
+        assert_eq!(auth.challenges.lock().len(), 0);
+    }
+    #[test]
+    fn challenge_and_session_admission_fail_closed_at_capacity() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let mut config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        config.ephemeral_state_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+        let auth = build_operator_auth(config, tempdir.path());
+        auth.credentials_write()
+            .expect("credential lock")
+            .push(StoredCredential {
+                id: vec![1],
+                public_key: Vec::new(),
+                alg: OperatorWebAuthnAlgorithm::Es256,
+                sign_count: 0,
+                created_at_ms: 0,
+            });
+        let ctx = AuthContext {
+            key: "capacity-test".to_owned(),
+            enrollment_authority: EnrollmentAuthority::None,
+        };
+
+        auth.webauthn_authentication_options(&ctx)
+            .expect("first challenge");
+        let challenge_error = auth
+            .webauthn_authentication_options(&ctx)
+            .expect_err("second live challenge must exceed capacity");
+        assert_eq!(
+            challenge_error.code,
+            "operator_auth_state_capacity_exhausted"
+        );
+
+        let mut rng = FallibleOsRng;
+        auth.issue_session_with_rng(b"credential", Duration::from_secs(60), &mut rng)
+            .expect("first session");
+        let session_error = auth
+            .issue_session_with_rng(b"credential", Duration::from_secs(60), &mut rng)
+            .expect_err("second live session must exceed capacity");
+        assert_eq!(session_error.code, "operator_auth_state_capacity_exhausted");
     }
     #[test]
     fn issue_session_reports_token_rng_failure() {
@@ -1938,7 +2559,7 @@ mod tests {
         };
         assert_eq!(err.code, "operator_auth_random_bytes_failed");
         assert!(err.message.contains("failing operator auth RNG"));
-        assert!(auth.sessions.is_empty());
+        assert_eq!(auth.sessions.lock().len(), 0);
     }
     fn headers_with_operator_token(token: &str) -> HeaderMap {
         let mut headers = base_headers();
@@ -1982,10 +2603,20 @@ mod tests {
         json.into_bytes()
     }
     fn build_attestation_object(auth_data: Vec<u8>) -> Vec<u8> {
-        let map = vec![(
-            CborValue::Text("authData".to_owned()),
-            CborValue::Bytes(auth_data),
-        )];
+        let map = vec![
+            (
+                CborValue::Text("fmt".to_owned()),
+                CborValue::Text("none".to_owned()),
+            ),
+            (
+                CborValue::Text("attStmt".to_owned()),
+                CborValue::Map(Vec::new()),
+            ),
+            (
+                CborValue::Text("authData".to_owned()),
+                CborValue::Bytes(auth_data),
+            ),
+        ];
         let mut bytes = Vec::new();
         into_writer(&CborValue::Map(map), &mut bytes).expect("attestationObject");
         bytes
@@ -2057,6 +2688,7 @@ mod tests {
             json_entry("id", credential_id.clone()),
             json_entry("rawId", credential_id),
             json_entry("response", response),
+            json_entry("type", "public-key"),
         ])
     }
     fn build_assertion_payload(
@@ -2075,7 +2707,92 @@ mod tests {
             json_entry("id", credential_id.clone()),
             json_entry("rawId", credential_id),
             json_entry("response", response),
+            json_entry("type", "public-key"),
         ])
+    }
+    #[test]
+    fn attestation_object_requires_the_exact_none_profile() {
+        let canonical = build_attestation_object(vec![1, 2, 3]);
+        assert_eq!(
+            parse_attestation_object(&canonical)
+                .expect("canonical none attestation")
+                .auth_data,
+            [1, 2, 3]
+        );
+
+        let malformed = [
+            CborValue::Map(vec![
+                (
+                    CborValue::Text("fmt".to_owned()),
+                    CborValue::Text("packed".to_owned()),
+                ),
+                (
+                    CborValue::Text("attStmt".to_owned()),
+                    CborValue::Map(Vec::new()),
+                ),
+                (
+                    CborValue::Text("authData".to_owned()),
+                    CborValue::Bytes(vec![1]),
+                ),
+            ]),
+            CborValue::Map(vec![
+                (
+                    CborValue::Text("fmt".to_owned()),
+                    CborValue::Text("none".to_owned()),
+                ),
+                (
+                    CborValue::Text("attStmt".to_owned()),
+                    CborValue::Map(Vec::new()),
+                ),
+                (
+                    CborValue::Text("authData".to_owned()),
+                    CborValue::Bytes(vec![1]),
+                ),
+                (
+                    CborValue::Text("legacy".to_owned()),
+                    CborValue::Null,
+                ),
+            ]),
+        ];
+        for value in malformed {
+            let mut encoded = Vec::new();
+            into_writer(&value, &mut encoded).expect("malformed attestation fixture");
+            assert!(parse_attestation_object(&encoded).is_err());
+        }
+
+        let mut trailing = canonical;
+        trailing.push(0);
+        assert!(parse_attestation_object(&trailing).is_err());
+    }
+    #[test]
+    fn authenticator_data_rejects_unconsumed_or_invalid_flags() {
+        let policy = WebAuthnPolicy::from_config(base_webauthn_config(vec![
+            OperatorWebAuthnAlgorithm::Es256,
+        ]))
+        .expect("policy");
+        let mut assertion = build_auth_data_assertion(&policy, 1);
+        assertion.push(0);
+        assert!(parse_auth_data_assertion(&assertion, &policy).is_err());
+
+        let mut assertion = build_auth_data_assertion(&policy, 1);
+        assertion[32] |= RESERVED_AUTHENTICATOR_FLAGS & 0x02;
+        assert!(parse_auth_data_assertion(&assertion, &policy).is_err());
+
+        let mut assertion = build_auth_data_assertion(&policy, 1);
+        assertion[32] |= FLAG_BACKUP_STATE;
+        assert!(parse_auth_data_assertion(&assertion, &policy).is_err());
+
+        let signing_key = SigningKey::random(&mut OsRng);
+        let cose_key = build_cose_key_es256(&signing_key);
+        let mut registration =
+            build_auth_data_registration(&policy, b"credential", &cose_key, 1);
+        registration.push(0);
+        assert!(parse_auth_data_registration(&registration, &policy).is_err());
+
+        let mut registration =
+            build_auth_data_registration(&policy, b"credential", &cose_key, 1);
+        registration[32] |= FLAG_EXTENSION_DATA;
+        assert!(parse_auth_data_registration(&registration, &policy).is_err());
     }
     #[tokio::test]
     async fn operator_auth_registration_login_and_rollover_es256() {
@@ -2229,6 +2946,237 @@ mod tests {
             "failed persistence must not advance the in-memory signature counter"
         );
     }
+    #[test]
+    fn authentication_counter_cannot_fall_back_to_zero() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            vec!["bootstrap".to_owned()],
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, tempdir.path());
+        let signing_key = SigningKey::random(&mut OsRng);
+        let credential_id = random_bytes(16).expect("credential id");
+        let credential = StoredCredential {
+            id: credential_id.clone(),
+            public_key: signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes()
+                .to_vec(),
+            alg: OperatorWebAuthnAlgorithm::Es256,
+            sign_count: 1,
+            created_at_ms: 0,
+        };
+        persist_credentials(&auth.credentials_path, std::slice::from_ref(&credential))
+            .expect("persist initial counter");
+        *auth.credentials_write().expect("credential lock") = vec![credential];
+        let persisted_before = fs::read(&auth.credentials_path).expect("persisted credential");
+
+        let ctx = AuthContext {
+            key: "counter-rollback".to_owned(),
+            enrollment_authority: EnrollmentAuthority::None,
+        };
+        let options = auth
+            .webauthn_authentication_options(&ctx)
+            .expect("login options");
+        let challenge = extract_challenge(&options);
+        let policy = auth.webauthn_policy().expect("policy");
+        let authenticator_data = build_auth_data_assertion(policy, 0);
+        let client_data_json = build_client_data(&challenge, "https://example.com", "webauthn.get");
+        let client_hash = Sha256::digest(&client_data_json);
+        let mut signed_bytes =
+            Vec::with_capacity(authenticator_data.len() + client_hash.as_slice().len());
+        signed_bytes.extend_from_slice(&authenticator_data);
+        signed_bytes.extend_from_slice(&client_hash);
+        let signature: p256::ecdsa::Signature = signing_key.sign(&signed_bytes);
+        let payload = build_assertion_payload(
+            &credential_id,
+            &client_data_json,
+            &authenticator_data,
+            signature.to_der().as_bytes(),
+        );
+
+        let error = match auth.webauthn_finish_authentication(&ctx, &payload) {
+            Ok(_) => panic!("a used counter cannot revert to zero"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "operator_webauthn_payload_invalid");
+        assert_eq!(
+            auth.credentials_read().expect("credential lock")[0].sign_count,
+            1
+        );
+        assert_eq!(
+            fs::read(&auth.credentials_path).expect("persisted credential"),
+            persisted_before
+        );
+    }
+    #[test]
+    fn persisted_credentials_are_validated_strictly_at_startup() {
+        let signing_key = SigningKey::random(&mut OsRng);
+        let public_key = encode_b64url(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let valid_entry = |id: &str, sign_count: u64| {
+            format!(
+                r#"{{"id_b64":"{id}","public_key_b64":"{public_key}","alg":"es256","sign_count":{sign_count},"created_at_ms":1}}"#
+            )
+        };
+        let duplicate = valid_entry(&encode_b64url(b"same-id"), 0);
+        let fixtures = [
+            (
+                "duplicate id",
+                format!(r#"{{"version":1,"credentials":[{duplicate},{duplicate}]}}"#),
+            ),
+            (
+                "empty id",
+                format!(r#"{{"version":1,"credentials":[{}]}}"#, valid_entry("", 0)),
+            ),
+            (
+                "oversized counter",
+                format!(
+                    r#"{{"version":1,"credentials":[{}]}}"#,
+                    valid_entry(&encode_b64url(b"counter"), u64::MAX)
+                ),
+            ),
+            (
+                "invalid key",
+                format!(
+                    r#"{{"version":1,"credentials":[{{"id_b64":"{}","public_key_b64":"{}","alg":"es256","sign_count":0,"created_at_ms":1}}]}}"#,
+                    encode_b64url(b"invalid-key"),
+                    encode_b64url(&[1; P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN])
+                ),
+            ),
+            (
+                "unknown field",
+                r#"{"version":1,"credentials":[],"legacy":true}"#.to_owned(),
+            ),
+        ];
+
+        for (label, body) in fixtures {
+            let tempdir = tempfile::tempdir().expect("tempdir");
+            write_credentials_fixture(tempdir.path(), &body);
+            let config = base_operator_auth_config(
+                Vec::new(),
+                OperatorAuthLockout::default(),
+                vec![OperatorWebAuthnAlgorithm::Es256],
+            );
+            let error = match OperatorAuth::new(
+                config,
+                tempdir.path().to_path_buf(),
+                MaybeTelemetry::disabled(),
+            ) {
+                Ok(_) => panic!("{label} must fail startup"),
+                Err(error) => error,
+            };
+            assert!(
+                matches!(error, OperatorAuthInitError::CredentialLoad(_)),
+                "{label}: {error}"
+            );
+        }
+    }
+    #[test]
+    fn credential_capacity_is_enforced_for_load_and_rollover() {
+        let signing_key = SigningKey::random(&mut OsRng);
+        let public_key = encode_b64url(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let entry = |id: &[u8]| {
+            format!(
+                r#"{{"id_b64":"{}","public_key_b64":"{public_key}","alg":"es256","sign_count":0,"created_at_ms":1}}"#,
+                encode_b64url(id)
+            )
+        };
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        write_credentials_fixture(
+            tempdir.path(),
+            &format!(
+                r#"{{"version":1,"credentials":[{},{}]}}"#,
+                entry(b"one"),
+                entry(b"two")
+            ),
+        );
+        let mut config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        config.credential_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+        let error = match OperatorAuth::new(
+            config,
+            tempdir.path().to_path_buf(),
+            MaybeTelemetry::disabled(),
+        ) {
+            Ok(_) => panic!("oversized credential store must fail startup"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, OperatorAuthInitError::CredentialLoad(_)));
+
+        let empty = tempfile::tempdir().expect("tempdir");
+        let mut config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        config.credential_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+        let auth = build_operator_auth(config, empty.path());
+        let credential = |id| StoredCredential {
+            id: vec![id],
+            public_key: signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes()
+                .to_vec(),
+            alg: OperatorWebAuthnAlgorithm::Es256,
+            sign_count: 0,
+            created_at_ms: 1,
+        };
+        auth.upsert_credential(credential(1), EnrollmentAuthority::Session)
+            .expect("first credential");
+        let error = auth
+            .upsert_credential(credential(2), EnrollmentAuthority::Session)
+            .expect_err("rollover beyond capacity must fail");
+        assert_eq!(
+            error.code,
+            "operator_webauthn_credential_capacity_exhausted"
+        );
+    }
+    #[test]
+    fn persisted_credential_algorithm_must_match_active_policy() {
+        let signing_key = SigningKey::random(&mut OsRng);
+        let body = format!(
+            r#"{{"version":1,"credentials":[{{"id_b64":"{}","public_key_b64":"{}","alg":"es256","sign_count":0,"created_at_ms":1}}]}}"#,
+            encode_b64url(b"es256-id"),
+            encode_b64url(
+                signing_key
+                    .verifying_key()
+                    .to_encoded_point(false)
+                    .as_bytes()
+            )
+        );
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        write_credentials_fixture(tempdir.path(), &body);
+        let config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Ed25519],
+        );
+        let error = match OperatorAuth::new(
+            config,
+            tempdir.path().to_path_buf(),
+            MaybeTelemetry::disabled(),
+        ) {
+            Ok(_) => panic!("credential outside active algorithm policy must fail startup"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, OperatorAuthInitError::CredentialLoad(_)));
+    }
     #[tokio::test]
     async fn operator_token_only_bootstraps_credential_enrollment() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2363,6 +3311,164 @@ mod tests {
             .await
             .expect_err("locked out");
         assert_eq!(err.code, "operator_auth_locked");
+    }
+    #[test]
+    fn login_options_do_not_clear_assertion_failures() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let lockout = OperatorAuthLockout {
+            failures: std::num::NonZeroU32::new(2),
+            ..OperatorAuthLockout::default()
+        };
+        let config =
+            base_operator_auth_config(Vec::new(), lockout, vec![OperatorWebAuthnAlgorithm::Es256]);
+        let auth = build_operator_auth(config, tempdir.path());
+        auth.credentials_write()
+            .expect("credential lock")
+            .push(StoredCredential {
+                id: vec![1],
+                public_key: vec![2],
+                alg: OperatorWebAuthnAlgorithm::Es256,
+                sign_count: 0,
+                created_at_ms: 0,
+            });
+        let ctx = AuthContext {
+            key: "caller".to_owned(),
+            enrollment_authority: EnrollmentAuthority::None,
+        };
+
+        auth.record_failure(&ctx, ACTION_LOGIN_VERIFY, "invalid_assertion")
+            .expect("lockout state has capacity");
+        auth.webauthn_authentication_options(&ctx)
+            .expect("issue another login challenge");
+        auth.record_failure(&ctx, ACTION_LOGIN_VERIFY, "invalid_assertion")
+            .expect("lockout state has capacity");
+
+        assert_eq!(auth.lockout.is_locked(&ctx.key), Ok(true));
+    }
+    #[test]
+    fn operational_errors_do_not_advance_lockout() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let lockout = OperatorAuthLockout {
+            failures: std::num::NonZeroU32::new(1),
+            ..OperatorAuthLockout::default()
+        };
+        let config =
+            base_operator_auth_config(Vec::new(), lockout, vec![OperatorWebAuthnAlgorithm::Es256]);
+        let auth = build_operator_auth(config, tempdir.path());
+        let ctx = AuthContext {
+            key: "caller".to_owned(),
+            enrollment_authority: EnrollmentAuthority::None,
+        };
+
+        let operational = OperatorAuthError::random_bytes_failure("entropy unavailable");
+        let returned = auth.record_error(&ctx, ACTION_LOGIN_VERIFY, operational);
+        assert_eq!(returned.code, "operator_auth_random_bytes_failed");
+        assert_eq!(auth.lockout.is_locked(&ctx.key), Ok(false));
+
+        let denial = OperatorAuthError::signature_invalid();
+        let returned = auth.record_error(&ctx, ACTION_LOGIN_VERIFY, denial);
+        assert_eq!(returned.code, "operator_webauthn_signature_invalid");
+        assert_eq!(auth.lockout.is_locked(&ctx.key), Ok(true));
+    }
+    #[test]
+    fn lockout_capacity_exhaustion_overrides_authentication_denial() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let lockout = OperatorAuthLockout {
+            failures: std::num::NonZeroU32::new(10),
+            ..OperatorAuthLockout::default()
+        };
+        let mut config =
+            base_operator_auth_config(Vec::new(), lockout, vec![OperatorWebAuthnAlgorithm::Es256]);
+        config.ephemeral_state_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+        let auth = build_operator_auth(config, tempdir.path());
+        auth.lockout
+            .record_failure("caller-a")
+            .expect("first identity fits");
+        let ctx = AuthContext {
+            key: "caller-b".to_owned(),
+            enrollment_authority: EnrollmentAuthority::None,
+        };
+
+        let returned = auth.record_error(
+            &ctx,
+            ACTION_LOGIN_VERIFY,
+            OperatorAuthError::signature_invalid(),
+        );
+        assert_eq!(returned.code, "operator_auth_state_capacity_exhausted");
+        assert_eq!(returned.status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+    #[test]
+    fn lockout_identity_state_is_bounded_and_fails_closed() {
+        let tracker = LockoutTracker::new(
+            OperatorAuthLockout {
+                failures: std::num::NonZeroU32::new(10),
+                window: Duration::from_secs(60),
+                duration: Duration::from_secs(60),
+            },
+            NonZeroUsize::new(2).expect("non-zero capacity"),
+        );
+
+        assert_eq!(tracker.record_failure("caller-a"), Ok(false));
+        assert_eq!(tracker.record_failure("caller-b"), Ok(false));
+        assert_eq!(tracker.entries.lock().len(), 2);
+        assert_eq!(tracker.is_locked("caller-c"), Err(ExpiringStoreAtCapacity));
+        assert_eq!(
+            tracker.record_failure("caller-c"),
+            Err(ExpiringStoreAtCapacity)
+        );
+        assert_eq!(tracker.entries.lock().len(), 2);
+
+        tracker.clear("caller-a");
+        assert_eq!(tracker.is_locked("caller-c"), Ok(false));
+        assert_eq!(tracker.record_failure("caller-c"), Ok(false));
+        assert_eq!(tracker.entries.lock().len(), 2);
+    }
+    #[test]
+    fn ephemeral_store_reclaims_expired_entries_without_evicting_live_state() {
+        let capacity = NonZeroUsize::new(2).expect("non-zero capacity");
+        let mut store = BoundedExpiringStore::new(capacity);
+        let now = Instant::now();
+        let soon = now + Duration::from_secs(1);
+        let later = now + Duration::from_secs(10);
+
+        store
+            .insert("soon".to_owned(), 1, soon, now)
+            .expect("first entry");
+        store
+            .insert("later".to_owned(), 2, later, now)
+            .expect("second entry");
+        assert_eq!(
+            store.insert("live-eviction".to_owned(), 3, later, now),
+            Err(ExpiringStoreAtCapacity)
+        );
+
+        let after_soon = soon + Duration::from_nanos(1);
+        store
+            .insert("replacement".to_owned(), 3, later, after_soon)
+            .expect("expired entry releases capacity");
+        assert_eq!(store.get("soon", after_soon), None);
+        assert_eq!(store.get("later", after_soon), Some(&2));
+        assert_eq!(store.get("replacement", after_soon), Some(&3));
+    }
+    #[test]
+    fn concurrent_ephemeral_admission_never_exceeds_capacity() {
+        let capacity = NonZeroUsize::new(8).expect("non-zero capacity");
+        let store = Mutex::new(BoundedExpiringStore::new(capacity));
+        let now = Instant::now();
+        let expires_at = now + Duration::from_secs(60);
+
+        std::thread::scope(|scope| {
+            for index in 0..64 {
+                let store = &store;
+                scope.spawn(move || {
+                    let _ = store
+                        .lock()
+                        .insert(format!("caller-{index}"), index, expires_at, now);
+                });
+            }
+        });
+
+        assert_eq!(store.lock().len(), capacity.get());
     }
     #[tokio::test]
     async fn operator_auth_rejects_forwarded_mtls_from_untrusted_proxy() {

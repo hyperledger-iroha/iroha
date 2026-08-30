@@ -219,10 +219,12 @@ impl<'a> PenaltyApplier<'a> {
             .map(|locator| (peer.clone(), locator))
     }
 }
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_npos_consensus_effects_to_transaction(
     tx: &mut StateTransaction<'_, '_>,
     effects: &NposConsensusEffects,
     expected_beacon_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
+    authenticated_roster: &[PeerId],
     current_height: u64,
     current_view: u64,
     now_ms: u64,
@@ -256,10 +258,18 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
                 "global beacon pulse key session is not active at the pulse height"
             ));
         }
+        let expected_roster_hash =
+            crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
+                &key_record.session,
+                authenticated_roster,
+            )
+            .wrap_err(
+                "pulse-height global beacon key differs from the authenticated height roster",
+            )?;
         let binding = crate::beacon::GlobalThresholdBeaconSessionBindingV1 {
             network_id: tx.network_id,
             session_id: pulse.session_id,
-            roster_hash: key_record.session.roster_hash,
+            roster_hash: expected_roster_hash,
             transcript_hash: key_record.session.transcript_hash,
         };
         let session = crate::beacon::validate_global_threshold_beacon_session_v1(

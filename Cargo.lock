@@ -6038,7 +6038,6 @@ dependencies = [
  "ed25519-dalek",
  "ff",
  "group",
- "halo2-axiom",
  "halo2curves",
  "hex",
  "hex-literal",

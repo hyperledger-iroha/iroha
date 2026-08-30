@@ -709,7 +709,7 @@ export function createToriiGovernanceNormalizers({
     return {
       drafted: true,
       tx_instructions: [{
-        wire_id: requireExactNonEmptyString(item.wire_id, `${itemContext}.wire_id`),
+        wire_id: requireExactTokenString(item.wire_id, `${itemContext}.wire_id`),
         payload_hex: requireExactLowercaseHex(
           item.payload_hex,
           `${itemContext}.payload_hex`,

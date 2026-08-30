@@ -233,10 +233,6 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         ConsensusMessageV2Payload::TimeoutCertificate(timeout.clone()),
     );
     insert_message(
-        "payload_manifest",
-        ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
-    );
-    insert_message(
         "payload_chunk",
         ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
             manifest_hash: HashOf::new(&manifest),
@@ -462,6 +458,7 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
         "trailing_byte",
         "retired_zero_prepare_tag",
         "unknown_payload_tag",
+        "retired_payload_manifest",
         "commit_request_truncated_signature",
         "commit_response_truncated_signature",
         "commit_request_invalid_network_id",

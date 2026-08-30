@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Dict, Mapping, NoReturn, Optional, Sequence, Tuple, Union
 
+from ._account_id import decode_canonical_i105_account_id
 from .norito_frame import validate_norito_frame
 
 SCCP_DOMAIN_SORA = 0
@@ -358,8 +359,8 @@ class SccpRecentMessages:
 
 
 @dataclass(frozen=True)
-class SccpBridgeSubmitResponse:
-    """Unified prepared-or-submitted SCCP transaction response."""
+class _SccpBridgeSubmitResponse:
+    """Internal prepared-or-submitted SCCP transaction response."""
 
     submitted: bool
     payload_kind: str
@@ -1049,10 +1050,8 @@ def normalize_sccp_codec_value(
         text = _text(value, "canonical_text", 256)
         encoded = text.encode("utf-8")
         if re.fullmatch(r"[\x21-\x7e]+", text) is None:
-            from .client import _decode_canonical_i105_string
-
             try:
-                _decode_canonical_i105_string(text)
+                decode_canonical_i105_account_id(text)
             except ValueError as exc:
                 raise ValueError(
                     "canonical_text must contain printable ASCII or an exact canonical I105 account address"
@@ -2531,6 +2530,17 @@ def _validate_codec_value(
         raise ValueError(f"SCCP transfer.{value_field} does not match its codec")
 
 
+def _validate_sora_sender(value: Any) -> None:
+    encoded = _variable_hex(value, "SCCP transfer.sender", maximum_bytes=256)
+    try:
+        sender = bytes.fromhex(encoded[2:]).decode("utf-8")
+        decode_canonical_i105_account_id(sender)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(
+            "SCCP transfer.sender must contain an exact canonical I105 account"
+        ) from exc
+
+
 def _validate_transfer(
     value: Any,
     lane: Tuple[Tuple[str, int, int, bool], Tuple[str, int, int, bool]],
@@ -2566,6 +2576,7 @@ def _validate_transfer(
     _validate_codec_value(record, "asset_id_codec", "asset_id")
     _unsigned_decimal(record["amount"], "SCCP transfer.amount", _MAX_U128, positive=True)
     _validate_codec_value(record, "sender_codec", "sender", source_domain)
+    _validate_sora_sender(record["sender"])
     _validate_codec_value(record, "recipient_codec", "recipient", destination_domain)
     _validate_codec_value(record, "route_id_codec", "route_id")
 
@@ -2991,9 +3002,9 @@ def _iroha_prehash(payload: bytes) -> bytes:
     return bytes(digest)
 
 
-def normalize_sccp_bridge_submit_response(
+def _normalize_sccp_bridge_submit_response(
     value: Any, expectations: Optional[Mapping[str, Any]] = None
-) -> SccpBridgeSubmitResponse:
+) -> _SccpBridgeSubmitResponse:
     """Validate the unified exact prepared-or-submitted bridge response."""
 
     record = _exact_fields(value, _BRIDGE_RESPONSE_FIELDS, "bridge submit response")
@@ -3036,7 +3047,7 @@ def normalize_sccp_bridge_submit_response(
         raise ValueError("prepared response requires transaction payload and signing message")
     elif _iroha_prehash(transaction) != signing:
         raise ValueError("signing_message_b64 is not the transaction-payload prehash")
-    response = SccpBridgeSubmitResponse(
+    response = _SccpBridgeSubmitResponse(
         submitted=submitted,
         payload_kind="transfer",
         message_id_hex=_lower_hex(record["message_id_hex"], "message_id_hex", 32),
@@ -3118,13 +3129,13 @@ def parse_sccp_json_object(
     return _mapping(value, label)
 
 
-def parse_sccp_bridge_submit_response_json(
+def _parse_sccp_bridge_submit_response_json(
     payload: Union[str, bytes, bytearray, memoryview],
     expectations: Optional[Mapping[str, Any]] = None,
-) -> SccpBridgeSubmitResponse:
+) -> _SccpBridgeSubmitResponse:
     """Parse and validate a strict SCCP bridge response."""
 
-    return normalize_sccp_bridge_submit_response(
+    return _normalize_sccp_bridge_submit_response(
         parse_sccp_json_object(payload, "bridge submit response"), expectations
     )
 
@@ -3152,7 +3163,6 @@ __all__ = [
     "SccpSoraOutboundExecutionPolicy",
     "SccpRecentMessages",
     "SccpRecentCursor",
-    "SccpBridgeSubmitResponse",
     "normalize_sccp_codec_value",
     "sccp_source_event_digest",
     "normalize_sccp_capabilities",
@@ -3162,7 +3172,5 @@ __all__ = [
     "normalize_sccp_proof_request",
     "normalize_bridge_proof_submit_payload",
     "normalize_bridge_message_submit_payload",
-    "normalize_sccp_bridge_submit_response",
     "parse_sccp_json_object",
-    "parse_sccp_bridge_submit_response_json",
 ]

@@ -893,8 +893,6 @@ pub enum PrivacyTransactionIntentUnsupportedPathV1 {
     ContractCall,
     /// Raw IVM bytecode can enqueue instructions not present in the signed payload.
     Ivm,
-    /// A proved IVM overlay is not a direct signed native-instruction list.
-    IvmProved,
     /// A mixed batch contains a deployed contract call.
     BatchContractCall,
     /// A custom instruction is interpreted by an executor rather than this closed projection.
@@ -957,7 +955,6 @@ struct PrivacyTransactionIntentScan<'a> {
     first_submission: Option<&'a SubmitPrivacyProofV1>,
     direct_submission_count: u64,
     unsupported_path: Option<PrivacyTransactionIntentUnsupportedPathV1>,
-    privacy_in_unsupported_path: bool,
 }
 impl<'a> PrivacyTransactionIntentScan<'a> {
     fn inspect_direct_instruction(&mut self, instruction: &'a InstructionBox) {
@@ -980,15 +977,6 @@ impl<'a> PrivacyTransactionIntentScan<'a> {
         {
             self.unsupported_path
                 .get_or_insert(PrivacyTransactionIntentUnsupportedPathV1::ExecuteTrigger);
-        }
-    }
-    fn inspect_proved_overlay_instruction(&mut self, instruction: &InstructionBox) {
-        if instruction
-            .as_any()
-            .downcast_ref::<SubmitPrivacyProofV1>()
-            .is_some()
-        {
-            self.privacy_in_unsupported_path = true;
         }
     }
 }
@@ -1021,13 +1009,6 @@ fn scan_privacy_transaction_intent_v1(executable: &Executable) -> PrivacyTransac
         Executable::Ivm(_) => {
             scan.unsupported_path
                 .replace(PrivacyTransactionIntentUnsupportedPathV1::Ivm);
-        }
-        Executable::IvmProved(proved) => {
-            scan.unsupported_path
-                .replace(PrivacyTransactionIntentUnsupportedPathV1::IvmProved);
-            for instruction in &proved.overlay {
-                scan.inspect_proved_overlay_instruction(instruction);
-            }
         }
     }
     scan
@@ -1123,7 +1104,7 @@ fn normalize_privacy_executable_for_intent_v1(
                 .collect::<Vec<_>>();
             Ok(Executable::Batch(normalized.into()))
         }
-        Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
+        Executable::ContractCall(_) | Executable::Ivm(_) => {
             unreachable!("exact direct privacy submission validation excludes opaque executables")
         }
     }
@@ -1260,9 +1241,8 @@ impl TransactionPayload {
     }
     /// Validate and borrow an optional direct privacy submission for runtime admission.
     ///
-    /// Ordinary non-privacy transactions return `Ok(None)`. A typed submission hidden in a proved
-    /// overlay fails closed. When one direct submission exists, every V1 projection and
-    /// derived-field rule is enforced.
+    /// Ordinary non-privacy transactions return `Ok(None)`. When one direct submission exists,
+    /// every V1 projection and derived-field rule is enforced.
     ///
     /// # Errors
     ///
@@ -1276,13 +1256,6 @@ impl TransactionPayload {
     > {
         let scan = scan_privacy_transaction_intent_v1(&self.instructions);
         if scan.direct_submission_count == 0 {
-            if scan.privacy_in_unsupported_path {
-                return Err(PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                    path: scan
-                        .unsupported_path
-                        .expect("privacy observed in an unsupported path records that path"),
-                });
-            }
             return Ok(None);
         }
         let submission = validate_exact_direct_privacy_submission_v1(&scan)?;
@@ -1539,7 +1512,7 @@ impl SignedTransaction {
                 );
                 *items = modified.into();
             }
-            Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
+            Executable::ContractCall(_) | Executable::Ivm(_) => {
                 Self::apply_fault_injection_overlay(&mut self.payload.metadata, additions);
             }
         }

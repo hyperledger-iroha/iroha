@@ -219,8 +219,8 @@ global beacon, an install or retirement included in block `H` is effective at
 `H + 1`; the session active at pulse height `H`, rather than the singleton
 successor pointer after transaction execution, verifies and persists a pulse
 authorized from `H`'s parent state. This prevents a same-block rotation from
-invalidating or reinterpreting either an optional Parliament pulse or a
-consensus-required NPoS pulse. TLE lifecycle changes use the same one-block
+invalidating or reinterpreting either a consensus-required Parliament pulse or
+an NPoS pulse. TLE lifecycle changes use the same one-block
 boundary: an instruction in block
 `H` keeps the predecessor selectable through `H` and activates its successor at
 `H + 1`. Predecessor public state remains available for ballots already bound
@@ -309,10 +309,11 @@ manual release, or fallback electorate.
 eligible failure class and evidence commitment from persisted phase state and
 current height; the caller cannot select either. In particular, Core derives
 release-pulse availability from the authoritative committed
-network/session/height pulse lookup. An absent pulse can produce
-`ReleasePulseUnavailable` only after its release height and no later than the
-inclusive opening deadline, while a ballot still awaiting release or opening
-after that deadline produces
+network/session/height pulse lookup. Every committed Parliament pulse request
+is consensus-mandatory, so a fresh-genesis chain cannot advance past an absent
+release pulse or selectively omit one to obtain a retry;
+`ReleasePulseUnavailable` is retained only as a fail-closed malformed-restore
+classification. A ballot still awaiting release or opening after its deadline produces
 `OpeningDeadlineExpired`. A retry must use the exact next sequence and fresh
 TLE session and cannot exceed the frozen retry limit (default three retries
 after the initial attempt; protocol cap 16). `NoResult` on the final permitted
@@ -833,7 +834,7 @@ RBAC
   permission. Core validates the complete retained certificate, exact due
   height, proposal effect, and compare-and-set head before applying it.
 - The fail-safe Initial executor admits the public native proposal, ballot,
-  slashing, restitution, and citizen-service instructions only because Core
+  slashing, and restitution instructions only because Core
   enforces those exact scopes before mutation. The lower-level
   `zk::SubmitBallot` vendor instruction is not part of that signed native
   surface: an IVM host must first consume the one-shot

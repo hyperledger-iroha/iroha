@@ -2060,9 +2060,20 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             );
             assert!(!output_guard.restart_required());
 
-            let ordinary_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
-            ));
+            let orphan_chunk_message = || {
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                        manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                            b"terminal lifecycle orphan chunk",
+                        )),
+                        index: 0,
+                        bytes: Vec::new(),
+                        sender: 0,
+                        signature: vec![1],
+                    }),
+                ))
+            };
+            let ordinary_message = orphan_chunk_message();
             assert!(matches!(
                 leader_wire_ingress.try_push(
                     crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
@@ -2211,9 +2222,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 &mut lane_work,
                 output_guard.as_ref(),
             );
-            let batch_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
-            ));
+            let batch_message = orphan_chunk_message();
             assert!(matches!(
                 leader_wire_ingress.try_push(
                     crate::sumeragi::InboundBlockMessage::from_authenticated_peer(

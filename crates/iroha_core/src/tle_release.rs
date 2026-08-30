@@ -2592,7 +2592,7 @@ pub(crate) mod tests {
         inactive_attempt
             .construct_certificate(
                 governance_attempt_id,
-                fixture.release_height + 1,
+                fixture.release_height,
                 fixture.release_height + 2,
             )
             .expect("certify completed fixture attempt");

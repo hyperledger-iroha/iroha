@@ -1,7 +1,7 @@
 // Test body included from the parent module to keep its production source budget bounded.
 use super::*;
 use crate::{
-    incentive_log::IncentiveLogError,
+    incentive_log::{INCENTIVE_MAX_TRUSTED_VERIFIERS_V1, IncentiveLogError},
     incentives::{
         INCENTIVE_DEFAULT_ACTIVE_EPOCHS, INCENTIVE_DEFAULT_MEASUREMENTS_PER_EPOCH,
         INCENTIVE_MAX_ACTIVE_EPOCHS_V1, INCENTIVE_MAX_RETAINED_MEASUREMENTS_V1,
@@ -1206,9 +1206,7 @@ fn incentive_log_defaults_when_enabled() {
             spool_dir: None,
             max_active_epochs: 0,
             max_measurements_per_epoch: 0,
-            trusted_verifier_ids: BTreeSet::from([AccountId::new(
-                verifier.public_key().clone(),
-            )]),
+            trusted_verifier_ids: BTreeSet::from([AccountId::new(verifier.public_key().clone())]),
         }),
         exit_routing: ExitRoutingConfig::default(),
         vpn: None,
@@ -1263,6 +1261,40 @@ fn enabled_incentive_ingestion_rejects_an_empty_verifier_roster() {
         incentives.validate(),
         Err(IncentiveLogError::Config(message))
             if message.contains("trusted_verifier_ids") && message.contains("at least one")
+    ));
+}
+
+#[test]
+fn incentive_verifier_roster_accepts_sixty_four_and_rejects_sixty_five() {
+    let verifier_id = |index: usize| {
+        let seed = u8::try_from(index + 1).expect("fixture verifier index fits one byte");
+        let verifier = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive deterministic incentive verifier");
+        AccountId::new(verifier.public_key().clone())
+    };
+    let trusted_verifier_ids = (0..INCENTIVE_MAX_TRUSTED_VERIFIERS_V1)
+        .map(verifier_id)
+        .collect();
+    let mut exact = IncentiveLogConfig {
+        enable: true,
+        spool_dir: None,
+        max_active_epochs: 1,
+        max_measurements_per_epoch: 1,
+        trusted_verifier_ids,
+    };
+    exact.validate().expect("the exact verifier-roster limit");
+
+    let mut overflow = exact;
+    assert!(
+        overflow
+            .trusted_verifier_ids
+            .insert(verifier_id(INCENTIVE_MAX_TRUSTED_VERIFIERS_V1))
+    );
+    assert!(matches!(
+        overflow.validate(),
+        Err(IncentiveLogError::Config(message))
+            if message.contains("trusted_verifier_ids")
+                && message.contains("first-release limit is 64")
     ));
 }
 #[test]

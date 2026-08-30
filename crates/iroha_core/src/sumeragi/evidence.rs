@@ -1208,6 +1208,7 @@ mod tests {
             &mut transaction,
             &effects,
             None,
+            &[],
             height,
             view,
             now_ms,

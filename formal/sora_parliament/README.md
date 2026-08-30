@@ -8,9 +8,12 @@ The model covers these consensus bindings:
 
 - the eligible-citizen snapshot is frozen before a strictly future finalized
   threshold-beacon pulse, and the initially required bodies are consumed as one
-  simultaneous draw batch. A sortition pulse may be classified unavailable
-  only strictly after its exact height and only while no authoritative pulse is
-  known. That objective failure records `NoRoster`; a retry supersedes the
+  simultaneous draw batch. Live consensus makes every committed Parliament
+  pulse request mandatory and cannot advance past an absent pulse. The reducer
+  model deliberately over-approximates malformed or restored state: there, a
+  sortition pulse may be classified unavailable only strictly after its exact
+  height and only while no authoritative pulse is known. That fail-closed
+  branch records `NoRoster`; a retry supersedes the
   complete failed initial generation, freezes a fresh snapshot, uses the exact
   next sequence no earlier than the failure height, and the final permitted
   sequence rejects the governance attempt. For a hidden body, an empty or
@@ -64,8 +67,10 @@ The model covers these consensus bindings:
   objectively eligible for `CommitmentDeadlineExpired`. Release consumption
   and aggregate finalization remain inside the inclusive
   `release_height + opening_phase_blocks` window;
-- a missed deadline or an objectively absent finalized release pulse becomes
-  `NoResult`; finalized-pulse availability is authoritative, a still-awaiting
+- a missed deadline becomes `NoResult`; the model also retains an objectively
+  absent finalized release pulse as a fail-closed malformed-state
+  over-approximation that fresh consensus cannot reach. Finalized-pulse
+  availability is authoritative, a still-awaiting
   or opening ballot becomes eligible for deadline failure after the frozen
   window, an invalid aggregate opening is rejected without mutating state, and
   no plaintext, manual-opening, or fallback transition exists;
@@ -120,8 +125,9 @@ safety and does not prove that weak-fairness assumption.
 
 The small configuration uses two abstract bodies, two seated assignments, two
 competing public-finding roots, a two-block public-finding deadline, three TLE
-sessions (two with an authoritative release pulse and one with an objectively
-absent pulse), a two-block commitment window, a two-block opening window, and
+sessions (two with an authoritative release pulse and one modeling the
+fail-closed malformed-state absent-pulse branch), a two-block commitment
+window, a two-block opening window, and
 two permitted sortition retries plus two permitted ballot retries. Its three
 abstract resource reservations include one symmetric conflict pair and an exact
 capacity of two. A shared redraw ceiling of two is explored from both the first
@@ -188,8 +194,8 @@ rather than proof of future liveness. Those operating seams are outside the TLA
 state machine and the check is not a refinement proof.
 For this formal-model corridor, release qualification still requires a settled
 source revision, an exhaustive same-source pinned TLC 2.19 run and archive, and
-qualification of the implemented finalized-pulse production and
-consensus-enforced TLE key-rotation paths. The repository-wide gate inventory in
+qualification of mandatory finalized-pulse production and consensus-enforced
+global-beacon and TLE key-rotation paths. The repository-wide gate inventory in
 the [SORA Parliament hardening roadmap](../../roadmap.md#sora-parliament-hardening)
 additionally requires focused and four-peer execution evidence, a genuine
 authenticated broker/HSM share provider, and independent review of the timed-OVN

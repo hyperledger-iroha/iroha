@@ -11,8 +11,8 @@ snippets directly into CLI tools, CI harnesses, or long-running services.
 
 See also:
 
-- `javascript/iroha_js/recipes/governance.mjs` — runnable end-to-end script for
-  proposals, ballots, and council rotations.
+- `javascript/iroha_js/recipes/governance.mjs` — runnable script for building a
+  deployment proposal and standalone plain ballot.
 - `javascript/iroha_js/recipes/iso_bridge.mjs` — CLI helper for submitting
   pacs.008/pacs.009 payloads and polling their deterministic status.
 - `specs/finance/settlement_iso_mapping.md` — canonical field mapping for
@@ -227,9 +227,7 @@ const ballot = await torii.governanceSubmitPlainBallot({
   durationBlocks: 7_200,
   direction: "Aye",
 }, { signal: writeController.signal, canonicalAuth });
-if (!ballot.accepted) {
-  console.warn("ballot rejected", ballot.reason);
-}
+console.log("ballot draft instructions", ballot.tx_instructions.length);
 
 const zkOwner = "<i105-account-id>"; // canonical I105 account id for ZK public inputs
 await torii.governanceSubmitZkBallotV1({

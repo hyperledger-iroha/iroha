@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import org.hyperledger.iroha.android.client.JsonNumbers;
 import org.hyperledger.iroha.android.client.JsonParser;
@@ -127,6 +128,9 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAXIMUM_PEER_HOPS = 8;
   public static final int MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 384 * 1024;
   public static final int CONFIDENTIAL_TREE_DEPTH = 16;
+  /** Top-up insertion leaves one tree position reserved for the proof-bound successor. */
+  public static final int TOP_UP_SHIELD_INSERTION_CAPACITY =
+      (1 << CONFIDENTIAL_TREE_DEPTH) - 1;
   public static final int MAX_OUTPUT_MEMBERSHIP_FRONTIER_ARCHIVE_BYTES_V4 = 4 * 1024;
   public static final int MAX_OUTPUT_MEMBERSHIP_PATHS_ARCHIVE_BYTES_V4 = 16 * 1024;
 
@@ -576,6 +580,41 @@ public final class KagemushaRecursiveSpendProver {
     return new RedeemSubmissionRequest(archive);
   }
 
+  public static byte[] projectTopUpRequestOperationId(final TopUpRequest request) {
+    requireArtifactBridge();
+    return requireDigest(
+        nativeProjectTopUpRequestOperationIdV4(
+            Objects.requireNonNull(request, "request").noritoEncoded()),
+        "operationId");
+  }
+
+  public static byte[] projectRedeemRequestOperationId(final RedeemSubmissionRequest request) {
+    requireArtifactBridge();
+    return requireDigest(
+        nativeProjectRedeemRequestOperationIdV4(
+            Objects.requireNonNull(request, "request").noritoEncoded()),
+        "operationId");
+  }
+
+  public static OperationReferenceProjection projectOperationReference(
+      final OperationReference reference) {
+    requireArtifactBridge();
+    final byte[][] fields = nativeProjectOperationReferenceV4(
+        Objects.requireNonNull(reference, "reference").noritoEncoded());
+    requireFieldCount(fields, 5, "operation reference projection");
+    final String kindText = canonicalText(fields[0], "operationKind");
+    final OperationKind kind;
+    if ("top_up".equals(kindText)) kind = OperationKind.TOP_UP;
+    else if ("redeem".equals(kindText)) kind = OperationKind.REDEEM;
+    else throw new IllegalStateException("native Kagemusha operation kind is invalid");
+    return new OperationReferenceProjection(
+        kind,
+        requireDigest(fields[1], "operationId"),
+        requireTransactionHash(fields[2], "transactionHash"),
+        canonicalText(fields[3], "statusUri"),
+        longInteger(fields[4], "submittedAtMilliseconds"));
+  }
+
   public static OperationStatusProjection projectOperationStatus(final OperationStatus status) {
     requireArtifactBridge();
     final byte[][] fields = nativeProjectOperationStatusV4(
@@ -622,7 +661,7 @@ public final class KagemushaRecursiveSpendProver {
     }
     return new OperationStatusProjection(
         state, kind, requireDigest(fields[2], "operationId"),
-        requireDigest(fields[3], "transactionHash"),
+        requireTransactionHash(fields[3], "transactionHash"),
         state == OperationState.PENDING ? heightOrSubmittedAt : null,
         state == OperationState.APPLIED ? heightOrSubmittedAt : null,
         serverTime, finalizedTopUp, rejection);
@@ -2204,6 +2243,15 @@ public final class KagemushaRecursiveSpendProver {
     return context;
   }
 
+  private static byte[] requireTransactionHash(final byte[] value, final String name) {
+    final byte[] hash = requireDigest(value, name);
+    if ((hash[hash.length - 1] & 1) != 1) {
+      Arrays.fill(hash, (byte) 0);
+      throw new IllegalArgumentException(name + " must preserve the Iroha hash marker");
+    }
+    return hash;
+  }
+
   private static byte[] requireBoundedBytes(
       final byte[] value, final String name, final int maximumBytes) {
     if (value == null || value.length == 0 || value.length > maximumBytes) {
@@ -2798,8 +2846,9 @@ public final class KagemushaRecursiveSpendProver {
         final List<byte[]> siblings,
         final byte[] directions,
         final byte[] root) {
-      if (leafIndex < 0 || leafIndex >= (1 << CONFIDENTIAL_TREE_DEPTH)) {
-        throw new IllegalArgumentException("leafIndex is outside the confidential tree");
+      if (leafIndex < 0 || leafIndex >= TOP_UP_SHIELD_INSERTION_CAPACITY) {
+        throw new IllegalArgumentException(
+            "leafIndex is outside the top-up shield insertion range");
       }
       if (siblings == null || siblings.size() != CONFIDENTIAL_TREE_DEPTH) {
         throw new IllegalArgumentException(
@@ -4065,6 +4114,42 @@ public final class KagemushaRecursiveSpendProver {
 
   public enum OperationKind { TOP_UP, REDEEM }
 
+  public static final class OperationReferenceProjection {
+    private final OperationKind kind;
+    private final byte[] operationId;
+    private final byte[] transactionHash;
+    private final String statusUri;
+    private final long submittedAtMilliseconds;
+
+    private OperationReferenceProjection(
+        final OperationKind kind,
+        final byte[] operationId,
+        final byte[] transactionHash,
+        final String statusUri,
+        final long submittedAtMilliseconds) {
+      this.kind = Objects.requireNonNull(kind, "kind");
+      this.operationId = requireDigest(operationId, "operationId");
+      this.transactionHash = requireTransactionHash(transactionHash, "transactionHash");
+      this.statusUri = Objects.requireNonNull(statusUri, "statusUri");
+      if (!(ToriiClient.OPERATIONS_PATH + "/" + hex(this.operationId)).equals(statusUri)) {
+        throw new IllegalArgumentException(
+            "statusUri must match the canonical operation resource");
+      }
+      if (submittedAtMilliseconds <= 0) {
+        throw new IllegalArgumentException("submittedAtMilliseconds must be positive");
+      }
+      this.submittedAtMilliseconds = submittedAtMilliseconds;
+    }
+
+    public OperationKind kind() { return kind; }
+    public byte[] operationId() { return Arrays.copyOf(operationId, operationId.length); }
+    public byte[] transactionHash() {
+      return Arrays.copyOf(transactionHash, transactionHash.length);
+    }
+    public String statusUri() { return statusUri; }
+    public long submittedAtMilliseconds() { return submittedAtMilliseconds; }
+  }
+
   public static final class OperationRejection {
     private final String code;
     private final String message;
@@ -4126,7 +4211,7 @@ public final class KagemushaRecursiveSpendProver {
         final FinalizedTopUp finalizedTopUp,
         final OperationRejection rejection) {
       this.operationId = requireDigest(operationId, "operationId");
-      this.transactionHash = requireDigest(transactionHash, "transactionHash");
+      this.transactionHash = requireTransactionHash(transactionHash, "transactionHash");
       if (state == null || kind == null) {
         throw new IllegalArgumentException("operation state and kind must be present");
       }
@@ -4183,6 +4268,11 @@ public final class KagemushaRecursiveSpendProver {
     private final TransportExecutor transport;
     private final LocalSigningContext localSigningContext;
     private final Duration requestTimeout;
+    private final Function<TopUpRequest, byte[]> topUpRequestOperationIdProjector;
+    private final Function<RedeemSubmissionRequest, byte[]> redeemRequestOperationIdProjector;
+    private final Function<OperationReference, OperationReferenceProjection>
+        operationReferenceProjector;
+    private final Function<OperationStatus, OperationStatusProjection> operationStatusProjector;
 
     private ToriiClient(final URI baseUri, final TransportExecutor transport,
         final LocalSigningContext localSigningContext) {
@@ -4194,9 +4284,37 @@ public final class KagemushaRecursiveSpendProver {
         final TransportExecutor transport,
         final LocalSigningContext localSigningContext,
         final Duration requestTimeout) {
+      this(
+          baseUri,
+          transport,
+          localSigningContext,
+          requestTimeout,
+          KagemushaRecursiveSpendProver::projectTopUpRequestOperationId,
+          KagemushaRecursiveSpendProver::projectRedeemRequestOperationId,
+          KagemushaRecursiveSpendProver::projectOperationReference,
+          KagemushaRecursiveSpendProver::projectOperationStatus);
+    }
+
+    ToriiClient(
+        final URI baseUri,
+        final TransportExecutor transport,
+        final LocalSigningContext localSigningContext,
+        final Duration requestTimeout,
+        final Function<TopUpRequest, byte[]> topUpRequestOperationIdProjector,
+        final Function<RedeemSubmissionRequest, byte[]> redeemRequestOperationIdProjector,
+        final Function<OperationReference, OperationReferenceProjection> operationReferenceProjector,
+        final Function<OperationStatus, OperationStatusProjection> operationStatusProjector) {
       Objects.requireNonNull(baseUri, "baseUri");
       this.transport = Objects.requireNonNull(transport, "transport");
       this.localSigningContext = Objects.requireNonNull(localSigningContext, "localSigningContext");
+      this.topUpRequestOperationIdProjector = Objects.requireNonNull(
+          topUpRequestOperationIdProjector, "topUpRequestOperationIdProjector");
+      this.redeemRequestOperationIdProjector = Objects.requireNonNull(
+          redeemRequestOperationIdProjector, "redeemRequestOperationIdProjector");
+      this.operationReferenceProjector = Objects.requireNonNull(
+          operationReferenceProjector, "operationReferenceProjector");
+      this.operationStatusProjector = Objects.requireNonNull(
+          operationStatusProjector, "operationStatusProjector");
       if (requestTimeout != null && requestTimeout.isNegative()) {
         throw new IllegalArgumentException("requestTimeout must be non-negative");
       }
@@ -4242,14 +4360,22 @@ public final class KagemushaRecursiveSpendProver {
 
     public CompletableFuture<OperationReference> submitTopUp(
         final TopUpRequest request, final String operationId) {
+      final String id = requireOperationId(operationId);
+      requireSubmittedOperationIdMatches(
+          topUpRequestOperationIdProjector.apply(Objects.requireNonNull(request, "request")), id);
       return submitCommand(
-          TOP_UP_PATH, Objects.requireNonNull(request, "request").noritoEncoded(), operationId);
+          TOP_UP_PATH, request.noritoEncoded(), id,
+          OperationKind.TOP_UP);
     }
 
     public CompletableFuture<OperationReference> submitRedeem(
         final RedeemSubmissionRequest request, final String operationId) {
+      final String id = requireOperationId(operationId);
+      requireSubmittedOperationIdMatches(
+          redeemRequestOperationIdProjector.apply(Objects.requireNonNull(request, "request")), id);
       return submitCommand(
-          REDEEM_PATH, Objects.requireNonNull(request, "request").noritoEncoded(), operationId);
+          REDEEM_PATH, request.noritoEncoded(), id,
+          OperationKind.REDEEM);
     }
 
     public CompletableFuture<OperationStatus> getOperation(final String operationId) {
@@ -4263,11 +4389,18 @@ public final class KagemushaRecursiveSpendProver {
                   .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
                   .build(),
               200)
-          .thenApply(response -> new OperationStatus(response.body()));
+          .thenApply(response -> {
+            final OperationStatus status = new OperationStatus(response.body());
+            requireOperationStatusMatches(operationStatusProjector.apply(status), id);
+            return status;
+          });
     }
 
     private CompletableFuture<OperationReference> submitCommand(
-        final String path, final byte[] request, final String operationId) {
+        final String path,
+        final byte[] request,
+        final String operationId,
+        final OperationKind expectedKind) {
       final String id = requireOperationId(operationId);
       return execute(
               TransportRequest.builder()
@@ -4284,8 +4417,45 @@ public final class KagemushaRecursiveSpendProver {
           .thenApply(
               response -> {
                 requireCommandResponseHeaders(response, id);
-                return new OperationReference(response.body());
+                final OperationReference reference = new OperationReference(response.body());
+                requireOperationReferenceMatches(
+                    operationReferenceProjector.apply(reference), id, expectedKind);
+                return reference;
               });
+    }
+
+    static void requireOperationReferenceMatches(
+        final OperationReferenceProjection reference,
+        final String operationId,
+        final OperationKind expectedKind) {
+      if (!hex(reference.operationId()).equals(operationId)) {
+        throw new IllegalStateException(
+            "Kagemusha Torii response operation ID must match the submitted operation");
+      }
+      if (reference.kind() != expectedKind) {
+        throw new IllegalStateException(
+            "Kagemusha Torii response kind must match the submitted command");
+      }
+      if (!reference.statusUri().equals(OPERATIONS_PATH + "/" + operationId)) {
+        throw new IllegalStateException(
+            "Kagemusha Torii response status URI must match the submitted operation");
+      }
+    }
+
+    static void requireSubmittedOperationIdMatches(
+        final byte[] projectedOperationId, final String operationId) {
+      if (!hex(requireDigest(projectedOperationId, "operationId")).equals(operationId)) {
+        throw new IllegalStateException(
+            "Kagemusha Torii Idempotency-Key must match the signed request operation ID");
+      }
+    }
+
+    static void requireOperationStatusMatches(
+        final OperationStatusProjection status, final String operationId) {
+      if (!hex(status.operationId()).equals(operationId)) {
+        throw new IllegalStateException(
+            "Kagemusha Torii status operation ID must match the requested operation");
+      }
     }
 
     private static void requireCommandResponseHeaders(
@@ -4817,6 +4987,9 @@ public final class KagemushaRecursiveSpendProver {
       byte[] operationId, byte[] spendKey, byte[] rho, byte[] diversifier, int leafIndex,
       byte[] flattenedSiblings, byte[] directions, byte[] root,
       byte[] shieldVerifierCommitment, byte[] artifactBinding);
+  private static native byte[] nativeProjectTopUpRequestOperationIdV4(byte[] request);
+  private static native byte[] nativeProjectRedeemRequestOperationIdV4(byte[] request);
+  private static native byte[][] nativeProjectOperationReferenceV4(byte[] reference);
   private static native byte[][] nativeProjectOperationStatusV4(byte[] status);
   private static native boolean nativeBranchClaimsConflictV2(byte[] left, byte[] right);
   private static native byte[][] nativePrepareRedemptionChangeV4(

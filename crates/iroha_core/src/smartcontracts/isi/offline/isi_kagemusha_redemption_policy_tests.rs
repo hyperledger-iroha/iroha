@@ -150,3 +150,83 @@ fn release_scoped_redemption_accepts_only_compatible_current_policy_reregistrati
     .expect("a current admission cannot replace a stricter historical trust basis");
     assert!(error.to_string().contains("attestation_policy_changed"));
 }
+
+#[test]
+fn torii_hardware_preflight_rejects_a_signature_from_an_unregistered_key() {
+    offline_test_transaction!(state_transaction);
+    let asset = offline_test_asset(&ALICE_ID).definition().clone();
+    let assertion_key = online_assertion_signing_key(0x6B);
+    let registration = android_online_registration(
+        &ALICE_ID,
+        &asset,
+        &assertion_key,
+        POLICY_TEST_TIME_MS + 60_000,
+    );
+    let mut authorization = android_online_authorization(&registration, &assertion_key);
+    install_android_online_registration(&mut state_transaction, registration);
+
+    preflight_registered_kagemusha_v2_hardware_authorization(
+        &state_transaction.world,
+        &authorization,
+        &asset,
+        POLICY_TEST_TIME_MS,
+    )
+    .expect("the registered hardware key must pass Torii preflight");
+
+    let attacker_key = online_assertion_signing_key(0x6C);
+    let signing_bytes = authorization
+        .signing_bytes()
+        .expect("canonical hardware authorization preimage");
+    authorization.set_hardware_signature(online_assertion_signature(
+        &attacker_key,
+        &signing_bytes,
+    ));
+    let error = preflight_registered_kagemusha_v2_hardware_authorization(
+        &state_transaction.world,
+        &authorization,
+        &asset,
+        POLICY_TEST_TIME_MS,
+    )
+    .expect_err("an unregistered hardware key must fail before Torii sponsors a transaction");
+    assert!(error.contains("signature"), "unexpected preflight error: {error}");
+}
+
+#[test]
+fn torii_hardware_preflight_rejects_a_consumed_android_registration() {
+    offline_test_transaction!(state_transaction);
+    let asset = offline_test_asset(&ALICE_ID).definition().clone();
+    let assertion_key = online_assertion_signing_key(0x6D);
+    let registration = android_online_registration(
+        &ALICE_ID,
+        &asset,
+        &assertion_key,
+        POLICY_TEST_TIME_MS + 60_000,
+    );
+    let authorization = android_online_authorization(&registration, &assertion_key);
+    let state_key = install_android_online_registration(&mut state_transaction, registration);
+    let archive = state_transaction
+        .world
+        .smart_contract_state
+        .get(&state_key)
+        .expect("installed registration state")
+        .clone();
+    let mut state = decode_kagemusha_online_registration_state_v4(&state_key, &archive)
+        .expect("canonical registration state");
+    state.lifecycle = KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintConsumed(
+        assertion_consumption(&authorization).expect("canonical assertion consumption"),
+    );
+    state_transaction.world.smart_contract_state.insert(
+        state_key,
+        encode_kagemusha_online_registration_state_v4(&state)
+            .expect("canonical consumed registration state"),
+    );
+
+    let error = preflight_registered_kagemusha_v2_hardware_authorization(
+        &state_transaction.world,
+        &authorization,
+        &asset,
+        POLICY_TEST_TIME_MS,
+    )
+    .expect_err("a consumed Android registration must fail before transaction sponsorship");
+    assert!(error.contains("consumed"), "unexpected preflight error: {error}");
+}

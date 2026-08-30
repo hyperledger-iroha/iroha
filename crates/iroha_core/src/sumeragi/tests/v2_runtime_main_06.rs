@@ -1514,20 +1514,12 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
         runtime.can_admit_network_payload(&commit_response),
         "a CommitQC recovery response owns the final physical certified-fence slot"
     );
-    let transport = wire::ConsensusMessageV2Payload::PayloadManifest(wire::PayloadManifest {
-        round,
-        subject,
-        payload_size_bytes: 1,
-        layout: wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 2,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 1,
-            max_chunk_count: 2,
-        },
-        chunk_hashes: vec![Hash::new([0_u8]); 2],
-        chunk_root: Hash::new(b"runtime transport root"),
+    let transport = wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+        manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime orphan chunk")),
+        index: 0,
+        bytes: Vec::new(),
+        sender: 0,
+        signature: vec![1],
     });
     assert!(runtime.can_admit_network_payload(&transport));
 }

@@ -1442,28 +1442,22 @@ public final class SumeragiV2Wire {
       @Override public byte[] encode() { return enumPayload(4, value.encode()); }
     }
 
-    public static final class PayloadManifestMessage extends ConsensusPayload {
-      public final PayloadManifest value;
-      public PayloadManifestMessage(PayloadManifest value) { this.value = nonNull(value, "value"); }
-      @Override public byte[] encode() { return enumPayload(5, value.encode()); }
-    }
-
     public static final class PayloadChunkMessage extends ConsensusPayload {
       public final PayloadChunk value;
       public PayloadChunkMessage(PayloadChunk value) { this.value = nonNull(value, "value"); }
-      @Override public byte[] encode() { return enumPayload(6, value.encode()); }
+      @Override public byte[] encode() { return enumPayload(5, value.encode()); }
     }
 
     public static final class CertifiedBodyRequestMessage extends ConsensusPayload {
       public final CertifiedBodyRequest value;
       public CertifiedBodyRequestMessage(CertifiedBodyRequest value) { this.value = nonNull(value, "value"); }
-      @Override public byte[] encode() { return enumPayload(7, value.encode()); }
+      @Override public byte[] encode() { return enumPayload(6, value.encode()); }
     }
 
     public static final class CertifiedBodyResponseMessage extends ConsensusPayload {
       public final CertifiedBodyResponse value;
       public CertifiedBodyResponseMessage(CertifiedBodyResponse value) { this.value = nonNull(value, "value"); }
-      @Override public byte[] encode() { return enumPayload(8, value.encode()); }
+      @Override public byte[] encode() { return enumPayload(7, value.encode()); }
     }
 
     public static final class CommitCertificateRequestMessage extends ConsensusPayload {
@@ -1471,7 +1465,7 @@ public final class SumeragiV2Wire {
       public CommitCertificateRequestMessage(CommitCertificateRequest value) {
         this.value = nonNull(value, "value");
       }
-      @Override public byte[] encode() { return enumPayload(9, value.encode()); }
+      @Override public byte[] encode() { return enumPayload(8, value.encode()); }
     }
 
     public static final class CommitCertificateResponseMessage extends ConsensusPayload {
@@ -1479,7 +1473,7 @@ public final class SumeragiV2Wire {
       public CommitCertificateResponseMessage(CommitCertificateResponse value) {
         this.value = nonNull(value, "value");
       }
-      @Override public byte[] encode() { return enumPayload(10, value.encode()); }
+      @Override public byte[] encode() { return enumPayload(9, value.encode()); }
     }
 
     static ConsensusPayload decode(byte[] bytes) {
@@ -1493,12 +1487,11 @@ public final class SumeragiV2Wire {
         case 2: return new QuorumCertificateMessage(QuorumCertificate.decode(payload));
         case 3: return new TimeoutVoteMessage(TimeoutVote.decode(payload));
         case 4: return new TimeoutCertificateMessage(TimeoutCertificate.decode(payload));
-        case 5: return new PayloadManifestMessage(PayloadManifest.decode(payload));
-        case 6: return new PayloadChunkMessage(PayloadChunk.decode(payload));
-        case 7: return new CertifiedBodyRequestMessage(CertifiedBodyRequest.decode(payload));
-        case 8: return new CertifiedBodyResponseMessage(CertifiedBodyResponse.decode(payload));
-        case 9: return new CommitCertificateRequestMessage(CommitCertificateRequest.decode(payload));
-        case 10: return new CommitCertificateResponseMessage(CommitCertificateResponse.decode(payload));
+        case 5: return new PayloadChunkMessage(PayloadChunk.decode(payload));
+        case 6: return new CertifiedBodyRequestMessage(CertifiedBodyRequest.decode(payload));
+        case 7: return new CertifiedBodyResponseMessage(CertifiedBodyResponse.decode(payload));
+        case 8: return new CommitCertificateRequestMessage(CommitCertificateRequest.decode(payload));
+        case 9: return new CommitCertificateResponseMessage(CommitCertificateResponse.decode(payload));
         default: throw new IllegalArgumentException("Unknown Sumeragi v2 payload: " + tag);
       }
     }

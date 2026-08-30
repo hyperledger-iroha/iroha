@@ -256,7 +256,6 @@ pub mod isi {
     ) -> Result<(), Error> {
         let bytecode = match executable {
             Executable::Ivm(bytecode) => bytecode.as_ref(),
-            Executable::IvmProved(proved) => proved.bytecode.as_ref(),
             Executable::Instructions(_) | Executable::ContractCall(_) | Executable::Batch(_) => {
                 return Ok(());
             }
@@ -525,7 +524,7 @@ pub mod isi {
                         if duplicates_enacted_payout(invocation)
                 )
             }),
-            Executable::Instructions(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
+            Executable::Instructions(_) | Executable::Ivm(_) => false,
         };
         if matches!(new_trigger.action().filter(), EventFilterBox::Time(_))
             && executable_duplicates_enacted_payout

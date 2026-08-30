@@ -168,12 +168,15 @@ mod model {
     }
     #[cfg(feature = "governance")]
     /// An event filter for [`super::governance::GovernanceEvent`] values.
+    ///
+    /// Scope selectors are intersected. Because proposal and referendum event
+    /// families are disjoint, setting both selectors matches no events.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct GovernanceEventFilter {
-        /// If specified, matches only events for this proposal id (`Proposal*` variants)
+        /// If specified, matches only proposal-family events that carry this proposal id.
         pub(super) proposal_id: Option<[u8; 32]>,
-        /// If specified, matches only events for this referendum id (`LockUpdated` variant)
+        /// If specified, matches only referendum-family events that carry this referendum id.
         pub(super) referendum_id: Option<String>,
         /// Matches only events from this set
         pub(super) event_set: super::governance::GovernanceEventSet,
@@ -1433,13 +1436,17 @@ impl GovernanceEventFilter {
         self.event_set = set;
         self
     }
-    /// Filter by proposal id (applies to Proposal* variants only).
+    /// Restrict the filter to proposal-family events carrying `id`.
+    ///
+    /// Events without a proposal id, including referendum-family events, do not match.
     #[must_use]
     pub fn for_proposal(mut self, id: [u8; 32]) -> Self {
         self.proposal_id = Some(id);
         self
     }
-    /// Filter by referendum id (applies to `LockUpdated` only).
+    /// Restrict the filter to referendum-family events carrying `rid`.
+    ///
+    /// Events without a referendum id, including proposal-family events, do not match.
     #[must_use]
     pub fn for_referendum(mut self, rid: String) -> Self {
         self.referendum_id = Some(rid);
@@ -1557,51 +1564,41 @@ fn governance_matches(
     if !filter.event_set.matches(event) {
         return false;
     }
-    let proposal_matches =
-        |candidate: &[u8; 32]| filter.proposal_id.as_ref().is_none_or(|id| candidate == id);
-    let referendum_matches = |candidate: &str| {
-        filter
-            .referendum_id
-            .as_ref()
-            .is_none_or(|rid| candidate == rid)
+    let proposal_matches = |candidate: &[u8; 32]| {
+        filter.referendum_id.is_none()
+            && filter.proposal_id.as_ref().is_none_or(|id| candidate == id)
     };
+    let referendum_matches = |candidate: &str| {
+        filter.proposal_id.is_none()
+            && filter
+                .referendum_id
+                .as_ref()
+                .is_none_or(|rid| candidate == rid)
+    };
+    let unscoped_matches = filter.proposal_id.is_none() && filter.referendum_id.is_none();
     match event {
         GovernanceEvent::ProposalSubmitted(p) => proposal_matches(&p.id),
+        GovernanceEvent::ProposalRejected(p) => proposal_matches(&p.id),
         GovernanceEvent::ProposalEnacted(p) => proposal_matches(&p.id),
         GovernanceEvent::LockCreated(lock) => referendum_matches(&lock.referendum_id),
         GovernanceEvent::LockExtended(lock) => referendum_matches(&lock.referendum_id),
+        GovernanceEvent::BallotAccepted(ballot) => referendum_matches(&ballot.referendum_id),
+        GovernanceEvent::BallotRejected(ballot) => referendum_matches(&ballot.referendum_id),
+        GovernanceEvent::ReferendumOpened(referendum) => referendum_matches(&referendum.id),
+        GovernanceEvent::ReferendumClosed(referendum) => referendum_matches(&referendum.id),
+        GovernanceEvent::LockUnlocked(lock) => referendum_matches(&lock.referendum_id),
+        GovernanceEvent::LockSlashed(lock) => referendum_matches(&lock.referendum_id),
+        GovernanceEvent::LockRestituted(lock) => referendum_matches(&lock.referendum_id),
         GovernanceEvent::ReferendumDecided(decision) => referendum_matches(&decision.referendum_id),
-        GovernanceEvent::ProposalApproved(_)
-        | GovernanceEvent::ProposalRejected(_)
-        | GovernanceEvent::BallotAccepted(_)
-        | GovernanceEvent::BallotRejected(_)
-        | GovernanceEvent::ReferendumOpened(_)
-        | GovernanceEvent::ReferendumClosed(_)
-        | GovernanceEvent::LockUnlocked(_)
-        | GovernanceEvent::CitizenRegistered(_)
+        GovernanceEvent::CitizenRegistered(_)
         | GovernanceEvent::CitizenRevoked(_)
-        | GovernanceEvent::ParliamentBodyTransitioned(_)
-        | GovernanceEvent::ParliamentBallotTransitioned(_)
-        | GovernanceEvent::ThresholdKeyLifecycleApplied(_)
-        | GovernanceEvent::ParliamentConcentrationWarning(_) => true,
-        GovernanceEvent::ParliamentAttemptTransitioned(ev) => {
-            proposal_matches(ev.proposal_content_id.as_bytes())
-        }
+        | GovernanceEvent::ThresholdKeyLifecycleApplied(_) => unscoped_matches,
         GovernanceEvent::ParliamentAttemptCreated(ev) => {
             proposal_matches(ev.proposal_content_id.as_bytes())
         }
         GovernanceEvent::ParliamentLifecycleTransitionApplied(ev) => {
             proposal_matches(ev.proposal_content_id.as_bytes())
         }
-        GovernanceEvent::ParliamentAggregateFinalized(ev) => {
-            proposal_matches(ev.proposal_content_id.as_bytes())
-        }
-        GovernanceEvent::ParliamentCertificateIssued(ev) => {
-            proposal_matches(ev.proposal_content_id.as_bytes())
-        }
-        GovernanceEvent::ParliamentApprovalRecorded(ev) => proposal_matches(&ev.proposal_id),
-        GovernanceEvent::LockSlashed(ev) => referendum_matches(&ev.referendum_id),
-        GovernanceEvent::LockRestituted(ev) => referendum_matches(&ev.referendum_id),
     }
 }
 pub mod prelude {
@@ -1631,6 +1628,61 @@ mod tests {
                 .0,
         )
     }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_scopes_match_only_their_id_bearing_event_family() {
+        use crate::events::data::governance::{
+            GovernanceCitizenRegistered, GovernanceEvent, GovernanceProposalRejected,
+            GovernanceReferendumOpened,
+        };
+
+        let proposal_id = [0x11; 32];
+        let other_proposal_id = [0x12; 32];
+        let referendum_id = "referendum-11".to_owned();
+        let other_referendum_id = "referendum-12".to_owned();
+        let matching_proposal =
+            GovernanceEvent::ProposalRejected(GovernanceProposalRejected { id: proposal_id });
+        let other_proposal = GovernanceEvent::ProposalRejected(GovernanceProposalRejected {
+            id: other_proposal_id,
+        });
+        let matching_referendum = GovernanceEvent::ReferendumOpened(GovernanceReferendumOpened {
+            id: referendum_id.clone(),
+            h_start: 10,
+            h_end: 20,
+        });
+        let other_referendum = GovernanceEvent::ReferendumOpened(GovernanceReferendumOpened {
+            id: other_referendum_id,
+            h_start: 10,
+            h_end: 20,
+        });
+        let unscoped = GovernanceEvent::CitizenRegistered(GovernanceCitizenRegistered {
+            owner: checked_random_account_id(),
+            amount: Quantity::from(1_u32),
+        });
+
+        let proposal_filter = GovernanceEventFilter::new().for_proposal(proposal_id);
+        assert!(governance_matches(&proposal_filter, &matching_proposal));
+        assert!(!governance_matches(&proposal_filter, &other_proposal));
+        assert!(!governance_matches(&proposal_filter, &matching_referendum));
+        assert!(!governance_matches(&proposal_filter, &unscoped));
+
+        let referendum_filter = GovernanceEventFilter::new().for_referendum(referendum_id.clone());
+        assert!(governance_matches(&referendum_filter, &matching_referendum));
+        assert!(!governance_matches(&referendum_filter, &other_referendum));
+        assert!(!governance_matches(&referendum_filter, &matching_proposal));
+        assert!(!governance_matches(&referendum_filter, &unscoped));
+
+        let disjoint_filter = GovernanceEventFilter::new()
+            .for_proposal(proposal_id)
+            .for_referendum(referendum_id);
+        assert!(!governance_matches(&disjoint_filter, &matching_proposal));
+        assert!(!governance_matches(&disjoint_filter, &matching_referendum));
+        assert!(!governance_matches(&disjoint_filter, &unscoped));
+
+        assert!(governance_matches(&GovernanceEventFilter::new(), &unscoped));
+    }
+
     #[test]
     #[cfg(feature = "transparent_api")]
     fn entity_scope() {

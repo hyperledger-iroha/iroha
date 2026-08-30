@@ -44,7 +44,7 @@ pub struct DisableConsensusKey {
     pub id: crate::consensus::ConsensusKeyId,
 }
 
-/// Exact threshold-key lifecycle action authorized by the current validator roster.
+/// Exact threshold-key lifecycle action authorized by the block-height validator roster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -52,13 +52,27 @@ pub struct DisableConsensusKey {
 )]
 #[norito(tag = "action", content = "value", rename_all = "snake_case")]
 pub enum ThresholdKeyLifecycleActionV1 {
-    /// Atomically install and activate a finalized global-beacon key session.
+    /// Install a finalized global-beacon key session for next-height activation.
+    ///
+    /// The signed public state carries the target DKG roster independently of
+    /// the certificate's effective-height authorization roster. Pulse
+    /// production accepts that target only when it matches the next height's
+    /// authenticated consensus context.
     InstallGlobalBeaconKey,
-    /// Retire the exact active global-beacon key session without a successor.
+    /// Retire the exact active global-beacon key at the next height.
+    ///
+    /// Retirement authority is the certificate's effective-height roster and
+    /// the expected active session remains an exact compare-and-set guard.
     RetireGlobalBeaconKey,
-    /// Atomically install and activate a finalized Parliament TLE key session.
+    /// Install a finalized Parliament TLE key session for next-height activation.
+    ///
+    /// Unlike the global beacon, the TLE session persists the same exact
+    /// certificate roster as its release-share seat roster.
     InstallParliamentTleKey,
-    /// Retire the exact active Parliament TLE key session without a successor.
+    /// Retire the exact active Parliament TLE key at the next height.
+    ///
+    /// Retirement authority is the certificate's effective-height roster and
+    /// the expected active session remains an exact compare-and-set guard.
     RetireParliamentTleKey,
 }
 
@@ -72,7 +86,7 @@ pub enum ThresholdKeyLifecycleActionV1 {
 )]
 #[getset(get = "pub")]
 pub struct ThresholdKeyLifecycleSignatureV1 {
-    /// Zero-based seat in the exact ordered authenticated validator roster.
+    /// Zero-based seat in the exact ordered authorization roster at block `H`.
     pub signer_index: u16,
     /// Signature over the canonical certificate preimage.
     pub signature: iroha_crypto::Signature,
@@ -97,28 +111,36 @@ pub struct ThresholdKeyLifecycleCertificateV1 {
     /// `None` is valid only for the first install in this key family. This is
     /// a committee-certified compare-and-set guard, not a registrar hint.
     pub expected_active_session_id: Option<[u8; 32]>,
-    /// Incoming block height at which this action must execute.
+    /// Block height `H` at which authorization is verified and the action executes.
+    ///
+    /// Lifecycle activation or retirement takes effect at `H + 1`.
     pub effective_height: u64,
     /// Exact genesis-derived network identity.
     pub network_id: crate::NetworkId,
-    /// Hash of the exact ordered authenticated validator roster.
+    /// Hash of the exact ordered validator roster authorizing this action at `H`.
+    ///
+    /// For a global-beacon install, the signed `public_state` independently
+    /// commits the DKG target roster used at `H + 1`.
     pub roster_hash: [u8; 32],
-    /// Exact validator committee size.
+    /// Exact authorization-roster committee size at `H`.
     pub committee_size: u16,
-    /// Exact `2f + 1` authorization threshold.
+    /// Exact `2f + 1` threshold of the authorization roster at `H`.
     pub quorum: u16,
     /// Exact threshold-key session identifier.
     pub session_id: [u8; 32],
     /// Exact finalized DKG transcript commitment.
     pub transcript_hash: [u8; 32],
     /// Canonical Core public-state bytes for install actions; empty for retirement.
+    ///
+    /// The certificate preimage commits the exact byte length and hash, so an
+    /// install target cannot be changed after the roster signs it.
     pub public_state: Vec<u8>,
     /// Strictly ordered unique exact-roster signatures.
     pub signatures: Vec<ThresholdKeyLifecycleSignatureV1>,
 }
 
 super::isi! {
-    /// Apply one current-roster-certified threshold-key lifecycle action.
+    /// Apply one effective-height-roster-certified threshold-key lifecycle action.
     #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
     pub struct ApplyThresholdKeyLifecycleCertificateV1 {
         /// Full proof-carrying exact-roster lifecycle certificate.

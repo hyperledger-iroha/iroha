@@ -41,6 +41,28 @@ public sealed class ToriiOneShotTransportTests
     [Theory]
     [InlineData(HttpStatusCode.TemporaryRedirect)]
     [InlineData(HttpStatusCode.PermanentRedirect)]
+    public async Task CanonicalAccountReadRedirectIsSurfacedWithoutReplay(
+        HttpStatusCode redirectStatus)
+    {
+        using var handler = new CountingHandler((request, _) =>
+            Task.FromResult(RedirectResponse(request, redirectStatus)));
+        using var client = CreateClient(handler);
+
+        var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
+            client.SendAsync(
+                HttpMethod.Get,
+                "/v1/explorer/accounts",
+                query: "cursor=cHJldg&limit=10",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(redirectStatus, error.StatusCode);
+        Assert.Equal(1, handler.CountFor("/v1/explorer/accounts"));
+        Assert.Equal(0, handler.CountFor("/replayed"));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.TemporaryRedirect)]
+    [InlineData(HttpStatusCode.PermanentRedirect)]
     public async Task SignedTransactionDetailsRedirectIsSurfacedWithoutReplay(
         HttpStatusCode redirectStatus)
     {

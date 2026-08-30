@@ -114,6 +114,16 @@ fn leaf_index_apis_reject_out_of_bounds_and_narrowing_aliases() {
 }
 
 #[test]
+fn oversized_leaf_update_is_rejected_without_truncation_or_mutation() {
+    let tree = ByteMerkleTree::new(1, 4).unwrap();
+    tree.update_leaf(0, &[1, 2, 3, 4]).unwrap();
+    let baseline = tree.root();
+
+    assert!(tree.update_leaf(0, &[1, 2, 3, 4, 5]).is_err());
+    assert_eq!(tree.root(), baseline, "failed update must be atomic");
+}
+
+#[test]
 fn public_constructors_reject_invalid_chunk_sizes() {
     for invalid in [0, 33] {
         assert!(ByteMerkleTree::new(1, invalid).is_err());

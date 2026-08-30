@@ -4,8 +4,11 @@ use crate::{
     json_macros::{JsonDeserialize, JsonSerialize},
 };
 use axum::{extract::Path, response::IntoResponse};
+#[cfg(feature = "app_api")]
+use iroha_core::query::index_status::QueryIndexStatus;
+#[cfg(feature = "app_api")]
+use iroha_core::state::StateReadOnly;
 use iroha_core::{
-    query::index_status::QueryIndexStatus,
     query::projection_checkpoint::{
         QUERY_PROJECTION_DA_BLOB_CLASS_CUSTOM_ID, QUERY_PROJECTION_DA_CODEC,
         QUERY_PROJECTION_DA_COMPRESSION, QUERY_PROJECTION_DEFAULT_PARTITION_COUNT,
@@ -29,8 +32,8 @@ use iroha_core::{
         QUERY_PROJECTION_SHARD_ARCHIVE_VERSION, QUERY_PROJECTION_SHARD_ROWSET_CODEC,
         QueryProjectionShardArchive,
     },
-    state::{StateReadOnly, WorldReadOnly},
 };
+#[cfg(all(test, feature = "app_api"))]
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     HasMetadata, Identifiable,
@@ -141,6 +144,10 @@ pub struct NodeProjectionCapabilities {
     pub checkpoint_contract_v1: bool,
     /// Whether the DA-backed cold projection worker is enabled.
     pub da_v1_enabled: bool,
+    /// Whether this node exposes direct checkpoint preflight publication.
+    pub checkpoint_plan_v1: bool,
+    /// Whether this node exposes direct checkpoint publication.
+    pub checkpoint_publish_v1: bool,
     /// Whether the node can enumerate the canonical live shard set directly.
     pub shard_catalog_v1: bool,
     /// Whether the node can export canonical projection shard archives directly.
@@ -386,6 +393,8 @@ pub async fn handle_node_capabilities(
             projection: NodeProjectionCapabilities {
                 checkpoint_contract_v1: true,
                 da_v1_enabled: false,
+                checkpoint_plan_v1: false,
+                checkpoint_publish_v1: false,
                 shard_catalog_v1: cfg!(feature = "app_api"),
                 archive_export_v1: cfg!(feature = "app_api"),
                 archive_version: QUERY_PROJECTION_SHARD_ARCHIVE_VERSION,
@@ -1549,55 +1558,6 @@ mod tests {
             checked_projection_account(0x52)
         );
     }
-    #[cfg(feature = "app_api")]
-    fn projection_checkpoint_request_for_state(
-        state: &std::sync::Arc<State>,
-        emitted_at_unix: u64,
-        archive_emitted_at_unix: u64,
-        manifest_seed: u8,
-        ticket_seed: u8,
-    ) -> NodeProjectionCheckpointPublishRequest {
-        let mut shards = Vec::new();
-        let mut next_seed = 0u8;
-        let mut push_entries = |resource: &str, entries: Vec<NodeProjectionShardCatalogEntry>| {
-            for entry in entries {
-                shards.push(NodeProjectionCheckpointPublishShardRef {
-                    resource: resource.to_owned(),
-                    partition_id: entry.partition_id,
-                    asset_definition_id: entry.asset_definition_id,
-                    archive_emitted_at_unix,
-                    manifest_digest_hex: hex::encode([manifest_seed.wrapping_add(next_seed); 32]),
-                    storage_ticket_hex: hex::encode([ticket_seed.wrapping_add(next_seed); 32]),
-                });
-                next_seed = next_seed.wrapping_add(1);
-            }
-        };
-        push_entries(
-            "accounts",
-            build_accounts_projection_shard_catalog_entries(state.as_ref()),
-        );
-        push_entries(
-            "account_assets",
-            build_account_assets_projection_shard_catalog_entries(state.as_ref()),
-        );
-        push_entries(
-            "asset_holders",
-            build_asset_holders_projection_shard_catalog_entries(state.as_ref(), None)
-                .expect("asset_holders catalog"),
-        );
-        push_entries(
-            "asset_definitions",
-            build_asset_definitions_projection_shard_catalog_entries(state.as_ref()),
-        );
-        push_entries(
-            "domains",
-            build_domains_projection_shard_catalog_entries(state.as_ref()),
-        );
-        NodeProjectionCheckpointPublishRequest {
-            emitted_at_unix: Some(emitted_at_unix),
-            shards,
-        }
-    }
     #[tokio::test]
     async fn runtime_abi_hash_matches_ivm() {
         // Build a minimal state (not used by the handler, but required by signature)
@@ -1660,14 +1620,8 @@ mod tests {
         );
         assert!(resp.query.projection.checkpoint_contract_v1);
         assert!(!resp.query.projection.da_v1_enabled);
-        assert_eq!(
-            resp.query.projection.checkpoint_plan_v1,
-            cfg!(feature = "app_api")
-        );
-        assert_eq!(
-            resp.query.projection.checkpoint_publish_v1,
-            cfg!(feature = "app_api")
-        );
+        assert!(!resp.query.projection.checkpoint_plan_v1);
+        assert!(!resp.query.projection.checkpoint_publish_v1);
         assert_eq!(
             resp.query.projection.shard_catalog_v1,
             cfg!(feature = "app_api")
@@ -1846,14 +1800,8 @@ mod tests {
             resp.query.projection.archive_export_v1,
             cfg!(feature = "app_api")
         );
-        assert_eq!(
-            resp.query.projection.checkpoint_plan_v1,
-            cfg!(feature = "app_api")
-        );
-        assert_eq!(
-            resp.query.projection.checkpoint_publish_v1,
-            cfg!(feature = "app_api")
-        );
+        assert!(!resp.query.projection.checkpoint_plan_v1);
+        assert!(!resp.query.projection.checkpoint_publish_v1);
         assert_eq!(
             resp.query.projection.shard_catalog_v1,
             cfg!(feature = "app_api")
@@ -1935,317 +1883,6 @@ mod tests {
         assert_eq!(resp.shards[0].manifest_digest_hex, hex::encode([0x11; 32]));
         assert_eq!(resp.shards[0].storage_ticket_hex, hex::encode([0x22; 32]));
         assert_eq!(resp.shards[0].blob_hash_hex, hex::encode([0x33; 32]));
-    }
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn node_query_projection_checkpoint_plan_rebuilds_uploaded_shards() {
-        use iroha_data_model::Registrable;
-        use iroha_data_model::prelude::{Account, Domain, DomainId};
-        let authority_id = checked_projection_account(0x60);
-        let alice_id = checked_projection_account(0x61);
-        let domain_id = DomainId::try_new("projection-plan", "universal").expect("domain");
-        let world = iroha_core::state::World::with(
-            [Domain::new(domain_id).build(&authority_id)],
-            [
-                Account::new(authority_id.clone()).build(&authority_id),
-                Account::new(alice_id.clone()).build(&authority_id),
-            ],
-            [],
-        );
-        let state = std::sync::Arc::new(State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
-        let archive_emitted_at_unix = 1_714_001_111;
-        let checkpoint_emitted_at_unix = 1_714_001_222;
-        let request = projection_checkpoint_request_for_state(
-            &state,
-            checkpoint_emitted_at_unix,
-            archive_emitted_at_unix,
-            0x11,
-            0x21,
-        );
-        let expected_total_shards = request.shards.len();
-        let accounts_shard = request
-            .shards
-            .iter()
-            .find(|shard| shard.resource == "accounts")
-            .cloned()
-            .expect("accounts shard");
-        let archive = build_accounts_projection_shard_archive(
-            state.as_ref(),
-            accounts_shard.partition_id,
-            archive_emitted_at_unix,
-        )
-        .expect("archive");
-        let expected_shard = archive
-            .clone()
-            .into_checkpoint_shard(
-                parse_blob_digest_hex(&accounts_shard.manifest_digest_hex, "manifest_digest_hex")
-                    .expect("parse manifest digest"),
-                parse_storage_ticket_hex(&accounts_shard.storage_ticket_hex, "storage_ticket_hex")
-                    .expect("parse storage ticket"),
-            )
-            .expect("checkpoint shard");
-        let response = handle_node_query_projection_checkpoint_plan(state.clone(), request)
-            .await
-            .expect("plan");
-        assert_eq!(response.emitted_at_unix, checkpoint_emitted_at_unix);
-        assert_eq!(response.indexed_height, 0);
-        assert_eq!(response.shards.len(), expected_total_shards);
-        let response_accounts_shard = response
-            .shards
-            .iter()
-            .find(|shard| {
-                shard.resource == "accounts"
-                    && shard.partition_id == accounts_shard.partition_id
-                    && shard.asset_definition_id.is_none()
-            })
-            .expect("response accounts shard");
-        assert_eq!(response_accounts_shard.resource, "accounts");
-        assert_eq!(
-            response_accounts_shard.partition_id,
-            accounts_shard.partition_id
-        );
-        assert_eq!(
-            response_accounts_shard.manifest_digest_hex,
-            accounts_shard.manifest_digest_hex
-        );
-        assert_eq!(
-            response_accounts_shard.storage_ticket_hex,
-            accounts_shard.storage_ticket_hex
-        );
-        assert_eq!(
-            response_accounts_shard.blob_hash_hex,
-            hex::encode(expected_shard.blob_hash.as_bytes())
-        );
-        assert!(state.query_projection_checkpoint_snapshot().is_none());
-    }
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn node_query_projection_checkpoint_plan_rejects_incomplete_shard_set() {
-        use iroha_data_model::Registrable;
-        use iroha_data_model::prelude::{Account, Domain, DomainId};
-        use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
-        let authority_id = checked_projection_account(0x62);
-        let domain_id = DomainId::try_new("projection-plan-gap", "universal").expect("domain");
-        let mut accounts = vec![Account::new(authority_id.clone()).build(&authority_id)];
-        for seed in 0x63..=0x82 {
-            let account_id = checked_projection_account(seed);
-            accounts.push(Account::new(account_id).build(&authority_id));
-        }
-        let world = iroha_core::state::World::with(
-            [Domain::new(domain_id).build(&authority_id)],
-            accounts,
-            [],
-        );
-        let state = std::sync::Arc::new(State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
-        let mut request = projection_checkpoint_request_for_state(
-            &state,
-            1_714_001_260,
-            1_714_001_250,
-            0x51,
-            0x61,
-        );
-        assert!(
-            request.shards.len() >= 2,
-            "expected more than one live checkpoint shard for completeness validation"
-        );
-        request.shards.pop();
-        let err = handle_node_query_projection_checkpoint_plan(state, request)
-            .await
-            .expect_err("incomplete shard set must fail");
-        let crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
-            message,
-        ))) = err
-        else {
-            panic!("unexpected error shape: {err:?}");
-        };
-        assert!(message.contains("checkpoint shard set must match"));
-        assert!(message.contains("canonical live shard catalog"));
-        assert!(message.contains("missing"));
-    }
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn node_query_projection_checkpoint_publish_persists_descriptor() {
-        use iroha_data_model::Registrable;
-        use iroha_data_model::prelude::{Account, Domain, DomainId};
-        let authority_id = checked_projection_account(0x83);
-        let alice_id = checked_projection_account(0x84);
-        let domain_id = DomainId::try_new("projection-publish", "universal").expect("domain");
-        let world = iroha_core::state::World::with(
-            [Domain::new(domain_id).build(&authority_id)],
-            [
-                Account::new(authority_id.clone()).build(&authority_id),
-                Account::new(alice_id.clone()).build(&authority_id),
-            ],
-            [],
-        );
-        let state = std::sync::Arc::new(State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
-        let checkpoint_emitted_at_unix = 1_714_001_333;
-        let request = projection_checkpoint_request_for_state(
-            &state,
-            checkpoint_emitted_at_unix,
-            1_714_001_300,
-            0x31,
-            0x41,
-        );
-        let expected_total_shards = request.shards.len();
-        let response = handle_node_query_projection_checkpoint_publish(state.clone(), request)
-            .await
-            .expect("publish");
-        assert_eq!(response.emitted_at_unix, checkpoint_emitted_at_unix);
-        let persisted = state
-            .query_projection_checkpoint_snapshot()
-            .expect("persisted checkpoint");
-        assert_eq!(persisted.emitted_at_unix, checkpoint_emitted_at_unix);
-        assert_eq!(persisted.shards.len(), expected_total_shards);
-        assert_eq!(response.shards.len(), persisted.shards.len());
-        for (response_shard, persisted_shard) in response.shards.iter().zip(&persisted.shards) {
-            assert_eq!(
-                response_shard.blob_hash_hex,
-                hex::encode(persisted_shard.blob_hash.as_bytes())
-            );
-        }
-    }
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn failed_projection_checkpoint_publish_does_not_overwrite_cached_archive() {
-        use iroha_data_model::Registrable;
-        use iroha_data_model::prelude::{
-            Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain, DomainId,
-        };
-        use iroha_primitives::numeric::Quantity;
-
-        let authority_id = checked_projection_account(0x90);
-        let alice_id = checked_projection_account(0x91);
-        let domain_id = DomainId::try_new("projection-publish-cache", "universal").expect("domain");
-        let definition_id = AssetDefinitionId::derive_from_components(
-            domain_id.clone(),
-            "cache-token".parse().expect("name"),
-        );
-        let definition = AssetDefinition::numeric(
-            definition_id.clone(),
-            "cache-token".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&authority_id);
-        let world = iroha_core::state::World::with_assets(
-            [Domain::new(domain_id).build(&authority_id)],
-            [
-                Account::new(authority_id.clone()).build(&authority_id),
-                Account::new(alice_id.clone()).build(&authority_id),
-            ],
-            [definition],
-            [Asset::new(
-                AssetId::new(definition_id.clone(), alice_id),
-                Quantity::from(1_u32),
-            )],
-            [],
-        );
-        let state = std::sync::Arc::new(State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
-        let definition_id = definition_id.to_string();
-        let published_request = projection_checkpoint_request_for_state(
-            &state,
-            1_714_001_400,
-            1_714_001_401,
-            0x51,
-            0x61,
-        );
-        let published_archives = build_query_projection_uploaded_archives(
-            state.as_ref(),
-            published_request.shards.clone(),
-        )
-        .expect("build published archives");
-        let published_archive = published_archives
-            .into_iter()
-            .find(|upload| {
-                upload.archive.resource == QueryProjectionResourceKind::AssetHolders
-                    && upload.archive.asset_definition_id.as_deref() == Some(definition_id.as_str())
-            })
-            .expect("asset-holder archive")
-            .archive;
-
-        handle_node_query_projection_checkpoint_publish(state.clone(), published_request)
-            .await
-            .expect("publish initial checkpoint");
-        assert_eq!(
-            crate::routing::query_projection_archive_from_hot_cache_for_tests(&published_archive),
-            Some(published_archive.clone())
-        );
-
-        let mut rejected_request = projection_checkpoint_request_for_state(
-            &state,
-            1_714_001_500,
-            1_714_001_501,
-            0x71,
-            0x81,
-        );
-        let duplicate = rejected_request
-            .shards
-            .iter()
-            .find(|shard| {
-                shard.resource == "asset_holders"
-                    && shard.asset_definition_id.as_deref() == Some(definition_id.as_str())
-            })
-            .expect("asset-holder shard reference")
-            .clone();
-        rejected_request.shards.push(duplicate);
-        let error = handle_node_query_projection_checkpoint_publish(state, rejected_request)
-            .await
-            .expect_err("duplicate checkpoint shard must fail");
-        assert!(error.to_string().contains("duplicate"));
-        assert_eq!(
-            crate::routing::query_projection_archive_from_hot_cache_for_tests(&published_archive),
-            Some(published_archive),
-            "a rejected publication must leave the previously published cache entry intact"
-        );
-    }
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn build_query_projection_uploaded_archives_rejects_asset_holders_without_asset_definition() {
-        use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
-        let state = State::new_for_testing(
-            iroha_core::state::World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let err = build_query_projection_uploaded_archives(
-            &state,
-            vec![NodeProjectionCheckpointPublishShardRef {
-                resource: "asset_holders".to_string(),
-                partition_id: 0,
-                asset_definition_id: None,
-                archive_emitted_at_unix: 1_714_001_444,
-                manifest_digest_hex: hex::encode([0x51; 32]),
-                storage_ticket_hex: hex::encode([0x61; 32]),
-            }],
-        )
-        .expect_err("missing asset_definition_id must fail");
-        let crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
-            message,
-        ))) = err
-        else {
-            panic!("unexpected error: {err:?}");
-        };
-        assert!(
-            message.contains("asset_definition_id is required for asset_holders checkpoint shard"),
-            "unexpected conversion error: {message}"
-        );
     }
     #[cfg(feature = "app_api")]
     #[tokio::test]
@@ -2448,6 +2085,27 @@ mod tests {
             }
             other => panic!("unexpected rowset variant: {other:?}"),
         }
+    }
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn projection_archive_marker_is_derived_from_the_same_state_view_as_rows() {
+        let state = State::new_for_testing(
+            iroha_core::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let expected_hash =
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::new([0xA7; iroha_crypto::Hash::LENGTH]),
+            );
+        let mut view = state.query_view();
+        view.block_hashes.push(expected_hash);
+
+        let archive = build_accounts_projection_shard_archive(&view, 0, 1_714_002_777)
+            .expect("build projection archive from one committed view");
+
+        assert_eq!(archive.indexed_height, 1);
+        assert_eq!(archive.indexed_block_hash, Some(expected_hash));
     }
     #[cfg(feature = "app_api")]
     #[tokio::test]

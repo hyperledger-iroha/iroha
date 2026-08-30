@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -206,11 +207,14 @@ def create_governance_ballot_client_mixin(
             if (
                 not isinstance(wire_id, str)
                 or not wire_id
-                or wire_id != wire_id.strip()
-                or any(character.isspace() or ord(character) < 0x20 for character in wire_id)
+                or any(
+                    character.isspace() or unicodedata.category(character) == "Cc"
+                    for character in wire_id
+                )
             ):
                 raise RuntimeError(
-                    f"{context}.tx_instructions[0].wire_id must be exact non-empty text"
+                    f"{context}.tx_instructions[0].wire_id must be exact non-empty text "
+                    "without whitespace or control characters"
                 )
             payload_hex = entry["payload_hex"]
             if (

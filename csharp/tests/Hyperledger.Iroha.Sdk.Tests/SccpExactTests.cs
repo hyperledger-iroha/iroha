@@ -269,7 +269,8 @@ public sealed partial class SccpExactTests
             flags: 0x02));
         var nativeArtifact = Convert.ToBase64String(NoritoCodec.Encode(
             SccpSubmitValidation.NativeInboundProofSchemaName,
-            [1]));
+            [1],
+            flags: 0x02));
         var unrelatedArtifact = Convert.ToBase64String(NoritoCodec.Encode("iroha.test.Unrelated", [1]));
         var transaction = CanonicalTransactionPayload(7, destinationProof: true);
         var signature = Convert.ToBase64String(
@@ -1237,8 +1238,8 @@ public sealed partial class SccpExactTests
         Assert.Equal(
             "CDBEC097FED4AD21E44A354FE09A3C43AD489F4AC78CFF8944BA8BB5CC2FD577",
             Convert.ToHexString(parsed.SoraFinalityAnchor.AnchorHash));
-        Assert.Equal("0x1168372c5c87f384d377a3ffb9140af5ac73cdcd693bcb1b4b89995a8fcad92a", parsed.StatementHash);
-        Assert.Equal("0x3757838d0f35d387dd9467d4d9c4806fc528d45db22060ea4784402a0208cd5f", parsed.RequestHash);
+        Assert.Equal("0xbfe8e664563ccf521090b15bc57a263edea90bf02a354c7ed8d53a06a3793016", parsed.StatementHash);
+        Assert.Equal("0xe94a8865241d461b62ff65bdd3fd7d3c7c762c4ef13a43e82dfaacf267af5278", parsed.RequestHash);
         Assert.Throws<ArgumentException>(() => ProofRequestObject(2));
         Assert.Throws<ArgumentException>(() => ProofRequestObject(3));
         Assert.Throws<ArgumentException>(() => ProofRequestObject(5));
@@ -1557,6 +1558,59 @@ public sealed partial class SccpExactTests
         recipient["account"] = "0x" + new string('0', 64);
         Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(
             new Dictionary<string, object?> { ["items"] = new[] { aliased } })));
+    }
+
+    [Fact]
+    public void RecentDiscoveryAcceptsOnlyCanonicalTronAddress21Projection()
+    {
+        var item = RecentItem(9, MessageId);
+        item["target_profile"] = "tron-mainnet";
+        item["target_domain"] = 3;
+        item["route_id"] = "taira_tron_xor";
+        item["payload_projection"] = TransferProjection(3);
+        var parsed = Assert.Single(SccpRecentMessages.Parse(Json(
+            new Dictionary<string, object?> { ["items"] = new[] { item } })).Items);
+        Assert.Equal(SccpNetworkV1.TronMainnet, parsed.Lane.Target);
+
+        foreach (var replacement in new object[]
+        {
+            new Dictionary<string, object?>
+            {
+                ["EvmAddress20"] = new Dictionary<string, object?>
+                {
+                    ["bytes"] = "0x" + new string('1', 40),
+                },
+            },
+            new Dictionary<string, object?>
+            {
+                ["TronAddress21"] = new Dictionary<string, object?>
+                {
+                    ["bytes"] = "0x" + new string('1', 40),
+                },
+            },
+            new Dictionary<string, object?>
+            {
+                ["TronAddress21"] = new Dictionary<string, object?>
+                {
+                    ["bytes"] = "0x41" + new string('0', 40),
+                },
+            },
+            new Dictionary<string, object?>
+            {
+                ["TronAddress21"] = new Dictionary<string, object?>
+                {
+                    ["bytes"] = "0x41" + new string('A', 40),
+                },
+            },
+        })
+        {
+            var malformed = DeepClone(item);
+            var transfer = (Dictionary<string, object?>)
+                ((Dictionary<string, object?>)malformed["payload_projection"]!)["Transfer"]!;
+            transfer["recipient"] = replacement;
+            Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(
+                new Dictionary<string, object?> { ["items"] = new[] { malformed } })));
+        }
     }
 
     [Fact]

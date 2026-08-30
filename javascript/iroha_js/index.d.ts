@@ -5465,6 +5465,16 @@ export type ParliamentProposalTagV1 =
 
 export const PARLIAMENT_PROPOSAL_KINDS_V1: ReadonlyArray<ParliamentProposalTagV1>;
 
+export type ParliamentContractLifecycleActionTagV1 =
+  | "Activate"
+  | "Deactivate"
+  | "OfferOwnership"
+  | "CancelOwnershipOffer"
+  | "AcceptParliamentOwnership"
+  | "CompleteEmergencyHoldRetrospective";
+
+export const PARLIAMENT_CONTRACT_LIFECYCLE_ACTIONS_V1: ReadonlyArray<ParliamentContractLifecycleActionTagV1>;
+
 export type ParliamentPublicTransitionTagV1 =
   | "EscalateRisk"
   | "CompleteQualification"
@@ -6050,7 +6060,7 @@ export interface ToriiGovernanceZkBallotV1Request {
   rootHint?: string | BinaryLike | null;
   owner?: string | null;
   amount?: QuantityInput | null;
-  durationBlocks?: number | string | bigint | null;
+  durationBlocks?: number | bigint | null;
   direction?: ToriiGovernanceBallotDirection | null;
   nullifier?: string | BinaryLike | null;
 }
@@ -6062,7 +6072,7 @@ export interface ToriiGovernanceBallotProof {
   owner?: string | null;
   nullifier?: string | null;
   amount?: QuantityInput | null;
-  durationBlocks?: number | string | bigint | null;
+  durationBlocks?: number | bigint | null;
   direction?: ToriiGovernanceBallotDirection | null;
 }
 
@@ -11138,44 +11148,17 @@ export interface NormalizedValidationFeeLedgerBindingV1 {
   readonly checkpoint: NormalizedValidationFeeCheckpointV1;
 }
 
-export interface ValidationFeeVerifiedPlainElectorateSnapshotV1 {
-  readonly rosterRoot: string;
-  readonly memberCount: string;
-  readonly capturedAtHeight: string;
-  readonly approvalGateHeight: string;
-}
-
-export interface ValidationFeeVerifiedEnactmentWindowV1 {
-  readonly opens_at_height: string;
-  readonly closes_at_height: string;
-  readonly enacted_at_height: string;
-}
-
-export interface ValidationFeeVerifiedFinalizationV1 {
-  readonly proposal_id: string;
-  readonly referendum_id: string;
-  readonly finalized_at_height: string;
-  readonly mode: "PLAIN";
-  readonly approve: string;
-  readonly reject: string;
-  readonly abstain: string;
-  readonly min_turnout: string;
-  readonly approval_threshold_numerator: string;
-  readonly approval_threshold_denominator: string;
-  readonly approved: true;
-}
-
 export interface ValidationFeeVerifiedParliamentProposalV1 {
   readonly proposal_kind:
     | "ValidationFeePolicyV1"
     | "ValidationFeePayoutLifecycleV1";
+  readonly proposal_operator: string;
   readonly proposal_id: string;
   readonly payload_hash: string;
-  readonly parliament_roster_root: string;
-  readonly plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>;
-  readonly plainElectorateSnapshot: Readonly<ValidationFeeVerifiedPlainElectorateSnapshotV1>;
-  readonly enactment_window: Readonly<ValidationFeeVerifiedEnactmentWindowV1>;
-  readonly finalization: Readonly<ValidationFeeVerifiedFinalizationV1>;
+  readonly governance_certificate_id: string;
+  readonly governance_certificate: Readonly<Record<string, unknown>>;
+  readonly certified_at_height: string;
+  readonly enacted_at_height: string;
 }
 
 export interface ValidationFeeVerifiedParliamentV1 {
@@ -13009,43 +12992,15 @@ export function inspectSubscriptionTriggerAction(
 ): SubscriptionTriggerActionSummary;
 
 /**
- * Exact first-release PLAIN eligibility rule bound into validation-fee proposals.
- */
-export interface ValidationFeePlainEligibilityRuleV1 {
-  readonly rule: "proposal_operator_at_or_before_gate_others_after_gate";
-  readonly value: null;
-}
-
-/**
- * Exact first-release PLAIN electorate contract bound into a proposal fingerprint.
- */
-export interface ValidationFeePlainElectorateRulesV1 {
-  readonly voting_asset_id: string;
-  readonly bond_escrow_account: string;
-  readonly slash_receiver_account: string;
-  readonly ballot_amount: string;
-  readonly ballot_duration_blocks: string;
-  readonly citizenship_amount: string;
-  readonly max_members: string;
-  readonly conviction_step_blocks: string;
-  readonly max_conviction: string;
-  readonly min_turnout: string;
-  readonly approval_threshold_numerator: string;
-  readonly approval_threshold_denominator: string;
-  readonly eligibility_rule: Readonly<ValidationFeePlainEligibilityRuleV1>;
-}
-
-/**
  * Compute the exact native Parliament fingerprint for a validation-fee policy.
  *
  * The policy must use the native snake-case `ValidationFeePolicyV1` JSON
- * contract. The electorate rules must use the exact first-release PLAIN
- * contract. Missing, unknown, and legacy fields are rejected natively.
+ * contract. Missing, unknown, and retired fields are rejected natively.
  */
 export function computeValidationFeePolicyProposalFingerprintV1(
+  proposalOperator: string,
   policy: Readonly<Record<string, JsonValue>>,
-  payoutLifecycleProposalId: string | null,
-  plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>,
+  payoutLifecycleProposalId?: string | null,
 ): string;
 
 /**
@@ -13055,8 +13010,8 @@ export function computeValidationFeePolicyProposalFingerprintV1(
  * Missing, unknown, legacy, and non-canonical fields are rejected natively.
  */
 export function computeValidationFeePayoutLifecycleProposalFingerprintV1(
+  proposalOperator: string,
   payoutBinding: Readonly<Record<string, JsonValue>>,
-  plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>,
 ): string;
 
 export interface LaneRelaySample {

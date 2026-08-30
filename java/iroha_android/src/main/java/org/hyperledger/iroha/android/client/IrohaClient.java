@@ -64,24 +64,6 @@ public interface IrohaClient {
     return future;
   }
 
-  /** Submits one canonical SCCP destination-proof artifact. */
-  default CompletableFuture<ClientResponse> submitSccpDestinationProof(
-      final SccpDestinationProofSubmitRequest request) {
-    final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
-    future.completeExceptionally(
-        new UnsupportedOperationException("submitSccpDestinationProof not supported"));
-    return future;
-  }
-
-  /** Submits one canonical protocol-native external-to-SORA SCCP proof. */
-  default CompletableFuture<ClientResponse> submitSccpNativeMessage(
-      final SccpNativeMessageSubmitRequest request) {
-    final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
-    future.completeExceptionally(
-        new UnsupportedOperationException("submitSccpNativeMessage not supported"));
-    return future;
-  }
-
   /**
    * Submits an already versioned Norito transaction entrypoint to the node.
    *

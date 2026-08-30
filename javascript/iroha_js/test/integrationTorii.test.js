@@ -3581,40 +3581,32 @@ test(
     }
 
     assert.ok(response, "governance ballot response should be present");
-    assert.equal(typeof response.ok, "boolean", "governance ballot response should expose ok flag");
     assert.equal(
-      typeof response.accepted,
-      "boolean",
-      "governance ballot response should expose accepted flag",
+      response.drafted,
+      true,
+      "governance ballot response should confirm an unsigned draft",
     );
     assert.ok(
       Array.isArray(response.tx_instructions),
       "governance ballot response must expose tx_instructions array",
+    );
+    assert.equal(
+      response.tx_instructions.length,
+      1,
+      "governance ballot response must contain exactly one instruction",
     );
     response.tx_instructions.forEach((instruction, index) => {
       assert.ok(
         isNonEmptyString(instruction.wire_id),
         `governance ballot tx_instructions[${index}].wire_id must be a string`,
       );
-      if (instruction.payload_hex !== undefined) {
-        assertHexString(
-          instruction.payload_hex,
-          `governance ballot tx_instructions[${index}].payload_hex`,
-        );
-      }
-    });
-    if (response.proposal_id !== null && response.proposal_id !== undefined) {
-      assertHexString(response.proposal_id, "governance ballot proposal_id");
-    }
-    if (response.reason !== undefined && response.reason !== null) {
-      assert.equal(
-        typeof response.reason,
-        "string",
-        "governance ballot response reason must be a string when present",
+      assertHexString(
+        instruction.payload_hex,
+        `governance ballot tx_instructions[${index}].payload_hex`,
       );
-    }
+    });
     t.diagnostic(
-      `governance ballot accepted=${response.accepted} instructions=${response.tx_instructions.length} proposal=${response.proposal_id ?? "none"}`,
+      `governance ballot drafted=${response.drafted} instructions=${response.tx_instructions.length}`,
     );
   },
 );

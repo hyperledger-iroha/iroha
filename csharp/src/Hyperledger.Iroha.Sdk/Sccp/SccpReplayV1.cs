@@ -66,9 +66,9 @@ public sealed class SccpReplayPrincipalV1
 
     internal byte[] Bytes { get; }
 
-    /// <summary>Construct from exact canonical Norito <c>AccountId</c> bytes.</summary>
+    /// <summary>Construct from exact canonical compact-Norito <c>AccountId</c> bytes.</summary>
     public static SccpReplayPrincipalV1 SoraAccount(ReadOnlySpan<byte> canonicalAccountId) =>
-        new(0, canonicalAccountId.ToArray());
+        new(0, SccpReplayV1.CanonicalSoraAccountId(canonicalAccountId));
 
     public static SccpReplayPrincipalV1 Evm(ReadOnlySpan<byte> address) =>
         new(1, SccpReplayV1.Exact(address, 20, "EVM replay principal"));
@@ -185,6 +185,11 @@ public static class SccpReplayV1
         ReadOnlySpan<byte> auxiliaryIdentitySha256)
     {
         ArgumentNullException.ThrowIfNull(principal);
+        if (!Enum.IsDefined(typeof(SccpReplayBoundaryV1), operation))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(operation), operation, "Unknown SCCP replay boundary.");
+        }
         if (amountScale9 == 0)
         {
             throw new ArgumentException("Replay amount must be a positive u128.", nameof(amountScale9));
@@ -274,6 +279,28 @@ public static class SccpReplayV1
                 : Parent(level, current, sibling);
         }
         return new SccpReplayWitnessRootV1(current, witness.ExpectedShardRoot, key[0]);
+    }
+
+    internal static byte[] CanonicalSoraAccountId(ReadOnlySpan<byte> canonicalAccountId)
+    {
+        if (canonicalAccountId.IsEmpty || canonicalAccountId.Length > ushort.MaxValue)
+        {
+            throw new ArgumentException(
+                "SORA replay principal must be canonical nonempty u16-sized AccountId bytes.",
+                nameof(canonicalAccountId));
+        }
+
+        try
+        {
+            return SccpSubmitValidation.RequireCanonicalAccountIdPayload(canonicalAccountId);
+        }
+        catch (Exception error) when (error is ArgumentException or FormatException or OverflowException)
+        {
+            throw new ArgumentException(
+                "SORA replay principal is not a canonical compact-Norito AccountId.",
+                nameof(canonicalAccountId),
+                error);
+        }
     }
 
     internal static byte[] Exact(

@@ -47,7 +47,7 @@ public final class SccpClientExactTests {
   private static final String BSC_ROUTE_CONFIG_HASH =
       "FDCE93E148D8A9BD3BE2E7051AF681A757CA273F409073F9402F5534D32C399B";
   private static final String TRON_ROUTE_CONFIG_HASH =
-      "60544E93C2B5E96761C90DC96E7E24EC1D6EDD5BEE2E2A946D7ED9632535177D";
+      "09091FF86A7F8E94B2EE53A398EF9CAC12346522457C3B466F3CA4ED4EF2DB70";
 
   private SccpClientExactTests() {}
 
@@ -202,32 +202,12 @@ public final class SccpClientExactTests {
             HttpClientTransport.preflightSccpBridgeSubmitJson(
                 proof.toJsonBytes(), "/v1/bridge/messages"));
 
-    final SccpSubmitExecutor submitExecutor =
-        new SccpSubmitExecutor(List.of("application/json"));
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            submitExecutor,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example"))
-                .build());
-    transport.submitSccpDestinationProof(proof).join();
-    transport.submitSccpNativeMessage(message).join();
-    assert submitExecutor.requests.size() == 2;
-    assert submitExecutor.requests.stream()
-        .allMatch(request -> request.maximumResponseBytes() == 64L * 1024L * 1024L);
-
-    final SccpSubmitExecutor missingContentType = new SccpSubmitExecutor(List.of());
-    final HttpClientTransport strictTransport =
-        HttpClientTransport.withExecutor(
-            missingContentType,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example"))
-                .build());
-    try {
-      strictTransport.submitSccpDestinationProof(proof).join();
-      throw new AssertionError("SCCP submit must reject a missing Content-Type");
-    } catch (final CompletionException expected) {
-      // Expected.
+    for (final String removedWrite :
+        List.of("submitSccpDestinationProof", "submitSccpNativeMessage")) {
+      assert Arrays.stream(IrohaClient.class.getMethods())
+          .noneMatch(method -> method.getName().equals(removedWrite));
+      assert Arrays.stream(HttpClientTransport.class.getMethods())
+          .noneMatch(method -> method.getName().equals(removedWrite));
     }
   }
 
@@ -2931,28 +2911,6 @@ public final class SccpClientExactTests {
         nativeProofB64,
         canonicalReplayWitnessArtifact(),
         BRIDGE_FEE_PAYMENT);
-  }
-
-  private static final class SccpSubmitExecutor implements HttpTransportExecutor {
-    private final List<String> contentTypes;
-    private final List<TransportRequest> requests = new ArrayList<>();
-
-    private SccpSubmitExecutor(final List<String> contentTypes) {
-      this.contentTypes = contentTypes;
-    }
-
-    @Override
-    public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
-      requests.add(request);
-      final TransportResponse.Builder builder =
-          TransportResponse.builder()
-              .setStatusCode(200)
-              .setBody("{}".getBytes(StandardCharsets.UTF_8));
-      for (final String contentType : contentTypes) {
-        builder.addHeader("Content-Type", contentType);
-      }
-      return CompletableFuture.completedFuture(builder.build());
-    }
   }
 
   private static final class SccpNoritoExecutor implements HttpTransportExecutor {

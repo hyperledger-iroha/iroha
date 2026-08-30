@@ -7357,6 +7357,15 @@ export function encodeAccountIdNoritoValue(value, context = "AccountId") {
   );
 }
 
+/** @internal Decode and re-encode one exact compact-length AccountId value. */
+export function _canonicalAccountIdNoritoValue(payload, context = "AccountId") {
+  return withNoritoCompactLengths(() =>
+    Uint8Array.from(
+      encodeAccountIdValue(decodeAccountIdValue(Buffer.from(payload), context), context),
+    ),
+  );
+}
+
 function decodeAccountIdValue(payload, context) {
   const reader = new BufferReader(payload, context);
   const kind = reader.readU32LE("kind");

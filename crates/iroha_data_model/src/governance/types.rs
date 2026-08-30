@@ -1370,8 +1370,8 @@ impl SortitionRequestV1 {
     /// Construct and validate an immutable sortition request.
     ///
     /// `last_consumed_pulse_height` must describe only the supplied beacon
-    /// session. An undersubscribed but nonempty candidate snapshot is valid and
-    /// is reported later through [`ParliamentConcentrationWarningV1`].
+    /// session. An undersubscribed but nonempty candidate snapshot remains valid;
+    /// the sealed roster retains the exact resulting seat count.
     ///
     /// # Errors
     /// Returns [`SortitionRequestErrorV1`] for an empty pool, an invalid target,
@@ -1417,6 +1417,30 @@ impl SortitionRequestV1 {
         &self,
         last_consumed_pulse_height: Option<u64>,
     ) -> Result<(), SortitionRequestErrorV1> {
+        self.validate_with_candidate_policy(last_consumed_pulse_height, false)
+    }
+
+    /// Validate a pre-request capacity intent while permitting an empty candidate snapshot.
+    ///
+    /// Core uses this only before it authenticates the live candidate corpus and
+    /// hidden-body decision mode. Every other identifier, target, height, and
+    /// pulse-reuse invariant remains identical to [`Self::validate`].
+    ///
+    /// # Errors
+    /// Returns [`SortitionRequestErrorV1`] for every malformed binding other
+    /// than an empty candidate snapshot.
+    pub(crate) fn validate_capacity_intent(
+        &self,
+        last_consumed_pulse_height: Option<u64>,
+    ) -> Result<(), SortitionRequestErrorV1> {
+        self.validate_with_candidate_policy(last_consumed_pulse_height, true)
+    }
+
+    fn validate_with_candidate_policy(
+        &self,
+        last_consumed_pulse_height: Option<u64>,
+        allow_empty_candidate_snapshot: bool,
+    ) -> Result<(), SortitionRequestErrorV1> {
         if self.id.as_bytes() == &[0; 32]
             || self.governance_attempt_id.as_bytes() == &[0; 32]
             || self.body_election_attempt_id.as_bytes() == &[0; 32]
@@ -1428,7 +1452,7 @@ impl SortitionRequestV1 {
         if self.id != self.canonical_id() {
             return Err(SortitionRequestErrorV1::NonCanonicalIdentifier);
         }
-        if self.candidate_count == 0 {
+        if self.candidate_count == 0 && !allow_empty_candidate_snapshot {
             return Err(SortitionRequestErrorV1::EmptyCandidateSnapshot);
         }
         if self.target_seats == 0 {
@@ -2086,24 +2110,6 @@ impl TleSessionId {
     }
 }
 
-/// Warning emitted when a sealed body is smaller or more concentrated than requested.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct ParliamentConcentrationWarningV1 {
-    /// Body instance affected by concentration.
-    pub body_instance_id: BodyInstanceId,
-    /// Parliament body affected by concentration.
-    pub body: ParliamentBody,
-    /// Requested seat count.
-    pub target_seats: u32,
-    /// Nonempty feasible seat count that was sealed.
-    pub sealed_seats: u32,
-    /// Eligible candidates in the frozen sortition snapshot.
-    pub eligible_candidates: u32,
-    /// Smallest feasible simultaneous cross-body assignment cap.
-    pub cross_body_assignment_cap: u32,
-}
-
 /// Return the immutable-seat quorum `ceil(2 × original_seats / 3)`.
 #[must_use]
 pub const fn parliament_quorum_seats_v1(original_seats: u32) -> u32 {
@@ -2518,7 +2524,8 @@ pub struct GovernanceCertificateV1 {
     pub effect_preimage_hash: [u8; 32],
     /// Compare-and-set head required when the effect executes.
     pub expected_head: GovernanceExpectedHeadV1,
-    /// Height at which the complete certificate was finalized.
+    /// Height of the final body result, at which the complete certificate was
+    /// atomically finalized.
     pub certified_at_height: u64,
     /// Exact height at which deterministic enactment is due.
     pub enact_at_height: u64,
@@ -2564,7 +2571,7 @@ pub enum GovernanceCertificateErrorV1 {
     /// A narrow Policy Jury approval did not have exactly one fresh Confirmation Jury result,
     /// or a non-narrow result carried one.
     ConfirmationJuryMismatch,
-    /// The policy version or certification/enactment height ordering was invalid.
+    /// The policy version or certification/enactment chronology was invalid.
     InvalidLifecycle,
     /// The compare-and-set head contained an inert subject or head commitment.
     InvalidExpectedHead,
@@ -2667,11 +2674,15 @@ impl GovernanceCertificateV1 {
         if self.governance_attempt_sequence > MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
             return Err(GovernanceCertificateErrorV1::RetryLimitExceeded);
         }
-        if self.body_bindings.is_empty() {
-            return Err(GovernanceCertificateErrorV1::EmptyBodyBindings);
-        }
+        let final_result_height = self
+            .body_bindings
+            .iter()
+            .map(|binding| binding.result_height)
+            .max()
+            .ok_or(GovernanceCertificateErrorV1::EmptyBodyBindings)?;
         if self.policy_version != PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1
             || self.certified_at_height == 0
+            || self.certified_at_height != final_result_height
             || self.enact_at_height <= self.certified_at_height
         {
             return Err(GovernanceCertificateErrorV1::InvalidLifecycle);
@@ -2924,8 +2935,7 @@ impl GovernanceCertificateV1 {
                     confirmation.sortition_request.request_height == policy.result_height
                 } else {
                     confirmation.sortition_request.request_height > policy.result_height
-                }) && (confirmation.beacon_session_id != policy.beacon_session_id
-                    || confirmation.beacon_pulse_id != policy.beacon_pulse_id) => {}
+                }) && confirmation.beacon_pulse_id != policy.beacon_pulse_id => {}
             _ => return Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch),
         }
         Ok(())
@@ -3834,6 +3844,75 @@ mod tests {
             .expect("valid sortition request revalidates");
     }
     #[test]
+    fn empty_sortition_capacity_intent_preserves_every_other_invariant() {
+        let governance_attempt_id = GovernanceAttemptId::new([0x73; 32]);
+        let body = ParliamentBody::PolicyJury;
+        let mut request = SortitionRequestV1 {
+            id: SortitionRequestId::new([0; 32]),
+            governance_attempt_id,
+            body_election_attempt_id: BodyElectionAttemptId::derive_v1(
+                governance_attempt_id,
+                body,
+                0,
+            ),
+            body,
+            candidate_root: [0x74; 32],
+            candidate_count: 0,
+            target_seats: 3,
+            request_height: 40,
+            pulse_height: 50,
+            beacon_session_id: BeaconSessionId::new([0x75; 32]),
+        };
+        request.id = request.canonical_id();
+        assert_eq!(
+            request.validate(None),
+            Err(SortitionRequestErrorV1::EmptyCandidateSnapshot)
+        );
+        request
+            .validate_capacity_intent(None)
+            .expect("canonical empty snapshot remains a valid capacity intent");
+
+        for (mut invalid, expected) in [
+            (
+                SortitionRequestV1 {
+                    target_seats: 0,
+                    ..request
+                },
+                SortitionRequestErrorV1::ZeroTargetSeats,
+            ),
+            (
+                SortitionRequestV1 {
+                    target_seats: MAX_PARLIAMENT_BODY_TARGET_SEATS_V1 + 1,
+                    ..request
+                },
+                SortitionRequestErrorV1::TargetSeatsExceedMaximum {
+                    target_seats: MAX_PARLIAMENT_BODY_TARGET_SEATS_V1 + 1,
+                    maximum: MAX_PARLIAMENT_BODY_TARGET_SEATS_V1,
+                },
+            ),
+            (
+                SortitionRequestV1 {
+                    request_height: 0,
+                    ..request
+                },
+                SortitionRequestErrorV1::ZeroRequestHeight,
+            ),
+            (
+                SortitionRequestV1 {
+                    pulse_height: request.request_height,
+                    ..request
+                },
+                SortitionRequestErrorV1::PulseNotStrictlyFuture {
+                    request_height: request.request_height,
+                    pulse_height: request.request_height,
+                },
+            ),
+        ] {
+            invalid.id = invalid.canonical_id();
+            assert_eq!(invalid.validate_capacity_intent(None), Err(expected));
+        }
+    }
+    #[test]
     fn sortition_request_rejects_zero_digest_bindings() {
         let request =
             checked_sortition_request(500, 500, 40, 50, None).expect("baseline sortition request");
@@ -4314,8 +4393,8 @@ mod tests {
                 version: 3,
                 head_root: [0x71; 32],
             }),
-            certified_at_height: 10_000,
-            enact_at_height: 10_001,
+            certified_at_height: result_height,
+            enact_at_height: result_height + 1,
         };
         let bytes = norito::to_bytes(&certificate).expect("encode GovernanceCertificateV1");
         assert_eq!(
@@ -4326,6 +4405,15 @@ mod tests {
         certificate
             .validate()
             .expect("wide Policy Jury approval is a complete structural certificate");
+
+        let mut delayed_certificate = certificate.clone();
+        delayed_certificate.certified_at_height += 1;
+        delayed_certificate.enact_at_height += 1;
+        assert_eq!(
+            delayed_certificate.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidLifecycle),
+            "certification must be atomic with the final body result"
+        );
 
         let mut unsupported_policy = certificate.clone();
         unsupported_policy.policy_version = PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1 + 1;
@@ -4709,7 +4797,10 @@ mod tests {
             confirmation_ballot.outcome,
             confirmation.result_height,
         );
+        let confirmation_result_height = confirmation.result_height;
         narrow.body_bindings.push(confirmation);
+        narrow.certified_at_height = confirmation_result_height;
+        narrow.enact_at_height = confirmation_result_height + 1;
         narrow
             .validate()
             .expect("narrow Policy Jury approval has a fresh Confirmation Jury result");
@@ -4738,10 +4829,29 @@ mod tests {
         );
 
         let policy_pulse_id = narrow.body_bindings[0].beacon_pulse_id;
-        narrow.body_bindings[1].beacon_pulse_id = policy_pulse_id;
+        let confirmation = &mut narrow.body_bindings[1];
+        let request = confirmation.sortition_request;
+        let different_session_id = BeaconSessionId::new([0x97; 32]);
+        confirmation.sortition_request = SortitionRequestV1::try_new_canonical(
+            request.governance_attempt_id,
+            request.body_election_attempt_id,
+            request.body,
+            request.candidate_root,
+            request.candidate_count,
+            request.target_seats,
+            request.request_height,
+            request.pulse_height,
+            different_session_id,
+            None,
+        )
+        .expect("different-session Confirmation request is structurally valid");
+        confirmation.sortition_request_id = confirmation.sortition_request.id;
+        confirmation.beacon_session_id = different_session_id;
+        confirmation.beacon_pulse_id = policy_pulse_id;
         assert_eq!(
             narrow.validate(),
-            Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch)
+            Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch),
+            "Confirmation must use a fresh pulse id even when the session id differs"
         );
     }
 

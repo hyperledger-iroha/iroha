@@ -5387,6 +5387,32 @@ pub mod isi {
         }
         Ok(())
     }
+    /// Return the authoritative insertion index while reserving the successor
+    /// leaf required by recursive-spend initialization.
+    fn kagemusha_v4_topup_leaf_index(
+        commitment_count: usize,
+        tree_capacity: usize,
+    ) -> Result<u32, InstructionExecutionError> {
+        let leaf_index = u32::try_from(commitment_count).map_err(|_| {
+            labeled_invariant(
+                "topup_tree_full",
+                "Kagemusha confidential tree position does not fit the protocol index",
+            )
+        })?;
+        let insertion_capacity = tree_capacity.checked_sub(1).ok_or_else(|| {
+            labeled_invariant(
+                "topup_tree_full",
+                "Kagemusha confidential tree cannot reserve an initialization leaf",
+            )
+        })?;
+        if commitment_count >= insertion_capacity {
+            return Err(labeled_invariant(
+                "topup_tree_full",
+                "Kagemusha confidential tree has no top-up position with a successor initialization leaf",
+            ));
+        }
+        Ok(leaf_index)
+    }
     /// Reject overlap between a redemption delta and either confidential-state namespace.
     fn ensure_kagemusha_v4_redemption_state_is_fresh(
         zk_state: &crate::state::ZkAssetState,
@@ -5758,7 +5784,10 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<KagemushaV4RedemptionCommitPlan, Error> {
         let statement = &request.bundle.statement;
-        let amount = request.amount.public_quantity();
+        let amount = request
+            .amount
+            .public_quantity()
+            .map_err(|err| labeled_invariant("amount_invalid", err.to_string()))?;
         let current_nullifier = statement.current_note.spend_nullifier;
         let (redemption_binding, change_children) =
             if let Some(change) = request.offline_change.as_ref() {
@@ -6033,7 +6062,10 @@ pub mod isi {
                 )
                 .into());
             }
-            let amount = request.amount.public_quantity();
+            let amount = request
+                .amount
+                .public_quantity()
+                .map_err(|err| labeled_invariant("amount_invalid", err.to_string()))?;
             if amount.scale() != live_scale {
                 return Err(labeled_invariant(
                     "amount_scale_mismatch",
@@ -6057,20 +6089,10 @@ pub mod isi {
                     )
                 })?;
             let authoritative_commitment_count = zk_state.commitments.len();
-            let authoritative_leaf_index =
-                u32::try_from(authoritative_commitment_count).map_err(|_| {
-                    labeled_invariant(
-                        "topup_tree_full",
-                        "Kagemusha confidential tree position does not fit the protocol index",
-                    )
-                })?;
-            if zk_state.commitments.len() >= zk_state.tree_profile.capacity() {
-                return Err(labeled_invariant(
-                    "topup_tree_full",
-                    "Kagemusha confidential tree has no remaining top-up leaves",
-                )
-                .into());
-            }
+            let authoritative_leaf_index = kagemusha_v4_topup_leaf_index(
+                authoritative_commitment_count,
+                zk_state.tree_profile.capacity(),
+            )?;
             ensure_kagemusha_v4_topup_note_is_fresh(
                 zk_state,
                 request.current_note.note_commitment,
@@ -6252,7 +6274,10 @@ pub mod isi {
                 statement.asset_scale,
                 live_scale,
             )?;
-            let amount = request.amount.public_quantity();
+            let amount = request
+                .amount
+                .public_quantity()
+                .map_err(|err| labeled_invariant("amount_invalid", err.to_string()))?;
             if amount.scale() != live_scale {
                 return Err(labeled_invariant(
                     "amount_scale_mismatch",

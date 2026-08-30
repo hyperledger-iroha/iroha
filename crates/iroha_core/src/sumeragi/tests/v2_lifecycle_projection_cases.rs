@@ -2617,7 +2617,6 @@ fn all_auxiliary_broadcast_payloads_are_explicitly_rejected() {
         signature: vec![0x62],
     };
     let payloads = vec![
-        wire::ConsensusMessageV2Payload::PayloadManifest(fixture.manifest.clone()),
         wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
             manifest_hash: HashOf::new(&fixture.manifest),
             index: 0,
@@ -2661,7 +2660,7 @@ fn all_auxiliary_broadcast_payloads_are_explicitly_rejected() {
             },
         ),
     ];
-    assert_eq!(payloads.len(), 7);
+    assert_eq!(payloads.len(), 6);
     for (ordinal, payload) in (60_u128..).zip(payloads) {
         let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(payload));
         let ownership = bound_ownership(&effect, fixture.tag, ordinal);

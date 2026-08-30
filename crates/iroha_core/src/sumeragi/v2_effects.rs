@@ -257,7 +257,6 @@ pub(crate) const fn network_ingress_is_certified_fence_escape(
         wire::ConsensusMessageV2Payload::Proposal(_)
         | wire::ConsensusMessageV2Payload::Vote(_)
         | wire::ConsensusMessageV2Payload::TimeoutVote(_)
-        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
         | wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -1661,6 +1660,12 @@ pub(crate) trait V2EffectServices {
         &mut self,
         task: &BodyFetchTask,
     ) -> Result<(), Self::Error>;
+    /// Borrow the once-validated manifest session owned by exact reconstruction work.
+    fn validated_payload_manifest<'a>(
+        &'a mut self,
+        context: &wire::HeightContext,
+        task: &BodyFetchTask,
+    ) -> Result<&'a wire::ValidatedPayloadManifest, Self::Error>;
     /// Hand one structurally, cryptographically, and outer-peer authenticated
     /// chunk to the bounded in-memory reconstruction adapter.
     fn accept_authenticated_chunk(
@@ -5069,8 +5074,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             | wire::ConsensusMessageV2Payload::TimeoutVote(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_) => true,
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)

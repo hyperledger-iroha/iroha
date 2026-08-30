@@ -9852,7 +9852,8 @@ mod decode_tests {
             let injected = format!("{encoded_prefix},\"{retired_field}\":[]}}");
             let error = SnapshotJsonMap::parse(&injected, "world")
                 .and_then(|map| parse_world(map, &seed))
-                .expect_err("retired caller-selected council state must fail closed");
+                .err()
+                .expect("retired caller-selected council state must fail closed");
             assert!(
                 error.to_string().contains(retired_field)
                     && error.to_string().contains("unknown field"),

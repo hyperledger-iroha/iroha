@@ -1254,8 +1254,10 @@ mod tests {
             let mut poisoned = cache
                 .checkout_generic_runtime(&summary, GAS_LIMIT, GOVERNED_HEAP_LIMIT)
                 .expect("initial generic runtime");
-            poisoned.memory = ivm::Memory::new_with_stack_limit(ivm::Memory::STACK_ALIGNMENT)
-                .expect("minimum ABI V1 stack geometry is valid");
+            poisoned.memory = ivm::Memory::new_with_stack_limit(
+                ivm::Memory::MIN_STACK_SIZE + ivm::Memory::STACK_ALIGNMENT,
+            )
+            .expect("distinct ABI V1 stack geometry is valid");
         }
         let replacement_allocation = {
             let mut replacement = cache
@@ -1439,8 +1441,10 @@ mod tests {
             let mut runtime = cache
                 .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
                 .expect("cold runtime");
-            runtime.memory = ivm::Memory::new_with_stack_limit(ivm::Memory::STACK_ALIGNMENT)
-                .expect("minimum ABI V1 stack geometry is valid");
+            runtime.memory = ivm::Memory::new_with_stack_limit(
+                ivm::Memory::MIN_STACK_SIZE + ivm::Memory::STACK_ALIGNMENT,
+            )
+            .expect("distinct ABI V1 stack geometry is valid");
         }
         let after_mismatch = cache.stats();
         assert_eq!(after_mismatch.runtime_misses, 1);
@@ -1453,7 +1457,7 @@ mod tests {
             let mut runtime = cache
                 .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
                 .expect("replacement runtime");
-            assert_ne!(runtime.memory.stack_limit(), ivm::Memory::STACK_ALIGNMENT);
+            assert_eq!(runtime.memory.stack_limit(), stack_limit_for_gas(GAS_LIMIT));
             let allocation = runtime
                 .memory
                 .load_region(0, 1)

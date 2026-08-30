@@ -927,7 +927,8 @@ impl ParliamentAttemptStateV1 {
     ///
     /// # Errors
     /// Returns an error unless every required body has a final consistent
-    /// binding and enactment is strictly later than certification.
+    /// binding, certification is atomic with the final body result, and
+    /// enactment is strictly later than certification.
     pub fn construct_certificate(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
@@ -970,6 +971,14 @@ impl ParliamentAttemptStateV1 {
                 return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
             }
             body_bindings.push(binding);
+        }
+        let final_result_height = body_bindings
+            .iter()
+            .map(|binding| binding.result_height)
+            .max()
+            .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
+        if certified_at_height != final_result_height {
+            return Err(ParliamentReducerErrorV1::InvalidCertificateHeight);
         }
         let certificate = GovernanceCertificateV1 {
             proposal_content_id: self.attempt.proposal_content_id,

@@ -168,7 +168,7 @@ fn referendum_open_and_close_by_height() {
         !events_at_h4.iter().any(|event| matches!(
             event.as_data_event(),
             Some(iroha_data_model::events::data::DataEvent::Governance(
-                GovernanceEvent::ProposalApproved(_) | GovernanceEvent::ProposalRejected(_)
+                GovernanceEvent::ProposalRejected(_)
             ))
         )),
         "standalone closure must never masquerade as a typed proposal decision"

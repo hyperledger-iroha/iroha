@@ -132,22 +132,6 @@ class HttpClientTransport(
             .thenCompose { executeAccepted(request, "transaction JSON submit", 202) }
     }
 
-    override fun submitSccpDestinationProof(
-        request: SccpDestinationProofSubmitRequest,
-    ): CompletableFuture<ClientResponse> =
-        executeSccpJsonAccepted(
-            buildBridgeJsonPostRequest("/v1/bridge/proofs/submit", request.toJsonBytes()),
-            "SCCP destination proof submit",
-        )
-
-    override fun submitSccpNativeMessage(
-        request: SccpNativeMessageSubmitRequest,
-    ): CompletableFuture<ClientResponse> =
-        executeSccpJsonAccepted(
-            buildBridgeJsonPostRequest("/v1/bridge/messages", request.toJsonBytes()),
-            "SCCP native message submit",
-        )
-
     override fun submitTransactionEntrypoint(encodedVersionedEntrypoint: ByteArray): CompletableFuture<ClientResponse> {
         val request = ToriiRequestBuilder.buildSubmitEntrypointRequest(
             config.baseUri(),
@@ -1983,11 +1967,6 @@ class HttpClientTransport(
         }) { "canonical request headers must be supplied only through canonicalAuth" }
     }
 
-    private fun buildBridgeJsonPostRequest(path: String, body: ByteArray): TransportRequest {
-        preflightSccpBridgeSubmitJson(body, path)
-        return buildJsonPostRequest(path, body, SCCP_JSON_RESPONSE_MAX_BYTES)
-    }
-
     private fun buildVpnRequest(
         method: String,
         path: String,
@@ -2510,38 +2489,6 @@ class HttpClientTransport(
             notifyResponse(request, clientResponse)
             future.complete(clientResponse)
         }; return future
-    }
-
-    private fun executeSccpJsonAccepted(
-        request: TransportRequest,
-        errorContext: String,
-    ): CompletableFuture<ClientResponse> {
-        notifyRequest(request)
-        val future = CompletableFuture<ClientResponse>()
-        executor.execute(request).whenComplete { response, throwable ->
-            if (throwable != null) {
-                val cause = if (throwable is CompletionException) throwable.cause else throwable
-                notifyFailure(request, cause!!)
-                future.completeExceptionally(RuntimeException("$errorContext request failed", cause))
-                return@whenComplete
-            }
-            val clientResponse = ClientResponse(
-                response.statusCode,
-                response.body,
-                response.message,
-                null,
-                extractRejectCode(response),
-            )
-            try {
-                requireExactSccpJsonResponse(response, errorContext)
-                notifyResponse(request, clientResponse)
-                future.complete(clientResponse)
-            } catch (ex: RuntimeException) {
-                notifyFailure(request, ex)
-                future.completeExceptionally(ex)
-            }
-        }
-        return future
     }
 
     private fun requireExactSccpJsonResponse(

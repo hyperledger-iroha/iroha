@@ -277,6 +277,99 @@ mod kagemusha_v4_topup_provenance_tests {
         }
     }
     #[test]
+    fn topup_anchor_reserves_the_complete_recursive_lifecycle() {
+        let fixture = fixture_with_seeds(&[0x10]);
+        let mut anchor = fixture.provenance.topup_finality_evidence[0]
+            .topup_anchor
+            .clone();
+        anchor.shield_leaf_index = KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2 - 1;
+        anchor.anchor_digest = [0; 32];
+        let mut exhausted = anchor
+            .finalize_digest()
+            .expect("the last insertable leaf retains the full lifecycle reserve");
+        exhausted.shield_leaf_index = KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2;
+        exhausted.anchor_digest = [0; 32];
+        assert!(matches!(
+            exhausted.finalize_digest(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_anchor.v4"
+            })
+        ));
+    }
+    #[test]
+    fn topup_anchor_requires_the_fixed_portable_shield_verifier_role() {
+        let fixture = fixture_with_seeds(&[0x12]);
+        let mut anchor = fixture.provenance.topup_finality_evidence[0]
+            .topup_anchor
+            .clone();
+        anchor.shield_verifier_id = VerifyingKeyId::new(
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
+            "topup-shield-v2",
+        );
+        anchor.anchor_digest = [0; 32];
+        assert!(matches!(
+            anchor.finalize_digest(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_anchor.v4"
+            })
+        ));
+    }
+    #[test]
+    fn standalone_init_statement_requires_one_root_anchor_claim() {
+        let fixture = fixture_with_seeds(&[0x13]);
+        let anchor_ref = fixture.provenance.topup_finality_evidence[0]
+            .topup_anchor
+            .compact_ref()
+            .expect("fixture anchor ref");
+        let mut statement = fixture.statement;
+        statement.topup_anchor_refs = vec![anchor_ref];
+        statement.branch_claims = vec![
+            KagemushaRecursiveSpendBranchClaimV2::root(anchor_ref.anchor_digest)
+                .expect("root claim"),
+        ];
+        statement.proof_step_count = 1;
+        statement.peer_hop_count = 0;
+        statement.transition = None;
+        statement
+            .validate_public_binding()
+            .expect("one exact root claim is the canonical init shape");
+
+        let root_claim = statement.branch_claims[0].clone();
+        statement.branch_claims = vec![
+            root_claim
+                .child(KagemushaRecursiveSpendBranchV2::Recipient, [0x45; 32])
+                .expect("non-root child claim"),
+        ];
+        assert!(matches!(
+            statement.validate_public_binding(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "public_statement.v4.transition"
+            })
+        ));
+
+        let mut two_anchor_statement = fixture_with_seeds(&[0x14, 0x24]).statement;
+        two_anchor_statement.branch_claims = two_anchor_statement
+            .topup_anchor_refs
+            .iter()
+            .map(|anchor| {
+                KagemushaRecursiveSpendBranchClaimV2::root(anchor.anchor_digest)
+                    .expect("root claim")
+            })
+            .collect();
+        two_anchor_statement
+            .branch_claims
+            .sort_unstable_by_key(|claim| claim.path);
+        two_anchor_statement.proof_step_count = 1;
+        two_anchor_statement.peer_hop_count = 0;
+        two_anchor_statement.transition = None;
+        assert!(matches!(
+            two_anchor_statement.validate_public_binding(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "public_statement.v4.transition"
+            })
+        ));
+    }
+    #[test]
     fn provenance_rejects_zero_many_duplicate_reordered_and_wrong_refs() {
         let fixture = fixture_with_seeds(&[0x11, 0x21]);
         fixture

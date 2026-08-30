@@ -187,6 +187,36 @@ public sealed partial class ToriiClientTests
     [InlineData("/v1/contracts/state")]
     [InlineData("/v1/events/sse")]
     [InlineData("/v1/explorer/metrics")]
+    public async Task CanonicalCredentialsRejectUnverifiedInjectedTransportForVisibilitySensitiveReadRoutes(string path)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("unverified signed request reached HTTP dispatch"));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    CanonicalAccountId,
+                    CanonicalPrivateKeySeed),
+            });
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => client.SendAsync(
+            HttpMethod.Get,
+            path,
+            query: "cursor=cHJldg&limit=10",
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("internally managed one-shot, no-redirect transport", error.Message, StringComparison.Ordinal);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
+    [InlineData("/v1/explorer/accounts")]
+    [InlineData("/v1/contracts/state")]
+    [InlineData("/v1/events/sse")]
+    [InlineData("/v1/explorer/metrics")]
     public async Task CanonicalCredentialsSignVisibilitySensitiveReadRoutes(string path)
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
@@ -199,7 +229,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(
             HttpMethod.Get,
@@ -831,8 +862,8 @@ public sealed partial class ToriiClientTests
                   "archive_version": 1,
                   "blob_class_custom_id": 1001,
                   "checkpoint_contract_v1": true,
-                  "checkpoint_plan_v1": true,
-                  "checkpoint_publish_v1": true,
+                  "checkpoint_plan_v1": false,
+                  "checkpoint_publish_v1": false,
                   "codec": "application/x-iroha-query-shard+norito+zstd",
                   "compression": "zstd",
                   "da_v1_enabled": false,
@@ -920,8 +951,8 @@ public sealed partial class ToriiClientTests
         var projection = new ToriiNodeProjectionCapabilities
         {
             CheckpointContractV1 = true,
-            CheckpointPlanV1 = true,
-            CheckpointPublishV1 = true,
+            CheckpointPlanV1 = false,
+            CheckpointPublishV1 = false,
             ShardCatalogV1 = true,
             ArchiveExportV1 = true,
             ArchiveVersion = 1,
@@ -1337,9 +1368,9 @@ public sealed partial class ToriiClientTests
         };
         yield return new object?[]
         {
-            "query.projection.checkpoint_publish_v1",
-            NodeCapabilitiesResponseJson("query.projection.checkpoint_publish_v1", false),
-            "must match",
+            "query.projection.checkpoint_plan_v1",
+            NodeCapabilitiesResponseJson("query.projection.checkpoint_plan_v1", true),
+            "must be false",
         };
         yield return new object?[]
         {
@@ -23039,8 +23070,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["archive_version"] = 1,
             ["blob_class_custom_id"] = 1001,
             ["checkpoint_contract_v1"] = true,
-            ["checkpoint_plan_v1"] = true,
-            ["checkpoint_publish_v1"] = true,
+            ["checkpoint_plan_v1"] = false,
+            ["checkpoint_publish_v1"] = false,
             ["codec"] = "application/x-iroha-query-shard+norito+zstd",
             ["compression"] = "zstd",
             ["da_v1_enabled"] = false,

@@ -70,7 +70,7 @@ a limit cannot expand or replace consensus validity.
 
 ## Determinism and schedule hash
 
-The gas schedule is deterministic. Descriptor format 3, domain-separated as
+The gas schedule is deterministic. Descriptor format 4, domain-separated as
 `iroha.ivm.gas-schedule.v4`, commits to:
 
 - the ordered opcode byte (`u8`) and cost (`u64`, little-endian) table;
@@ -286,13 +286,13 @@ is applied on top of these base values as noted above.
 | crypto | 0x81 | `SHA3BLOCK` | 50 |
 | crypto | 0x82 | `POSEIDON2` | 10 |
 | crypto | 0x83 | `POSEIDON6` | 10 |
-| crypto | 0x88 | `AESENC` | 30 |
-| crypto | 0x89 | `AESDEC` | 30 |
-| crypto | 0x8A | `BLAKE2S` | 40 |
-| crypto | 0x8B | `ED25519VERIFY` | 1000 |
-| crypto | 0x8F | `ED25519BATCHVERIFY` | 500 |
-| crypto | 0x8C | `ECDSAVERIFY` | 1500 |
-| crypto | 0x8D | `DILITHIUMVERIFY` | 5000 |
+| crypto | 0x84 | `AESENC` | 30 |
+| crypto | 0x85 | `AESDEC` | 30 |
+| crypto | 0x86 | `BLAKE2S` | 40 |
+| crypto | 0x87 | `ED25519VERIFY` | 1000 |
+| crypto | 0x88 | `ED25519BATCHVERIFY` | 500 |
+| crypto | 0x89 | `ECDSAVERIFY` | 1500 |
+| crypto | 0x8A | `DILITHIUMVERIFY` | 5000 |
 | zk | 0xA0 | `ASSERT` | 1 |
 | zk | 0xA1 | `ASSERT_EQ` | 1 |
 | zk | 0xA2 | `FADD` | 1 |

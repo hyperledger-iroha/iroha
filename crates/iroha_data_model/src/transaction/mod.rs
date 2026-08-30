@@ -9,7 +9,7 @@ pub mod receipt;
 pub mod signed;
 pub use crate::trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntrypoint};
 pub use executable::{
-    Executable, ExecutableBatchItem, IvmBytecode, IvmProved, TransactionGasLimitError,
+    Executable, ExecutableBatchItem, IvmBytecode, TransactionGasLimitError,
     parse_transaction_gas_limit, require_transaction_gas_limit,
 };
 pub use receipt::{
@@ -36,7 +36,7 @@ pub mod prelude {
     pub use super::{
         AuthorityFeePayment, DataTriggerSequence, DataTriggerStep, Executable, ExecutableBatchItem,
         ExecutionStep, FeeChargeKind, FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError,
-        IvmBytecode, IvmProved, SignedTransaction, SponsorFeePayment, TX_SUBMISSION_RECEIPT_DOMAIN,
+        IvmBytecode, SignedTransaction, SponsorFeePayment, TX_SUBMISSION_RECEIPT_DOMAIN,
         TimeTriggerEntrypoint, TransactionAdmissionIntent, TransactionBuilder, TransactionDomain,
         TransactionEntrypoint, TransactionGasLimitError, TransactionPayload, TransactionResult,
         TransactionResultInner, TransactionSignature, TransactionSubmissionReceipt,

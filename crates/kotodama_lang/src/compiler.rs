@@ -18831,9 +18831,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
             }
             _ => IrAccessClass::Ledger(BuiltinAccess::Dynamic),
         },
-        ir::Instr::ExecutionSummary { .. } => {
-            access_class_for_builtin(Builtin::ExecutionSummary)
-        }
+        ir::Instr::ExecutionSummary { .. } => access_class_for_builtin(Builtin::ExecutionSummary),
         ir::Instr::GrowHeap { .. } => access_class_for_builtin(Builtin::GrowHeap),
         ir::Instr::GetMerklePath { .. } => access_class_for_builtin(Builtin::GetMerklePath),
         ir::Instr::GetMerkleCompact { .. } => access_class_for_builtin(Builtin::GetMerkleCompact),

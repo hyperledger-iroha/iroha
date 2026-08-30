@@ -589,7 +589,7 @@ public enum KagemushaRecursiveSpendCodecs {
               initialRoot != finalizedRoot,
               initialRoot.contains(where: { $0 != 0 }),
               finalizedRoot.contains(where: { $0 != 0 }),
-              leafIndex < UInt32(ToriiZkMerklePathResponse.confidentialTreeCapacityV2),
+              leafIndex < KagemushaRecursiveSpend.topUpShieldInsertionCapacityV2,
               operationID.contains(where: { $0 != 0 }),
               verifierCommitment.contains(where: { $0 != 0 }),
               finalizedHeight > 0,

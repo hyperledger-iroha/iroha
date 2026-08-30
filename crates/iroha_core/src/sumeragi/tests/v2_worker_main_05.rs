@@ -1047,8 +1047,10 @@ fn productive_chunk_at_view(
     )
     .payload()
     .to_vec();
+    let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+        .expect("validate chunk manifest once");
     let mut chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: chunks.into_iter().next().expect("fixture data chunk"),
         sender: proposer,
@@ -1057,8 +1059,9 @@ fn productive_chunk_at_view(
     chunk.signature = Signature::new(
         keys[proposer_index].private_key(),
         &chunk
-            .signature_preimage(&service.context, &manifest)
-            .expect("chunk signature preimage"),
+            .signature_payload(&validated)
+            .expect("chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
@@ -1616,8 +1619,10 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     );
     let (manifest, chunks) = payload.into_parts();
     assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
+    let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+        .expect("validate chunk manifest once");
     let mut completing_chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: chunks.into_iter().next().expect("one fixture chunk"),
         sender: 0,
@@ -1626,8 +1631,9 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     completing_chunk.signature = Signature::new(
         keys[0].private_key(),
         &completing_chunk
-            .signature_preimage(&service.context, &manifest)
-            .expect("canonical chunk signature preimage"),
+            .signature_payload(&validated)
+            .expect("canonical chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
@@ -1761,8 +1767,10 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let (manifest, chunks) = payload.into_parts();
     assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
+    let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+        .expect("validate chunk manifest once");
     let mut payload_chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: chunks.into_iter().next().expect("one fixture chunk"),
         sender: 0,
@@ -1771,8 +1779,9 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     payload_chunk.signature = Signature::new(
         keys[0].private_key(),
         &payload_chunk
-            .signature_preimage(&service.context, &manifest)
-            .expect("canonical chunk signature preimage"),
+            .signature_payload(&validated)
+            .expect("canonical chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();

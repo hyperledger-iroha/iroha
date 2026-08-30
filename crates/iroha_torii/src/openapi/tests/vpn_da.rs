@@ -1869,6 +1869,92 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "GlobalDataTriggerPermissionGovernance",
         ]
     );
+    let proposal_payload_refs = proposal_variants
+        .iter()
+        .map(|variant| {
+            variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("payload"))
+                .and_then(Value::as_object)
+                .and_then(|payload| payload.get("$ref"))
+                .and_then(Value::as_str)
+                .expect("typed Parliament proposal payload reference")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        proposal_payload_refs,
+        [
+            "#/components/schemas/GovernanceParliamentProposalPayloadDeployContractV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadSccpRouteGovernanceV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePolicyProposalV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePayoutLifecycleV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadMusubiRegistryActionV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadSorafsProviderV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadContractLifecycleV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadContractEmergencyHoldV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadGlobalDataTriggerPermissionV1",
+        ]
+    );
+    for payload_ref in proposal_payload_refs {
+        let root = payload_ref
+            .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
+            .expect("Parliament payload component reference");
+        let mut pending = std::collections::VecDeque::from([root.to_owned()]);
+        let mut reachable = std::collections::BTreeSet::new();
+        while let Some(component) = pending.pop_front() {
+            if !reachable.insert(component.clone()) {
+                continue;
+            }
+            assert_ne!(
+                component, "JsonValue",
+                "Parliament proposal payloads must stay transitively typed"
+            );
+            let schema = schemas
+                .get(&component)
+                .unwrap_or_else(|| panic!("missing Parliament payload component {component}"));
+            let mut references = std::collections::BTreeSet::new();
+            collect_component_refs(schema, &mut references);
+            pending.extend(references);
+        }
+    }
+
+    let contract_lifecycle_action_variants = schemas
+        .get("GovernanceParliamentProposalPayloadContractLifecycleActionV1")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("oneOf"))
+        .and_then(Value::as_array)
+        .expect("closed contract lifecycle action variants");
+    let contract_lifecycle_action_tags = contract_lifecycle_action_variants
+        .iter()
+        .map(|variant| {
+            assert_eq!(
+                variant.get("additionalProperties").and_then(Value::as_bool),
+                Some(false),
+                "each contract lifecycle action must reject unknown fields"
+            );
+            variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("action"))
+                .and_then(Value::as_object)
+                .and_then(|action| action.get("const"))
+                .and_then(Value::as_str)
+                .expect("closed contract lifecycle action tag")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        contract_lifecycle_action_tags,
+        [
+            "Activate",
+            "Deactivate",
+            "OfferOwnership",
+            "CancelOwnershipOffer",
+            "AcceptParliamentOwnership",
+            "CompleteEmergencyHoldRetrospective",
+        ]
+    );
 
     let transition_variants = schemas
         .get("GovernanceParliamentLifecycleTransitionV1")

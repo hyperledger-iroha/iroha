@@ -4450,7 +4450,6 @@ impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
             wire::ConsensusMessageV2Payload::TimeoutVote(_)
             | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -8958,7 +8957,6 @@ fn ingress_equivocation_identity(
         )),
         wire::ConsensusMessageV2Payload::QuorumCertificate(_)
         | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
         | wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -8985,7 +8983,6 @@ impl IngressEquivocationArtifact {
             }
             wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -11356,8 +11353,7 @@ impl SumeragiV2Adapter {
                     &mut observed,
                 )?;
             }
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {}
@@ -11851,7 +11847,6 @@ impl SumeragiV2Adapter {
                 return Ok((None, None));
             }
             wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -12173,8 +12168,7 @@ impl SumeragiV2Adapter {
                     authenticated_wire_identity,
                 );
             }
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -17494,8 +17488,7 @@ impl SumeragiV2Adapter {
             }
             wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => None,
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -17551,8 +17544,7 @@ impl SumeragiV2Adapter {
                         },
                     )
                 }),
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)

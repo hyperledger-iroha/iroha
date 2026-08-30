@@ -72,7 +72,7 @@ def test_release_evidence_requires_every_production_corridor_phase() -> None:
     assert common.REQUIRED_PHASES == CORRIDOR_PHASES
 
 
-def test_production_profile_inventory_requires_ton_mainnet_on_bls12381() -> None:
+def test_production_profile_inventory_uses_the_closed_final_v1_domains() -> None:
     assert common.PROFILE_ORDER == (
         "ethereum-mainnet",
         "bsc-mainnet",
@@ -85,7 +85,12 @@ def test_production_profile_inventory_requires_ton_mainnet_on_bls12381() -> None
         "tron-mainnet": "bn254",
         "ton-mainnet": "bls12-381",
     }
-    assert common.PROFILE_DOMAINS["ton-mainnet"] == 4
+    assert common.PROFILE_DOMAINS == {
+        "ethereum-mainnet": 1,
+        "bsc-mainnet": 2,
+        "tron-mainnet": 3,
+        "ton-mainnet": 4,
+    }
     assert "ton-testnet" not in common.PROFILE_ORDER
 
 

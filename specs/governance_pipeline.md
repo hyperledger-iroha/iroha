@@ -46,12 +46,22 @@ release qualified.
    described below remains separate.
    Threshold key rotation is independent of that logical request identifier.
    Its exact-roster certificate compare-and-sets the expected active predecessor,
-   and a global key change in block `H` takes effect at `H + 1`. Consequently an
-   optional Parliament pulse or mandatory NPoS pulse produced from the parent
-   state is verified against the key session active at its own height, not the
-   successor pointer visible after the block's transactions execute. The
-   No alternate entropy source or detached roster record is accepted as a
-   fallback.
+   and a global key change in block `H` takes effect at `H + 1`. The certificate
+   roster fields and `2f + 1` signatures remain bound to the exact authenticated
+   block-`H` authorization roster. For a global-beacon install, the signed
+   canonical public state independently commits the target DKG roster and
+   committee size; the producer at `H + 1` accepts that key only when the target
+   exactly matches the authenticated `HeightContext` roster. This permits a
+   terminal epoch block to install the successor committee's key while a wrong
+   target fails closed, with no stale-key or alternate-entropy fallback.
+   Parliament TLE differs deliberately: its release-share roster is
+   session-fixed and is persisted as the exact certificate roster. Retirement
+   actions carry no public state and remain block-`H`-roster-authorized,
+   compare-and-set operations. Consequently a
+   mandatory requested Parliament or NPoS pulse produced from the parent state
+   is verified against the key session active at its own height, not the
+   successor pointer visible after the block's transactions execute. No
+   alternate entropy source or detached roster record is accepted as a fallback.
 4. The future pulse deterministically ranks primaries and alternates. Candidates
    accept or decline their own invitations under their transaction authority;
    `BeginInvitationAcceptance` is permissionless and carries only the election
@@ -59,8 +69,10 @@ release qualified.
    window. After that fixed response window, either permissionless
    `SealBodyRoster` derives the nonempty accepted assignments, roster root, and
    body id, or permissionless `FailBodyElectionNoRoster` proves from the reducer
-   and finalized-pulse store that the pulse expired unavailable or the accepted
-   roster is empty. Neither trigger accepts a caller-selected window, failure
+   that the accepted roster is empty. A committed Parliament pulse request is
+   consensus-mandatory: block production remains on that exact slot until the
+   threshold pulse reconstructs, so a proposer cannot turn selective omission
+   into a redraw. Neither trigger accepts a caller-selected window, failure
    reason, assignment list, root, or body id. The
    `RecordAttemptAbsence` lets the same authority declare only its exact seated
    assignment absent. Absence is attempt-local and immutable, does not slash or
@@ -153,10 +165,10 @@ release qualified.
    signature open only the aggregate Aye/Nay/Abstain tally.
 8. If a phase deadline is missed, Core derives the eligible `NoResult` reason
    and evidence commitment from persisted state and the containing block
-   height. `ReleasePulseUnavailable` is available only after the committed
-   release height, no later than the opening deadline, and when the exact
-   network/session/height pulse is absent from authoritative finalized-pulse
-   history. `OpeningDeadlineExpired` is available after the immutable opening
+   height. `ReleasePulseUnavailable` remains a fail-closed validation class for
+   malformed or restored state, but cannot be reached by a fresh-genesis chain:
+   the committed release-pulse slot is consensus-mandatory.
+   `OpeningDeadlineExpired` is available after the immutable opening
    deadline whether the ballot is still awaiting release or is opening. A
    finalized pulse therefore cannot be falsely
    classified as unavailable, and neither release consumption nor a result can
@@ -459,8 +471,8 @@ The repository still contains a standalone referendum subsystem with public
 PLAIN and proof-backed ZK ballot routes, conviction locks, and tally reads.
 Those routes are not Parliament body ballots, cannot stand in for a timed-OVN
 jury result, and are not inputs to `GovernanceCertificateV1`. Independent epoch
-council records likewise remain readable but are not consulted by the attempt
-reducer. The first-release public contract contains no proposal approval
+council records and detached roster state do not exist in the first-release
+schema. The first-release public contract contains no proposal approval
 snapshot, equal Parliament stage ballot, caller-selected referendum window or
 mode, client finalization, or client enactment path.
 
@@ -469,9 +481,8 @@ lower-, upper-, or mixed-case hexadecimal form, with or without an exact `0x`
 or `0X` prefix. Standalone ballot/state admission, typed-proposal admission, and
 snapshot restoration all reject such cross-subsystem aliases. Standalone
 closure emits `ReferendumDecided` with the original selector and exact tally;
-it never emits `ProposalApproved` or `ProposalRejected`, and the Torii
-governance stream therefore publishes only referendum/lock/tally updates for
-that decision.
+it never emits a proposal lifecycle event, and the Torii governance stream
+therefore publishes only referendum/lock/tally updates for that decision.
 
 PLAIN admission accepts only direction `0` (Aye), `1` (Nay), or `2`
 (Abstain), and rejects a replacement before mutation if its exact quadratic
@@ -519,7 +530,7 @@ project the canonical outer carrier.
   per-session runtime custody, threshold aggregation, candidate-effect
   assembly, and authoritative finalized-pulse persistence on at least four
   peers, including missing/invalid shares, restart, idempotent retransmission,
-  mandatory NPoS boundary slots, optional Parliament demand slots, and key
+  mandatory NPoS boundary slots, mandatory Parliament demand slots, and key
   rotation.
 - Qualify canonical carrier publication and retirement on every nonproducer
   follower. Cover an `author = false` live follower retiring a losing carrier

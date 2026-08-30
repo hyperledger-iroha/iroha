@@ -306,7 +306,7 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
         let assetParts = canonicalAssetID.split(separator: "#", omittingEmptySubsequences: false)
         guard assetParts.count == 2 || assetParts.count == 3,
               String(assetParts[1]) == payer,
-              leafIndex < UInt32(ToriiZkMerklePathResponse.confidentialTreeCapacityV2),
+              leafIndex < KagemushaRecursiveSpend.topUpShieldInsertionCapacityV2,
               zeroPath.root.contains(where: { $0 != 0 }) else {
             throw KagemushaRecursiveSpendError.invalidField("topUpShieldBuildRequestV4")
         }

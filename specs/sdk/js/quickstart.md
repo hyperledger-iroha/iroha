@@ -718,8 +718,8 @@ for await (const event of torii.streamEvents({
 ## Governance & ISO Bridge
 
 `ToriiClient` exposes the governance surfaces needed to inspect contract
-instances, draft deployment proposals, run standalone plain or ZK referenda,
-inspect the council roster, and use the authenticated Parliament attempt-draft,
+instances and typed proposal state, draft deployment proposals, run standalone
+plain or ZK referenda, and use the authenticated Parliament attempt-draft,
 attempt-read, and transition-draft APIs without rolling your own DTOs. Proposal
 finalization and enactment are automatic certificate-consensus outcomes and have
 no public client mutation helpers. Typed proposal reads are a closed discriminated

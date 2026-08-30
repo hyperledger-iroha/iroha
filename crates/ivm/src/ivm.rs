@@ -7733,7 +7733,7 @@ mod tests {
         vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
             .expect("template program loads");
         let template = vm.runtime_template();
-        vm.memory = Memory::new_with_stack_limit(Memory::STACK_ALIGNMENT).unwrap();
+        vm.memory = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
         vm.set_register(7, 99);
         let mismatched_allocation = vm
             .memory
@@ -7747,7 +7747,7 @@ mod tests {
         assert!(error.to_string().contains("memory geometry mismatch"));
         assert_eq!(crate::memory::memory_clone_count(), 0);
         assert_eq!(vm.register(7), 99, "failed reset must not touch VM state");
-        assert_eq!(vm.memory.stack_limit(), Memory::STACK_ALIGNMENT);
+        assert_eq!(vm.memory.stack_limit(), Memory::MIN_STACK_SIZE);
         assert!(std::ptr::eq(
             vm.memory
                 .load_region(Memory::HEAP_START, 1)

@@ -177,6 +177,8 @@ public enum KagemushaRecursiveSpend {
     public static let authorizationPreparationVersionV2: UInt16 = 2
     public static let wireVersionV4: UInt16 = 4
     public static let localWitnessVersionV4: UInt16 = 4
+    /// Top-up insertion leaves the last Merkle position for the proof-bound successor.
+    public static let topUpShieldInsertionCapacityV2: UInt32 = (1 << 16) - 1
     /// First-release maximum number of recursive parents consumed by one transition.
     public static let maximumInputsPerTransition = 2
     /// First-release peer-hop bound advertised by universal capability discovery and
@@ -1834,7 +1836,8 @@ public struct KagemushaTopUpShieldEvidence: Equatable, Sendable {
     ) throws {
         try KagemushaRecursiveSpend.requireNonzeroFixed32(initialRoot, field: "initialRoot")
         try KagemushaRecursiveSpend.requireNonzeroFixed32(finalizedRoot, field: "finalizedRoot")
-        guard initialRoot != finalizedRoot, leafIndex < (1 << 16) else {
+        guard initialRoot != finalizedRoot,
+              leafIndex < KagemushaRecursiveSpend.topUpShieldInsertionCapacityV2 else {
             throw KagemushaRecursiveSpendError.invalidField("shieldEvidence")
         }
         try KagemushaRecursiveSpend.requireArchive(

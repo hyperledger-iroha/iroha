@@ -1769,12 +1769,17 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
         );
         runtime.can_admit_network_message_with_ingress_ownership(message, &ownership)
     };
-    let transport = match &original.payload {
-        wire::ConsensusMessageV2Payload::Proposal(proposal) => wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadManifest(proposal.manifest.clone()),
-        ),
-        _ => unreachable!("fixture is a proposal"),
-    };
+    let transport = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+        wire::PayloadChunk {
+            manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"runtime retransmission orphan chunk",
+            )),
+            index: 0,
+            bytes: Vec::new(),
+            sender: 0,
+            signature: vec![1],
+        },
+    ));
     let owner_tag = enqueue_network(&mut runtime, original.clone())
         .expect("first authenticated proposal owns one normal slot");
     assert_eq!(runtime.queued_commands(), 1);

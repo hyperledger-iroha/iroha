@@ -242,21 +242,23 @@ expose client finalization or proposal-enactment drafts.
 ```bash
 iroha app gov proposal get --id 0123...ABCD
 iroha app gov locks get --referendum-id r1
-iroha app gov council
 iroha app gov referendum get --referendum-id r1
 iroha app gov tally get --referendum-id r1
 
 Governance events (subscribe via `iroha ledger events`)
-- ProposalSubmitted, ProposalApproved, ProposalRejected, ProposalEnacted
-- ReferendumOpened, ReferendumClosed
+- ProposalSubmitted, ProposalRejected, ProposalEnacted
+- ParliamentAttemptCreated, ParliamentLifecycleTransitionApplied
+- ReferendumOpened, ReferendumClosed, ReferendumDecided
 - BallotAccepted { mode, weight }, BallotRejected { reason }
-- LockCreated { owner, amount, expiry }, LockExtended { ... }, LockUnlocked { ... }
+- LockCreated { owner, amount, expiry }, LockExtended { ... }, LockUnlocked { ... },
+  LockSlashed { ... }, LockRestituted { ... }
+- CitizenRegistered, CitizenRevoked, ThresholdKeyLifecycleApplied
 ```
 
 - Stream governance events:
 
 ```bash
-iroha ledger events governance [--proposal-id 0123...ABCD] [--referendum-id r1]
+iroha ledger events governance [--proposal-id 0123...ABCD | --referendum-id r1]
 ```
 
 

@@ -4418,9 +4418,7 @@ const ballot = await torii.governanceSubmitPlainBallot({
   durationBlocks: 7200,
   direction: "Aye",
 }, { canonicalAuth: governanceCanonicalAuth, signal: writeController.signal });
-if (!ballot.accepted) {
-  console.warn("ballot rejected:", ballot.reason);
-}
+console.log("ballot draft instructions", ballot.tx_instructions.length);
 
 const zkOwner = "sorauﾛ1Ni1A1mYｲzｳﾚﾊGﾆｲgｵ4ﾜｾﾒﾔzｺﾍz6ﾀFoVDﾇXzｹCkﾙ4CQVXL"; // canonical I105 account id for ZK public inputs
 await torii.governanceSubmitZkBallotV1({

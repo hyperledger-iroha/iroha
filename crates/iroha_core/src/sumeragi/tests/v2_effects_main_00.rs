@@ -1104,6 +1104,7 @@ struct FakeServices {
     broadcast_attempts: Vec<wire::ConsensusMessageV2>,
     broadcasts: Vec<wire::ConsensusMessageV2>,
     fetch_tasks: Vec<BodyFetchTask>,
+    chunk_validation_sessions: BTreeMap<EffectWorkId, wire::ValidatedPayloadManifest>,
     cancelled_fetches: Vec<EffectWorkId>,
     completed_reconstruction_fetches: Vec<EffectWorkId>,
     chunks: Vec<EffectWorkId>,
@@ -1272,10 +1273,12 @@ impl V2EffectServices for FakeServices {
             return Err("body-fetch consumer rebind differs from service ownership".to_owned());
         }
         *owned = rebound;
+        self.chunk_validation_sessions.remove(&previous.id());
         Ok(())
     }
     fn cancel_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
         self.check("cancel-fetch")?;
+        self.chunk_validation_sessions.remove(&task.id());
         self.cancelled_fetches.push(task.id());
         Ok(())
     }
@@ -1284,8 +1287,34 @@ impl V2EffectServices for FakeServices {
         task: &BodyFetchTask,
     ) -> Result<(), Self::Error> {
         self.check("complete-reconstruction-fetch")?;
+        self.chunk_validation_sessions.remove(&task.id());
         self.completed_reconstruction_fetches.push(task.id());
         Ok(())
+    }
+    fn validated_payload_manifest<'a>(
+        &'a mut self,
+        context: &wire::HeightContext,
+        task: &BodyFetchTask,
+    ) -> Result<&'a wire::ValidatedPayloadManifest, Self::Error> {
+        if !self
+            .fetch_tasks
+            .iter()
+            .any(|owned| owned == task && owned.id() == task.id())
+        {
+            return Err("chunk validation has no fake service owner".to_owned());
+        }
+        if !self.chunk_validation_sessions.contains_key(&task.id()) {
+            let manifest = task
+                .manifest()
+                .cloned()
+                .ok_or_else(|| "chunk validation requires a manifest".to_owned())?;
+            let validated = wire::ValidatedPayloadManifest::new(context, manifest)
+                .map_err(|error| error.to_string())?;
+            self.chunk_validation_sessions.insert(task.id(), validated);
+        }
+        self.chunk_validation_sessions
+            .get(&task.id())
+            .ok_or_else(|| "chunk validation session disappeared".to_owned())
     }
     fn accept_authenticated_chunk(
         &mut self,

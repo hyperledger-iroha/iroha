@@ -1516,7 +1516,7 @@ mod parliament_tests {
             outcome,
             result_height,
         );
-        let certified_at_height = base + 14;
+        let certified_at_height = result_height;
         let enact_at_height = base + 15;
         let governance_certificate = GovernanceCertificateV1 {
             proposal_content_id,

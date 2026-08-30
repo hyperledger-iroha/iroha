@@ -83,7 +83,6 @@ enum MessageKind {
     CommitCertificate,
     TimeoutVote,
     TimeoutCertificate,
-    PayloadManifest,
     PayloadChunk,
     CertifiedBodyRequest,
     CertifiedBodyResponse,
@@ -107,7 +106,6 @@ impl MessageKind {
             "commit_certificate" => Ok(Self::CommitCertificate),
             "timeout_vote" => Ok(Self::TimeoutVote),
             "timeout_certificate" => Ok(Self::TimeoutCertificate),
-            "payload_manifest" => Ok(Self::PayloadManifest),
             "payload_chunk" => Ok(Self::PayloadChunk),
             "certified_body_request" => Ok(Self::CertifiedBodyRequest),
             "certified_body_response" => Ok(Self::CertifiedBodyResponse),
@@ -126,7 +124,6 @@ impl MessageKind {
             Self::CommitCertificate => "commit_certificate",
             Self::TimeoutVote => "timeout_vote",
             Self::TimeoutCertificate => "timeout_certificate",
-            Self::PayloadManifest => "payload_manifest",
             Self::PayloadChunk => "payload_chunk",
             Self::CertifiedBodyRequest => "certified_body_request",
             Self::CertifiedBodyResponse => "certified_body_response",
@@ -1167,25 +1164,34 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
             .get("action")
             .ok_or(ControlError::InvalidField("action"))?,
     )?;
-    let valid_coordinates = if kind == MessageKind::PayloadChunk {
-        height.is_none()
-            && view.is_none()
-            && block_hash.is_none()
-            && chunk_index.is_some()
-            && proposal_binding_valid
-            && (manifest_hash.is_some() || proposal_height.is_some())
-            && (manifest_hash.is_some() || action == Action::Hold)
-    } else {
-        height.is_some_and(|height| height > 0)
-            && view.is_some()
-            && manifest_hash.is_none()
-            && chunk_index.is_none()
-            && proposal_height.is_none()
-            && proposal_view.is_none()
+    let valid_coordinates = match kind {
+        MessageKind::PayloadChunk => {
+            height.is_none()
+                && view.is_none()
+                && block_hash.is_none()
+                && chunk_index.is_some()
+                && proposal_binding_valid
+                && (manifest_hash.is_some() || proposal_height.is_some())
+                && (manifest_hash.is_some() || action == Action::Hold)
+        }
+        MessageKind::CommitCertificateRequest => {
+            height.is_some_and(|height| height > 0)
+                && view.is_none()
+                && block_hash.is_none()
+                && manifest_hash.is_none()
+                && chunk_index.is_none()
+                && proposal_height.is_none()
+                && proposal_view.is_none()
+        }
+        _ => {
+            height.is_some_and(|height| height > 0)
+                && view.is_some()
+                && manifest_hash.is_none()
+                && chunk_index.is_none()
+                && proposal_height.is_none()
+                && proposal_view.is_none()
+        }
     };
-    if kind == MessageKind::CommitCertificateRequest {
-        return Err(ControlError::KindHasNoExactRound);
-    }
     if !valid_coordinates {
         return Err(ControlError::InvalidField("coordinates"));
     }
@@ -1511,14 +1517,6 @@ fn message_meta(
                     signers,
                 )
             }
-            ConsensusMessageV2Payload::PayloadManifest(value) => (
-                MessageKind::PayloadManifest,
-                Some(value.round),
-                Some(value.subject),
-                None,
-                None,
-                Vec::new(),
-            ),
             ConsensusMessageV2Payload::PayloadChunk(value) => (
                 MessageKind::PayloadChunk,
                 None,
@@ -1586,7 +1584,6 @@ fn message_meta(
     };
     let (manifest_hash, chunk_index) = match &message.payload {
         ConsensusMessageV2Payload::Proposal(value) => (Some(HashOf::new(&value.manifest)), None),
-        ConsensusMessageV2Payload::PayloadManifest(value) => (Some(HashOf::new(value)), None),
         ConsensusMessageV2Payload::PayloadChunk(value) => {
             (Some(value.manifest_hash), Some(value.index))
         }
@@ -1682,15 +1679,6 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
                 && !has_single_signer
                 && has_certificate_signers
         }
-        MessageKind::PayloadManifest => {
-            has_round
-                && meta.subject.is_some()
-                && meta.execution_commitment.is_none()
-                && !has_single_signer
-                && !has_certificate_signers
-                && has_manifest_hash
-                && !has_chunk_index
-        }
         MessageKind::PayloadChunk => {
             meta.height.is_none()
                 && meta.view.is_none()
@@ -1727,10 +1715,7 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
     };
     if !matches!(
         meta.kind,
-        MessageKind::Proposal
-            | MessageKind::PayloadManifest
-            | MessageKind::PayloadChunk
-            | MessageKind::CertifiedBodyResponse
+        MessageKind::Proposal | MessageKind::PayloadChunk | MessageKind::CertifiedBodyResponse
     ) && (has_manifest_hash || has_chunk_index)
     {
         return Err(ControlError::InvalidMessageDescriptor);
@@ -1968,7 +1953,6 @@ pub(crate) enum ControlError {
     ReleaseBusy,
     QueueCapacityBelowHeld,
     DrainWithExplicitRelease,
-    KindHasNoExactRound,
     ReleaseNotStrictlyIncreasing,
     UnknownReleaseSequence,
     ReleaseEntryDisappeared,
@@ -2010,7 +1994,6 @@ impl ControlError {
             Self::ReleaseBusy => "release_busy",
             Self::QueueCapacityBelowHeld => "queue_capacity_below_held",
             Self::DrainWithExplicitRelease => "drain_with_explicit_release",
-            Self::KindHasNoExactRound => "kind_has_no_exact_round",
             Self::ReleaseNotStrictlyIncreasing => "release_not_strictly_increasing",
             Self::UnknownReleaseSequence => "unknown_release_sequence",
             Self::ReleaseEntryDisappeared => "release_entry_disappeared",
@@ -2123,15 +2106,6 @@ mod tests {
             MessageKind::TimeoutCertificate => {
                 (Some(9), Some(2), None, None, None, None, vec![0, 1, 2])
             }
-            MessageKind::PayloadManifest => (
-                Some(9),
-                Some(2),
-                Some(subject),
-                None,
-                None,
-                None,
-                Vec::new(),
-            ),
             MessageKind::PayloadChunk => (None, None, None, None, Some(0), None, Vec::new()),
             MessageKind::GlobalBeaconPartialSignature => {
                 (Some(9), Some(2), None, None, Some(0), None, Vec::new())
@@ -2150,9 +2124,9 @@ mod tests {
             }
         };
         let (manifest_hash, chunk_index) = match kind {
-            MessageKind::Proposal
-            | MessageKind::PayloadManifest
-            | MessageKind::CertifiedBodyResponse => (Some(manifest_hash(0x33)), None),
+            MessageKind::Proposal | MessageKind::CertifiedBodyResponse => {
+                (Some(manifest_hash(0x33)), None)
+            }
             MessageKind::PayloadChunk => (Some(manifest_hash(0x33)), Some(7)),
             _ => (None, None),
         };
@@ -2724,7 +2698,6 @@ mod tests {
             MessageKind::CommitCertificate,
             MessageKind::TimeoutVote,
             MessageKind::TimeoutCertificate,
-            MessageKind::PayloadManifest,
             MessageKind::PayloadChunk,
             MessageKind::CertifiedBodyRequest,
             MessageKind::CertifiedBodyResponse,

@@ -14,9 +14,20 @@ Completed history lives in [`status.md`](./status.md).
   malformed snapshot rejection on a four-validator network with mandatory
   signed RS16 DA/RBC; regenerate and compare public API artifacts and SDK
   projections before declaring the first release qualified.
+- On that sealed candidate, require the single 17-variant governance event
+  schema, exact negative pins for every retired council/roster,
+  citizen-service, duplicate-event, and unreachable-event symbol, and
+  byte-identical embedded/latest/current OpenAPI documents with matching
+  unsigned manifest and version-index byte counts and digests.
 
 ## Default-on capability follow-up
 
+- Promote compute from the standalone `xtask` harness into a governed Torii/Core
+  runtime before enabling `compute.enabled`: add an authoritative manifest and
+  contract target, stable catalog route, canonical authentication, bounded
+  execution and replay state, real IVM metering, and a live Kiso pricing
+  subscriber. The current configuration bit has no daemon consumer and must not
+  advertise a capability that nodes cannot execute.
 - Upgrade the locked QUIC stack to a qualified `quinn-proto` release, rerun the
   transport security and four-validator loss/recovery matrix, and only then add
   QUIC to the portable daemon aggregate.
@@ -395,23 +406,9 @@ Completed history lives in [`status.md`](./status.md).
   allowances. Delete or feature-gate every resulting production-only finding,
   and replace trait-check helper functions with compile-time assertions that do
   not need dead-code exemptions.
-- Bound operator-auth sessions, challenges, and lockout identities with one
-  expiry-aware capacity policy. Admission must fail closed at capacity without
-  a full-map scan, and focused tests must cover expiry, concurrency, and many
-  distinct source identities.
-- Retire the explicitly legacy `POST /v1/sorafs/storage/fetch` diagnostic and
-  its JavaScript adapter in favor of authenticated CAR/chunk reads, then
-  regenerate the OpenAPI provenance bundle and update the SoraFS operator
-  runbooks in the same change.
-- Remove duplicate response fields and retain only `/openapi.json` as the
-  OpenAPI discovery endpoint. Duplicate MCP Connect tool aliases and permanent
-  operator bearer-token modes are already removed; preserve the four canonical
-  `iroha.connect.*` tools and the single first-credential operator-token
-  bootstrap flow without reintroducing composite credential-minting helpers.
-- Audit wildcard diagnostic and configuration-alias surfaces (`/status/{*tail}`
-  and one-way parser spellings) against first-release callers, deleting each
-  surface that has no production owner instead of carrying compatibility
-  branches.
+- Audit the remaining one-way configuration parser spellings against
+  first-release deployment owners. Delete aliases with no production owner
+  instead of carrying compatibility branches.
 
 ## Taikai first-release closure
 
@@ -548,15 +545,15 @@ Completed history lives in [`status.md`](./status.md).
 - Qualify the implemented live threshold-beacon partial-share transport,
   per-session runtime custody, threshold aggregation, candidate-effect
   assembly, and authoritative finalized-pulse persistence on at least four
-  peers. Include optional Parliament demand batches, mandatory NPoS boundary
-  slots, missing/invalid shares, selective withholding, repeated-retry bias and
-  domain separation, restart and idempotent retransmission, and key rotation.
-  Measure the remaining selection advantage across the bounded retry sequence;
-  single-round uniformity is not sufficient evidence. The certified lifecycle
+  peers. Include mandatory Parliament demand batches and NPoS boundary slots,
+  missing/invalid shares, selective withholding, domain separation, restart,
+  idempotent retransmission, and key rotation. Prove that a missing threshold
+  share stalls only the exact requested slot and that recovery finalizes that
+  same slot without a redraw. The certified lifecycle
   now compare-and-sets the expected active
   predecessor and makes a block-`H` global key change effective at `H + 1`;
-  qualification must prove that optional and mandatory pulses authorized by
-  the parent state are resolved by the session active at the pulse height and
+  qualification must prove that all requested pulses authorized by the parent
+  state are resolved by the session active at the pulse height and
   cannot be reinterpreted through the post-block successor pointer.
 - Qualify the implemented timed-release operating seams: full-public-transcript
   release-context read, bodyless authenticated local partial request,
@@ -3730,8 +3727,9 @@ scan limited to repository policy text plus intentional guard-test fixtures.
 
 ## SCCP Launch Scope
 
-**Status:** exact V1 implementation and local release-fixture validation
-complete; audited live deployment evidence pending.
+**Status (2026-08-30 audit closeout):** exact V1 source and focused local
+conformance validation complete; regenerated production proof/deployment
+material and audited live evidence pending.
 
 The canonical production release-evidence corridor has exactly four remote
 profiles: Ethereum mainnet, BNB Smart Chain mainnet, TRON mainnet, and TON
@@ -3870,11 +3868,18 @@ or publication state is ambiguous, Kura poisons further canonical mutation and
 the process-wide consensus output guard requires restart recovery. Only
 explicitly classified non-authoritative cleanup diagnostics remain non-fatal.
 
-The remaining SCCP release work is external, independently verifiable evidence:
+The remaining SCCP release work is:
 
-- obtain independently audited, reproducible semantic circuit, witness
-  generator, proving key, verifying key, toolchain, and audit-report artifacts
-  for all four production profiles;
+- regenerate the corrected semantic circuits, witness generators, R1CS,
+  proving/verifying keys, verifiers, and deployment artifacts for all four
+  production profiles from one reproducible toolchain; independently audit the
+  resulting exact material, since the pre-audit artifacts are non-admissible;
+- implement exact Rust-equivalent prepared-transaction authentication before
+  restoring non-Rust SDK write methods, including payload, prehash, authority,
+  creation-time, route, proof, and tamper-rejection parity;
+- rebuild the ABI-23 Swift `NoritoBridge.xcframework` from the settled
+  candidate, then run the full Swift and cross-SDK corridor, contract smokes,
+  focused Rust tests, and workspace qualification from that same source state;
 - deploy the exact contracts and native source-verifier material, obtain
   authenticated finalized verifier/runtime readbacks, and confirm every
   governed runtime/key/policy hash;
@@ -21184,10 +21189,10 @@ digest-bound pending-XSD source probe summaries for reviewed
   Torii-generated IVM proof
   attachments include the checked verifier-key commitment for downstream
   proof-submission binding.
-  The `zk-preverify` block sidecar path records verified trace digests only;
-  the background trace lane revalidates queued traces but no longer emits
-  `zk-trace/mock-proof` artifacts while the real transparent IVM trace prover
-  remains future work.
+  The `zk-preverify` trace lane performs advisory diagnostic checks and emits
+  logs/events only; it persists no trace digest or proof-like artifact in block
+  sidecars. A transparent IVM execution prover remains future work and must
+  authenticate the complete execution relation before producing artifacts.
   Kagemusha is the single mode-free offline-cash protocol. Its current artifact
 	  and readiness contract is exact bridge ABI 23 with authenticated manifest V4
   artifacts: exactly eight external Eq/Ep roles with circuit parameters inline.

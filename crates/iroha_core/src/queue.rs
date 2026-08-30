@@ -21305,6 +21305,20 @@ pub mod tests {
     }
     fn commit_globally_bound_fixture_directly(fixture: &GloballyBoundGuardFixture) {
         install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+        resolve_globally_bound_fixture_pending_obligation(fixture);
+        commit_globally_bound_fixture_membership_only(fixture);
+        assert_eq!(
+            State::queue_plan_binding_application_evidence_in_view(
+                &fixture.state.view(),
+                &fixture.binding,
+            )
+            .expect("read direct QueuePlan terminal evidence"),
+            QueuePlanBindingApplicationEvidence::AppliedDirect,
+        );
+    }
+    fn resolve_globally_bound_fixture_pending_obligation(
+        fixture: &GloballyBoundGuardFixture,
+    ) {
         let signer = checked_random_queue_keypair();
         let block = crate::block::BlockBuilder::new(vec![fixture.transaction.clone()])
             .chain(0, None)
@@ -21320,22 +21334,6 @@ pub mod tests {
                 .commit_world_overlay_for_testing()
                 .expect("publish direct QueuePlan terminal state");
         }
-        let mut transactions = fixture.state.transactions.block();
-        transactions.insert_block_with_single_tx(
-            fixture.transaction.hash_as_entrypoint(),
-            nonzero!(1_usize),
-        );
-        transactions
-            .commit()
-            .expect("commit direct carrier membership");
-        assert_eq!(
-            State::queue_plan_binding_application_evidence_in_view(
-                &fixture.state.view(),
-                &fixture.binding,
-            )
-            .expect("read direct QueuePlan terminal evidence"),
-            QueuePlanBindingApplicationEvidence::AppliedDirect,
-        );
     }
     fn commit_globally_bound_fixture_membership_only(fixture: &GloballyBoundGuardFixture) {
         let mut transactions = fixture.state.transactions.block();
@@ -28234,7 +28232,16 @@ pub mod tests {
                 .expect("read losing QueuePlan registry projection"),
             QueuePlanAdmissionRegistryMatch::Conflict,
         );
+        resolve_globally_bound_fixture_pending_obligation(&fixture);
         commit_globally_bound_fixture_membership_only(&fixture);
+        assert_eq!(
+            State::queue_plan_binding_application_evidence_in_view(
+                &fixture.state.view(),
+                &conflicting_binding,
+            )
+            .expect("read winning QueuePlan terminal evidence"),
+            QueuePlanBindingApplicationEvidence::AppliedDirect,
+        );
         let journal_path = fixture._dir.path().join("global_guard_queue_plan.norito");
         let GloballyBoundGuardFixture {
             state,

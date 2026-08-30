@@ -1783,7 +1783,7 @@ pub mod core {
 pub mod diagnostic {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
-        PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
     /// Root diagnostic status document.
     pub const STATUS: RouteDescriptor = RouteDescriptor::new(
@@ -1802,11 +1802,11 @@ pub mod diagnostic {
         reason: "established infrastructure status endpoint",
     })
     .with_implicit_head(true);
-    /// Namespaced diagnostic status documents.
-    pub const STATUS_TAIL: RouteDescriptor = RouteDescriptor::new(
-        "diagnostic.status_namespace",
+    /// Canonical committed block-height diagnostic.
+    pub const STATUS_BLOCKS: RouteDescriptor = RouteDescriptor::new(
+        "diagnostic.status_blocks",
         HttpMethod::Get,
-        "/status/{*tail}",
+        "/status/blocks",
         ApiSurface::Diagnostic,
         Listener::Torii,
         RouteEffect::ReadOnly,
@@ -1815,9 +1815,25 @@ pub mod diagnostic {
     .with_feature_gate(FeatureGate::Feature("telemetry"))
     .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_projections(RouteProjections::OPENAPI)
-    .with_route_match(RouteMatch::Wildcard)
     .with_path_policy(PathPolicy::ProtocolException {
-        reason: "status namespace is a reviewed diagnostic wildcard",
+        reason: "established infrastructure block-height probe",
+    })
+    .with_implicit_head(true);
+    /// Current online-peer-count diagnostic.
+    pub const STATUS_PEERS: RouteDescriptor = RouteDescriptor::new(
+        "diagnostic.status_peers",
+        HttpMethod::Get,
+        "/status/peers",
+        ApiSurface::Diagnostic,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_feature_gate(FeatureGate::Feature("telemetry"))
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
+    .with_projections(RouteProjections::OPENAPI)
+    .with_path_policy(PathPolicy::ProtocolException {
+        reason: "established infrastructure peer-count probe",
     })
     .with_implicit_head(true);
     /// Prometheus metrics exposition.
@@ -1889,8 +1905,15 @@ pub mod diagnostic {
     /// Profiling route registered by `add_profiling_routes`.
     pub const PROFILE_ROUTES: &[RouteDescriptor] = &[PROFILE];
     /// Diagnostic and self-description routes registered by the builder.
-    pub const ROUTES: &[RouteDescriptor] =
-        &[STATUS, STATUS_TAIL, METRICS, PROFILE, SCHEMA, OPENAPI_JSON];
+    pub const ROUTES: &[RouteDescriptor] = &[
+        STATUS,
+        STATUS_BLOCKS,
+        STATUS_PEERS,
+        METRICS,
+        PROFILE,
+        SCHEMA,
+        OPENAPI_JSON,
+    ];
 }
 /// Transaction, query, proof, and pipeline routes.
 pub mod pipeline {

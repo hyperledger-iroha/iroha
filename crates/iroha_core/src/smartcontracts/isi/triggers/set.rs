@@ -1981,29 +1981,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                 }
                 ExecutableRef::Ivm(hash)
             }
-            Executable::IvmProved(proved) => {
-                // Triggers do not carry proof attachments; treat proved IVM executables as plain
-                // bytecode and execute them via the standard IVM trigger machinery.
-                let bytes = proved.bytecode;
-                let hash = HashOf::new(&bytes);
-                if let Some(IvmBytecodeEntry { count, .. }) = self.contracts.get_mut(&hash) {
-                    let updated = count.get().strict_add(1);
-                    *count = NonZeroU64::new(updated).expect(
-                        "There is no way someone could register 2^64 amount of same triggers",
-                    );
-                } else {
-                    let code_hash = ivm::contract_code_hash(bytes.as_ref());
-                    self.contracts.insert(
-                        hash,
-                        IvmBytecodeEntry {
-                            original_contract: bytes,
-                            code_hash,
-                            count: NonZeroU64::MIN,
-                        },
-                    );
-                }
-                ExecutableRef::Ivm(hash)
-            }
             Executable::ContractCall(invocation) => ExecutableRef::ContractCall(invocation),
             Executable::Instructions(instructions) => ExecutableRef::Instructions(instructions),
             Executable::Batch(items) => ExecutableRef::Batch(items),

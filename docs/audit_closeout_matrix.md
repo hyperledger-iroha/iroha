@@ -48,6 +48,31 @@ boundary remained closed rather than a new public behavior.
 | `R-CON-28` | **Regression retained.** Adversarial nested `NativeAmx` and `LaneRelay` frames are rejected by global decode depth/allocation limits before unbounded recursion. See `native_amx_and_lane_relay_fall_back_to_canonical_global_decode_limits` in `crates/iroha_core/src/lib.rs` and `canonical_decode_limits_reject_recursive_native_amx_commitment_frames` in `crates/iroha_data_model/src/block/consensus_model_tests.rs`. |
 | `R-UNM-06` | **Regression retained.** Release dependency-graph checks prove development test fixtures are absent from shipping artifacts. See `scripts/check_release_feature_graph.py` and `test_shipping_packages_exclude_test_fixtures` in `scripts/tests/release_feature_graph_test.py`. |
 
+## Cross-surface closure addenda
+
+- `R-ISI-84`: `strict_governed_contract_lifecycle_rejects_consensus_impossible_values`
+  in `crates/iroha_cli/src/gov/audit.rs` keeps CLI audit acceptance in parity
+  with consensus account, owner, Parliament-origin, delegation, and emergency-
+  hold invariants.
+- `R-TOR-34`: `openapi_standard_security_matches_enabled_catalog_authentication`,
+  `protocol_specific_bootle_bearer_security_is_preserved`, and
+  `static_authority_is_the_complete_catalog_projection_with_exact_effects`
+  bind standard and protocol-specific OpenAPI security to the route catalog.
+  MCP regressions `generic_xml_request_body_uses_exact_text_bytes_and_media_type`
+  and `generated_iso_tool_advertises_raw_xml_as_its_default_media_type` prevent
+  XML quoting or media-type drift. JavaScript and Python Sumeragi status-stream
+  tests require a fresh operator signature and forbid redirects or automatic
+  retries for each one-shot subscription.
+- `R-TOR-56`: `ToriiClient uses its configured signer for optional account reads`
+  and `ToriiClient permits explicit anonymous optional account reads` cover the
+  JavaScript account surface. Python adds
+  `test_dataspace_visible_account_reads_use_configured_canonical_signer` and
+  `test_dataspace_visible_account_reads_remain_anonymous_without_signer`; the
+  Swift account helpers use the same final-URI optional-signature path.
+- `R-TOR-66`: the guarded recovery inventory includes both Kagemusha
+  accumulation and recursion adapters, which use the reviewed suppressed panic
+  boundary and are pinned by `scripts/check_panic_recovery_boundaries.py`.
+
 ## Qualification boundary
 
 The rows above mean that an enforcing source path and reviewable regression are

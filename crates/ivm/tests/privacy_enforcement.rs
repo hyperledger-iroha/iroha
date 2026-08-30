@@ -755,7 +755,7 @@ fn typed_int_decimal_and_quantity_commitments_execute_and_bind_nominal_kind() {
     );
 }
 #[test]
-fn legacy_scalar_crypto_opcodes_never_declassify_private_operands() {
+fn poseidon_opcodes_never_declassify_private_operands() {
     fn program_fetching_private_operands(operands: &[u8], word: u32) -> Vec<u8> {
         let mut words = Vec::with_capacity(operands.len() * 4 + 1);
         for (index, register) in operands.iter().copied().enumerate() {

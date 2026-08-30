@@ -108,10 +108,11 @@ impl core::fmt::Debug for V2GlobalBeaconLifecycle {
 impl V2GlobalBeaconLifecycle {
     /// Open the exact height producer from committed public state.
     ///
-    /// NPoS pre-boundary slots are consensus-mandatory. Committed Parliament
-    /// sortition and timed-ballot slots are also produced, but remain optional
-    /// for chain liveness so their objective missing-pulse retry paths remain
-    /// reachable. Every requested slot uses the same authenticated producer.
+    /// NPoS pre-boundary slots and committed Parliament sortition or
+    /// timed-ballot slots are consensus-mandatory. Requiring every requested
+    /// pulse prevents a proposer from omitting an unfavourable reconstructed
+    /// value and grinding a later Parliament retry. Every requested slot uses
+    /// the same authenticated producer.
     pub(crate) fn open(
         context: &wire::HeightContext,
         state: &State,
@@ -136,7 +137,7 @@ impl V2GlobalBeaconLifecycle {
                 outbound: Vec::new(),
             });
         }
-        let required_for_consensus = context.mode == wire::ConsensusMode::Npos
+        let npos_boundary_requested = context.mode == wire::ConsensusMode::Npos
             && context
                 .height
                 .checked_add(1)
@@ -147,7 +148,8 @@ impl V2GlobalBeaconLifecycle {
             world.parliament_attempts().iter().any(|(_, attempt)| {
                 attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)
             });
-        if !required_for_consensus && !parliament_requested_at_height {
+        let required_for_consensus = npos_boundary_requested || parliament_requested_at_height;
+        if !required_for_consensus {
             return Ok(Self {
                 context: context.clone(),
                 roster,
@@ -422,7 +424,7 @@ impl V2GlobalBeaconLifecycle {
     }
 
     /// Attach the exact-view pulse to candidate effects, failing closed when
-    /// a consensus-mandatory pre-boundary height has not reconstructed it yet.
+    /// a consensus-mandatory requested height has not reconstructed it yet.
     pub(crate) fn attach_candidate_effects(
         &self,
         view: wire::View,

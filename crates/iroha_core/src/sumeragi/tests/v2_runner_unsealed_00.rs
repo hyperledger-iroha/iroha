@@ -549,7 +549,6 @@ fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work
     for fenced in [
         "ConsensusMessageV2Payload::Proposal(",
         "ConsensusMessageV2Payload::Vote(",
-        "ConsensusMessageV2Payload::PayloadManifest(",
         "ConsensusMessageV2Payload::PayloadChunk(",
         "ConsensusMessageV2Payload::CertifiedBodyRequest(",
     ] {

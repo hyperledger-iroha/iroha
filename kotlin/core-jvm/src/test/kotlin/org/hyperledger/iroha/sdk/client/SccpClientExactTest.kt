@@ -210,29 +210,15 @@ class SccpClientExactTest {
             )
         }
 
-        val submitExecutor = SccpSubmitExecutor(listOf("application/json"))
-        val transport = HttpClientTransport.withExecutor(
-            submitExecutor,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example"))
-                .build(),
-        )
-        transport.submitSccpDestinationProof(proof).join()
-        transport.submitSccpNativeMessage(message).join()
-        assertEquals(
-            listOf(64L * 1024L * 1024L, 64L * 1024L * 1024L),
-            submitExecutor.requests.map { it.maximumResponseBytes },
-        )
-
-        val missingContentType = SccpSubmitExecutor(emptyList())
-        val strictTransport = HttpClientTransport.withExecutor(
-            missingContentType,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example"))
-                .build(),
-        )
-        assertFailsWith<CompletionException> {
-            strictTransport.submitSccpDestinationProof(proof).join()
+        for (removedWrite in listOf("submitSccpDestinationProof", "submitSccpNativeMessage")) {
+            assertFalse(
+                IrohaClient::class.java.methods.any { it.name == removedWrite },
+                "$removedWrite must not expose an unbound prepared-transaction signing surface",
+            )
+            assertFalse(
+                HttpClientTransport::class.java.methods.any { it.name == removedWrite },
+                "$removedWrite must not dispatch an SCCP write before exact local proof binding exists",
+            )
         }
     }
 
@@ -2795,21 +2781,6 @@ class SccpClientExactTest {
     private fun jsonBytes(value: Any?): ByteArray =
         JsonEncoder.encode(value).toByteArray(Charsets.UTF_8)
 
-    private class SccpSubmitExecutor(
-        private val contentTypes: List<String>,
-    ) : HttpTransportExecutor {
-        val requests = mutableListOf<TransportRequest>()
-
-        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
-            requests += request
-            val builder = TransportResponse.builder()
-                .setStatusCode(200)
-                .setBody("{}".toByteArray(Charsets.UTF_8))
-            contentTypes.forEach { builder.addHeader("Content-Type", it) }
-            return CompletableFuture.completedFuture(builder.build())
-        }
-    }
-
     private class SccpNoritoExecutor(
         private val body: ByteArray,
     ) : HttpTransportExecutor {
@@ -3006,7 +2977,7 @@ class SccpClientExactTest {
         const val DEFAULT_ROUTE_CONFIG_HASH =
             "FDCE93E148D8A9BD3BE2E7051AF681A757CA273F409073F9402F5534D32C399B"
         const val TRON_ROUTE_CONFIG_HASH =
-            "60544E93C2B5E96761C90DC96E7E24EC1D6EDD5BEE2E2A946D7ED9632535177D"
+            "09091FF86A7F8E94B2EE53A398EF9CAC12346522457C3B466F3CA4ED4EF2DB70"
         val BLS12381_SCALAR_MODULUS = BigInteger(
             "73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001",
             16,

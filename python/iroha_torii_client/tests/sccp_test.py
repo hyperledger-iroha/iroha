@@ -33,14 +33,12 @@ from iroha_torii_client import (  # noqa: E402
     ToriiClient,
     normalize_bridge_message_submit_payload,
     normalize_bridge_proof_submit_payload,
-    normalize_sccp_bridge_submit_response,
     normalize_sccp_capabilities,
     normalize_sccp_codec_value,
     normalize_sccp_message_bundle,
     normalize_sccp_proof_request,
     normalize_sccp_recent_messages,
     normalize_sccp_registry,
-    parse_sccp_bridge_submit_response_json,
     parse_sccp_json_object,
     sccp_source_event_digest,
 )
@@ -586,7 +584,7 @@ def _bundle() -> Dict[str, Any]:
                 "asset_id": "0x786f72",
                 "amount": "1",
                 "sender_codec": 0,
-                "sender": "0x616c696365",
+                "sender": "0x" + AUTHORITY.encode("utf-8").hex(),
                 "recipient_codec": 1,
                 "recipient": "0x" + HASH(0x21)[:40],
                 "route_id_codec": 0,
@@ -1814,6 +1812,7 @@ def test_bundle_accepts_only_exact_canonical_i105_sora_sender() -> None:
     for invalid in (
         checksum_tampering,
         noncanonical_sentinel,
+        "alice",
         "merchant taira",
         "merchant🙂",
     ):
@@ -1821,7 +1820,7 @@ def test_bundle_accepts_only_exact_canonical_i105_sora_sender() -> None:
         bundle["payload"]["Transfer"]["sender"] = (
             "0x" + invalid.encode("utf-8").hex()
         )
-        with pytest.raises(ValueError, match="does not match its codec"):
+        with pytest.raises(ValueError, match="SCCP transfer.sender"):
             normalize_sccp_message_bundle(bundle)
 
     invalid_utf8 = _bundle()
@@ -2091,16 +2090,29 @@ def test_proof_submit_requires_structural_typed_fee_payment(fee_payment: Any) ->
         )
 
 
-def test_bridge_response_and_strict_json_reject_contradictions_and_duplicates() -> None:
-    assert normalize_sccp_bridge_submit_response(_prepared_response()).submitted is False
+def test_bridge_submit_response_surface_is_not_package_public() -> None:
+    for name in (
+        "SccpBridgeSubmitResponse",
+        "normalize_sccp_bridge_submit_response",
+        "parse_sccp_bridge_submit_response_json",
+    ):
+        assert name not in package.__all__
+        assert not hasattr(package, name)
+        assert not hasattr(sccp, name)
+
+
+def test_internal_bridge_response_parser_rejects_contradictions_and_duplicates() -> None:
+    normalize_response = sccp._normalize_sccp_bridge_submit_response  # noqa: SLF001
+    parse_response = sccp._parse_sccp_bridge_submit_response_json  # noqa: SLF001
+    assert normalize_response(_prepared_response()).submitted is False
     assert (
-        normalize_sccp_bridge_submit_response(
+        normalize_response(
             _prepared_response(backend="evm-groth16-bn254-v1")
         ).backend
         == "evm-groth16-bn254-v1"
     )
     assert (
-        normalize_sccp_bridge_submit_response(
+        normalize_response(
             _prepared_response(
                 backend="ton-groth16-bls12381-v1",
                 counterparty_domain=4,
@@ -2115,7 +2127,7 @@ def test_bridge_response_and_strict_json_reject_contradictions_and_duplicates() 
         transaction_payload_b64=None,
         signing_message_b64=None,
     )
-    assert normalize_sccp_bridge_submit_response(submitted).submitted is True
+    assert normalize_response(submitted).submitted is True
     for value in (
         _prepared_response(payload_kind="burn"),
         _prepared_response(counterparty_chain="solana-mainnet-beta"),
@@ -2128,24 +2140,24 @@ def test_bridge_response_and_strict_json_reject_contradictions_and_duplicates() 
         _prepared_response(signing_message_b64=_b64(b"\x09" * 32)),
     ):
         with pytest.raises((TypeError, ValueError)):
-            normalize_sccp_bridge_submit_response(value)
+            normalize_response(value)
     missing_route_hash = _prepared_response()
     del missing_route_hash["route_configuration_hash_hex"]
     with pytest.raises(ValueError, match="missing required"):
-        normalize_sccp_bridge_submit_response(missing_route_hash)
+        normalize_response(missing_route_hash)
     with pytest.raises(ValueError, match="signing state"):
-        normalize_sccp_bridge_submit_response(_prepared_response(), {"submitted": True})
+        normalize_response(_prepared_response(), {"submitted": True})
     canonical = json.dumps(_prepared_response())
-    assert parse_sccp_bridge_submit_response_json(canonical).submitted is False
+    assert parse_response(canonical).submitted is False
     with pytest.raises(ValueError, match="duplicate"):
-        parse_sccp_bridge_submit_response_json(canonical.replace("{", '{"submitted":false,', 1))
+        parse_response(canonical.replace("{", '{"submitted":false,', 1))
     duplicated_hash = canonical.replace(
         f'"route_configuration_hash_hex": "{HASH(0x31)}"',
         f'"route_configuration_hash_hex": "{HASH(0x31)}", '
         f'"route_configuration_hash_hex": "{HASH(0x32)}"',
     )
     with pytest.raises(ValueError, match="duplicate"):
-        parse_sccp_bridge_submit_response_json(duplicated_hash)
+        parse_response(duplicated_hash)
     with pytest.raises(ValueError):
         parse_sccp_json_object(canonical + "{}")
 
@@ -2361,15 +2373,6 @@ def test_torii_sccp_error_response_uses_the_same_actual_byte_bound() -> None:
             "application/x-norito",
             lambda client: client.get_sccp_proof_request(MESSAGE_ID, format="norito"),
         ),
-        (
-            64 * 1024 * 1024,
-            "application/json",
-            lambda client: client.submit_bridge_proof(
-                authority=AUTHORITY,
-                fee_payment=_fee_payment(),
-                destination_proof_b64=_destination_artifact_b64(),
-            ),
-        ),
     ],
 )
 def test_torii_sccp_routes_apply_endpoint_specific_declared_limits(
@@ -2446,104 +2449,31 @@ def test_torii_rejects_invalid_recent_queries_without_io(
     assert session.calls == []
 
 
-def test_torii_proof_submit_sends_only_closed_artifact_fields() -> None:
-    session = RecordingSession([StubResponse(_prepared_response(creation_time_ms=42))])
+@pytest.mark.parametrize(
+    "invoke",
+    [
+        lambda client: client.submit_bridge_proof(
+            authority=AUTHORITY,
+            fee_payment=_fee_payment(),
+            destination_proof_b64=_destination_artifact_b64(),
+        ),
+        lambda client: client.submit_bridge_message(
+            authority=AUTHORITY,
+            fee_payment=_fee_payment(),
+            native_proof_b64=_native_inbound_proof_b64(),
+            replay_witness_b64=_replay_witness_b64(),
+        ),
+    ],
+    ids=("destination-proof", "native-message"),
+)
+def test_torii_sccp_write_methods_are_disabled_before_http(
+    invoke: Callable[[ToriiClient], Any],
+) -> None:
+    session = RecordingSession([])
     client = ToriiClient("https://example.invalid", session=session)
-    destination_artifact = _destination_artifact_b64()
-    assert client.submit_bridge_proof(
-        authority=AUTHORITY,
-        fee_payment=_fee_payment(),
-        destination_proof_b64=destination_artifact,
-        creation_time_ms=42,
-    ).submitted is False
-    call = session.calls[0]
-    assert call["url"] == "https://example.invalid/v1/bridge/proofs/submit"
-    assert json.loads(call["data"]) == {
-        "authority": AUTHORITY,
-        "fee_payment": _fee_payment(),
-        "destination_proof_b64": destination_artifact,
-        "creation_time_ms": 42,
-    }
-
-
-def test_torii_prepare_then_submit_resends_byte_identical_transaction_payload() -> None:
-    prepared = _prepared_response(creation_time_ms=42)
-    submitted = _prepared_response(
-        submitted=True,
-        creation_time_ms=42,
-        tx_hash_hex=HASH(0x55),
-        transaction_payload_b64=None,
-        signing_message_b64=None,
-    )
-    session = RecordingSession([StubResponse(prepared), StubResponse(submitted)])
-    client = ToriiClient("https://example.invalid", session=session)
-    destination_artifact = _destination_artifact_b64()
-    preparation = client.submit_bridge_proof(
-        authority=AUTHORITY,
-        fee_payment=_fee_payment(),
-        destination_proof_b64=destination_artifact,
-        creation_time_ms=42,
-    )
-    submission = client.submit_bridge_proof(
-        authority=AUTHORITY,
-        fee_payment=_fee_payment(),
-        destination_proof_b64=destination_artifact,
-        signature_b64=_b64(bytes([7]) * 64),
-        transaction_payload_b64=preparation.transaction_payload_b64,
-        creation_time_ms=preparation.creation_time_ms,
-    )
-    assert submission.submitted is True
-    submitted_body = json.loads(session.calls[1]["data"])
-    assert submitted_body["transaction_payload_b64"] == prepared["transaction_payload_b64"]
-    assert submitted_body["fee_payment"] == _fee_payment()
-    assert base64.b64decode(submitted_body["transaction_payload_b64"], validate=True) == bytes(
-        [1, 2, 3, 4]
-    )
-
-
-def test_torii_rejects_response_state_that_contradicts_request() -> None:
-    submitted = _prepared_response(
-        submitted=True,
-        tx_hash_hex=HASH(0x55),
-        transaction_payload_b64=None,
-        signing_message_b64=None,
-    )
-    prepare_session = RecordingSession([StubResponse(submitted)])
-    with pytest.raises(ValueError, match="signing state"):
-        ToriiClient("https://example.invalid", session=prepare_session).submit_bridge_proof(
-            authority=AUTHORITY,
-            fee_payment=_fee_payment(),
-            destination_proof_b64=_destination_artifact_b64(),
-        )
-    signed_session = RecordingSession([StubResponse(_prepared_response(creation_time_ms=42))])
-    with pytest.raises(ValueError, match="signing state"):
-        ToriiClient("https://example.invalid", session=signed_session).submit_bridge_proof(
-            authority=AUTHORITY,
-            fee_payment=_fee_payment(),
-            destination_proof_b64=_destination_artifact_b64(),
-            signature_b64="AQ==",
-            transaction_payload_b64="Ag==",
-            creation_time_ms=42,
-        )
-
-
-def test_torii_rejects_wrong_content_type_and_duplicate_submit_response() -> None:
-    plain = RecordingSession([StubResponse(_prepared_response(), content_type="text/plain")])
-    with pytest.raises(TypeError, match="application/json"):
-        ToriiClient("https://example.invalid", session=plain).submit_bridge_proof(
-            authority=AUTHORITY,
-            fee_payment=_fee_payment(),
-            destination_proof_b64=_destination_artifact_b64(),
-        )
-    canonical = json.dumps(_prepared_response())
-    duplicate = canonical.replace("{", '{"submitted":false,', 1).encode()
-    session = RecordingSession([StubResponse(raw=duplicate)])
-    with pytest.raises(ValueError, match="duplicate"):
-        ToriiClient("https://example.invalid", session=session).submit_bridge_proof(
-            authority=AUTHORITY,
-            fee_payment=_fee_payment(),
-            destination_proof_b64=_destination_artifact_b64(),
-        )
+    with pytest.raises(RuntimeError, match="authenticated SCCP write transport"):
+        invoke(client)
+    assert session.calls == []
 
 
 def test_embedded_mock_serves_only_exact_registry_bundle_and_request_routes() -> None:

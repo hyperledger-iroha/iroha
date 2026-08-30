@@ -330,7 +330,7 @@ FORBIDDEN_FIXTURE_PUBLIC_KEYS = frozenset(
 PROFILE_DOMAINS = {
     "ethereum-mainnet": 1,
     "bsc-mainnet": 2,
-    "tron-mainnet": 5,
+    "tron-mainnet": 3,
     "ton-mainnet": 4,
 }
 

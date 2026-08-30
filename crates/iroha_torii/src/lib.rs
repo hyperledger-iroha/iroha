@@ -1029,7 +1029,8 @@ pub use routing::{
 pub use routing::{QueryOptions, SignedQueryAdmission};
 #[cfg(feature = "telemetry")]
 pub use routing::{
-    RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
+    RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, StatusView, handle_metrics,
+    handle_status,
 };
 pub use routing::{
     ZkMerklePathDto, ZkMerklePathGetRequestDto, ZkMerklePathGetResponseDto, ZkRootsGetRequestDto,
@@ -19341,13 +19342,13 @@ fn status_offline_snapshot(
     }
 }
 #[cfg(feature = "telemetry")]
-async fn handler_status_tail(
+async fn handler_status_segment(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     accept: Option<utils::extractors::ExtractAccept>,
-    AxPath(tail): AxPath<String>,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<impl IntoResponse, Error> {
+    view: routing::StatusView,
+) -> Result<Response, Error> {
     let nexus = app.state.nexus_snapshot();
     let nexus_routing_policy = nexus.routing_policy.clone();
     let offline = status_offline_snapshot(&app);
@@ -19358,7 +19359,7 @@ async fn handler_status_tail(
         return routing::handle_status(
             &app.telemetry,
             accept.map(|e| e.0),
-            Some(&tail),
+            view,
             nexus_routing_policy,
             authoritative_block_height,
             offline,
@@ -19386,12 +19387,30 @@ async fn handler_status_tail(
     routing::handle_status(
         &app.telemetry,
         accept.map(|e| e.0),
-        Some(&tail),
+        view,
         nexus_routing_policy,
         authoritative_block_height,
         offline,
     )
     .await
+}
+#[cfg(feature = "telemetry")]
+async fn handler_status_blocks(
+    state: State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    accept: Option<utils::extractors::ExtractAccept>,
+    remote: axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<Response, Error> {
+    handler_status_segment(state, headers, accept, remote, routing::StatusView::Blocks).await
+}
+#[cfg(feature = "telemetry")]
+async fn handler_status_peers(
+    state: State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    accept: Option<utils::extractors::ExtractAccept>,
+    remote: axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<Response, Error> {
+    handler_status_segment(state, headers, accept, remote, routing::StatusView::Peers).await
 }
 #[cfg(feature = "telemetry")]
 async fn handler_status_root(
@@ -19409,7 +19428,7 @@ async fn handler_status_root(
         return routing::handle_status(
             &app.telemetry,
             accept.map(|e| e.0),
-            None,
+            routing::StatusView::Full,
             nexus_routing_policy,
             authoritative_block_height,
             offline,
@@ -19435,7 +19454,7 @@ async fn handler_status_root(
     routing::handle_status(
         &app.telemetry,
         accept.map(|e| e.0),
-        None,
+        routing::StatusView::Full,
         nexus_routing_policy,
         authoritative_block_height,
         offline,
@@ -47869,6 +47888,9 @@ macro_rules! catalog_route_policy {
     };
     (operator_credential_post($handler:path)) => {
         catalog_post($handler)
+            .layer(DefaultBodyLimit::max(
+                operator_auth::CREDENTIAL_EXCHANGE_BODY_LIMIT,
+            ))
             .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange)
     };
     (operator_delete($handler:path, $state:ident)) => {
@@ -48077,7 +48099,8 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, diagnostic;
             STATUS => unauthenticated_get(handler_status_root);
-            STATUS_TAIL => unauthenticated_get(handler_status_tail);
+            STATUS_BLOCKS => unauthenticated_get(handler_status_blocks);
+            STATUS_PEERS => unauthenticated_get(handler_status_peers);
             METRICS => unauthenticated_get(handler_metrics);
         );
         let app_state = builder.state().clone();
@@ -54003,8 +54026,6 @@ pub enum Error {
     },
     /// Failure caused by configuration subsystem
     ConfigurationFailure(#[from] KisoError),
-    /// Failed to find status segment by provided path
-    StatusSegmentNotFound(#[source] eyre::Report),
     /// Failed to start Torii
     StartServer,
     /// Torii server terminated with an error
@@ -54473,10 +54494,6 @@ impl Error {
                     "The configuration subsystem could not complete the request.",
                 )
             }
-            Self::StatusSegmentNotFound(err) => {
-                iroha_logger::warn!(?err, "Requested status segment not found");
-                ErrorEnvelope::new("status_segment_not_found", err.to_string())
-            }
             Self::StartServer => {
                 iroha_logger::error!(
                     "Attempted to map `Error::StartServer` to an HTTP response envelope"
@@ -54512,7 +54529,7 @@ impl Error {
             #[cfg(feature = "app_api")]
             SorafsEvidenceViewerStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
             LaneLifecycle { .. } => StatusCode::BAD_REQUEST,
-            Config(_) | StatusSegmentNotFound(_) => StatusCode::NOT_FOUND,
+            Config(_) => StatusCode::NOT_FOUND,
             SerializationFailure { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             PushIntoQueue { source, .. } => Self::status_code_for_queue_error(source.as_ref()),
             #[cfg(feature = "telemetry")]

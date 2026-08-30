@@ -2129,7 +2129,7 @@ public sealed partial class ToriiClient : IDisposable
             versionedNoritoBytes,
             nameof(versionedNoritoBytes));
         RequireCanonicalRequestCredentials("/v1/node/capabilities");
-        EnsureTransactionSubmissionTransportIsOneShot();
+        EnsureOneShotTransportIsVerified();
         await EnsureCanonicalTransactionContractAsync(cancellationToken);
         using var content = CreateBinaryContent(normalizedBytes, "application/x-norito");
         using var response = await SendExpectingStatusAsync(
@@ -2142,12 +2142,12 @@ public sealed partial class ToriiClient : IDisposable
             cancellationToken: cancellationToken);
     }
 
-    private void EnsureTransactionSubmissionTransportIsOneShot()
+    private void EnsureOneShotTransportIsVerified()
     {
         if (!ownsHttpClient && !injectedTransactionSubmissionTransportIsOneShot)
         {
             throw new InvalidOperationException(
-                "Transaction submission requires ToriiClient's internally managed one-shot, no-redirect transport.");
+                "Signed and one-shot Torii requests require ToriiClient's internally managed one-shot, no-redirect transport.");
         }
     }
 
@@ -2409,6 +2409,11 @@ public sealed partial class ToriiClient : IDisposable
 
         if (canonicalCredentials is not null && !IsAnonymousPublicRoute(exactPath))
         {
+            // Canonical account proofs bind method, path, query, body, time, and nonce, but not
+            // the destination authority. An opaque injected handler could therefore forward the
+            // proof on redirect or replay the same nonce on retry. Only the internally managed
+            // handler (or the internal test-only one-shot assurance) may dispatch signed requests.
+            EnsureOneShotTransportIsVerified();
             var bodyBytes = content is null ? Array.Empty<byte>() : await content.ReadAsByteArrayAsync(cancellationToken);
             var headers = CanonicalRequest.BuildHeaders(
                 Options.LocalSigningContext?.NetworkId

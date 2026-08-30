@@ -78,6 +78,51 @@ def require_all(relative: str, text: str, needles: tuple[str, ...]) -> None:
         raise RuntimeError(f"{relative}: missing modeled source binding(s): {rendered}")
 
 
+def require_identifiers_absent(
+    relative: str, text: str, identifiers: tuple[str, ...]
+) -> None:
+    """Reject exact retired identifiers without matching longer live names."""
+    found = [
+        identifier
+        for identifier in identifiers
+        if re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(identifier)}(?![A-Za-z0-9_])",
+            text,
+        )
+    ]
+    if found:
+        rendered = ", ".join(repr(item) for item in found)
+        raise RuntimeError(
+            f"{relative}: retired public Parliament identifier(s) remain: {rendered}"
+        )
+
+
+def require_public_items_absent(
+    relative: str, text: str, identifiers: tuple[str, ...]
+) -> None:
+    """Reject exact retired public item declarations while allowing private internals."""
+    found = [
+        identifier
+        for identifier in identifiers
+        if re.search(
+            rf"(?m)^\s*pub\s+(?:struct|enum|type|const|fn|mod)\s+"
+            rf"{re.escape(identifier)}(?![A-Za-z0-9_])",
+            text,
+        )
+    ]
+    if found:
+        rendered = ", ".join(repr(item) for item in found)
+        raise RuntimeError(
+            f"{relative}: retired public Parliament item(s) remain: {rendered}"
+        )
+
+
+def require_path_absent(relative: str) -> None:
+    """Reject a retired source module if it is recreated."""
+    if (ROOT / relative).exists():
+        raise RuntimeError(f"{relative}: retired public Parliament module remains")
+
+
 def section(text: str, start: str, end: str, relative: str) -> str:
     pattern = re.compile(re.escape(start) + r"(?P<body>.*?)" + re.escape(end), re.S)
     match = pattern.search(text)
@@ -470,6 +515,8 @@ def main() -> int:
             "pub requests: Vec<ParliamentSortitionRequestRegistrationV1>",
             "next contiguous corpus chunk is appended",
             "complete exact survivor coverage and causes automatic corpus sealing",
+            "entry.request.validate_capacity_intent(None).is_err()",
+            "fn zero_candidate_sortition_intent_reaches_consensus_capacity_validation()",
         ),
     )
     for misplaced_policy_definition in (
@@ -946,9 +993,12 @@ def main() -> int:
         api,
         (
             "pub execution_failure_root: Option<[u8; 32]>",
-            "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1 as PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1",
         ),
     )
+    if "PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1" in api:
+        raise RuntimeError(
+            f"{api_path}: retired compatibility alias for the authoritative state bound remains"
+        )
 
     torii_gov_path = "crates/iroha_torii/src/gov.rs"
     torii_gov = read(torii_gov_path)
@@ -963,7 +1013,7 @@ def main() -> int:
         attempt_read,
         (
             "norito::core::to_bytes_bounded(",
-            "PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1",
+            "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1",
         ),
     )
 
@@ -1723,6 +1773,192 @@ def main() -> int:
             '"/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release"',
         ),
     )
+
+    retired_public_parliament_identifiers = (
+        "ParliamentTerm",
+        "CouncilState",
+        "CouncilDerivationKind",
+        "ParliamentRoster",
+        "ParliamentBodies",
+        "CitizenServiceDiscipline",
+        "CitizenServiceEvent",
+        "RecordCitizenServiceOutcome",
+        "GovernanceCouncilPersisted",
+        "GovernanceParliamentSelected",
+        "GovernanceCitizenServiceRecorded",
+        "CouncilPersisted",
+        "ParliamentSelected",
+        "CitizenServiceRecorded",
+        "GovernanceProposalApproved",
+        "ProposalApproved",
+        "GovernanceParliamentApprovalRecorded",
+        "ParliamentApprovalRecorded",
+        "GovernanceParliamentAttemptTransitioned",
+        "ParliamentAttemptTransitioned",
+        "GovernanceParliamentBodyTransitioned",
+        "ParliamentBodyTransitioned",
+        "GovernanceParliamentBallotTransitioned",
+        "ParliamentBallotTransitioned",
+        "GovernanceParliamentConcentrationWarning",
+        "ParliamentConcentrationWarning",
+        "ParliamentConcentrationWarningV1",
+        "GovernanceParliamentAggregateFinalized",
+        "ParliamentAggregateFinalized",
+        "GovernanceParliamentCertificateIssued",
+        "ParliamentCertificateIssued",
+    )
+
+    # The former feature-gated governance event module duplicated the canonical
+    # data-event stream and exposed caller-oriented Parliament outcomes. Keep
+    # both the module and every uniquely named public payload/type retired. The
+    # declaration-aware check deliberately does not confuse canonical enum
+    # variants such as `ReferendumOpened` with those removed payload structs.
+    retired_event_module_path = "crates/iroha_data_model/src/governance/events.rs"
+    require_path_absent(retired_event_module_path)
+    governance_mod_path = "crates/iroha_data_model/src/governance/mod.rs"
+    governance_mod = read(governance_mod_path)
+    if re.search(r"(?m)^\s*pub\s+mod\s+events\s*;", governance_mod):
+        raise RuntimeError(
+            f"{governance_mod_path}: retired duplicate governance event module is exported"
+        )
+
+    retired_public_item_identifiers = (
+        "SudoExecutionResult",
+        "SudoFailure",
+        "SudoExecuted",
+        "ReferendumProposed",
+        "ReferendumOpened",
+        "VoteCast",
+        "ReferendumTallied",
+        "GovernanceScheduled",
+        "GovernanceEnacted",
+        "GovernanceExecutionFailed",
+        "ParliamentSelected",
+        "ParliamentEnacted",
+        "ParliamentExecutionFailed",
+        "ParliamentHouse",
+        "ParliamentTimeout",
+        "ParliamentVetoed",
+        "ParliamentMemberEjected",
+        "CertificateRejected",
+        "RescheduleRequired",
+        "FastTrackGranted",
+        "DepositSlashed",
+        "GovernanceCouncilPersisted",
+        "GovernanceParliamentSelected",
+        "GovernanceCitizenServiceRecorded",
+        "GovernanceProposalApproved",
+        "GovernanceParliamentApprovalRecorded",
+        "GovernanceParliamentAttemptTransitioned",
+        "GovernanceParliamentBodyTransitioned",
+        "GovernanceParliamentBallotTransitioned",
+        "GovernanceParliamentConcentrationWarning",
+        "GovernanceParliamentAggregateFinalized",
+        "GovernanceParliamentCertificateIssued",
+        "ParliamentConcentrationWarningV1",
+        "CouncilDerivationKind",
+        "ParliamentRoster",
+        "ParliamentBodies",
+        "ParliamentTerm",
+        "CouncilState",
+        "PRIMARY_PARLIAMENT_BODIES_V1",
+        "ParliamentDrawPlan",
+        "CitizenServiceDiscipline",
+        "CitizenServiceEvent",
+        "RecordCitizenServiceOutcome",
+        "CITIZEN_SEAT_COOLDOWN_BLOCKS",
+        "CITIZEN_MAX_SEATS_PER_EPOCH",
+        "CITIZEN_FREE_DECLINES_PER_EPOCH",
+        "CITIZEN_DECLINE_SLASH_BPS",
+        "CITIZEN_NO_SHOW_SLASH_BPS",
+        "CITIZEN_MISCONDUCT_SLASH_BPS",
+        "citizen_service",
+        "role_bond_multipliers",
+        "record_citizen_service_event",
+        "record_council_draw",
+    )
+    require_path_absent("crates/iroha_core/src/governance/state.rs")
+    retired_public_item_surfaces = (
+        (governance_mod_path, governance_mod),
+        (types_path, types),
+        (instruction_path, instructions),
+        (events_path, events),
+        (world_path, world),
+        (state_path, state),
+        (telemetry_path, telemetry),
+        (
+            "crates/iroha_core/src/governance/draw.rs",
+            read("crates/iroha_core/src/governance/draw.rs"),
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            read("crates/iroha_config/src/parameters/defaults.rs"),
+        ),
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            read("crates/iroha_config/src/parameters/actual.rs"),
+        ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            read("crates/iroha_config/src/parameters/user.rs"),
+        ),
+    )
+    for relative, contract_surface in retired_public_item_surfaces:
+        require_public_items_absent(
+            relative,
+            contract_surface,
+            retired_public_item_identifiers,
+        )
+
+    retired_identifier_surfaces = (
+        (types_path, types),
+        (instruction_path, instructions),
+        (events_path, events),
+        (world_path, world),
+        (state_path, state),
+        (telemetry_path, telemetry),
+        (metrics_path, metrics),
+        (api_path, api),
+        (torii_gov_path, torii_gov),
+        (torii_path, torii),
+        (route_catalog_path, route_catalog),
+    )
+    for relative, contract_surface in retired_identifier_surfaces:
+        require_identifiers_absent(
+            relative,
+            contract_surface,
+            retired_public_parliament_identifiers,
+        )
+
+    retired_identifier_surface_paths = (
+        "crates/iroha_data_model/src/events/data/filters.rs",
+        "crates/iroha_data_model/src/isi/governance.rs",
+        "crates/iroha_data_model/src/isi/registry.rs",
+        "crates/iroha_data_model/src/isi/registry/wire_ids.rs",
+        "crates/iroha_torii/src/routing.rs",
+        "crates/iroha_cli/src/gov.rs",
+        "crates/iroha_config/src/parameters/defaults.rs",
+        "crates/iroha_config/src/parameters/actual.rs",
+        "crates/iroha_config/src/parameters/user.rs",
+        "javascript/iroha_js/index.d.ts",
+        "javascript/iroha_js/src/parliamentApiV1.js",
+        "python/iroha_torii_client/parliament_api.py",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ParliamentApiV1.kt",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ParliamentApiV1.java",
+        "crates/iroha_torii/assets/openapi/torii.json",
+        "specs/governance_api.md",
+        "specs/governance_pipeline.md",
+        "specs/governance_playbook.md",
+        "specs/sorafs/signing_ceremony.md",
+        "fixtures/sorafs_chunker/README.md",
+        "crates/iroha_cli/README.md",
+    )
+    for relative in retired_identifier_surface_paths:
+        require_identifiers_absent(
+            relative,
+            read(relative),
+            retired_public_parliament_identifiers,
+        )
 
     runtime_deps_path = "crates/irohad/src/main/runtime_deps.rs"
     runtime_deps = read(runtime_deps_path)
@@ -2541,6 +2777,146 @@ def main() -> int:
                 f"{model_path}: invariant {invariant!r} must be declared exactly once; "
                 f"found {declaration_count}"
             )
+
+    lifecycle_world_path = "crates/iroha_core/src/smartcontracts/isi/world.rs"
+    lifecycle_world = read(lifecycle_world_path)
+    global_beacon_install = section(
+        lifecycle_world,
+        "                Action::InstallGlobalBeaconKey => {",
+        "                Action::RetireGlobalBeaconKey => {",
+        lifecycle_world_path,
+    )
+    require_all(
+        lifecycle_world_path,
+        global_beacon_install,
+        (
+            "norito::decode_canonical::<",
+            "FinalizedGlobalThresholdBeaconKeySessionRecordV1,",
+            "record.session.network_id != certificate.network_id",
+            ".put_finalized_global_beacon_key_session(record)",
+            ".activate_global_beacon_key_session(certificate.session_id, next_height)",
+            "the H+1 producer checks that target against its authenticated",
+        ),
+    )
+    for conflated_binding in (
+        "record.session.roster_hash != certificate.roster_hash",
+        "record.session.committee_size != certificate.committee_size",
+    ):
+        if conflated_binding in global_beacon_install:
+            raise RuntimeError(
+                f"{lifecycle_world_path}: global-beacon target DKG roster was conflated "
+                f"with block-height authorization: {conflated_binding!r}"
+            )
+    require_all(
+        lifecycle_world_path,
+        lifecycle_world,
+        (
+            "global_beacon_boundary_rotation_signs_the_successor_dkg_target",
+            "the block-H roster remains the sole lifecycle-signature authority",
+            "the signed public state independently names the H+1 DKG target",
+            "the authorization roster cannot be substituted as the DKG target",
+        ),
+    )
+
+    certificate_state_path = "crates/iroha_core/src/state.rs"
+    certificate_state = read(certificate_state_path)
+    certificate_preimage = section(
+        certificate_state,
+        "pub fn threshold_key_lifecycle_certificate_preimage_v1(",
+        "fn threshold_key_lifecycle_successor_roster_v1(",
+        certificate_state_path,
+    )
+    require_all(
+        certificate_state_path,
+        certificate_preimage,
+        (
+            "let public_state_len = u64::try_from(certificate.public_state.len())",
+            "let public_state_hash = Hash::new(&certificate.public_state);",
+            "preimage.extend_from_slice(&public_state_len.to_be_bytes());",
+            "preimage.extend_from_slice(public_state_hash.as_ref());",
+        ),
+    )
+
+    beacon_runtime_path = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
+    beacon_runtime = read(beacon_runtime_path)
+    beacon_open = section(
+        beacon_runtime,
+        "    pub(crate) fn open(",
+        "    /// Return whether committed state requests a pulse attempt at this height.",
+        beacon_runtime_path,
+    )
+    require_all(
+        beacon_runtime_path,
+        beacon_open,
+        (
+            "let parliament_requested_at_height =",
+            "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)",
+            "let required_for_consensus = npos_boundary_requested || parliament_requested_at_height;",
+            "Err(_) if !required_for_consensus => None",
+            "requested: true,",
+            "required_for_consensus,",
+        ),
+    )
+    beacon_attach = section(
+        beacon_runtime,
+        "    pub(crate) fn attach_candidate_effects(",
+        "        Ok(())\n    }",
+        beacon_runtime_path,
+    )
+    require_all(
+        beacon_runtime_path,
+        beacon_attach,
+        (
+            "if self.pulse_required_for_consensus() && pulse.is_none()",
+            '"required finalized pulse is absent for the candidate view"',
+            "effects.finalized_global_beacon_pulse = pulse;",
+        ),
+    )
+
+    block_path = "crates/iroha_core/src/block.rs"
+    block = read(block_path)
+    pulse_validation = section(
+        block,
+        "        fn validate_global_beacon_pulse_effect(",
+        "        fn execution_context_error(",
+        block_path,
+    )
+    require_all(
+        block_path,
+        pulse_validation,
+        (
+            "let pulse_requested = pulse_required_for_successor || parliament_requested;",
+            "return if pulse_requested {",
+            '"block is missing a finalized global beacon pulse requested by committed pre-state"',
+            "authenticated_global_threshold_beacon_roster_hash_v1(",
+            "&context_roster,",
+        ),
+    )
+    require_all(
+        block_path,
+        block,
+        ("fn committed_parliament_request_rejects_candidate_without_pulse()",),
+    )
+
+    penalty_path = "crates/iroha_core/src/sumeragi/penalties.rs"
+    penalties = read(penalty_path)
+    pulse_application = section(
+        penalties,
+        "pub(crate) fn apply_npos_consensus_effects_to_transaction(",
+        "    for admission in &effects.v2_evidence_admissions",
+        penalty_path,
+    )
+    require_all(
+        penalty_path,
+        pulse_application,
+        (
+            "authenticated_roster: &[PeerId]",
+            "authenticated_global_threshold_beacon_roster_hash_v1(",
+            "authenticated_roster,",
+            '"pulse-height global beacon key differs from the authenticated height roster"',
+            "roster_hash: expected_roster_hash,",
+        ),
+    )
 
     for declaration in ("SPECIFICATION Spec", "INVARIANTS", "CHECK_DEADLOCK FALSE"):
         declaration_count = model_config.count(declaration)

@@ -117,12 +117,13 @@ checks resource-cap edges, corrupted chunks, withheld evidence, volatile shard
 reacquisition, restart hydration, and the one durable canonical-body boundary.
 
 The exact authenticated-loss test starts its controller with an empty
-genesis-safe revision, installs Proposal-bound Hold rules for height 2/view 0,
-and submits a 10 MiB payload to four validators. It requires at least three
-receivers to retain chunk indices 57, 58, and 59 under their resolved exact
-manifest selectors, proves the three-of-six RS16 loss prevents premature
-commit, heals through the acknowledged drain fence, and then requires all four
-peers to converge on one committed subject:
+genesis-safe revision, installs Proposal-bound Hold rules for successor height
+3 across carrier views 0 through 3, and submits a 10 MiB payload during the
+height-2/view-0 admission interval. It requires at least three receivers to
+retain chunk indices 57, 58, and 59 under their resolved exact manifest
+selectors, proves the three-of-six RS16 loss prevents premature commit, heals
+through the acknowledged drain fence, and then requires all four peers to
+converge on one committed subject:
 
 ```bash
 scripts/cargo_fast.sh --stable-local-metadata -- test \

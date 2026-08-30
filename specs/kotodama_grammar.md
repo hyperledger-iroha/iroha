@@ -858,9 +858,8 @@ secrets. It binds the nominal kind and every byte of each canonical numeric TLV,
 derives full-width BLS12-381 scalars without `u64` truncation, and returns the
 complete compressed Pedersen point as a public `int`. The scalar `POSEIDON2`
 and `POSEIDON6` opcodes are internal proof gadgets that reject private
-operands. The former scalar/truncated `PUBKGEN`, `VALCOM`, `ECADD`,
-`ECMUL_VAR`, and `PAIRING` slots are invalid in ABI V1; none are Kotodama
-source commitments, hashes, public-key APIs, or curve operations.
+operands. ABI V1 has no register-level BLS12-381 public-key, commitment, or
+curve operations; full-width typed syscall boundaries provide those semantics.
 
 Secrets cannot influence public control flow, public returns, logs, error
 selection, state keys, state values, ledger writes, host queries, seiyaku calls,

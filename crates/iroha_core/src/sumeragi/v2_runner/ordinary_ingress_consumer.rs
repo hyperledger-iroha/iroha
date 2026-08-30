@@ -495,12 +495,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 mark_leader_wire_volatile(receiver, &ingress_ownership)?;
             }
         }
-        wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => {
-            if let Err(error) = manifest.validate(executor.context()) {
-                iroha_logger::debug!(%error, "rejected standalone Sumeragi v2 manifest");
-            }
-            mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-        }
         wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {
             if terminal_decision
                 && services

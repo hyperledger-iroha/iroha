@@ -166,21 +166,25 @@ type ParityMatrixCache = OnceLock<Mutex<HashMap<(usize, usize), Arc<ParityMatrix
 fn parity_matrix(data_shards: usize, parity_shards: usize) -> Result<Arc<ParityMatrix>, Rs16Error> {
     static CACHE: ParityMatrixCache = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(entry) = cache
+    let cached = cache
         .lock()
-        .expect("mutex poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(&(data_shards, parity_shards))
-    {
-        return Ok(entry.clone());
+        .cloned();
+    if let Some(entry) = cached {
+        return Ok(entry);
     }
-    let total = data_shards + parity_shards;
+    let total = data_shards
+        .checked_add(parity_shards)
+        .filter(|total| data_shards != 0 && parity_shards != 0 && *total <= ORDER_MINUS_ONE)
+        .ok_or(Rs16Error)?;
     let mut vandermonde = vec![vec![0u16; data_shards]; total];
     for (row_idx, row) in vandermonde.iter_mut().enumerate() {
         for (col_idx, value) in row.iter_mut().enumerate() {
             *value = if row_idx == 0 || col_idx == 0 {
                 1
             } else {
-                gf_pow(row_idx * col_idx)
+                gf_pow(row_idx.checked_mul(col_idx).ok_or(Rs16Error)?)
             };
         }
     }
@@ -200,7 +204,7 @@ fn parity_matrix(data_shards: usize, parity_shards: usize) -> Result<Arc<ParityM
     let matrix = Arc::new(ParityMatrix { rows: parity_rows });
     cache
         .lock()
-        .expect("mutex poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert((data_shards, parity_shards), matrix.clone());
     Ok(matrix)
 }
@@ -235,15 +239,15 @@ pub fn encode_parity(
 /// Convert a payload slice into RS16 symbols using the configured chunk size.
 ///
 /// # Errors
-/// Returns `Rs16Error` if `chunk_size` is smaller than 2, `length` exceeds
-/// `chunk_size`, or the requested range is out of bounds.
+/// Returns `Rs16Error` if `chunk_size` is smaller than 2 or odd, `length`
+/// exceeds `chunk_size`, or the requested range is out of bounds.
 pub fn symbols_from_payload(
     chunk_size: usize,
     payload: &[u8],
     offset: usize,
     length: usize,
 ) -> Result<Vec<u16>, Rs16Error> {
-    if chunk_size < 2 || length > chunk_size {
+    if chunk_size < 2 || !chunk_size.is_multiple_of(2) || length > chunk_size {
         return Err(Rs16Error);
     }
     let end = offset.checked_add(length).ok_or(Rs16Error)?;
@@ -706,8 +710,16 @@ mod tests {
         let payload = [0u8; 4];
         let ok = symbols_from_payload(4, &payload, 0, 4).expect("symbols");
         assert_eq!(ok.len(), 2);
+        assert!(symbols_from_payload(3, &payload, 0, 3).is_err());
         assert!(symbols_from_payload(2, &payload, 0, 4).is_err());
         assert!(symbols_from_payload(4, &payload, 3, 2).is_err());
+    }
+    #[test]
+    fn parity_matrix_rejects_invalid_field_geometry_before_allocation() {
+        assert!(parity_matrix(0, 1).is_err());
+        assert!(parity_matrix(1, 0).is_err());
+        assert!(parity_matrix(ORDER_MINUS_ONE, 1).is_err());
+        assert!(parity_matrix(usize::MAX, 1).is_err());
     }
     #[test]
     fn parity_offset_matches_expected() {

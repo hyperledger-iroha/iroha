@@ -878,8 +878,17 @@ mod tests {
         assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
         assert_eq!(shared.limits.max_queue_scan, 2_048);
         assert_eq!(shared.limits.authenticated_non_validator_source_capacity, 2);
-        assert_eq!(shared.limits.body_bytes, 231 * 1024 * 1024);
+        assert_eq!(shared.limits.body_bytes, 1089 * 1024 * 1024);
         assert_eq!(shared.limits.body_source_bytes, 33 * 1024 * 1024);
+        shared
+            .validate_ingress_roster_capacity(
+                usize::try_from(
+                    iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                        .max_validators(),
+                )
+                .expect("default signed NPoS validator ceiling fits usize"),
+            )
+            .expect("default ingress geometry admits the default signed NPoS ceiling");
         assert_eq!(shared.limits.merge_sidecar_inbound_session_capacity, 32);
         assert_eq!(shared.limits.merge_sidecar_inbound_sessions_per_peer, 4);
         assert_eq!(
@@ -934,6 +943,27 @@ mod tests {
                 )
                 .expect("same input")
         );
+    }
+
+    #[test]
+    fn sumeragi_v2_ingress_capacity_rejects_a_signed_roster_above_byte_geometry() {
+        let config = default_v2_sumeragi();
+        let mut shared = config
+            .v2_config(
+                Duration::from_secs(1),
+                consensus_v2::ConsensusMode::Npos,
+            )
+            .expect("default v2 config");
+        shared.limits.body_bytes = shared.limits.body_source_bytes * 6;
+
+        assert_eq!(shared.validate_ingress_roster_capacity(4), Ok(()));
+        assert!(matches!(
+            shared.validate_ingress_roster_capacity(7),
+            Err(SumeragiV2ConfigError::BodyBytesTooSmall {
+                minimum_sources: 9,
+                ..
+            })
+        ));
     }
     #[test]
     fn sumeragi_v2_config_format_changes_the_handshake_fingerprint() {

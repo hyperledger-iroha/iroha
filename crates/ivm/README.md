@@ -148,8 +148,8 @@ IVM now standardises on the wide encoding (8-bit primary opcode + three 8-bit op
 - **0x30-0x35:** Memory and indexed-literal access (`LOAD64`, `STORE64`, `LOAD128`, `STORE128`, `LDLIT`, `LDI64`).
 - **0x40-0x4B:** Control flow (`BEQ`, `BNE`, `JAL`, `JR`, `HALT`, `JMP`, `JALS`).
 - **0x60-0x62:** System helpers (`SCALL`, `GETGAS`, `SYSTEM`).
-- **0x70-0x78 / 0x80-0x83 / 0x88-0x8D / 0x8F:** Vector and cryptographic primitives (`VADD32`, `SETVL`, `PARBEGIN`, `SHA256BLOCK`, `POSEIDON6`, `AESENC`, `ED25519VERIFY`, …).
-- **0x84-0x87 / 0x8E / 0x90-0x9F:** Reserved and rejected in ABI V1.
+- **0x70-0x78 / 0x80-0x8A:** Vector and cryptographic primitives (`VADD32`, `SETVL`, `PARBEGIN`, `SHA256BLOCK`, `POSEIDON6`, `AESENC`, `ED25519VERIFY`, …).
+- **0x8B-0x9F:** Unassigned and rejected in ABI V1.
 - **0xA0-0xA6:** Zero-knowledge field operations (`ASSERT`, `FADD`, `ASSERT_RANGE`).
 
 See [`docs/opcodes.md`](docs/opcodes.md) for the full opcode tables, operand conventions, and encoding details. The canonical helpers in `encoding::wide` and `instruction::wide` cover the entire surface and are used throughout Kotodama and the runtime.

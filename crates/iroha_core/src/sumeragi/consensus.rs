@@ -1,8 +1,8 @@
-//! Sumeragi core message types and helpers.
+//! Sumeragi bootstrap helpers and lane-consensus carrier re-exports.
 //!
-//! This module defines canonical, Norito-encoded types for QC voting
-//! (prepare/commit/new-view), evidence, and consensus helpers.
-//! It is used by the consensus adapters and related tooling.
+//! Global consensus messages, signatures, and quorum certificates live only
+//! in [`iroha_data_model::block::consensus_v2`]. This module deliberately does
+//! not expose the retired bitmap-QC or v1 vote-signing helpers.
 //!
 //! Mode separation (permissioned vs `NPoS`) is runtime-selectable via config/WSV.
 //! Build artifacts no longer hard‑code consensus mode; peers validate mode
@@ -15,12 +15,15 @@ compile_error!(
 use iroha_config::parameters::actual::Sumeragi as SumeragiConfig;
 #[cfg(test)]
 use iroha_crypto::HashOf;
+#[cfg(test)]
+use iroha_data_model::block::consensus::{Qc, QcAggregate, QcRef, QcVote};
+use iroha_data_model::block::consensus::{
+    CertPhase, ConsensusGenesisModeParams, ConsensusGenesisParams, NposGenesisParams,
+};
+#[cfg(test)]
+use iroha_data_model::block::consensus::default_chain_order_hash;
 pub use iroha_data_model::block::consensus::{
-    CertPhase, ConsensusBlockHeader, ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence,
-    ExecKv, ExecWitness, ExecWitnessMsg, Height, LaneBlockCertificateV1, LaneBlockDescriptorV1,
-    LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1, LaneBlockVoteBodyV1,
-    NposGenesisParams, Proposal, Qc, QcAggregate, QcRef, QcVote, ValidatorIndex, View,
-    default_chain_order_hash,
+    Evidence, ExecKv, ExecWitness, LaneBlockProposalV1, ValidatorIndex,
 };
 /// Live consensus protocol revision.
 pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
@@ -28,38 +31,36 @@ pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_V
 pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus_v2::PERMISSIONED_TAG;
 /// NPoS Sumeragi v2 handshake and signing-domain tag.
 pub const NPOS_TAG: &str = iroha_data_model::block::consensus_v2::NPOS_TAG;
-/// Commit-certificate phase (prepare/commit/new-view).
+/// Lane-certificate phase (prepare/commit/new-view).
 pub type Phase = CertPhase;
-/// Runtime adapter vote used for certificate aggregation.
-pub type Vote = QcVote;
-/// Reference to a QC header carried in hints.
-pub type QcHeaderRef = QcRef;
 use crate::state::{StateView, WorldReadOnly};
 use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::prelude::*;
-/// Count the number of validators encoded into a QC signer bitmap.
-pub fn qc_signer_count(qc: &Qc) -> usize {
+#[cfg(test)]
+type Vote = QcVote;
+#[cfg(test)]
+fn qc_signer_count(qc: &Qc) -> usize {
     qc.aggregate
         .signers_bitmap
         .iter()
         .map(|byte| byte.count_ones() as usize)
         .sum()
 }
-/// Build the canonical preimage for a QC vote signature under the given chain and mode tag.
-pub fn vote_preimage(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8> {
+#[cfg(test)]
+fn vote_preimage(network_id: &NetworkId, mode_tag: &str, vote: &Vote) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 * 4 + 8 * 6 + 3);
     let domain = consensus_domain(network_id, "Vote", b"v1", mode_tag);
     out.extend_from_slice(&domain);
-    out.extend_from_slice(v.block_hash.as_ref().as_ref());
-    out.extend_from_slice(v.parent_state_root.as_ref());
-    out.extend_from_slice(v.post_state_root.as_ref());
-    out.extend_from_slice(&v.height.to_be_bytes());
-    out.extend_from_slice(&v.view.to_be_bytes());
-    out.extend_from_slice(&v.epoch.to_be_bytes());
-    out.extend_from_slice(v.chain_order_hash.as_ref());
-    out.extend_from_slice(&v.rechain_seq.to_be_bytes());
-    out.push(v.phase as u8);
-    match v.highest_qc {
+    out.extend_from_slice(vote.block_hash.as_ref().as_ref());
+    out.extend_from_slice(vote.parent_state_root.as_ref());
+    out.extend_from_slice(vote.post_state_root.as_ref());
+    out.extend_from_slice(&vote.height.to_be_bytes());
+    out.extend_from_slice(&vote.view.to_be_bytes());
+    out.extend_from_slice(&vote.epoch.to_be_bytes());
+    out.extend_from_slice(vote.chain_order_hash.as_ref());
+    out.extend_from_slice(&vote.rechain_seq.to_be_bytes());
+    out.push(vote.phase as u8);
+    match vote.highest_qc {
         Some(highest_qc) => {
             out.push(1);
             out.extend_from_slice(&highest_qc.height.to_be_bytes());
@@ -72,18 +73,8 @@ pub fn vote_preimage(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8
     }
     out
 }
-/// Canonical preimage helpers for BLS signing (same-message across signers).
-#[cfg(feature = "bls")]
-pub mod bls_preimage {
-    use super::*;
-    /// Build the canonical preimage for a Vote signature under the given chain and mode tag.
-    pub fn vote(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8> {
-        super::vote_preimage(network_id, mode_tag, v)
-    }
-}
-/// Domain separation helper for signable payloads.
-/// Returns a 32‑byte Blake2b digest of the domain preimage.
-pub fn consensus_domain(
+#[cfg(test)]
+fn consensus_domain(
     network_id: &NetworkId,
     message_type_tag: &str,
     extra: &[u8],

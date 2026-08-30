@@ -2444,6 +2444,11 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
                     == wire::ConsensusMessageV2Payload::Proposal(proposal.clone())
         ));
         let manifest = payload.manifest();
+        let validated = wire::ValidatedPayloadManifest::new(
+            &service.context,
+            manifest.clone(),
+        )
+        .expect("validate retained chunk manifest once");
         let signer = &service.context.roster[proposer].validator;
         let mut observed_chunk_indices = BTreeSet::new();
         for encoded in &chunks.messages {
@@ -2456,17 +2461,15 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
             let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload else {
                 panic!("the recovered Proposal chunk fanout mixed message classes")
             };
-            chunk
-                .validate(&service.context, manifest)
+            let signature_payload = chunk
+                .validate_for_authentication(&validated)
                 .expect("the retained chunk matches its canonical manifest");
             let signature = Signature::try_from_bytes(&chunk.signature)
                 .expect("the retained chunk signature is canonical");
             signature
                 .verify(
                     signer.public_key(),
-                    &chunk
-                        .signature_preimage(&service.context, manifest)
-                        .expect("the retained chunk has a canonical signature preimage"),
+                    &signature_payload.signature_preimage(),
                 )
                 .expect("the retained chunk is signed by the recovered proposer");
             assert!(observed_chunk_indices.insert(chunk.index));

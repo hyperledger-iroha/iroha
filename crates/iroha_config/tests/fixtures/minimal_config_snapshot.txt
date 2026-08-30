@@ -464,6 +464,8 @@ Root {
             burst: Some(
                 10,
             ),
+            ephemeral_state_capacity: 4096,
+            credential_capacity: 64,
             lockout: OperatorAuthLockout {
                 failures: Some(
                     5,
@@ -1711,7 +1713,7 @@ Root {
             commands: 1024,
             authenticated_non_validator_sources: 2,
             bodies: 161,
-            body_bytes: 242221056,
+            body_bytes: 1141899264,
             body_source_bytes: 34603008,
             chunks: 2048,
             ready_bodies: 128,

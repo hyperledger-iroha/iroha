@@ -40,6 +40,7 @@ pub(crate) const SAFETY_WAL_MAX_RECORDS: usize = 8 * 1024;
 /// Maximum combined payload bytes retained by one height-local safety WAL.
 pub(crate) const SAFETY_WAL_MAX_TOTAL_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 const SAFETY_WAL_RECOVERY_SCRATCH_BYTES: usize = 64 * 1024;
+const WAL_INITIALIZATION_TEMPORARY_SUFFIX: &str = ".initializing";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WalRetentionLimits {
     max_records: usize,
@@ -210,6 +211,51 @@ struct BoundSafetyWalDirectory {
     #[cfg(all(unix, not(target_os = "espidf")))]
     identity: (u64, u64),
 }
+#[cfg(all(unix, not(target_os = "espidf")))]
+struct WalInitializationDirectoryLock<'directory> {
+    directory: &'directory File,
+}
+#[cfg(all(unix, not(target_os = "espidf")))]
+impl<'directory> WalInitializationDirectoryLock<'directory> {
+    fn acquire(directory: &'directory File) -> io::Result<Self> {
+        #[cfg(not(any(
+            target_os = "horizon",
+            target_os = "solaris",
+            target_os = "vita",
+            target_os = "wasi"
+        )))]
+        {
+            rustix::fs::flock(directory, rustix::fs::FlockOperation::LockExclusive)
+                .map_err(io::Error::from)?;
+            Ok(Self { directory })
+        }
+        #[cfg(any(
+            target_os = "horizon",
+            target_os = "solaris",
+            target_os = "vita",
+            target_os = "wasi"
+        ))]
+        {
+            let _ = directory;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "exclusive safety WAL initialization locking is unavailable on this platform",
+            ))
+        }
+    }
+}
+#[cfg(all(unix, not(target_os = "espidf")))]
+impl Drop for WalInitializationDirectoryLock<'_> {
+    fn drop(&mut self) {
+        #[cfg(not(any(
+            target_os = "horizon",
+            target_os = "solaris",
+            target_os = "vita",
+            target_os = "wasi"
+        )))]
+        let _ = rustix::fs::flock(self.directory, rustix::fs::FlockOperation::Unlock);
+    }
+}
 /// Private descriptor-relative owner of one fixed safety-WAL-adjacent entry.
 #[derive(Debug)]
 struct BoundSafetyWalAdjacentEntry {
@@ -371,63 +417,178 @@ impl BoundSafetyWalDirectory {
             Err(unsupported_storage_binding_io())
         }
     }
-    fn open_wal_leaf(&self, name: &OsStr) -> io::Result<(File, bool)> {
+    fn open_existing_wal_leaf(&self, name: &OsStr) -> io::Result<Option<File>> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
             self.verify_linked()?;
-            let (created, flags, existing_identity) = match rustix::fs::statat(
+            let existing = match rustix::fs::statat(
                 &self.directory,
                 name,
                 rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
             ) {
                 Ok(stat) => {
                     ensure_unix_regular_single_link_stat(&stat)?;
-                    (
-                        false,
-                        rustix::fs::OFlags::RDWR
-                            | rustix::fs::OFlags::NOFOLLOW
-                            | rustix::fs::OFlags::CLOEXEC,
-                        Some((stat.st_dev as u64, stat.st_ino as u64)),
-                    )
+                    stat
                 }
-                Err(rustix::io::Errno::NOENT) => (
-                    true,
-                    rustix::fs::OFlags::RDWR
-                        | rustix::fs::OFlags::CREATE
-                        | rustix::fs::OFlags::EXCL
-                        | rustix::fs::OFlags::NOFOLLOW
-                        | rustix::fs::OFlags::CLOEXEC,
-                    None,
-                ),
+                Err(rustix::io::Errno::NOENT) => {
+                    self.verify_linked()?;
+                    return Ok(None);
+                }
                 Err(error) => return Err(io::Error::from(error)),
             };
             let file = File::from(
                 rustix::fs::openat(
                     &self.directory,
                     name,
-                    flags,
+                    rustix::fs::OFlags::RDWR
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
                     rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
                 )
                 .map_err(io::Error::from)?,
             );
-            if let Some(expected_identity) = existing_identity {
-                let opened = file.metadata()?;
-                if unix_file_identity(&opened) != expected_identity {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "safety WAL leaf changed between inspection and open",
-                    ));
-                }
+            let opened = file.metadata()?;
+            if unix_file_identity(&opened) != (existing.st_dev as u64, existing.st_ino as u64) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "safety WAL leaf changed between inspection and open",
+                ));
             }
             self.verify_leaf(&file, name)?;
             self.verify_linked()?;
-            Ok((file, created))
+            Ok(Some(file))
         }
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             let _ = name;
             Err(unsupported_storage_binding_io())
         }
+    }
+    fn publish_initialized_wal_leaf(
+        &self,
+        name: &OsStr,
+        header: &[u8; FILE_HEADER_LEN],
+    ) -> io::Result<File> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            self.verify_linked()?;
+            let _initialization_lock = WalInitializationDirectoryLock::acquire(&self.directory)?;
+            match rustix::fs::statat(&self.directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) => {
+                    ensure_unix_regular_single_link_stat(&stat)?;
+                    return Err(io::Error::from(rustix::io::Errno::EXIST));
+                }
+                Err(rustix::io::Errno::NOENT) => {}
+                Err(error) => return Err(io::Error::from(error)),
+            }
+            let temporary = wal_initialization_temporary_name(name);
+            self.remove_stale_wal_initialization(&temporary, header.len())?;
+            let mut file = File::from(
+                rustix::fs::openat(
+                    &self.directory,
+                    &temporary,
+                    rustix::fs::OFlags::RDWR
+                        | rustix::fs::OFlags::CREATE
+                        | rustix::fs::OFlags::EXCL
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                )
+                .map_err(io::Error::from)?,
+            );
+            let publication = (|| -> io::Result<()> {
+                self.verify_leaf(&file, &temporary)?;
+                file.write_all(header)?;
+                file.flush()?;
+                file.sync_all()?;
+                self.verify_leaf(&file, &temporary)?;
+                if file.metadata()?.len() != u64::try_from(header.len()).unwrap_or(u64::MAX) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "safety WAL initialization temporary has the wrong length",
+                    ));
+                }
+                self.verify_linked()?;
+                rename_wal_leaf_noreplace(&self.directory, &temporary, name)?;
+                self.verify_leaf(&file, name)?;
+                self.sync()?;
+                let durable = file.metadata()?;
+                if !durable.is_file()
+                    || durable.nlink() != 1
+                    || durable.len() != u64::try_from(header.len()).unwrap_or(u64::MAX)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "published safety WAL header changed across directory sync",
+                    ));
+                }
+                self.verify_leaf(&file, name)
+            })();
+            if let Err(error) = publication {
+                let _ = self.unlink_exact_leaf(&temporary, &file);
+                return Err(error);
+            }
+            Ok(file)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (name, header);
+            Err(unsupported_storage_binding_io())
+        }
+    }
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn remove_stale_wal_initialization(
+        &self,
+        temporary: &OsStr,
+        maximum_header_len: usize,
+    ) -> io::Result<()> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        self.verify_linked()?;
+        let linked = match rustix::fs::statat(
+            &self.directory,
+            temporary,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(stat) => stat,
+            Err(rustix::io::Errno::NOENT) => return Ok(()),
+            Err(error) => return Err(io::Error::from(error)),
+        };
+        ensure_unix_regular_single_link_stat(&linked)?;
+        if linked.st_size < 0
+            || u64::try_from(linked.st_size).unwrap_or(u64::MAX)
+                > u64::try_from(maximum_header_len).unwrap_or(u64::MAX)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stale safety WAL initialization temporary has an impossible length",
+            ));
+        }
+        let file = File::from(
+            rustix::fs::openat(
+                &self.directory,
+                temporary,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(io::Error::from)?,
+        );
+        let opened = file.metadata()?;
+        if !opened.is_file()
+            || opened.nlink() != 1
+            || opened.dev() != linked.st_dev as u64
+            || opened.ino() != linked.st_ino as u64
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stale safety WAL initialization temporary changed while opening",
+            ));
+        }
+        self.unlink_exact_leaf(temporary, &file)
     }
     fn verify_leaf(&self, file: &File, name: &OsStr) -> io::Result<()> {
         #[cfg(all(unix, not(target_os = "espidf")))]
@@ -483,6 +644,55 @@ impl BoundSafetyWalDirectory {
             Err(unsupported_storage_binding_io())
         }
     }
+}
+fn wal_initialization_temporary_name(wal_name: &OsStr) -> OsString {
+    let mut temporary = wal_name.to_os_string();
+    temporary.push(WAL_INITIALIZATION_TEMPORARY_SUFFIX);
+    temporary
+}
+#[cfg(all(
+    unix,
+    not(target_os = "espidf"),
+    any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    )
+))]
+fn rename_wal_leaf_noreplace(
+    directory: &File,
+    source: &OsStr,
+    destination: &OsStr,
+) -> io::Result<()> {
+    rustix::fs::renameat_with(
+        directory,
+        source,
+        directory,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(io::Error::from)
+}
+#[cfg(all(
+    unix,
+    not(target_os = "espidf"),
+    not(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    ))
+))]
+fn rename_wal_leaf_noreplace(
+    _directory: &File,
+    _source: &OsStr,
+    _destination: &OsStr,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "atomic no-replace safety WAL publication is unavailable on this platform",
+    ))
 }
 impl BoundSafetyWalAdjacentEntry {
     #[cfg(all(unix, not(target_os = "espidf")))]
@@ -1139,9 +1349,10 @@ impl SafetyWal {
     }
     /// Open or create a WAL bound to the supplied network, protocol, and consensus-key hashes.
     ///
-    /// An incomplete final frame is treated as an unacknowledged crash tail and truncated. Any
-    /// earlier structural or hash-chain failure, or a complete prefix beyond the fixed retention
-    /// bounds, is returned as an error.
+    /// A new header is synchronized under a descriptor-relative temporary and atomically published
+    /// before the final name is opened for append. An incomplete final frame is treated as an
+    /// unacknowledged crash tail and truncated. Any earlier structural or hash-chain failure, or a
+    /// complete prefix beyond the fixed retention bounds, is returned as an error.
     #[cfg(test)]
     pub(crate) fn open(
         path: impl Into<PathBuf>,
@@ -1203,39 +1414,38 @@ impl SafetyWal {
         network_id: [u8; HASH_LEN],
         key_hash: [u8; HASH_LEN],
     ) -> Result<Self, SafetyWalError> {
-        let parent = directory.expected_path.clone();
         let identity = WalFileIdentity::new(protocol_version, network_id, key_hash);
-        let (mut file, created) =
-            directory
-                .open_wal_leaf(&wal_name)
-                .map_err(|source| SafetyWalError::Io {
-                    path: path.clone(),
-                    source,
-                })?;
-        if created
-            || file
-                .metadata()
-                .map_err(|source| SafetyWalError::Io {
-                    path: path.clone(),
-                    source,
-                })?
-                .len()
-                == 0
-        {
-            let header = encode_wal_file_header(identity, &frame_hash);
-            file.write_all(&header)
-                .and_then(|()| file.flush())
-                .and_then(|()| file.sync_data())
-                .and_then(|()| directory.verify_leaf(&file, &wal_name))
-                .map_err(|source| SafetyWalError::Io {
-                    path: path.clone(),
-                    source,
-                })?;
-            directory.sync().map_err(|source| SafetyWalError::Io {
-                path: parent.clone(),
+        let header = encode_wal_file_header(identity, &frame_hash);
+        let mut file = match directory
+            .open_existing_wal_leaf(&wal_name)
+            .map_err(|source| SafetyWalError::Io {
+                path: path.clone(),
                 source,
-            })?;
-        }
+            })? {
+            Some(file) => file,
+            None => match directory.publish_initialized_wal_leaf(&wal_name, &header) {
+                Ok(file) => file,
+                Err(source) if source.kind() == io::ErrorKind::AlreadyExists => directory
+                    .open_existing_wal_leaf(&wal_name)
+                    .map_err(|source| SafetyWalError::Io {
+                        path: path.clone(),
+                        source,
+                    })?
+                    .ok_or_else(|| SafetyWalError::Io {
+                        path: path.clone(),
+                        source: io::Error::new(
+                            io::ErrorKind::NotFound,
+                            "competing safety WAL publication disappeared before open",
+                        ),
+                    })?,
+                Err(source) => {
+                    return Err(SafetyWalError::Io {
+                        path: path.clone(),
+                        source,
+                    });
+                }
+            },
+        };
         directory
             .verify_leaf(&file, &wal_name)
             .map_err(|source| SafetyWalError::Io {
@@ -1874,6 +2084,89 @@ mod tests {
         assert_eq!(
             &header[FILE_HEADER_PREFIX_LEN..],
             &frame_hash(&header[..FILE_HEADER_PREFIX_LEN])
+        );
+    }
+    #[test]
+    fn every_initial_header_crash_prefix_recovers_without_publishing_a_partial_wal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parent = dir.path().join("wal");
+        fs::create_dir(&parent).expect("create WAL directory");
+        let header =
+            encode_wal_file_header(WalFileIdentity::new(PROTOCOL, NETWORK_ID, KEY), &frame_hash);
+        for prefix_len in 0..=header.len() {
+            let wal_name = format!("{prefix_len:020}.wal");
+            let path = parent.join(&wal_name);
+            let temporary = parent.join(wal_initialization_temporary_name(OsStr::new(&wal_name)));
+            fs::write(&temporary, &header[..prefix_len])
+                .expect("model a crash while writing the unpublished header");
+
+            let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY)
+                .expect("reopen must discard the unpublished prefix and publish atomically");
+            assert!(wal.recovered_records().is_empty());
+            assert_eq!(fs::read(&path).expect("read published WAL"), header);
+            assert!(
+                !temporary.exists(),
+                "initialization temporary must not survive successful publication"
+            );
+            drop(wal);
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY)
+                .expect("the published header must remain recoverable");
+        }
+    }
+    #[test]
+    fn concurrent_initializers_share_one_complete_no_replace_publication() {
+        const INITIALIZERS: usize = 16;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = Arc::new(dir.path().join("sumeragi-v2.wal"));
+        let barrier = Arc::new(std::sync::Barrier::new(INITIALIZERS));
+        let initializers = (0..INITIALIZERS)
+            .map(|_| {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    SafetyWal::open(path.as_ref(), PROTOCOL, NETWORK_ID, KEY)
+                        .map(drop)
+                        .map_err(|error| error.to_string())
+                })
+            })
+            .collect::<Vec<_>>();
+        for initializer in initializers {
+            initializer
+                .join()
+                .expect("initializer thread must not panic")
+                .expect("all initializers must open the one published WAL");
+        }
+        let expected =
+            encode_wal_file_header(WalFileIdentity::new(PROTOCOL, NETWORK_ID, KEY), &frame_hash);
+        assert_eq!(fs::read(path.as_ref()).expect("read shared WAL"), expected);
+        assert!(
+            !path
+                .with_file_name(wal_initialization_temporary_name(
+                    path.file_name().expect("WAL file name"),
+                ))
+                .exists(),
+            "serialized initialization must leave no temporary"
+        );
+    }
+    #[test]
+    fn partial_final_header_is_never_repaired_in_place() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sumeragi-v2.wal");
+        let header =
+            encode_wal_file_header(WalFileIdentity::new(PROTOCOL, NETWORK_ID, KEY), &frame_hash);
+        fs::write(&path, &header[..header.len() / 2]).expect("write impossible partial final WAL");
+        assert!(matches!(
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY),
+            Err(SafetyWalError::InvalidHeader {
+                reason: "truncated header",
+                ..
+            })
+        ));
+        assert_eq!(
+            fs::read(path).expect("read rejected partial WAL"),
+            header[..header.len() / 2],
+            "opening must not mutate a partial final file"
         );
     }
     #[test]

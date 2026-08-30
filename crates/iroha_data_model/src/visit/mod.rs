@@ -138,14 +138,6 @@ pub fn visit_transaction<V: Visit + ?Sized>(visitor: &mut V, transaction: &Signe
     match transaction.instructions() {
         Executable::ContractCall(_) => {}
         Executable::Ivm(bytecode) => visitor.visit_ivm(bytecode),
-        Executable::IvmProved(proved) => {
-            // For proved execution the semantic state transition is expressed by the overlay, but
-            // we also expose the original bytecode for visitors that inspect Kotodama programs.
-            visitor.visit_ivm(&proved.bytecode);
-            for isi in &proved.overlay {
-                visitor.visit_instruction(isi);
-            }
-        }
         Executable::Instructions(instructions) => {
             for isi in instructions {
                 visitor.visit_instruction(isi);

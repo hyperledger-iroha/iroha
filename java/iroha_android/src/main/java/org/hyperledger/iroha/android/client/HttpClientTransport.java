@@ -175,24 +175,6 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   @Override
-  public CompletableFuture<ClientResponse> submitSccpDestinationProof(
-      final SccpDestinationProofSubmitRequest request) {
-    Objects.requireNonNull(request, "request");
-    return executeSccpJsonAccepted(
-        buildBridgeJsonPostRequest("/v1/bridge/proofs/submit", request.toJsonBytes()),
-        "SCCP destination proof submit");
-  }
-
-  @Override
-  public CompletableFuture<ClientResponse> submitSccpNativeMessage(
-      final SccpNativeMessageSubmitRequest request) {
-    Objects.requireNonNull(request, "request");
-    return executeSccpJsonAccepted(
-        buildBridgeJsonPostRequest("/v1/bridge/messages", request.toJsonBytes()),
-        "SCCP native message submit");
-  }
-
-  @Override
   public CompletableFuture<ClientResponse> submitTransactionEntrypoint(
       final byte[] encodedVersionedEntrypoint) {
     final TransportRequest request =
@@ -291,41 +273,6 @@ public final class HttpClientTransport implements IrohaClient {
               }
               notifyResponse(request, clientResponse);
               future.complete(clientResponse);
-            });
-    return future;
-  }
-
-  private CompletableFuture<ClientResponse> executeSccpJsonAccepted(
-      final TransportRequest request, final String errorContext) {
-    notifyRequest(request);
-    final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
-    executor
-        .execute(request)
-        .whenComplete(
-            (response, throwable) -> {
-              if (throwable != null) {
-                final Throwable cause =
-                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
-                notifyFailure(request, cause);
-                future.completeExceptionally(
-                    new RuntimeException(errorContext + " request failed", cause));
-                return;
-              }
-              final ClientResponse clientResponse =
-                  new ClientResponse(
-                      response.statusCode(),
-                      response.body(),
-                      response.message(),
-                      null,
-                      extractRejectCode(response));
-              try {
-                requireExactSccpJsonResponse(response, errorContext);
-                notifyResponse(request, clientResponse);
-                future.complete(clientResponse);
-              } catch (final RuntimeException ex) {
-                notifyFailure(request, ex);
-                future.completeExceptionally(ex);
-              }
             });
     return future;
   }
@@ -2650,11 +2597,6 @@ public final class HttpClientTransport implements IrohaClient {
       builder.addHeader(entry.getKey(), entry.getValue());
     }
     return builder.build();
-  }
-
-  private TransportRequest buildBridgeJsonPostRequest(final String path, final byte[] body) {
-    preflightSccpBridgeSubmitJson(body, path);
-    return buildJsonPostRequest(path, body, SCCP_JSON_RESPONSE_MAX_BYTES);
   }
 
   private TransportRequest buildVpnRequest(

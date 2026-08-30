@@ -1557,7 +1557,6 @@ mod tests {
                 signature: vec![2],
             }),
             ConsensusMessageV2Payload::TimeoutCertificate(timeout),
-            ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
             ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
                 manifest_hash: HashOf::new(&manifest),
                 index: 0,
@@ -1620,15 +1619,17 @@ mod tests {
     fn signed_payload_chunk_binds_session_and_manifest_fields() {
         let context = context(&[1, 1, 1, 1]);
         let manifest = manifest(&context);
+        let validated = ValidatedPayloadManifest::new(&context, manifest.clone())
+            .expect("validate chunk manifest once");
         let chunk = PayloadChunk {
-            manifest_hash: HashOf::new(&manifest),
+            manifest_hash: validated.manifest_hash(),
             index: 0,
             bytes: b"body".to_vec(),
             sender: 1,
             signature: vec![0x77; 48],
         };
         let payload = chunk
-            .signature_payload(&context, &manifest)
+            .signature_payload(&validated)
             .expect("valid chunk signature payload");
         assert_eq!(payload.context_id, context.id());
         assert_eq!(payload.epoch, context.epoch);
@@ -1641,22 +1642,21 @@ mod tests {
         );
         assert_eq!(payload.chunk_hash, Hash::new(b"body"));
         assert!(
-            chunk
-                .signature_preimage(&context, &manifest)
-                .expect("valid signature preimage")
+            payload
+                .signature_preimage()
                 .starts_with(b"iroha:sumeragi:v2:payload-chunk")
         );
         let mut unsigned = chunk.clone();
         unsigned.signature.clear();
-        assert!(unsigned.signature_preimage(&context, &manifest).is_ok());
+        assert!(unsigned.signature_payload(&validated).is_ok());
         assert_eq!(
-            unsigned.validate(&context, &manifest),
+            unsigned.validate_for_authentication(&validated),
             Err(ValidationError::MissingChunkSignature)
         );
         let mut corrupted = chunk.clone();
         corrupted.bytes.push(0);
         assert_eq!(
-            corrupted.signature_payload(&context, &manifest),
+            corrupted.signature_payload(&validated),
             Err(ValidationError::InvalidChunkLength)
         );
     }
@@ -1664,6 +1664,8 @@ mod tests {
     fn manifest_rejects_mutated_root_size_count_and_chunk_length() {
         let context = context(&[1, 1, 1, 1]);
         let canonical = manifest(&context);
+        let validated = ValidatedPayloadManifest::new(&context, canonical.clone())
+            .expect("validate canonical manifest once");
         assert_eq!(canonical.validate(&context), Ok(()));
         let mut wrong_root = canonical.clone();
         wrong_root.chunk_root = Hash::new(b"not the canonical root");
@@ -1691,7 +1693,7 @@ mod tests {
             signature: vec![0x44; 48],
         };
         assert_eq!(
-            short_chunk.validate(&context, &canonical),
+            short_chunk.validate_for_authentication(&validated),
             Err(ValidationError::InvalidChunkLength)
         );
     }

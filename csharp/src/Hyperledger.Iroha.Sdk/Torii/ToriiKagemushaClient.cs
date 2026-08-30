@@ -82,7 +82,7 @@ public sealed partial class ToriiClient
         ToriiKagemushaOperationKind expectedKind,
         CancellationToken cancellationToken)
     {
-        EnsureTransactionSubmissionTransportIsOneShot();
+        EnsureOneShotTransportIsVerified();
         using var content = new ByteArrayContent(norito);
         content.Headers.ContentType = new MediaTypeHeaderValue("application/x-norito");
         using var response = await SendAsync(

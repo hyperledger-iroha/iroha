@@ -388,6 +388,9 @@ internal object ParliamentProposalValidatorV1 {
         val action = objectValue(value["action"], "ContractLifecycleGovernance.action")
         exact(action, setOf("action", "payload"), "ContractLifecycleGovernance.action")
         val kind = text(action["action"], "ContractLifecycleGovernance.action.action")
+        require(kind in ParliamentApiV1.CONTRACT_LIFECYCLE_ACTIONS) {
+            "contract lifecycle action is unsupported"
+        }
         if (kind == "CancelOwnershipOffer" || kind == "AcceptParliamentOwnership") {
             require(action["payload"] == null) { "$kind payload must be null" }
             return

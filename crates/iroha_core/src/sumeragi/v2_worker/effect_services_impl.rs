@@ -116,7 +116,6 @@ impl V2EffectServices for ProductionV2Services {
             | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutVote(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -256,9 +255,21 @@ impl V2EffectServices for ProductionV2Services {
                 }
                 let manifest_upgrade =
                     existing_task.manifest().is_none() && task.manifest().is_some();
-                let manifest_hash = manifest_upgrade.then(|| {
-                    HashOf::new(task.manifest().expect("manifest upgrade was checked above"))
-                });
+                let opened_chunks = manifest_upgrade
+                    .then(|| {
+                        V2ChunkSession::open(
+                            &self.chunk_root,
+                            &self.context,
+                            task.manifest()
+                                .expect("manifest upgrade was checked above")
+                                .clone(),
+                        )
+                    })
+                    .transpose()
+                    .map_err(|error| error.to_string())?;
+                let manifest_hash = opened_chunks
+                    .as_ref()
+                    .map(|session| session.validated_manifest().manifest_hash());
                 if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
                     return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
                 }
@@ -274,18 +285,6 @@ impl V2EffectServices for ProductionV2Services {
                     .as_ref()
                     .map(|_| task.sources().to_vec())
                     .unwrap_or_default();
-                let opened_chunks = manifest_upgrade
-                    .then(|| {
-                        V2ChunkSession::open(
-                            &self.chunk_root,
-                            &self.context,
-                            task.manifest()
-                                .expect("manifest upgrade was checked above")
-                                .clone(),
-                        )
-                    })
-                    .transpose()
-                    .map_err(|error| error.to_string())?;
                 let fetch = self.fetches.get_mut(&task.id()).ok_or_else(|| {
                     "preflighted Sumeragi v2 body-fetch owner disappeared".to_owned()
                 })?;
@@ -319,10 +318,6 @@ impl V2EffectServices for ProductionV2Services {
         if task.manifest().is_none() && task.certified_request().is_none() {
             return Err("Sumeragi v2 body-fetch task has no acquisition authority".to_owned());
         }
-        let manifest_hash = task.manifest().map(HashOf::new);
-        if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
-            return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
-        }
         let certified_message = task
             .certified_request()
             .map(|request| {
@@ -341,6 +336,12 @@ impl V2EffectServices for ProductionV2Services {
             .map(|manifest| V2ChunkSession::open(&self.chunk_root, &self.context, manifest))
             .transpose()
             .map_err(|error| error.to_string())?;
+        let manifest_hash = chunks
+            .as_ref()
+            .map(|session| session.validated_manifest().manifest_hash());
+        if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
+            return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
+        }
         if let Some(hash) = manifest_hash {
             self.fetch_by_manifest.insert(hash, task.id());
         }
@@ -437,6 +438,34 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(())
     }
+    fn validated_payload_manifest<'a>(
+        &'a mut self,
+        context: &wire::HeightContext,
+        task: &BodyFetchTask,
+    ) -> Result<&'a wire::ValidatedPayloadManifest, Self::Error> {
+        if context != &self.context
+            || self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live
+        {
+            return Err("Sumeragi v2 chunk validation has no exact live owner".to_owned());
+        }
+        let fetch = self
+            .fetches
+            .get(&task.id())
+            .expect("live body-fetch owner was classified above");
+        if fetch.task != *task {
+            return Err(format!(
+                "Sumeragi v2 chunk task {} differs from validation-session ownership",
+                task.id().get()
+            ));
+        }
+        fetch
+            .chunks
+            .as_ref()
+            .map(V2ChunkSession::validated_manifest)
+            .ok_or_else(|| {
+                "manifest-less certified body fetch has no chunk validation session".to_owned()
+            })
+    }
     fn accept_authenticated_chunk(
         &mut self,
         task: &BodyFetchTask,
@@ -464,7 +493,7 @@ impl V2EffectServices for ProductionV2Services {
                 "manifest-less certified body fetch cannot accept chunks".to_owned()
             })?;
             let admission = session
-                .admit(chunk.chunk())
+                .admit_authenticated(chunk.chunk(), chunk.signature_payload())
                 .map_err(|error| error.to_string())?;
             if admission == crate::sumeragi::v2_chunks::ChunkAdmission::Duplicate {
                 operation.complete();
@@ -732,7 +761,6 @@ fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRou
         wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => Some(certificate.round),
         wire::ConsensusMessageV2Payload::TimeoutVote(vote) => Some(vote.round),
         wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => Some(certificate.round),
-        wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => Some(manifest.round),
         wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
             Some(response.certificate.round)
         }

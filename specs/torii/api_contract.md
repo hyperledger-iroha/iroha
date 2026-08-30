@@ -246,7 +246,7 @@ authentication and network policy rather than by claiming a separate socket.
 | Method/path or family | Surface and exposure | Media/protocol | Authentication | Reason |
 | --- | --- | --- | --- | --- |
 | `GET /health` | protocol, public | framework health response | deployment policy | load-balancer probe |
-| `GET /status`, `GET /status/{*tail}` | diagnostic, restricted on the public listener | diagnostic JSON/text | CIDR/API-token and network policy | infrastructure status namespace; never an SDK or MCP tool |
+| `GET /status`, `GET /status/blocks`, `GET /status/peers` | diagnostic, restricted on the public listener | diagnostic JSON/text | CIDR/API-token and network policy | root status plus exact infrastructure probes; never an SDK or MCP tool |
 | `GET /metrics` | diagnostic, restricted on the public listener | Prometheus text | CIDR/API-token policy | scraper protocol; never an SDK or MCP tool |
 | `GET /debug/pprof/profile` | diagnostic, restricted on the public listener | profiler bytes | CIDR/API-token policy | diagnostic artifact |
 | `GET /openapi.json`, `GET /v1/schema` | protocol documentation | JSON document | deployment policy | schema/document endpoints are JSON-only; the extensionless OpenAPI alias is not part of V1 |
@@ -262,6 +262,38 @@ authentication and network policy rather than by claiming a separate socket.
 
 The canonical event/block handshake, ordering, heartbeat, lag, reconnect, and
 close-code rules are specified in [the Torii streaming contract](streaming.md).
+
+### Operator WebAuthn exchange
+
+The four operator-authentication operations accept at most 64 KiB of JSON and
+use one normalized credential envelope rather than accepting a browser's
+open-ended `PublicKeyCredential` object. The top-level object contains exactly
+`id`, `rawId`, `response`, and `type`; `type` is exactly `public-key`, and `id`
+and `rawId` are equal canonical unpadded base64url encodings of a non-empty
+credential identifier no longer than 1,024 decoded bytes. Registration
+`response` contains exactly `clientDataJSON` and `attestationObject`.
+Authentication `response` contains exactly `clientDataJSON`,
+`authenticatorData`, and `signature`. Each byte string is non-empty canonical
+unpadded base64url. Unknown members, browser-extension members such as
+`userHandle`, padded encodings, and alternate credential types are rejected;
+this closed envelope is a route-specific exception to the general typed-JSON
+unknown-member rule below. Registration accepts only the requested WebAuthn
+`none` attestation profile with an empty attestation statement. V1 rejects
+reserved authenticator flag bits, inconsistent backup flags, embedded attested
+data on assertions, extension data it does not interpret, and trailing CBOR or
+authenticator bytes.
+
+Challenges, sessions, and lockout identities share a configured per-kind live
+entry bound and expire without full-map scans. New state fails closed with
+`503 operator_auth_state_capacity_exhausted` when that bound is occupied.
+Credential enrollment is separately bounded; an authenticated attempt to add
+a new credential at the configured limit returns
+`409 operator_webauthn_credential_capacity_exhausted`, while replacing the
+same credential identifier remains permitted. Persisted credential state is
+validated exactly at startup, including its version, fields, canonical
+encodings, identifier and counter bounds, allowed algorithm, public key, and
+duplicate identifiers. Corrupt or policy-incompatible state prevents Torii
+from starting operator authentication instead of being repaired or ignored.
 
 ## Typed JSON mapping
 

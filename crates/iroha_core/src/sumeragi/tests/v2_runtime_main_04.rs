@@ -1407,20 +1407,14 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
             )
         };
     let queued_wire = wire::ConsensusMessageV2::new(payload(1));
-    let transport = wire::ConsensusMessageV2Payload::PayloadManifest(wire::PayloadManifest {
-        round,
-        subject,
-        payload_size_bytes: 1,
-        layout: wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 2,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 1,
-            max_chunk_count: 2,
-        },
-        chunk_hashes: vec![Hash::new(b"coalesced capacity chunk"); 2],
-        chunk_root: Hash::new(b"coalesced capacity root"),
+    let transport = wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+        manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"coalesced capacity orphan chunk",
+        )),
+        index: 0,
+        bytes: Vec::new(),
+        sender: 0,
+        signature: vec![1],
     });
     assert!(matches!(
         classify_reducer_network_ingress(false, &queued_wire.payload),

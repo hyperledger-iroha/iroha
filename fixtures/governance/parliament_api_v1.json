@@ -26,6 +26,14 @@
     "ContractEmergencyHold",
     "GlobalDataTriggerPermissionGovernance"
   ],
+  "contract_lifecycle_actions": [
+    "Activate",
+    "Deactivate",
+    "OfferOwnership",
+    "CancelOwnershipOffer",
+    "AcceptParliamentOwnership",
+    "CompleteEmergencyHoldRetrospective"
+  ],
   "limits": {
     "attempt_state_bytes": 16777216,
     "governance_attempt_sequence_max": 16,

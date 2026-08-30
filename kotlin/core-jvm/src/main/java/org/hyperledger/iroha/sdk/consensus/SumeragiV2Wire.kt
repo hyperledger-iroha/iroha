@@ -1144,32 +1144,28 @@ object SumeragiV2Wire {
             override fun encode(): ByteArray = enumPayload(4, value.encode())
         }
 
-        class PayloadManifestMessage(@JvmField val value: PayloadManifest) : ConsensusPayload() {
+        class PayloadChunkMessage(@JvmField val value: PayloadChunk) : ConsensusPayload() {
             override fun encode(): ByteArray = enumPayload(5, value.encode())
         }
 
-        class PayloadChunkMessage(@JvmField val value: PayloadChunk) : ConsensusPayload() {
+        class CertifiedBodyRequestMessage(@JvmField val value: CertifiedBodyRequest) : ConsensusPayload() {
             override fun encode(): ByteArray = enumPayload(6, value.encode())
         }
 
-        class CertifiedBodyRequestMessage(@JvmField val value: CertifiedBodyRequest) : ConsensusPayload() {
-            override fun encode(): ByteArray = enumPayload(7, value.encode())
-        }
-
         class CertifiedBodyResponseMessage(@JvmField val value: CertifiedBodyResponse) : ConsensusPayload() {
-            override fun encode(): ByteArray = enumPayload(8, value.encode())
+            override fun encode(): ByteArray = enumPayload(7, value.encode())
         }
 
         class CommitCertificateRequestMessage(
             @JvmField val value: CommitCertificateRequest,
         ) : ConsensusPayload() {
-            override fun encode(): ByteArray = enumPayload(9, value.encode())
+            override fun encode(): ByteArray = enumPayload(8, value.encode())
         }
 
         class CommitCertificateResponseMessage(
             @JvmField val value: CommitCertificateResponse,
         ) : ConsensusPayload() {
-            override fun encode(): ByteArray = enumPayload(10, value.encode())
+            override fun encode(): ByteArray = enumPayload(9, value.encode())
         }
 
         companion object {
@@ -1184,12 +1180,11 @@ object SumeragiV2Wire {
                     2L -> QuorumCertificateMessage(QuorumCertificate.decode(payload))
                     3L -> TimeoutVoteMessage(TimeoutVote.decode(payload))
                     4L -> TimeoutCertificateMessage(TimeoutCertificate.decode(payload))
-                    5L -> PayloadManifestMessage(PayloadManifest.decode(payload))
-                    6L -> PayloadChunkMessage(PayloadChunk.decode(payload))
-                    7L -> CertifiedBodyRequestMessage(CertifiedBodyRequest.decode(payload))
-                    8L -> CertifiedBodyResponseMessage(CertifiedBodyResponse.decode(payload))
-                    9L -> CommitCertificateRequestMessage(CommitCertificateRequest.decode(payload))
-                    10L -> CommitCertificateResponseMessage(CommitCertificateResponse.decode(payload))
+                    5L -> PayloadChunkMessage(PayloadChunk.decode(payload))
+                    6L -> CertifiedBodyRequestMessage(CertifiedBodyRequest.decode(payload))
+                    7L -> CertifiedBodyResponseMessage(CertifiedBodyResponse.decode(payload))
+                    8L -> CommitCertificateRequestMessage(CommitCertificateRequest.decode(payload))
+                    9L -> CommitCertificateResponseMessage(CommitCertificateResponse.decode(payload))
                     else -> throw IllegalArgumentException("Unknown Sumeragi v2 payload: $tag")
                 }
             }

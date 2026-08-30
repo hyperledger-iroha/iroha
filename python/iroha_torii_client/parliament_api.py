@@ -78,6 +78,8 @@ PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1 = 52
 
 PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1 = 16 * 1024 * 1024
 PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1 = 16
+_PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1 = 1
+_PARLIAMENT_SORTITION_RETRIES_MAX_V1 = 16
 PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1 = 4 * 1024 * 1024
 PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1 = 8 * 1024 * 1024
 # A maximal 32 x 2,858-byte freeze call is below 92 KiB before framing and
@@ -1234,7 +1236,7 @@ def _validate_expected_head(value: Any, context: str) -> None:
             {"subject_id", "version", "head_root"},
             f"{context}.head",
         )
-        _uint(head["version"], f"{context}.head.version")
+        _uint(head["version"], f"{context}.head.version", minimum=1)
         _bytes(head["head_root"], 32, f"{context}.head.head_root", nonzero=True)
     else:
         raise TypeError(f"{context}.state must be Absent or Present")
@@ -1470,6 +1472,8 @@ def _validate_ballot_binding(
         "release_height": heights["release_height"],
         "release_pulse_id": release_pulse_id,
         "accepted_ballots": accepted_ballots,
+        "aye": aye,
+        "nay": nay,
     }
 
 
@@ -1512,7 +1516,7 @@ def _validate_certificate_outer(
         _uint(
             record["governance_attempt_sequence"],
             "certificate.governance_attempt_sequence",
-            _U32_MAX,
+            PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
         )
         != attempt["sequence"]
     ):
@@ -1525,7 +1529,12 @@ def _validate_certificate_outer(
     )
     if certificate_risk_tier != attempt["risk_tier"]["tier"]:
         raise ValueError("certificate risk_tier differs from attempt")
-    if _uint(record["policy_version"], "certificate.policy_version", minimum=1) != policy_version:
+    certificate_policy_version = _uint(
+        record["policy_version"], "certificate.policy_version", minimum=1
+    )
+    if certificate_policy_version != _PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1:
+        raise ValueError("certificate policy_version is not first-release Parliament V1")
+    if certificate_policy_version != policy_version:
         raise ValueError("certificate policy_version differs from the attempt projection")
     _bytes(
         record["effect_preimage_hash"],
@@ -1568,6 +1577,9 @@ def _validate_certificate_outer(
     seen_release_pulse_ids: set[str] = set()
     seen_release_slots: set[Tuple[str, int]] = set()
     sortition_pulse_ids: set[str] = set()
+    policy_binding: Optional[Dict[str, Any]] = None
+    confirmation_binding: Optional[Dict[str, Any]] = None
+    latest_body_result_height = 0
     for index, item in enumerate(bindings):
         context = f"certificate.body_bindings[{index}]"
         binding = _exact(item, binding_fields, context)
@@ -1600,10 +1612,10 @@ def _validate_certificate_outer(
                 raise ValueError(f"certificate.body_bindings reuses {field}")
             seen.add(identifier)
         sortition_pulse_ids.add(beacon_pulse_id)
-        _uint(
+        election_attempt_sequence = _uint(
             binding["election_attempt_sequence"],
             f"{context}.election_attempt_sequence",
-            _U32_MAX,
+            _PARLIAMENT_SORTITION_RETRIES_MAX_V1,
         )
         original_seats = _uint(
             binding["original_seats"],
@@ -1616,6 +1628,7 @@ def _validate_certificate_outer(
         result_height = _uint(
             binding["result_height"], f"{context}.result_height", minimum=1
         )
+        latest_body_result_height = max(latest_body_result_height, result_height)
         if result_height > certified:
             raise ValueError(f"{context}.result_height follows certificate finalization")
         request = _validate_sortition_request(
@@ -1630,6 +1643,11 @@ def _validate_certificate_outer(
             or request["beacon_session_id"] != beacon_session_id
         ):
             raise ValueError(f"{context}.sortition_request differs from its binding indexes")
+        if (
+            original_seats > request["target_seats"]
+            or original_seats > request["candidate_count"]
+        ):
+            raise ValueError(f"{context}.original_seats exceeds its sortition bounds")
         if result_height <= request["pulse_height"]:
             raise ValueError(f"{context}.result_height must follow the sortition pulse")
 
@@ -1678,6 +1696,22 @@ def _validate_certificate_outer(
             if release_slot in seen_release_slots:
                 raise ValueError("certificate.body_bindings reuses a TLE release slot")
             seen_release_slots.add(release_slot)
+            private_binding = {
+                "election_attempt_sequence": election_attempt_sequence,
+                "request_height": request["request_height"],
+                "result_height": result_height,
+                "beacon_session_id": beacon_session_id,
+                "beacon_pulse_id": beacon_pulse_id,
+                "ballot": ballot,
+            }
+            if body == "policy-jury":
+                if policy_binding is not None:
+                    raise ValueError("certificate contains more than one policy-jury")
+                policy_binding = private_binding
+            elif body == "confirmation-jury":
+                if confirmation_binding is not None:
+                    raise ValueError("certificate contains more than one confirmation-jury")
+                confirmation_binding = private_binding
         else:
             if body_states[index]["timed_ovn_progress"] is not None:
                 raise ValueError(f"{context} public body exposes timed_ovn_progress")
@@ -1690,6 +1724,40 @@ def _validate_certificate_outer(
             )
     if not sortition_pulse_ids.isdisjoint(seen_release_pulse_ids):
         raise ValueError("certificate reuses a sortition pulse for ballot release")
+    if certified != latest_body_result_height:
+        raise ValueError(
+            "certificate.certified_at_height must equal the latest body result height"
+        )
+    if policy_binding is None:
+        raise ValueError("certificate must contain exactly one approving policy-jury ballot")
+    policy_ballot = policy_binding["ballot"]
+    decisive = policy_ballot["aye"] + policy_ballot["nay"]
+    requires_confirmation = (
+        decisive > 0
+        and abs(policy_ballot["aye"] - policy_ballot["nay"]) * 100 < decisive * 5
+    )
+    if requires_confirmation != (confirmation_binding is not None):
+        raise ValueError(
+            "certificate confirmation-jury presence differs from the policy margin"
+        )
+    if confirmation_binding is not None:
+        initial_attempt = confirmation_binding["election_attempt_sequence"] == 0
+        request_height = confirmation_binding["request_height"]
+        policy_result_height = policy_binding["result_height"]
+        valid_request_height = (
+            request_height == policy_result_height
+            if initial_attempt
+            else request_height > policy_result_height
+        )
+        fresh_pulse = (
+            confirmation_binding["beacon_pulse_id"]
+            != policy_binding["beacon_pulse_id"]
+        )
+        if not valid_request_height or not fresh_pulse:
+            raise ValueError(
+                "certificate confirmation-jury request height must match the atomic "
+                "initial request or follow it on retry, with a fresh pulse"
+            )
 
 
 def _parse_attempt_read(value: Any, expected_attempt_id: str) -> ParliamentAttemptReadResponseV1:
@@ -1711,6 +1779,8 @@ def _parse_attempt_read(value: Any, expected_attempt_id: str) -> ParliamentAttem
         raise TypeError("unsupported Parliament attempt read response version")
     current_height = _uint(record["current_height"], "current_height", minimum=1)
     policy_version = _uint(record["policy_version"], "policy_version", minimum=1)
+    if policy_version != _PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1:
+        raise TypeError("policy_version is not first-release Parliament V1")
     attempt = _exact(
         record["attempt"],
         {"id", "proposal_content_id", "sequence", "risk_tier", "stage", "status"},
@@ -1720,7 +1790,11 @@ def _parse_attempt_read(value: Any, expected_attempt_id: str) -> ParliamentAttem
     if attempt_id != _id(expected_attempt_id, "expected_governance_attempt_id"):
         raise ValueError("attempt.id differs from the requested canonical identifier")
     _id(attempt["proposal_content_id"], "attempt.proposal_content_id")
-    _uint(attempt["sequence"], "attempt.sequence", _U32_MAX)
+    _uint(
+        attempt["sequence"],
+        "attempt.sequence",
+        PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
+    )
     _tagged_unit(
         attempt["risk_tier"],
         "tier",

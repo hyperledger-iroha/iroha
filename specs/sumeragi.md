@@ -130,6 +130,7 @@ availability path.
 
 Safety tests inject authenticated revision-4 messages at the runner boundary.
 Availability and liveness tests use signed genesis/current configuration plus
-real process/network outages and recovery. A test must not lower quorum,
+either real process/network outages or the feature-isolated authenticated
+message controller at that same runner boundary. A test must not lower quorum,
 disable mandatory DA, select a local protocol version, or synthesize consensus
 messages through node-local debug configuration.

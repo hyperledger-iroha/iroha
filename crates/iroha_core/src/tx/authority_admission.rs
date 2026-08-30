@@ -49,7 +49,6 @@ pub fn executable_self_registers_authority(executable: &Executable, authority: &
         }
         Executable::ContractCall(_)
         | Executable::Batch(_)
-        | Executable::IvmProved(_)
         | Executable::Ivm(_) => false,
     }
 }

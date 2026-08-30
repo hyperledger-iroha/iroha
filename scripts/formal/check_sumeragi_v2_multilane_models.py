@@ -1736,7 +1736,10 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "decode_exact_queue_plan_pending_route_member_marker",
             "marker.route != route",
             "queue_plan_pending_obligation_marker_key",
-            "storage.get(&obligation_key).is_none()",
+            "storage.get(&obligation_key).ok_or_else",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "queue_plan_pending_route_member_from_obligation(&obligation, route)",
+            "marker != expected",
             "members.push((key.clone(), marker))",
         ),
     ),
@@ -1919,8 +1922,18 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "queue_plan_pending_exact_route_member_state_in_storage",
         (
+            "prevalidate_queue_plan_pending_route_rosters",
+            "obligation.routes.iter().copied()",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+        (
             "for route in &obligation.routes",
-            "queue_plan_pending_route_members_from_storage(storage, *route)?",
+            "prevalidated_routes.contains(route)",
             "queue_plan_pending_route_member_from_obligation(obligation, *route)?",
             "queue_plan_pending_route_member_marker_key",
             "decode_exact_queue_plan_pending_route_member_marker",
@@ -1930,6 +1943,17 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "present == 0",
             "QueuePlanPendingRouteMemberState::AllAbsent",
             "partial exact route-member set",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "prevalidate_queue_plan_pending_route_rosters",
+        (
+            "routes.into_iter().collect::<BTreeSet<_>>()",
+            "for route in &distinct_routes",
+            "queue_plan_pending_route_members_from_storage(storage, *route)?",
+            "Ok(distinct_routes)",
         ),
     ),
     (
@@ -2127,13 +2151,30 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "resolve_queue_plan_pending_obligation_in_storage",
         (
             "&mut impl QueuePlanMarkerStorage",
+            "queue_plan_pending_obligation_marker_key",
+            "storage.get(&obligation_key)",
+            "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
+            "&BTreeSet::new()",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "prevalidate_queue_plan_pending_route_rosters",
+            "obligation.routes.iter().copied()",
+            "&prevalidated_routes",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
+        (
+            "&mut impl QueuePlanMarkerStorage",
+            "prevalidated_routes: &BTreeSet",
             "decode_exact_queue_plan_pending_obligation_marker",
             "decode_exact_queue_plan_admission_registry_marker",
             "registry_value.binding_hash != obligation.binding_hash",
             "require_queue_plan_pending_signed_alias_member_marker",
             "queue_plan_terminal_signed_alias_member_from_obligation",
             "queue_plan_signed_alias_terminal_marker_key",
-            "queue_plan_pending_exact_route_member_state_in_storage",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
             "member_keys.push",
             "remove_queue_plan_marker(obligation_key)",
             "remove_queue_plan_marker(alias_key)",
@@ -2152,7 +2193,8 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "decode_exact_queue_plan_pending_obligation_marker",
             "queue_plan_pending_signed_alias_member_from_obligation(&obligation)",
             "require_queue_plan_pending_signed_alias_member_marker",
-            "queue_plan_pending_exact_route_member_state_in_storage",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+            "prevalidated_routes",
             "collect::<Result<Vec<_>, MergeLedgerCommitError>>()?",
             "queue_plan_terminal_signed_alias_member_from_obligation",
             "terminal_member.entrypoint_hash != member.entrypoint_hash",
@@ -2214,14 +2256,22 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "let committed_signed_entrypoints = committed_signed_identities",
             "self.world.smart_contract_state.transaction()",
             "queue_plan_pending_signed_alias_members_from_storage",
+            "let mut affected_routes = BTreeSet::new()",
+            "for (entrypoint_hash, expected_binding_hash) in &pending_obligations",
+            "affected_routes.extend(obligation.routes.iter().copied())",
+            "for member in alias_members.iter().flatten()",
+            "queue_plan_pending_signed_alias_member_from_obligation(&obligation)",
+            "prevalidate_queue_plan_pending_route_rosters",
             "for (entrypoint_hash, expected_binding_hash) in pending_obligations",
             "obligation.binding_hash != expected_binding_hash",
             "autonomous QueuePlan pending obligation disappeared before resolution",
+            "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
             "for member in alias_members.into_iter().flatten()",
             "exact_entrypoints.contains(&member.entrypoint_hash)",
             "committed_signed_entrypoints.contains(&member.entrypoint_hash)",
             "QueuePlan direct replay identity lost its exact obligation",
             "resolve_queue_plan_pending_obligation_by_signed_alias_in_storage",
+            "&prevalidated_routes",
             "markers.apply()",
         ),
     ),
@@ -2251,6 +2301,8 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_SOURCE_REBIND_SYMBOLS = frozenset(
         "QueuePlanPendingSignedAliasMemberV1",
         "QueuePlanSignedAliasTerminalV1",
         "queue_plan_pending_exact_route_member_state_in_storage",
+        "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+        "prevalidate_queue_plan_pending_route_rosters",
         "queue_plan_pending_signed_alias_member_from_obligation",
         "queue_plan_terminal_signed_alias_member_from_obligation",
         "queue_plan_pending_signed_alias_member_marker_prefix",
@@ -2269,6 +2321,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_SOURCE_REBIND_SYMBOLS = frozenset(
         "queue_plan_binding_application_evidence_in_view",
         "stage_queue_plan_pending_obligation_marker_in_storage",
         "resolve_queue_plan_pending_obligation_in_storage",
+        "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
         "resolve_queue_plan_pending_obligation_by_signed_alias_in_storage",
         "resolve_required_queue_plan_pending_obligations",
         "resolve_queue_plan_pending_obligations_from_block",
@@ -2292,7 +2345,11 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
             "decode_exact_queue_plan_pending_route_member_marker",
             "decode_exact_queue_plan_pending_signed_alias_member_marker",
             "decode_exact_queue_plan_signed_alias_terminal_marker",
+            "queue_plan_pending_route_members_from_storage_with_limit",
             "queue_plan_pending_signed_alias_members_from_storage",
+            "queue_plan_pending_exact_route_member_state_in_storage",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+            "prevalidate_queue_plan_pending_route_rosters",
             "validate_queue_plan_admissions_for_carrier_in_view",
             "stage_queue_plan_admissions",
             "resolve_queue_plan_pending_obligations_for_entrypoints",
@@ -2306,6 +2363,12 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
             "let mut markers = self.world.smart_contract_state.transaction();",
             "let alias_members = committed_signed_identities",
             "State::queue_plan_pending_signed_alias_members_from_storage(",
+            "let mut affected_routes = BTreeSet::new();",
+            "for (entrypoint_hash, expected_binding_hash) in &pending_obligations {",
+            "if obligation.binding_hash != *expected_binding_hash {",
+            "for member in alias_members.iter().flatten() {",
+            "State::queue_plan_pending_signed_alias_member_from_obligation(&obligation).as_ref()",
+            "State::prevalidate_queue_plan_pending_route_rosters(&markers, affected_routes)?;",
             "for (entrypoint_hash, expected_binding_hash) in pending_obligations {",
             "State::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;",
             "if obligation.binding_hash != expected_binding_hash {",
@@ -2435,13 +2498,14 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
     (
         QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
         "fn",
-        "resolve_queue_plan_pending_obligation_in_storage",
+        "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
         (
             "Self::decode_exact_queue_plan_admission_registry_marker(",
             "registry_value.binding_hash != obligation.binding_hash",
             "Self::require_queue_plan_pending_signed_alias_member_marker(storage, &obligation)?;",
             "Self::queue_plan_signed_alias_terminal_marker_key(&terminal)?;",
-            "Self::queue_plan_pending_exact_route_member_state_in_storage(storage, &obligation)?",
+            "Self::queue_plan_pending_exact_route_member_state_after_roster_prevalidation(",
+            "prevalidated_routes,",
             "let mut member_keys = Vec::with_capacity(obligation.routes.len());",
             "storage.remove_queue_plan_marker(obligation_key);",
             "storage.remove_queue_plan_marker(alias_key);",
@@ -2456,7 +2520,8 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
             "Self::decode_exact_queue_plan_pending_signed_alias_member_marker(",
             "Self::decode_exact_queue_plan_pending_obligation_marker(",
             "Self::require_queue_plan_pending_signed_alias_member_marker(storage, &obligation)?;",
-            "Self::queue_plan_pending_exact_route_member_state_in_storage(storage, &obligation)?",
+            "Self::queue_plan_pending_exact_route_member_state_after_roster_prevalidation(",
+            "prevalidated_routes,",
             "let member_keys = obligation",
             "Self::queue_plan_terminal_signed_alias_member_from_obligation(",
             "terminal_member.binding_hash != member.binding_hash",
@@ -2525,6 +2590,16 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS = (
     ),
     (
         "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
+        "queue_plan_route_roster_rejects_member_projected_from_another_binding",
+        (
+            "alternate route-member binding",
+            "queue_plan_pending_route_members_from_storage",
+            "a canonical route member must still match the exact obligation projection",
+            "failed roster validation must preserve the forged marker for diagnosis",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
         "queue_plan_signed_alias_terminal_evidence_is_exact_and_fail_closed",
         (
             "signed-alias resolution must delete the potentially large full obligation",
@@ -2535,6 +2610,29 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS = (
             "tampered compact terminal evidence must fail closed",
             "missing signed-alias evidence must fail closed",
             "missing registry ownership must fail closed",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "globally_bound_commit_before_marker_staging_releases_runtime_owner",
+        (
+            "QueuePlanAdmissionRegistryMatch::Absent",
+            "QueuePlanBindingApplicationEvidence::Absent",
+            "committed replay membership terminalizes the unstaged losing owner",
+            "fixture.assert_terminally_removed()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "globally_bound_committed_conflict_tombstones_during_startup_replay",
+        (
+            "QueuePlanAdmissionRegistryMatch::Conflict",
+            "resolve_globally_bound_fixture_pending_obligation(&fixture)",
+            "QueuePlanBindingApplicationEvidence::AppliedDirect",
+            "read winning QueuePlan terminal evidence",
+            "startup tombstones a committed losing QueuePlan conflict",
+            "summary.tombstoned_conflicting_global_admission",
+            "live_record_count()",
         ),
     ),
     (
@@ -4922,6 +5020,66 @@ def _validate_queue_plan_pending_membership_contract(
                 break
             cursor = position
 
+    resolution_item = binding_items.get(
+        (
+            QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+            "fn",
+            "resolve_required_queue_plan_pending_obligations",
+        )
+    )
+    if resolution_item is not None:
+        route_extension = "affected_routes.extend(obligation.routes.iter().copied());"
+        route_extensions = tuple(
+            match.start()
+            for match in re.finditer(re.escape(route_extension), resolution_item)
+        )
+        resolver_call = (
+            "State::resolve_queue_plan_pending_obligation_after_roster_prevalidation("
+        )
+        resolver_calls = tuple(
+            match.start()
+            for match in re.finditer(re.escape(resolver_call), resolution_item)
+        )
+        direct_collection = resolution_item.find(
+            "for (entrypoint_hash, expected_binding_hash) in &pending_obligations {"
+        )
+        alias_collection = resolution_item.find(
+            "for member in alias_members.iter().flatten() {"
+        )
+        roster_prevalidation = resolution_item.find(
+            "State::prevalidate_queue_plan_pending_route_rosters(&markers, affected_routes)?;"
+        )
+        direct_resolution = resolution_item.find(
+            "for (entrypoint_hash, expected_binding_hash) in pending_obligations {"
+        )
+        alias_resolution = resolution_item.find(
+            "if committed_signed_entrypoints.contains(&member.entrypoint_hash) {"
+        )
+        signed_alias_resolution = resolution_item.find(
+            "State::resolve_queue_plan_pending_obligation_by_signed_alias_in_storage("
+        )
+        if (
+            len(route_extensions) != 2
+            or len(resolver_calls) != 2
+            or not (
+                direct_collection
+                < route_extensions[0]
+                < alias_collection
+                < route_extensions[1]
+                < roster_prevalidation
+                < direct_resolution
+                < resolver_calls[0]
+                < alias_resolution
+                < resolver_calls[1]
+                < signed_alias_resolution
+            )
+        ):
+            errors.append(
+                f"{state_path}: QueuePlan resolution must collect both direct "
+                "and signed-alias route sets before one roster prevalidation, "
+                "then resolve both exact committed corridors before alias terminalization"
+            )
+
     roster_item = binding_items.get(
         (
             QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
@@ -4929,14 +5087,18 @@ def _validate_queue_plan_pending_membership_contract(
             "queue_plan_pending_route_members_from_storage_with_limit",
         )
     )
-    if (
-        roster_item is not None
-        and "decode_exact_queue_plan_pending_obligation_marker" in roster_item
+    roster_projection_tokens = (
+        "decode_exact_queue_plan_pending_obligation_marker",
+        "queue_plan_pending_route_member_from_obligation(&obligation, route)",
+        "marker != expected",
+    )
+    if roster_item is not None and any(
+        token not in roster_item for token in roster_projection_tokens
     ):
         errors.append(
             f"{state_path}: QueuePlan bounded route-roster enumeration must "
-            "validate the compact canonical member and exact obligation-key "
-            "existence without decoding the full obligation payload"
+            "decode the exact bounded obligation and compare the member's "
+            "complete canonical projection"
         )
 
     mutation_re = re.compile(
@@ -4949,7 +5111,7 @@ def _validate_queue_plan_pending_membership_contract(
             "storage.insert_queue_plan_marker(obligation_key, obligation_payload);",
         ),
         (
-            "resolve_queue_plan_pending_obligation_in_storage",
+            "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
             "storage.remove_queue_plan_marker(obligation_key);",
         ),
         (

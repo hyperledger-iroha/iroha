@@ -1360,13 +1360,10 @@ internal static class ToriiNodeCapabilitiesJson
 
     private static void ValidateProjectionFeatureFlags(ToriiNodeProjectionCapabilities response, string context)
     {
-        var expected = response.CheckpointPlanV1;
-        if (response.CheckpointPublishV1 != expected ||
-            response.ShardCatalogV1 != expected ||
-            response.ArchiveExportV1 != expected)
+        if (response.CheckpointPlanV1 || response.CheckpointPublishV1)
         {
             throw new JsonException(
-                $"{context}.checkpoint_plan_v1, {context}.checkpoint_publish_v1, {context}.shard_catalog_v1, and {context}.archive_export_v1 must match.");
+                $"{context}.checkpoint_plan_v1 and {context}.checkpoint_publish_v1 must be false until the DA projection worker can verify and persist uploaded archives.");
         }
     }
 

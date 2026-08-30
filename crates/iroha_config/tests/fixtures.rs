@@ -238,9 +238,23 @@ fn portable_production_capabilities_default_to_enabled() {
     assert!(!config.torii.mcp.expose_operator_routes);
     assert!(!config.torii.cors.enabled);
     assert!(!config.torii.push.enabled);
-    assert!(config.sorafs_gateway.enforce_capabilities);
-    assert_eq!(config.sorafs_storage.metering_smoothing.gib_hours_alpha, Some(0.2));
-    assert_eq!(config.sorafs_storage.metering_smoothing.por_success_alpha, Some(0.2));
+    assert!(config.torii.sorafs_gateway.enforce_capabilities);
+    assert_eq!(
+        config
+            .torii
+            .sorafs_storage
+            .metering_smoothing
+            .gib_hours_alpha,
+        Some(0.2)
+    );
+    assert_eq!(
+        config
+            .torii
+            .sorafs_storage
+            .metering_smoothing
+            .por_success_alpha,
+        Some(0.2)
+    );
 }
 #[test]
 fn ivm_banner_override_applies() {
@@ -564,26 +578,39 @@ fn nexus_atomic_private_settlement_rejects_default_auditor_threshold_above_v1_ro
     assert!(emitter.into_result().is_err());
 }
 #[test]
-fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
-    let report = load_config_from_fixtures("bad.sumeragi_legacy_v1_fields.toml")
-        .expect_err("retired v1 actor/global-RBC schema must be rejected");
-    let message = format!("{report:?}");
-    assert!(
-        message.contains("collectors")
-            || message.contains("advanced")
-            || message.contains("recovery"),
-        "diagnostic should identify a retired v1 table: {message}",
-    );
+fn sumeragi_v2_rejects_each_retired_v1_table_independently() {
+    for (fixture, expected_parameter) in [
+        ("bad.sumeragi_retired_collectors_table.toml", "collectors"),
+        ("bad.sumeragi_retired_advanced_rbc_table.toml", "advanced"),
+        ("bad.sumeragi_retired_recovery_table.toml", "recovery"),
+    ] {
+        let report = match load_config_from_fixtures(fixture) {
+            Ok(_) => panic!("retired v1 fixture {fixture} was accepted"),
+            Err(report) => report,
+        };
+        let message = strip_ansi_codes(&format!("{report:?}"));
+        assert!(
+            message.contains(expected_parameter),
+            "diagnostic for {fixture} should identify `{expected_parameter}`: {message}",
+        );
+    }
 }
 #[test]
-fn sumeragi_v2_rejects_retired_byzantine_rbc_debug_fields() {
-    let report = load_config_from_fixtures("bad.sumeragi_retired_debug_rbc_fields.toml")
-        .expect_err("retired Byzantine RBC debug fields must be rejected");
-    let message = strip_ansi_codes(&format!("{report:?}"));
-    assert!(
-        message.contains("sumeragi.debug") || message.contains("sumeragi.debug.rbc"),
-        "diagnostic should identify the retired debug table: {message}",
-    );
+fn sumeragi_v2_rejects_each_retired_byzantine_rbc_debug_field_independently() {
+    for fixture in [
+        "bad.sumeragi_retired_debug_rbc_conflicting_ready_mask.toml",
+        "bad.sumeragi_retired_debug_rbc_duplicate_inits.toml",
+    ] {
+        let report = match load_config_from_fixtures(fixture) {
+            Ok(_) => panic!("retired debug fixture {fixture} was accepted"),
+            Err(report) => report,
+        };
+        let message = strip_ansi_codes(&format!("{report:?}"));
+        assert!(
+            message.contains("sumeragi.debug") || message.contains("sumeragi.debug.rbc"),
+            "diagnostic for {fixture} should identify the retired debug table: {message}",
+        );
+    }
 }
 #[test]
 fn retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage() {

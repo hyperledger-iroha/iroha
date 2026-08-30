@@ -543,6 +543,9 @@ final class ParliamentProposalValidatorV1 {
     exact(action, fields("action", "payload"), "ContractLifecycleGovernance.action");
     final String kind =
         text(action.get("action"), "ContractLifecycleGovernance.action.action");
+    if (!ParliamentApiV1.CONTRACT_LIFECYCLE_ACTIONS.contains(kind)) {
+      throw invalid("contract lifecycle action is unsupported");
+    }
     if ("CancelOwnershipOffer".equals(kind) || "AcceptParliamentOwnership".equals(kind)) {
       if (action.get("payload") != null) throw invalid(kind + " payload must be null");
       return;

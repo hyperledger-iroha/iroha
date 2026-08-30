@@ -42,7 +42,7 @@ pub struct ZkTask {
     pub trace: Vec<RegisterState>,
     /// Logged constraints encountered during execution.
     pub constraints: Vec<Constraint>,
-    /// Memory access log with Merkle proofs.
+    /// Memory access log with diagnostic path/root snapshots.
     pub mem_log: Vec<MemEvent>,
     /// Register access log with Merkle proofs.
     pub reg_log: Vec<RegEvent>,
@@ -699,14 +699,6 @@ fn process_job(job: ZkTask) {
     emit_outcome(job, dig, outcome);
 }
 fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: TraceCheckOutcome) {
-    #[cfg(feature = "zk-preverify")]
-    if matches!(outcome, TraceCheckOutcome::Checked) {
-        if let Some(header) = &job.header {
-            let artifact =
-                crate::zk::make_trace_digest_artifact(job.code_hash, job.tx_hash.as_ref(), dig);
-            crate::zk::queue_trace_digest(header.height().get(), artifact);
-        }
-    }
     let transport_desc = job.transport_capabilities.as_ref().map(|caps| {
         format!(
             "suite={}, datagram={}, max_dgram={}, feedback_ms={}, privacy={:?}",
@@ -1198,55 +1190,5 @@ mod tests {
             cache.admit(c, now + Duration::from_millis(3)),
             CacheAdmission::Cached
         );
-    }
-    #[cfg(feature = "zk-preverify")]
-    #[test]
-    fn process_batch_enqueues_trace_digest() {
-        use iroha_data_model::block::BlockHeader;
-        use std::num::NonZeroU64;
-        crate::zk::reset_trace_digest_state_for_tests();
-        let header = BlockHeader::new(
-            NonZeroU64::new(42).expect("non-zero"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let program: Arc<[u8]> = Arc::from(vec![0x13, 0x37, 0xC0, 0xDE]);
-        let trace = vec![
-            RegisterState {
-                pc: 0,
-                gpr: [0u64; 256],
-                tags: [false; 256],
-            },
-            RegisterState {
-                pc: 4,
-                gpr: [0u64; 256],
-                tags: [false; 256],
-            },
-        ];
-        let task = ZkTask {
-            tx_hash: None,
-            code_hash: [0xDA; 32],
-            program: Arc::clone(&program),
-            header: Some(header.clone()),
-            trace,
-            constraints: Vec::new(),
-            mem_log: Vec::new(),
-            reg_log: Vec::new(),
-            step_log: Vec::new(),
-            transport_capabilities: None,
-            negotiated_capabilities: None,
-        };
-        let expected_digest = task.digest();
-        let mut batch = vec![task];
-        process_batch(&mut batch);
-        assert!(batch.is_empty(), "processing drains the batch");
-        let digests = crate::zk::collect_trace_digests_for_height(header.height().get());
-        assert_eq!(digests.len(), 1, "digest artifact recorded");
-        let artifact = &digests[0];
-        assert_eq!(artifact.backend, "zk-trace/digest");
-        assert_eq!(artifact.proof, expected_digest.to_vec());
     }
 }

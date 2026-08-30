@@ -3,9 +3,10 @@
 //! Consensus votes authenticate a [`wire::BlockSubject`], including the hash of the
 //! exact canonical [`SignedBlock`] wire bytes.  This store is the durability
 //! boundary between reconstruction and the reducer's `BodyStored` input: a
-//! receipt can only be obtained after the bytes, their metadata, and the
-//! directory entry have been synchronised. The first release has one V1 frame
-//! layout and no predecessor-format reader or migration path.
+//! receipt can only be obtained after the bytes, their canonically re-derived
+//! RS16 manifest, and the directory entry have been synchronised. The first
+//! release has one V1 frame layout and no predecessor-format reader or
+//! migration path.
 #![cfg_attr(
     not(test),
     allow(
@@ -56,16 +57,42 @@ const FRAME_HEADER_LEN: usize = STORE_MAGIC.len() + size_of::<u16>() + size_of::
 const CHECKSUM_LEN: usize = 32;
 const FRAME_PAYLOAD_MAX_BYTES: u64 =
     wire::MAX_EXECUTED_BLOCK_WIRE_BYTES + wire::MAX_DA_ENCODED_PAYLOAD_BYTES;
+const VALIDATION_OUTCOME_MARKER_PAYLOAD_MAX_BYTES: u64 = 4 * 1024;
+const VALIDATION_OUTCOME_MARKER_FRAME_MAX_BYTES: u64 =
+    VALIDATION_OUTCOME_MARKER_PAYLOAD_MAX_BYTES + (FRAME_HEADER_LEN + CHECKSUM_LEN) as u64;
 /// Compatibility default for callers which do not supply an operator limit.
 pub(crate) const DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT: u64 = 1024 * 1024 * 1024;
 const BODY_STORE_TEMPORARY_ENTRIES_PER_BODY: usize = 2;
 const BODY_STORE_DIRECTORY_ENTRIES_PER_BODY: usize = 4;
 
+#[derive(Clone, Copy)]
+enum FramePayloadKind {
+    Body,
+    ValidationOutcomeMarker,
+}
+
+impl FramePayloadKind {
+    const fn maximum_payload_bytes(self) -> u64 {
+        match self {
+            Self::Body => FRAME_PAYLOAD_MAX_BYTES,
+            Self::ValidationOutcomeMarker => VALIDATION_OUTCOME_MARKER_PAYLOAD_MAX_BYTES,
+        }
+    }
+
+    const fn too_large(self) -> V2BodyStoreError {
+        match self {
+            Self::Body => V2BodyStoreError::BodyTooLarge,
+            Self::ValidationOutcomeMarker => V2BodyStoreError::ValidationMarkerTooLarge,
+        }
+    }
+}
+
 /// Per-height geometry for bounded durable body ownership.
 ///
 /// Production construction fixes the semantic entry ceiling to the lifecycle
 /// record limit. The byte ceiling covers complete final `.norito` body frames;
-/// validation markers and atomic-write remnants are separately count-bounded.
+/// validation markers are separately size- and count-bounded, while atomic-write remnants are
+/// count-bounded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct V2BodyStoreCapacity {
     max_body_entries: usize,
@@ -1902,6 +1929,17 @@ impl V2BodyStore {
                             capacity: capacity.max_body_entries,
                         });
                     }
+                    if entry
+                        .metadata()
+                        .map_err(|source| V2BodyStoreError::Io {
+                            path: path.clone(),
+                            source,
+                        })?
+                        .len()
+                        > VALIDATION_OUTCOME_MARKER_FRAME_MAX_BYTES
+                    {
+                        return Err(V2BodyStoreError::ValidationMarkerTooLarge);
+                    }
                     validation_marker_paths.push(path);
                 }
                 _ => return Err(V2BodyStoreError::UnexpectedEntry(path)),
@@ -3106,6 +3144,16 @@ impl V2BodyStore {
         if Hash::new(&envelope.canonical_wire) != envelope.subject.payload_hash {
             return Err(V2BodyStoreError::PayloadHashMismatch);
         }
+        let canonical_manifest = encode_payload(
+            &self.context,
+            envelope.round,
+            envelope.subject,
+            &envelope.canonical_wire,
+        )
+        .map_err(|_| V2BodyStoreError::NonCanonicalPayloadManifest)?;
+        if canonical_manifest.manifest() != &envelope.manifest {
+            return Err(V2BodyStoreError::NonCanonicalPayloadManifest);
+        }
         let block = decode_framed_signed_block(&envelope.canonical_wire)
             .map_err(|error| V2BodyStoreError::BlockDecode(error.to_string()))?;
         if !block.is_resultless_proposal() {
@@ -3244,21 +3292,25 @@ fn receipt_for(envelope: &StoredBodyEnvelope, frame_hash: Hash) -> DurableBodyRe
     }
 }
 fn frame_payload(payload: &[u8]) -> Result<Vec<u8>, V2BodyStoreError> {
-    frame_payload_with_magic(STORE_MAGIC, payload)
+    frame_payload_with_magic(STORE_MAGIC, payload, FramePayloadKind::Body)
 }
-fn frame_payload_with_magic(magic: &[u8; 8], payload: &[u8]) -> Result<Vec<u8>, V2BodyStoreError> {
-    let payload_len = u64::try_from(payload.len()).map_err(|_| V2BodyStoreError::BodyTooLarge)?;
-    if payload_len > FRAME_PAYLOAD_MAX_BYTES {
-        return Err(V2BodyStoreError::BodyTooLarge);
+fn frame_payload_with_magic(
+    magic: &[u8; 8],
+    payload: &[u8],
+    kind: FramePayloadKind,
+) -> Result<Vec<u8>, V2BodyStoreError> {
+    let payload_len = u64::try_from(payload.len()).map_err(|_| kind.too_large())?;
+    if payload_len > kind.maximum_payload_bytes() {
+        return Err(kind.too_large());
     }
     let capacity = FRAME_HEADER_LEN
         .checked_add(payload.len())
         .and_then(|length| length.checked_add(CHECKSUM_LEN))
-        .ok_or(V2BodyStoreError::BodyTooLarge)?;
+        .ok_or_else(|| kind.too_large())?;
     let mut frame = Vec::new();
     frame
         .try_reserve_exact(capacity)
-        .map_err(|_| V2BodyStoreError::BodyTooLarge)?;
+        .map_err(|_| kind.too_large())?;
     frame.extend_from_slice(magic);
     frame.extend_from_slice(&STORE_VERSION.to_le_bytes());
     frame.extend_from_slice(&payload_len.to_le_bytes());
@@ -3267,18 +3319,24 @@ fn frame_payload_with_magic(magic: &[u8; 8], payload: &[u8]) -> Result<Vec<u8>, 
     Ok(frame)
 }
 fn read_envelope(path: &Path) -> Result<(StoredBodyEnvelope, Hash), V2BodyStoreError> {
-    let (payload, frame_hash) = read_frame_payload_with_hash(path, STORE_MAGIC)?;
+    let (payload, frame_hash) =
+        read_frame_payload_with_hash(path, STORE_MAGIC, FramePayloadKind::Body)?;
     let mut cursor = payload.as_slice();
     let envelope = StoredBodyEnvelope::decode_all(&mut cursor)
         .map_err(|error| V2BodyStoreError::EnvelopeDecode(error.to_string()))?;
     Ok((envelope, frame_hash))
 }
-fn read_frame_payload(path: &Path, magic: &[u8; 8]) -> Result<Vec<u8>, V2BodyStoreError> {
-    read_frame_payload_with_hash(path, magic).map(|(payload, _)| payload)
+fn read_frame_payload(
+    path: &Path,
+    magic: &[u8; 8],
+    kind: FramePayloadKind,
+) -> Result<Vec<u8>, V2BodyStoreError> {
+    read_frame_payload_with_hash(path, magic, kind).map(|(payload, _)| payload)
 }
 fn read_frame_payload_with_hash(
     path: &Path,
     magic: &[u8; 8],
+    kind: FramePayloadKind,
 ) -> Result<(Vec<u8>, Hash), V2BodyStoreError> {
     let mut file = File::open(path).map_err(|source| V2BodyStoreError::Io {
         path: path.to_path_buf(),
@@ -3291,13 +3349,14 @@ fn read_frame_payload_with_hash(
             source,
         })?
         .len();
-    let maximum_frame_bytes = FRAME_PAYLOAD_MAX_BYTES
+    let maximum_frame_bytes = kind
+        .maximum_payload_bytes()
         .checked_add(
             u64::try_from(FRAME_HEADER_LEN + CHECKSUM_LEN).expect("frame overhead fits u64"),
         )
-        .ok_or(V2BodyStoreError::BodyTooLarge)?;
+        .ok_or_else(|| kind.too_large())?;
     if opened_len > maximum_frame_bytes {
-        return Err(V2BodyStoreError::BodyTooLarge);
+        return Err(kind.too_large());
     }
     let mut header = [0_u8; FRAME_HEADER_LEN];
     file.read_exact(&mut header)
@@ -3320,21 +3379,21 @@ fn read_frame_payload_with_hash(
             .try_into()
             .map_err(|_| V2BodyStoreError::CorruptFrame)?,
     );
-    if payload_len > FRAME_PAYLOAD_MAX_BYTES {
-        return Err(V2BodyStoreError::BodyTooLarge);
+    if payload_len > kind.maximum_payload_bytes() {
+        return Err(kind.too_large());
     }
-    let payload_len = usize::try_from(payload_len).map_err(|_| V2BodyStoreError::BodyTooLarge)?;
+    let payload_len = usize::try_from(payload_len).map_err(|_| kind.too_large())?;
     let expected_len = FRAME_HEADER_LEN
         .checked_add(payload_len)
         .and_then(|length| length.checked_add(CHECKSUM_LEN))
-        .ok_or(V2BodyStoreError::BodyTooLarge)?;
-    if opened_len != u64::try_from(expected_len).map_err(|_| V2BodyStoreError::BodyTooLarge)? {
+        .ok_or_else(|| kind.too_large())?;
+    if opened_len != u64::try_from(expected_len).map_err(|_| kind.too_large())? {
         return Err(V2BodyStoreError::CorruptFrame);
     }
     let mut payload = Vec::new();
     payload
         .try_reserve_exact(payload_len)
-        .map_err(|_| V2BodyStoreError::BodyTooLarge)?;
+        .map_err(|_| kind.too_large())?;
     payload.resize(payload_len, 0);
     file.read_exact(&mut payload)
         .map_err(|_| V2BodyStoreError::CorruptFrame)?;
@@ -3363,13 +3422,21 @@ fn write_validation_outcome_marker(
     marker: &ValidationOutcomeMarker,
 ) -> Result<(), V2BodyStoreError> {
     let payload = marker.encode();
-    let frame = frame_payload_with_magic(VALIDATED_MAGIC, &payload)?;
+    let frame = frame_payload_with_magic(
+        VALIDATED_MAGIC,
+        &payload,
+        FramePayloadKind::ValidationOutcomeMarker,
+    )?;
     write_atomic_synced(path, &frame)
 }
 fn read_validation_outcome_marker(
     path: &Path,
 ) -> Result<ValidationOutcomeMarker, V2BodyStoreError> {
-    let payload = read_frame_payload(path, VALIDATED_MAGIC)?;
+    let payload = read_frame_payload(
+        path,
+        VALIDATED_MAGIC,
+        FramePayloadKind::ValidationOutcomeMarker,
+    )?;
     let mut cursor = payload.as_slice();
     ValidationOutcomeMarker::decode_all(&mut cursor)
         .map_err(|error| V2BodyStoreError::ValidationMarkerDecode(error.to_string()))
@@ -3453,6 +3520,9 @@ pub(crate) enum V2BodyStoreError {
         /// Maximum validation markers for one height.
         capacity: usize,
     },
+    /// One validation marker exceeds the fixed first-release frame ceiling.
+    #[error("Sumeragi v2 validation marker exceeds its fixed frame-size ceiling")]
+    ValidationMarkerTooLarge,
     /// Complete durable body frames exceed the configured per-height byte cap.
     #[error("Sumeragi v2 body store exceeds {capacity} body-frame bytes per height")]
     BodyByteCapacityExceeded {
@@ -3495,6 +3565,9 @@ pub(crate) enum V2BodyStoreError {
     /// Exact wire byte hash differs from the proposal subject.
     #[error("Sumeragi v2 body payload hash mismatch")]
     PayloadHashMismatch,
+    /// The stored manifest is not the unique RS16 encoding of the exact body.
+    #[error("non-canonical Sumeragi v2 payload manifest")]
+    NonCanonicalPayloadManifest,
     /// Exact body could not be decoded as `SignedBlockWire`.
     #[error("invalid canonical Sumeragi v2 block body: {0}")]
     BlockDecode(String),

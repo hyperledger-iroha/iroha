@@ -5,6 +5,11 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python <3.11
+    import tomli as tomllib
+
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "check_release_feature_graph.py"
@@ -50,6 +55,13 @@ def test_forbidden_feature_detection_rejects_core_test_surface() -> None:
     assert checker.forbidden_features_in_graph(graph) == (
         'iroha_core feature "iroha-core-tests"',
     )
+
+
+def test_kagami_keeps_core_test_surface_out_of_normal_dependencies() -> None:
+    with (REPO / "crates" / "iroha_kagami" / "Cargo.toml").open("rb") as source:
+        manifest = tomllib.load(source)
+    assert "iroha-core-tests" not in manifest["dependencies"]["iroha_core"]["features"]
+    assert "iroha-core-tests" in manifest["dev-dependencies"]["iroha_core"]["features"]
 
 
 def test_pr_workflow_runs_release_feature_graph_guard() -> None:

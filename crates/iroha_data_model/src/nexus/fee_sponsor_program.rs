@@ -200,8 +200,6 @@ pub enum FeeSponsorRuleSelector {
     ContractCall(FeeSponsorContractSelector),
     /// One exact raw IVM program hash.
     Ivm(FeeSponsorIvmSelector),
-    /// One exact proved-IVM program hash.
-    IvmProved(FeeSponsorIvmSelector),
 }
 /// One stable, ordered sponsor-program rule.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]

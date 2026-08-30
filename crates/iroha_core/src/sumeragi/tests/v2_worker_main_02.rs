@@ -846,10 +846,16 @@ fn duplicate_authenticated_chunk_skips_reconstruction() {
     service
         .enqueue_body_fetch(task.clone())
         .expect("open exact live reconstruction session");
+    let validated = service.fetches[&task.id()]
+        .chunks
+        .as_ref()
+        .expect("manifest-backed fetch session")
+        .validated_manifest()
+        .clone();
     let sender_index = usize::try_from(proposal.proposer).expect("small proposer index");
     let sender = service.context.roster[sender_index].validator.clone();
     let mut chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: chunks[0].clone(),
         sender: proposal.proposer,
@@ -858,12 +864,13 @@ fn duplicate_authenticated_chunk_skips_reconstruction() {
     chunk.signature = Signature::new(
         keys[sender_index].private_key(),
         &chunk
-            .signature_preimage(&service.context, &manifest)
-            .expect("chunk preimage"),
+            .signature_payload(&validated)
+            .expect("chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
-    let authenticated = authenticate_payload_chunk(&service.context, &manifest, chunk, &sender)
+    let authenticated = authenticate_payload_chunk(&validated, chunk, &sender)
         .expect("authenticate canonical chunk");
     assert_eq!(
         service
@@ -926,8 +933,14 @@ fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
     service
         .enqueue_body_fetch(task.clone())
         .expect("open invalid remote reconstruction session");
+    let validated = service.fetches[&task.id()]
+        .chunks
+        .as_ref()
+        .expect("manifest-backed invalid fetch session")
+        .validated_manifest()
+        .clone();
     let mut chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&invalid_manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: invalid_chunks[0].clone(),
         sender: 0,
@@ -936,15 +949,15 @@ fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
     chunk.signature = Signature::new(
         keys[0].private_key(),
         &chunk
-            .signature_preimage(&service.context, &invalid_manifest)
-            .expect("chunk preimage"),
+            .signature_payload(&validated)
+            .expect("chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
     let sender = service.context.roster[0].validator.clone();
-    let authenticated =
-        authenticate_payload_chunk(&service.context, &invalid_manifest, chunk, &sender)
-            .expect("authenticate chunk committed by invalid manifest");
+    let authenticated = authenticate_payload_chunk(&validated, chunk, &sender)
+        .expect("authenticate chunk committed by invalid manifest");
     assert_eq!(
         service
             .accept_authenticated_chunk(&task, authenticated)

@@ -2,4 +2,3 @@ extends = ["minimal_with_trusted_peers.toml"]
 
 [sumeragi.debug.rbc]
 conflicting_ready_mask = 15
-duplicate_inits = true

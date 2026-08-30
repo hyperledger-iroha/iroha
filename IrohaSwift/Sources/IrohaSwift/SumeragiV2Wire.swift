@@ -1273,7 +1273,6 @@ public enum SumeragiV2ConsensusPayload: Equatable, Sendable {
     case quorumCertificate(SumeragiV2QuorumCertificate)
     case timeoutVote(SumeragiV2TimeoutVote)
     case timeoutCertificate(SumeragiV2TimeoutCertificate)
-    case payloadManifest(SumeragiV2PayloadManifest)
     case payloadChunk(SumeragiV2PayloadChunk)
     case certifiedBodyRequest(SumeragiV2CertifiedBodyRequest)
     case certifiedBodyResponse(SumeragiV2CertifiedBodyResponse)
@@ -1287,12 +1286,11 @@ public enum SumeragiV2ConsensusPayload: Equatable, Sendable {
         case .quorumCertificate(let value): return sumeragiV2Enum(2, value.encode())
         case .timeoutVote(let value): return sumeragiV2Enum(3, value.encode())
         case .timeoutCertificate(let value): return sumeragiV2Enum(4, value.encode())
-        case .payloadManifest(let value): return sumeragiV2Enum(5, value.encode())
-        case .payloadChunk(let value): return sumeragiV2Enum(6, value.encode())
-        case .certifiedBodyRequest(let value): return sumeragiV2Enum(7, value.encode())
-        case .certifiedBodyResponse(let value): return sumeragiV2Enum(8, value.encode())
-        case .commitCertificateRequest(let value): return sumeragiV2Enum(9, value.encode())
-        case .commitCertificateResponse(let value): return sumeragiV2Enum(10, value.encode())
+        case .payloadChunk(let value): return sumeragiV2Enum(5, value.encode())
+        case .certifiedBodyRequest(let value): return sumeragiV2Enum(6, value.encode())
+        case .certifiedBodyResponse(let value): return sumeragiV2Enum(7, value.encode())
+        case .commitCertificateRequest(let value): return sumeragiV2Enum(8, value.encode())
+        case .commitCertificateResponse(let value): return sumeragiV2Enum(9, value.encode())
         }
     }
 
@@ -1307,12 +1305,11 @@ public enum SumeragiV2ConsensusPayload: Equatable, Sendable {
         case 2: return try .quorumCertificate(SumeragiV2QuorumCertificate.decode(payload))
         case 3: return try .timeoutVote(SumeragiV2TimeoutVote.decode(payload))
         case 4: return try .timeoutCertificate(SumeragiV2TimeoutCertificate.decode(payload))
-        case 5: return try .payloadManifest(SumeragiV2PayloadManifest.decode(payload))
-        case 6: return try .payloadChunk(SumeragiV2PayloadChunk.decode(payload))
-        case 7: return try .certifiedBodyRequest(SumeragiV2CertifiedBodyRequest.decode(payload))
-        case 8: return try .certifiedBodyResponse(SumeragiV2CertifiedBodyResponse.decode(payload))
-        case 9: return try .commitCertificateRequest(SumeragiV2CommitCertificateRequest.decode(payload))
-        case 10: return try .commitCertificateResponse(SumeragiV2CommitCertificateResponse.decode(payload))
+        case 5: return try .payloadChunk(SumeragiV2PayloadChunk.decode(payload))
+        case 6: return try .certifiedBodyRequest(SumeragiV2CertifiedBodyRequest.decode(payload))
+        case 7: return try .certifiedBodyResponse(SumeragiV2CertifiedBodyResponse.decode(payload))
+        case 8: return try .commitCertificateRequest(SumeragiV2CommitCertificateRequest.decode(payload))
+        case 9: return try .commitCertificateResponse(SumeragiV2CommitCertificateResponse.decode(payload))
         default: throw SumeragiV2WireError.invalid("unknown consensus payload \(tag)")
         }
     }

@@ -450,6 +450,10 @@ pub mod uri {
     pub const NEXUS_LANE_LIFECYCLE: &str = "/v1/nexus/lifecycle";
     /// URI to report status for administration
     pub const STATUS: &str = "/status";
+    /// Canonical committed block-height diagnostic.
+    pub const STATUS_BLOCKS: &str = crate::route_catalog::diagnostic::STATUS_BLOCKS.path();
+    /// Current online-peer-count diagnostic.
+    pub const STATUS_PEERS: &str = crate::route_catalog::diagnostic::STATUS_PEERS.path();
     ///  Metrics URI is used to export metrics according to [Prometheus
     ///  Guidance](https://prometheus.io/docs/instrumenting/writing_exporters/).
     pub const METRICS: &str = "/metrics";
