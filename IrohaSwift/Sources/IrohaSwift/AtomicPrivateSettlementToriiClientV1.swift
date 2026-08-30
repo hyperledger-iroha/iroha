@@ -418,6 +418,23 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         }
     }
 
+    /// Recover the persisted Prepare and Commit certificates for one local leg.
+    public func getPhaseCertificates(
+        payloadDigest: AtomicPrivateSettlementIdentifierV1,
+        sponsorAuth: ToriiCanonicalRequestAuth
+    ) async throws -> AtomicPrivateSettlementJSONResponseV1 {
+        let path =
+            "/v1/nexus/private-settlements/legs/\(payloadDigest.pathComponent)/phase-certificates"
+        return try await get(
+            path: path,
+            maximumBytes: Self.smallResponseMaximumBytes,
+            expectedIdentifier: payloadDigest,
+            expectedIdentifierField: "payload_digest"
+        ) { target in
+            try self.sponsorHeaders(method: "GET", target: target, body: Data(), auth: sponsorAuth)
+        }
+    }
+
     public func getCommitteeProof(
         payloadDigest: AtomicPrivateSettlementIdentifierV1,
         validatorSigningContext: ToriiOperatorSigningContext
@@ -682,6 +699,14 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
            object[expectedIdentifierField] as? String != expectedIdentifier.jsonLiteral {
             throw AtomicPrivateSettlementClientErrorV1.responseSubstitution
         }
+        if route.hasSuffix("/phase-certificates") {
+            for field in ["prepare_certificate", "commit_certificate"] {
+                let value = object[field]
+                guard value is NSNull || value is [String: Any] else {
+                    throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+                }
+            }
+        }
         if route.hasSuffix("/receipt") {
             guard let expectedIdentifier,
                   let status = object["status"] as? String,
@@ -707,6 +732,12 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         }
         if route.hasSuffix("/prepare-votes") || route.hasSuffix("/commit-votes") {
             return ["bundle_id", "payload_digest", "leg_ordinal", "vote"]
+        }
+        if route.hasSuffix("/phase-certificates") {
+            return [
+                "bundle_id", "payload_digest", "leg_ordinal", "lifecycle",
+                "prepare_certificate", "commit_certificate",
+            ]
         }
         if route.hasSuffix("/certificates") {
             return ["bundle_id", "payload_digest", "leg_ordinal", "phase", "lifecycle"]

@@ -61,6 +61,8 @@ pub enum PrivateSettlementCommand {
     CommitVote(PrivateSettlementCommitVoteArgs),
     /// Persist one exact Prepare or Commit certificate on a validator
     PhaseCertificate(PrivateSettlementPhaseCertificateArgs),
+    /// Recover locally durable Prepare and Commit certificates as the sponsor
+    PhaseCertificates(PrivateSettlementPhaseCertificatesArgs),
     /// Upload one certified encrypted leg
     LegUpload(PrivateSettlementLegUploadArgs),
     /// Read one authenticated redacted leg status
@@ -135,6 +137,16 @@ pub struct PrivateSettlementPhaseCertificateArgs {
     /// Bounded Norito JSON Prepare or Commit certificate file.
     #[arg(long, value_name = "PATH")]
     pub certificate: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PrivateSettlementPhaseCertificatesArgs {
+    /// Optional participant Torii root; defaults to the configured Torii URL.
+    #[arg(long)]
+    pub endpoint: Option<Url>,
+    /// Exact leg payload digest.
+    #[arg(long)]
+    pub payload_digest: String,
 }
 
 #[derive(clap::Args, Debug)]
@@ -225,9 +237,7 @@ fn private_settlement_digest(literal: &str, label: &str) -> Result<Hash> {
 
 fn private_settlement_operator_key<C: RunContext>(context: &C) -> Result<KeyPair> {
     context.operator_key_pair().cloned().ok_or_else(|| {
-        eyre!(
-            "this restricted private-settlement operation requires --operator-private-key-file"
-        )
+        eyre!("this restricted private-settlement operation requires --operator-private-key-file")
     })
 }
 
@@ -240,8 +250,8 @@ fn private_settlement<C: RunContext>(
         PrivateSettlementCommand::AvailabilityShare(args) => {
             let material: PrivateSettlementProvisionalLegMaterialV1 =
                 read_private_settlement_json(&args.material, "private-settlement material")?;
-            let response =
-                client.request_private_settlement_availability_share_v1(&args.endpoint, &material)?;
+            let response = client
+                .request_private_settlement_availability_share_v1(&args.endpoint, &material)?;
             context.print_data(&response)
         }
         PrivateSettlementCommand::PrepareVote(args) => {
@@ -249,8 +259,7 @@ fn private_settlement<C: RunContext>(
                 read_private_settlement_json(&args.manifest, "private-settlement manifest")?;
             let authority: PrivateSettlementCommitteeAuthorityV1 =
                 read_private_settlement_json(&args.authority, "private-settlement authority")?;
-            let payload_digest =
-                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let payload_digest = private_settlement_digest(&args.payload_digest, "payload digest")?;
             let response = client.request_private_settlement_prepare_vote_v1(
                 &args.endpoint,
                 &manifest,
@@ -264,8 +273,7 @@ fn private_settlement<C: RunContext>(
                 read_private_settlement_json(&args.barrier, "private-settlement Prepare barrier")?;
             let authority: PrivateSettlementCommitteeAuthorityV1 =
                 read_private_settlement_json(&args.authority, "private-settlement authority")?;
-            let payload_digest =
-                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let payload_digest = private_settlement_digest(&args.payload_digest, "payload digest")?;
             let response = client.request_private_settlement_commit_vote_v1(
                 &args.endpoint,
                 payload_digest,
@@ -281,14 +289,22 @@ fn private_settlement<C: RunContext>(
                 &args.certificate,
                 "private-settlement phase certificate",
             )?;
-            let payload_digest =
-                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let payload_digest = private_settlement_digest(&args.payload_digest, "payload digest")?;
             let response = client.persist_private_settlement_phase_certificate_v1(
                 &args.endpoint,
                 &manifest,
                 payload_digest,
                 &certificate,
             )?;
+            context.print_data(&response)
+        }
+        PrivateSettlementCommand::PhaseCertificates(args) => {
+            let payload_digest = private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let response = if let Some(endpoint) = args.endpoint {
+                client.private_settlement_phase_certificates_from_v1(&endpoint, payload_digest)?
+            } else {
+                client.private_settlement_phase_certificates_v1(payload_digest)?
+            };
             context.print_data(&response)
         }
         PrivateSettlementCommand::LegUpload(args) => {
@@ -302,34 +318,28 @@ fn private_settlement<C: RunContext>(
             context.print_data(&response)
         }
         PrivateSettlementCommand::LegStatus(args) => {
-            let payload_digest =
-                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let payload_digest = private_settlement_digest(&args.payload_digest, "payload digest")?;
             context.print_data(&client.private_settlement_leg_status_v1(payload_digest)?)
         }
         PrivateSettlementCommand::CommitteeProof(args) => {
             let role_key = private_settlement_operator_key(context)?;
-            let payload_digest =
-                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let payload_digest = private_settlement_digest(&args.payload_digest, "payload digest")?;
             context.print_data(
                 &client.private_settlement_committee_proof_v1(payload_digest, &role_key)?,
             )
         }
         PrivateSettlementCommand::AuditCapsule(args) => {
             let role_key = private_settlement_operator_key(context)?;
-            let payload_digest =
-                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let payload_digest = private_settlement_digest(&args.payload_digest, "payload digest")?;
             context.print_data(
                 &client.private_settlement_auditor_capsule_v1(payload_digest, &role_key)?,
             )
         }
         PrivateSettlementCommand::AuditApproval(args) => {
             let role_key = private_settlement_operator_key(context)?;
-            let payload_digest =
-                private_settlement_digest(&args.payload_digest, "payload digest")?;
-            let request: PrivateSettlementAuditApprovalRequestV1 = read_private_settlement_json(
-                &args.request,
-                "private-settlement audit approval",
-            )?;
+            let payload_digest = private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let request: PrivateSettlementAuditApprovalRequestV1 =
+                read_private_settlement_json(&args.request, "private-settlement audit approval")?;
             context.print_data(&client.submit_private_settlement_audit_approval_v1(
                 payload_digest,
                 &role_key,
@@ -838,6 +848,23 @@ mod tests {
             expected
         );
         assert!(private_settlement_digest("not-a-hash", "bundle id").is_err());
+    }
+
+    #[test]
+    fn private_settlement_cli_exposes_sponsor_phase_recovery() {
+        let command = <PrivateSettlementCommand as clap::Subcommand>::augment_subcommands(
+            clap::Command::new("private-settlement"),
+        );
+        let recovery = command
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "phase-certificates")
+            .expect("phase-certificate recovery subcommand");
+        let argument_ids = recovery
+            .get_arguments()
+            .map(|argument| argument.get_id().as_str())
+            .collect::<Vec<_>>();
+        assert!(argument_ids.contains(&"endpoint"));
+        assert!(argument_ids.contains(&"payload_digest"));
     }
 
     #[test]

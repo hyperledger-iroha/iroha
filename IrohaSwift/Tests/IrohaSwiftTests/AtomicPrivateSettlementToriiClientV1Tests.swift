@@ -114,6 +114,68 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         XCTAssertFalse(received.description.contains(try XCTUnwrap(ids["payload_json"] as? String)))
     }
 
+    func testSponsorPhaseCertificateRecoveryIsBoundAndStrictlyAllowlisted() async throws {
+        let root = try fixture()
+        let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])
+        let responses = try XCTUnwrap(root["responses"] as? [String: Any])
+        let phaseCertificates = try XCTUnwrap(responses["phase_certificates"] as? [String: Any])
+        let payload = try AtomicPrivateSettlementIdentifierV1(
+            try XCTUnwrap(ids["payload_hex"] as? String)
+        )
+        install(phaseCertificates)
+
+        let received = try await makeClient().getPhaseCertificates(
+            payloadDigest: payload,
+            sponsorAuth: try sponsorAuth()
+        )
+
+        let request = try XCTUnwrap(AtomicPrivateSettlementStubURLProtocolV1.lastRequest)
+        XCTAssertEqual(
+            request.url?.path,
+            "/api/v1/nexus/private-settlements/legs/\(payload.pathComponent)/phase-certificates"
+        )
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertNil(request.httpBody)
+        XCTAssertNotNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
+        XCTAssertNil(request.value(forHTTPHeaderField: "X-Iroha-Operator-Signature"))
+        XCTAssertTrue(received.description.contains("[REDACTED]"))
+
+        var missingCertificate = phaseCertificates
+        missingCertificate.removeValue(forKey: "commit_certificate")
+        install(missingCertificate)
+        do {
+            _ = try await makeClient().getPhaseCertificates(
+                payloadDigest: payload,
+                sponsorAuth: try sponsorAuth()
+            )
+            XCTFail("both certificate fields must be explicit")
+        } catch AtomicPrivateSettlementClientErrorV1.invalidResponse {}
+
+        var nonObjectCertificate = phaseCertificates
+        nonObjectCertificate["prepare_certificate"] = []
+        install(nonObjectCertificate)
+        do {
+            _ = try await makeClient().getPhaseCertificates(
+                payloadDigest: payload,
+                sponsorAuth: try sponsorAuth()
+            )
+            XCTFail("certificate values must be null or opaque objects")
+        } catch AtomicPrivateSettlementClientErrorV1.invalidResponse {}
+
+        var leakedField = phaseCertificates
+        leakedField["plaintext"] = "LEAK_CANARY"
+        install(leakedField)
+        do {
+            _ = try await makeClient().getPhaseCertificates(
+                payloadDigest: payload,
+                sponsorAuth: try sponsorAuth()
+            )
+            XCTFail("route-specific allowlist must reject extra fields")
+        } catch {
+            XCTAssertFalse(String(describing: error).contains("LEAK_CANARY"))
+        }
+    }
+
     func testAuditorApprovalUsesSeparateRoleIdentityHeaders() async throws {
         let root = try fixture()
         let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])

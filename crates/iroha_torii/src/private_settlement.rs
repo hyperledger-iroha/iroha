@@ -40,7 +40,8 @@ use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementLegUploadDispositionV1, PrivateSettlementLegUploadRequestV1,
     PrivateSettlementLegUploadResponseV1, PrivateSettlementLifecycleDtoV1,
     PrivateSettlementPhaseCertificateRequestV1, PrivateSettlementPhaseCertificateResponseV1,
-    PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
+    PrivateSettlementPhaseCertificatesResponseV1, PrivateSettlementPhaseVoteResponseV1,
+    PrivateSettlementPrepareVoteRequestV1,
 };
 use std::{path::PathBuf, str::FromStr as _, sync::Arc, time::Duration};
 
@@ -56,6 +57,20 @@ const fn private_settlement_carrier_height_is_live_v1(
     expiry_height: u64,
 ) -> bool {
     current_height >= authority_context_height && current_height < expiry_height
+}
+
+fn private_settlement_carrier_within_wire_bound_v1(
+    transaction: &SignedTransaction,
+    max_signed_transaction_bytes: u64,
+) -> Result<bool, norito::Error> {
+    let encoded = transaction.encode_wire_v1()?;
+    let signed_transaction_bytes = u64::try_from(encoded.len()).map_err(|_| {
+        norito::Error::Io(std::io::Error::other(
+            "private-settlement carrier transaction is too large",
+        ))
+    })?;
+    Ok(max_signed_transaction_bytes != 0
+        && signed_transaction_bytes <= max_signed_transaction_bytes)
 }
 
 fn governed_sidecar_store_config_v1(
@@ -170,16 +185,19 @@ impl PrivateSettlementToriiRuntimeV1 {
 mod governed_sidecar_store_config_tests {
     use std::num::{NonZeroU32, NonZeroU64};
 
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        NetworkId,
+        Level, NetworkId,
+        account::AccountId,
         block::BlockHeader,
+        isi::Log,
         nexus::{
             ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, LaneId,
             PRIVATE_SETTLEMENT_XCHACHA_NONCE_BYTES_V1, PrivateSettlementAuditAadV1,
             PrivateSettlementAuditCapsuleV1, PrivateSettlementCapsulePaddingV1,
             PrivateSettlementRouteV1,
         },
+        transaction::{FeePaymentIntent, TransactionBuilder},
     };
 
     use super::*;
@@ -253,6 +271,42 @@ mod governed_sidecar_store_config_tests {
         assert!(private_settlement_carrier_height_is_live_v1(19, 10, 20));
         assert!(!private_settlement_carrier_height_is_live_v1(20, 10, 20));
         assert!(!private_settlement_carrier_height_is_live_v1(21, 10, 20));
+    }
+
+    #[test]
+    fn carrier_wire_bound_counts_the_versioned_signed_envelope() {
+        let signer = KeyPair::from_seed(vec![0xA7; 32], Algorithm::Ed25519);
+        let transaction = TransactionBuilder::new(
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"Torii carrier wire bound",
+            ))),
+            AccountId::new(signer.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "complete signed carrier envelope".to_owned(),
+        )])
+        .sign(signer.private_key());
+        let exact_signed_bytes = u64::try_from(
+            transaction
+                .encode_wire_v1()
+                .expect("fixed V1 transaction wire encodes")
+                .len(),
+        )
+        .expect("fixture transaction length fits u64");
+        assert!(
+            !private_settlement_carrier_within_wire_bound_v1(&transaction, exact_signed_bytes - 1,)
+                .expect("carrier measurement succeeds")
+        );
+        assert!(
+            private_settlement_carrier_within_wire_bound_v1(&transaction, exact_signed_bytes)
+                .expect("carrier measurement succeeds")
+        );
+        assert!(
+            !private_settlement_carrier_within_wire_bound_v1(&transaction, 0)
+                .expect("zero limit fails closed")
+        );
     }
 
     #[test]
@@ -598,6 +652,22 @@ fn lifecycle_dto(
         }
         PrivateSettlementSidecarLifecycleV1::Aborted => PrivateSettlementLifecycleDtoV1::Aborted,
         PrivateSettlementSidecarLifecycleV1::Expired => PrivateSettlementLifecycleDtoV1::Expired,
+    }
+}
+
+fn phase_certificate_acknowledges_lifecycle_v1(
+    phase: PrivateSettlementPhaseV1,
+    lifecycle: PrivateSettlementSidecarLifecycleV1,
+) -> bool {
+    match phase {
+        PrivateSettlementPhaseV1::Prepare => matches!(
+            lifecycle,
+            PrivateSettlementSidecarLifecycleV1::Prepared
+                | PrivateSettlementSidecarLifecycleV1::CommitCertified
+        ),
+        PrivateSettlementPhaseV1::Commit => {
+            lifecycle == PrivateSettlementSidecarLifecycleV1::CommitCertified
+        }
     }
 }
 
@@ -969,11 +1039,9 @@ pub(crate) async fn handler_phase_certificate(
         Ok(status) => status,
         Err(_) => return map_phase_error(PrivateSettlementPhaseErrorV1),
     };
-    let expected_lifecycle = match phase {
-        PrivateSettlementPhaseV1::Prepare => PrivateSettlementSidecarLifecycleV1::Prepared,
-        PrivateSettlementPhaseV1::Commit => PrivateSettlementSidecarLifecycleV1::CommitCertified,
-    };
-    if status.leg_ordinal != leg_ordinal || status.lifecycle != expected_lifecycle {
+    if status.leg_ordinal != leg_ordinal
+        || !phase_certificate_acknowledges_lifecycle_v1(phase, status.lifecycle)
+    {
         return map_phase_error(PrivateSettlementPhaseErrorV1);
     }
     JsonBody(PrivateSettlementPhaseCertificateResponseV1 {
@@ -982,6 +1050,43 @@ pub(crate) async fn handler_phase_certificate(
         leg_ordinal,
         phase,
         lifecycle: lifecycle_dto(status.lifecycle),
+    })
+    .into_response()
+}
+
+/// Recover exact durable Prepare and Commit QCs as the immutable bundle sponsor.
+pub(crate) async fn handler_phase_certificates_get(
+    State(app): State<SharedAppState>,
+    Extension(runtime): Extension<PrivateSettlementToriiRuntimeV1>,
+    Extension(authenticated): Extension<VerifiedCanonicalRequest>,
+    Path(payload_digest): Path<String>,
+) -> Response {
+    let payload_digest = match parse_digest(&payload_digest) {
+        Ok(digest) => digest,
+        Err(response) => return response,
+    };
+    let height = match authoritative_height(&app) {
+        Ok(height) => height,
+        Err(response) => return response,
+    };
+    if active_config(&app, height).is_err() {
+        return private_settlement_unavailable();
+    }
+    let recovered = match runtime.store().and_then(|store| {
+        store
+            .sponsor_phase_certificates(payload_digest, &authenticated.account, height)
+            .map_err(map_store_error)
+    }) {
+        Ok(recovered) => recovered,
+        Err(response) => return response,
+    };
+    JsonBody(PrivateSettlementPhaseCertificatesResponseV1 {
+        bundle_id: recovered.bundle_id,
+        payload_digest: recovered.payload_digest,
+        leg_ordinal: recovered.leg_ordinal,
+        lifecycle: lifecycle_dto(recovered.lifecycle),
+        prepare_certificate: recovered.prepare_certificate,
+        commit_certificate: recovered.commit_certificate,
     })
     .into_response()
 }
@@ -1278,18 +1383,14 @@ pub(crate) async fn handler_bundle_submit(
         .commit_bundle
         .clone()
         .into_receipt(manifest.authority_context_height);
-    let carrier_bytes = norito::encode_canonical(&transaction)
-        .and_then(|encoded| {
-            u64::try_from(encoded.len()).map_err(|_| {
-                norito::Error::Io(std::io::Error::other(
-                    "private-settlement carrier transaction is too large",
-                ))
-            })
-        })
-        .map_err(|_| crate::Error::AppQueryValidation {
-            code: "private_settlement_invalid_carrier",
-            message: "private-settlement carrier is not canonically encodable".to_owned(),
-        })?;
+    let carrier_within_bound = private_settlement_carrier_within_wire_bound_v1(
+        &transaction,
+        config.max_carrier_bytes.get(),
+    )
+    .map_err(|_| crate::Error::AppQueryValidation {
+        code: "private_settlement_invalid_carrier",
+        message: "private-settlement carrier is not canonically encodable".to_owned(),
+    })?;
     if authenticated.account != manifest.sponsor
         || transaction.authority() != &manifest.sponsor
         || transaction.fee_payment_intent() != &manifest.public_fee_intent
@@ -1305,7 +1406,7 @@ pub(crate) async fn handler_bundle_submit(
             .expiry_height
             .checked_sub(manifest.authority_context_height)
             .is_none_or(|span| span > config.max_expiry_blocks.get())
-        || carrier_bytes > config.max_carrier_bytes.get()
+        || !carrier_within_bound
     {
         return Err(crate::Error::AppQueryValidation {
             code: "private_settlement_invalid_carrier",
@@ -1440,4 +1541,33 @@ pub(crate) async fn handler_bundle_receipt(
         lifecycle: lifecycle_dto(status.lifecycle),
     })
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phase_certificate_acknowledgement_is_monotonic() {
+        assert!(phase_certificate_acknowledges_lifecycle_v1(
+            PrivateSettlementPhaseV1::Prepare,
+            PrivateSettlementSidecarLifecycleV1::Prepared,
+        ));
+        assert!(phase_certificate_acknowledges_lifecycle_v1(
+            PrivateSettlementPhaseV1::Prepare,
+            PrivateSettlementSidecarLifecycleV1::CommitCertified,
+        ));
+        assert!(!phase_certificate_acknowledges_lifecycle_v1(
+            PrivateSettlementPhaseV1::Prepare,
+            PrivateSettlementSidecarLifecycleV1::Audited,
+        ));
+        assert!(phase_certificate_acknowledges_lifecycle_v1(
+            PrivateSettlementPhaseV1::Commit,
+            PrivateSettlementSidecarLifecycleV1::CommitCertified,
+        ));
+        assert!(!phase_certificate_acknowledges_lifecycle_v1(
+            PrivateSettlementPhaseV1::Commit,
+            PrivateSettlementSidecarLifecycleV1::Prepared,
+        ));
+    }
 }

@@ -151,19 +151,16 @@ pub(crate) fn signed_private_settlement_carrier_binding_v1(
                 "failed to encode private-settlement carrier: {error}"
             ))
         })?;
-    let signed_transaction_bytes = norito::encode_canonical(transaction)
-        .and_then(|encoded| {
-            u64::try_from(encoded.len()).map_err(|_| {
-                norito::Error::Io(std::io::Error::other(
-                    "private-settlement carrier transaction is too large",
-                ))
-            })
-        })
-        .map_err(|error| {
-            ValidationFail::InternalError(format!(
-                "failed to encode private-settlement carrier transaction: {error}"
-            ))
-        })?;
+    let encoded_transaction = transaction.encode_wire_v1().map_err(|error| {
+        ValidationFail::InternalError(format!(
+            "failed to encode private-settlement carrier transaction: {error}"
+        ))
+    })?;
+    let signed_transaction_bytes = u64::try_from(encoded_transaction.len()).map_err(|_| {
+        ValidationFail::InternalError(
+            "private-settlement carrier transaction is too large".to_owned(),
+        )
+    })?;
     Ok(Some(PrivateSettlementCarrierBindingV1::new(
         commit_bundle_digest,
         instruction_digest,
@@ -201,10 +198,13 @@ pub(crate) enum PrivateSettlementCarrierBindingErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::private_settlement::coordinator::tests::certified_commit_bundle_fixture;
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId, account::AccountId, block::BlockHeader, nexus::AtomicPrivateSettlementV1,
+        transaction::TransactionBuilder,
     };
+    use std::num::NonZeroU32;
 
     #[test]
     fn one_shot_binding_rejects_substitution_and_replay() {
@@ -232,6 +232,54 @@ mod tests {
         assert_eq!(
             binding.consume(bundle_digest, instruction_digest, 1024),
             Err(PrivateSettlementCarrierBindingErrorV1::AlreadyConsumed)
+        );
+    }
+
+    #[test]
+    fn signed_carrier_limit_uses_the_complete_fixed_v1_transaction_wire() {
+        let (bundle, sponsor_key) = certified_commit_bundle_fixture();
+        let instruction = FinalizeAtomicPrivateSettlementV1::new(bundle.clone());
+        let direct_instruction_bytes = u64::try_from(
+            bundle
+                .canonical_carrier_bytes_len()
+                .expect("carrier instruction encodes"),
+        )
+        .expect("fixture instruction length fits u64");
+        let mut builder = TransactionBuilder::new(
+            bundle.manifest.network_id,
+            bundle.manifest.sponsor.clone(),
+            bundle.manifest.public_fee_intent.clone(),
+        )
+        .with_instructions([instruction.clone()]);
+        builder.set_nonce(NonZeroU32::new(7).expect("non-zero fixture nonce"));
+        let transaction = builder.sign(sponsor_key.private_key());
+        let exact_signed_bytes = u64::try_from(
+            transaction
+                .encode_wire_v1()
+                .expect("fixed V1 signed transaction encodes")
+                .len(),
+        )
+        .expect("fixture signed transaction length fits u64");
+        assert!(
+            exact_signed_bytes > direct_instruction_bytes,
+            "the signed envelope and authorization proof must contribute to the limit"
+        );
+
+        let mut binding = signed_private_settlement_carrier_binding_v1(&transaction)
+            .expect("carrier binding derives")
+            .expect("fixture contains one direct carrier");
+        assert_eq!(binding.signed_transaction_bytes, exact_signed_bytes);
+        let bundle_digest = private_settlement_commit_bundle_digest_v1(&bundle)
+            .expect("fixture bundle digest encodes");
+        let instruction_digest = private_settlement_carrier_instruction_digest_v1(&instruction)
+            .expect("fixture instruction digest encodes");
+        assert_eq!(
+            binding.consume(bundle_digest, instruction_digest, exact_signed_bytes - 1,),
+            Err(PrivateSettlementCarrierBindingErrorV1::CarrierTooLarge)
+        );
+        assert_eq!(
+            binding.consume(bundle_digest, instruction_digest, exact_signed_bytes),
+            Ok(())
         );
     }
 

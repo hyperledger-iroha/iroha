@@ -49752,6 +49752,12 @@ impl Torii {
                 .authenticated_canonical_account_body(app_state.clone(), upload_limit),
         );
         builder.route(
+            &routes::PHASE_CERTIFICATES_GET,
+            catalog_get(private_settlement::handler_phase_certificates_get)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), 0),
+        );
+        builder.route(
             &routes::LEG_UPLOAD,
             catalog_post(private_settlement::handler_leg_upload)
                 .layer(axum::Extension(runtime.clone()))

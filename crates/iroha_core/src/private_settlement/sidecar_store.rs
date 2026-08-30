@@ -87,7 +87,7 @@ pub const PRIVATE_SETTLEMENT_SIDECAR_DEFAULT_MAX_TOTAL_BYTES_V1: u64 =
 pub const PRIVATE_SETTLEMENT_RECONCILIATION_MAX_PAGE_RECORDS_V1: usize = 256;
 
 /// Stable first-release durable restricted-sidecar profile descriptor.
-pub const PRIVATE_SETTLEMENT_SIDECAR_STORE_PROFILE_DESCRIPTOR_V1: &[u8] = b"APV1+APS1:provisional=magic-APV1,version-1,exact-zero-certificate-manifest,policy,authority,proof,delta,encrypted-capsule,availability-body,stored-height,address=payload-digest.apv1|certified=magic-APS1,version-1,manifest,policy,authority,encrypted-leg-payload,stored-height,lifecycle,lifecycle-height,audit-approvals,audit-approval-validation-height,verified-leg,prepare-qc,commit-qc,terminal-evidence-digest,verification-evidence-digest,address=payload-digest.aps1|promotion=exact-material+exact-body+valid-3-of-4-certificate,final-fsync-before-provisional-delete,restart-reconcile-exact-pair|bounds=each-record<=12MiB,combined-count<=4096,combined-total<=48GiB|access=owner-only-provisional,exact-four-validator-proof-view,governed-auditor-capsule-view,missing-and-denied-share-unavailable|durability=owner-0700,files-0600,nofollow,single-link,same-euid,process-lease+held-flock,temp-create-new+fsync+rename+directory-fsync|restart=reject-unknown-or-noncanonical-or-substituted-evidence,remove-only-well-formed-stale-temp,rebuild-pool-nullifier-output-reservations|retention=collecting-audited-prepared-commit-certified-never-pruned,terminal-only-at-ticket-height|plaintext=forbidden";
+pub const PRIVATE_SETTLEMENT_SIDECAR_STORE_PROFILE_DESCRIPTOR_V1: &[u8] = b"APV1+APS1:provisional=magic-APV1,version-1,exact-zero-certificate-manifest,policy,authority,proof,delta,encrypted-capsule,availability-body,stored-height,address=payload-digest.apv1|certified=magic-APS1,version-1,manifest,policy,authority,encrypted-leg-payload,stored-height,lifecycle,lifecycle-height,audit-approvals,audit-approval-validation-height,verified-leg,prepare-qc,commit-qc,terminal-evidence-digest,verification-evidence-digest,address=payload-digest.aps1|promotion=exact-material+exact-body+valid-3-of-4-certificate,final-fsync-before-provisional-delete,restart-reconcile-exact-pair|bounds=each-record<=12MiB,combined-count<=4096,combined-total<=48GiB|access=owner-only-provisional,exact-four-validator-proof-view,governed-auditor-capsule-view,missing-and-denied-share-unavailable|durability=owner-0700,files-0600,nofollow,single-link,same-euid,process-lease+held-flock,temp-create-new+fsync+rename+directory-fsync|restart=reject-unknown-or-noncanonical-or-substituted-evidence,quorum-equivalent-qc-body+authority-index-replay-is-write-free,remove-only-well-formed-stale-temp,rebuild-pool-nullifier-output-reservations|retention=collecting-audited-prepared-commit-certified-never-pruned,terminal-only-at-ticket-height|plaintext=forbidden";
 
 /// Capacity policy for one durable restricted-sidecar store.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -457,6 +457,27 @@ pub struct PrivateSettlementPublicSidecarStatusV1 {
     pub expiry_height: u64,
     /// Current durable lifecycle.
     pub lifecycle: PrivateSettlementSidecarLifecycleV1,
+}
+
+/// Sponsor-only recovery projection for exact durable phase certificates.
+///
+/// The certificates contain only protocol-public quorum material. The view
+/// deliberately excludes proof bytes, capsules, approvals, and every audit
+/// plaintext field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateSettlementSponsorPhaseCertificatesV1 {
+    /// Public bundle identifier.
+    pub bundle_id: Hash,
+    /// Content address of the exact encrypted leg.
+    pub payload_digest: Hash,
+    /// Canonical participant ordinal.
+    pub leg_ordinal: u8,
+    /// Current monotonic local lifecycle.
+    pub lifecycle: PrivateSettlementSidecarLifecycleV1,
+    /// Exact locally durable Prepare QC, when present.
+    pub prepare_certificate: Option<PrivateSettlementPhaseCertificateV1>,
+    /// Exact locally durable Commit QC, when present.
+    pub commit_certificate: Option<PrivateSettlementPhaseCertificateV1>,
 }
 
 /// Allowlisted aggregate lifecycle projection for one public bundle.
@@ -1084,6 +1105,11 @@ impl PrivateSettlementFileSidecarStoreV1 {
         }
         insert_provisional_index_v1(&mut state, &candidate, encoded_len)?;
         state.canonical_bytes = next_bytes;
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        crate::native_amx_fault_injection::maybe_abort(
+            crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementSidecarFsync,
+            *candidate.material.manifest.bundle_id.as_ref(),
+        );
         Ok(PrivateSettlementSidecarStoreOutcomeV1::Stored)
     }
 
@@ -1298,6 +1324,48 @@ impl PrivateSettlementFileSidecarStoreV1 {
             lifecycle_height: durable.lifecycle_height,
             expiry_height: durable.sidecar.manifest.expiry_height,
             lifecycle: durable.lifecycle,
+        })
+    }
+
+    /// Recover exact durable phase certificates as the immutable bundle sponsor.
+    ///
+    /// Unknown, wrong-sponsor, and retention-expired records deliberately share
+    /// the same unavailable result. The full owner-only record is decoded and
+    /// validated before any quorum material is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns unavailable or a local corruption/backend error.
+    pub fn sponsor_phase_certificates(
+        &self,
+        digest: Hash,
+        sponsor: &AccountId,
+        authoritative_height: u64,
+    ) -> Result<PrivateSettlementSponsorPhaseCertificatesV1, PrivateSettlementSidecarStoreErrorV1>
+    {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+        ensure_healthy_v1(&state)?;
+        let metadata = state
+            .index
+            .get(&digest)
+            .ok_or(PrivateSettlementSidecarStoreErrorV1::Unavailable)?;
+        if authoritative_height > metadata.retention_until_height {
+            return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
+        }
+        let durable = self.read_record_v1(digest)?;
+        if &durable.sidecar.manifest.sponsor != sponsor {
+            return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
+        }
+        Ok(PrivateSettlementSponsorPhaseCertificatesV1 {
+            bundle_id: durable.sidecar.manifest.bundle_id,
+            payload_digest: digest,
+            leg_ordinal: durable.sidecar.payload.statement.leg_ordinal,
+            lifecycle: durable.lifecycle,
+            prepare_certificate: durable.prepare_certificate,
+            commit_certificate: durable.commit_certificate,
         })
     }
 
@@ -1891,7 +1959,13 @@ impl PrivateSettlementFileSidecarStoreV1 {
         durable.lifecycle_evidence_digest = Some(verified.verification_digest());
         durable.verified_leg = Some(verified);
         durable.validate()?;
-        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)
+        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)?;
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        crate::native_amx_fault_injection::maybe_abort(
+            crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementStagedDeltaFsync,
+            *durable.sidecar.manifest.bundle_id.as_ref(),
+        );
+        Ok(())
     }
 
     /// Confirm that a phase request names the exact locally retained manifest
@@ -2019,6 +2093,12 @@ impl PrivateSettlementFileSidecarStoreV1 {
     }
 
     /// Persist the local Prepare QC after the verified delta is already locked.
+    ///
+    /// A quorum-equivalent retry remains idempotent after the same record
+    /// advances to `CommitCertified`; it never rewinds the lifecycle or
+    /// rewrites the journal. Different signer subsets over the exact same body
+    /// are equivalent because the prepared-bundle digest normalizes their
+    /// aggregate encoding.
     pub(crate) fn record_prepare_certificate(
         &self,
         digest: Hash,
@@ -2070,9 +2150,11 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .ok_or(PrivateSettlementSidecarStoreErrorV1::Unavailable)?
             .clone();
         let lifecycle_accepts_phase = match phase {
-            PrivateSettlementPhaseV1::Prepare => {
-                metadata.lifecycle == PrivateSettlementSidecarLifecycleV1::Prepared
-            }
+            PrivateSettlementPhaseV1::Prepare => matches!(
+                metadata.lifecycle,
+                PrivateSettlementSidecarLifecycleV1::Prepared
+                    | PrivateSettlementSidecarLifecycleV1::CommitCertified
+            ),
             PrivateSettlementPhaseV1::Commit => matches!(
                 metadata.lifecycle,
                 PrivateSettlementSidecarLifecycleV1::Prepared
@@ -2112,7 +2194,9 @@ impl PrivateSettlementFileSidecarStoreV1 {
             PrivateSettlementPhaseV1::Commit => &mut durable.commit_certificate,
         };
         if let Some(existing) = slot.as_ref() {
-            return if existing == &certificate {
+            return if existing.body == certificate.body
+                && existing.authority_catalog_index == certificate.authority_catalog_index
+            {
                 Ok(())
             } else {
                 Err(PrivateSettlementSidecarStoreErrorV1::Conflict)
@@ -2124,7 +2208,16 @@ impl PrivateSettlementFileSidecarStoreV1 {
             durable.lifecycle = PrivateSettlementSidecarLifecycleV1::CommitCertified;
         }
         durable.validate()?;
-        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)
+        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)?;
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        crate::native_amx_fault_injection::maybe_abort(
+            match phase {
+                PrivateSettlementPhaseV1::Prepare => crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementPrepareQcFsync,
+                PrivateSettlementPhaseV1::Commit => crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync,
+            },
+            *durable.sidecar.manifest.bundle_id.as_ref(),
+        );
+        Ok(())
     }
 
     /// Reconcile one local record against an immutable global terminal snapshot.
@@ -2239,7 +2332,13 @@ impl PrivateSettlementFileSidecarStoreV1 {
         durable.lifecycle_height = metadata.lifecycle_height.max(receipt.finalized_height);
         durable.terminal_evidence_digest = Some(receipt_digest);
         durable.validate()?;
-        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)
+        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)?;
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        crate::native_amx_fault_injection::maybe_abort(
+            crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementReceiptPublication,
+            *receipt.manifest.bundle_id.as_ref(),
+        );
+        Ok(())
     }
 
     fn abort_with_receipt(
@@ -4897,6 +4996,114 @@ pub(crate) mod tests {
         store
             .record_commit_certificate(digest, local_commit.clone(), prepared_bundle_digest, 14)
             .expect("commit QC");
+        drop(store);
+        let store = PrivateSettlementFileSidecarStoreV1::open(
+            &root,
+            PrivateSettlementSidecarStoreConfigV1::default(),
+        )
+        .expect("reopen after durable Commit QC");
+        let commit_certified_record =
+            fs::read(&record_path).expect("read Commit-certified journal");
+        let sponsor_recovery = store
+            .sponsor_phase_certificates(digest, &fixture.sidecar.manifest.sponsor, 15)
+            .expect("exact sponsor recovers both durable QCs");
+        assert_eq!(
+            sponsor_recovery.prepare_certificate,
+            Some(local_prepare.clone())
+        );
+        assert_eq!(
+            sponsor_recovery.commit_certificate,
+            Some(local_commit.clone())
+        );
+        assert_eq!(
+            sponsor_recovery.lifecycle,
+            PrivateSettlementSidecarLifecycleV1::CommitCertified
+        );
+        let wrong_sponsor = AccountId::new(
+            KeyPair::from_seed(vec![0x3B; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        assert_eq!(
+            store.sponsor_phase_certificates(digest, &wrong_sponsor, 15),
+            Err(PrivateSettlementSidecarStoreErrorV1::Unavailable)
+        );
+        assert_eq!(
+            store.sponsor_phase_certificates(
+                digest,
+                &fixture.sidecar.manifest.sponsor,
+                fixture
+                    .sidecar
+                    .payload
+                    .availability
+                    .body
+                    .retention_until_height
+                    + 1,
+            ),
+            Err(PrivateSettlementSidecarStoreErrorV1::Unavailable)
+        );
+        store
+            .record_prepare_certificate(digest, local_prepare.clone(), 15)
+            .expect("exact Prepare QC replay survives restart after Commit certification");
+        assert_eq!(
+            store
+                .public_status(digest, 15)
+                .expect("Commit-certified replay status")
+                .lifecycle,
+            PrivateSettlementSidecarLifecycleV1::CommitCertified,
+            "replaying older phase evidence must not regress lifecycle"
+        );
+        assert_eq!(
+            fs::read(&record_path).expect("read journal after exact Prepare QC replay"),
+            commit_certified_record,
+            "exact Prepare QC replay after Commit certification must be write-free"
+        );
+        let alternate_prepare_votes = fixture.validator_keys[1..]
+            .iter()
+            .map(|key| {
+                sign_private_settlement_phase_vote_v1(local_prepare.body, key)
+                    .expect("alternate Prepare vote")
+            })
+            .collect::<Vec<_>>();
+        let alternate_prepare = aggregate_private_settlement_phase_votes_v1(
+            local_prepare.body,
+            local_prepare.authority_catalog_index,
+            &fixture.sidecar.authority,
+            &alternate_prepare_votes,
+        )
+        .expect("quorum-equivalent Prepare QC");
+        assert_ne!(alternate_prepare, local_prepare);
+        store
+            .record_prepare_certificate(digest, alternate_prepare, 15)
+            .expect("quorum-equivalent Prepare replay survives restart");
+        assert_eq!(
+            fs::read(&record_path).expect("read journal after equivalent Prepare QC replay"),
+            commit_certified_record,
+            "quorum-equivalent Prepare QC replay must be write-free"
+        );
+        let alternate_commit_votes = fixture.validator_keys[1..]
+            .iter()
+            .map(|key| {
+                sign_private_settlement_phase_vote_v1(local_commit.body, key)
+                    .expect("alternate Commit vote")
+            })
+            .collect::<Vec<_>>();
+        let alternate_commit = aggregate_private_settlement_phase_votes_v1(
+            local_commit.body,
+            local_commit.authority_catalog_index,
+            &fixture.sidecar.authority,
+            &alternate_commit_votes,
+        )
+        .expect("quorum-equivalent Commit QC");
+        assert_ne!(alternate_commit, local_commit);
+        store
+            .record_commit_certificate(digest, alternate_commit, prepared_bundle_digest, 15)
+            .expect("quorum-equivalent Commit replay survives restart");
+        assert_eq!(
+            fs::read(&record_path).expect("read journal after equivalent Commit QC replay"),
+            commit_certified_record,
+            "quorum-equivalent Commit QC replay must be write-free"
+        );
         let second_commit = phase_certificate_for(
             &fixture.sidecar.manifest,
             &second_delta,

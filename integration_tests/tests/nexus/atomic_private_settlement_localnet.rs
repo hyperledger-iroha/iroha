@@ -1,9 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Release-only real-process smoke test for atomic private settlement.
+//! Release-only real-process tests for atomic private settlement.
 //!
 //! The ignored test deliberately uses the production wallet prover, encrypted
 //! auditor capsule, Torii restricted-DA routes, and node-held BLS committee
 //! keys.  There is no fixture proof, hand-made vote, or QC verification bypass.
+//! The included release-harness entrypoint parameterizes the same production
+//! workflow across N=2,3,4,8,16 and publishes only measured process evidence.
 
 use super::localnet_npos::npos_override_transactions;
 use eyre::{Result, WrapErr, ensure, eyre};
@@ -17,7 +19,13 @@ use iroha::{
     data_model::{
         Level,
         account::{Account, AccountId},
-        asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
+        asset::{
+            AssetBalancePolicy, AssetBalanceScope, AssetDefinition, AssetDefinitionId, AssetId,
+        },
+        block::{
+            BlockHeader,
+            consensus::{NativeAmxReceipt, SumeragiDiagnosticsStatus},
+        },
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
         isi::{
@@ -25,6 +33,10 @@ use iroha::{
             privacy::RegisterPrivacyProtocolActivationV1,
             private_settlement::{
                 ActivatePrivateSettlementPoolV1, FinalizeAtomicPrivateSettlementV1,
+            },
+            settlement::{
+                DvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
+                SettlementPlan,
             },
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
@@ -51,13 +63,15 @@ use iroha::{
         },
         peer::PeerId,
         permission::Permission,
+        prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId},
         privacy::{
             PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCapabilityActivationStateV1,
             PrivacyCommitmentV1, PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1,
             PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyProposedLifecycleV1, PrivacyProtocolIdV1,
             PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootV1,
         },
-        transaction::FeePaymentIntent,
+        query::block::prelude::FindBlocks,
+        transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
     },
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
@@ -83,7 +97,10 @@ use iroha_core::{
     },
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, HybridKeyPair, KeyPair, SignatureOf};
-use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+use iroha_data_model::prelude::QueryBuilderExt;
+use iroha_executor_data_model::permission::{
+    governance::CanEnactGovernance, settlement::CanExecuteSettlement,
+};
 use iroha_primitives::numeric::Quantity;
 use iroha_test_network::{
     Network, NetworkBuilder, NetworkPeer, genesis_factory_with_post_topology,
@@ -105,6 +122,8 @@ const VALIDATOR_STAKE: u64 = 2_000;
 const PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT: u64 = 2;
 const MAX_EXPIRY_BLOCKS: u64 = 4_096;
 const SIDECAR_RETENTION_BLOCKS: u64 = 4_096;
+const TRANSPARENT_CONTROL_SEED_BALANCE: u64 = 10_000;
+const TRANSPARENT_CONTROL_OUTPUT_BASELINE: u64 = 1;
 const TEST_STACK_BYTES: usize = 64 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const FINALITY_TIMEOUT: Duration = Duration::from_secs(300);
@@ -153,6 +172,7 @@ impl TopologyShape {
 struct CommitteeEndpoints {
     authority: PrivateSettlementCommitteeAuthorityV1,
     endpoints: Vec<Url>,
+    validator_keys: Vec<KeyPair>,
 }
 
 struct GovernedLeg {
@@ -204,6 +224,44 @@ fn cbdc_asset_definition_id(ordinal: usize) -> AssetDefinitionId {
         format!("cbdc{}", ordinal + 1)
             .parse()
             .expect("CBDC asset name"),
+    )
+}
+
+fn transparent_control_domain_id(ordinal: usize) -> DomainId {
+    DomainId::try_new(
+        format!("control{}", ordinal + 1),
+        format!("private-{}", ordinal + 1),
+    )
+    .expect("transparent-control domain")
+}
+
+fn transparent_control_asset_definition_id(ordinal: usize) -> AssetDefinitionId {
+    AssetDefinitionId::derive_from_components(
+        transparent_control_domain_id(ordinal),
+        format!("controlcbdc{}", ordinal + 1)
+            .parse()
+            .expect("transparent-control CBDC asset name"),
+    )
+}
+
+fn transparent_control_keypair(ordinal: usize) -> KeyPair {
+    let mut seed = vec![0_u8; 32];
+    seed[0] = 0xD7;
+    seed[1..9].copy_from_slice(&u64::try_from(ordinal).unwrap_or(u64::MAX).to_le_bytes());
+    KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("transparent-control account key")
+}
+
+fn transparent_control_account_id(ordinal: usize) -> AccountId {
+    AccountId::new(transparent_control_keypair(ordinal).public_key().clone())
+}
+
+fn transparent_control_asset_id(asset_ordinal: usize, owner_ordinal: usize) -> AssetId {
+    AssetId::with_scope(
+        transparent_control_asset_definition_id(asset_ordinal),
+        transparent_control_account_id(owner_ordinal),
+        AssetBalanceScope::Dataspace(DataSpaceId::new(
+            u64::try_from(asset_ordinal + 1).expect("control dataspace fits u64"),
+        )),
     )
 }
 
@@ -267,6 +325,49 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
                 AssetBalancePolicy::Global,
                 None,
             ))
+            .into(),
+        );
+        let control_domain = transparent_control_domain_id(ordinal);
+        instructions.push(Register::domain(Domain::new(control_domain.clone())).into());
+        instructions.push(
+            Register::asset_definition(AssetDefinition::numeric(
+                transparent_control_asset_definition_id(ordinal),
+                format!("Transparent control CBDC {}", ordinal + 1),
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(control_domain),
+            ))
+            .into(),
+        );
+        instructions
+            .push(Register::account(Account::new(transparent_control_account_id(ordinal))).into());
+    }
+    instructions.push(
+        Mint::asset_quantity(
+            TRANSPARENT_CONTROL_SEED_BALANCE,
+            transparent_control_asset_id(0, 0),
+        )
+        .into(),
+    );
+    for ordinal in 1..shape.participants {
+        instructions.push(
+            Mint::asset_quantity(
+                TRANSPARENT_CONTROL_OUTPUT_BASELINE,
+                transparent_control_asset_id(0, ordinal),
+            )
+            .into(),
+        );
+        instructions.push(
+            Mint::asset_quantity(
+                TRANSPARENT_CONTROL_OUTPUT_BASELINE,
+                transparent_control_asset_id(ordinal, 0),
+            )
+            .into(),
+        );
+        instructions.push(
+            Mint::asset_quantity(
+                TRANSPARENT_CONTROL_SEED_BALANCE,
+                transparent_control_asset_id(ordinal, ordinal),
+            )
             .into(),
         );
     }
@@ -374,13 +475,33 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                     TomlValue::Table(table)
                 })
                 .collect::<Vec<_>>();
+            let routing_rules = (0..shape.participants)
+                .map(|ordinal| {
+                    let mut matcher = Table::new();
+                    matcher.insert(
+                        "account".into(),
+                        TomlValue::String(transparent_control_account_id(ordinal).to_string()),
+                    );
+                    let mut rule = Table::new();
+                    rule.insert(
+                        "lane".into(),
+                        TomlValue::Integer(i64::try_from(ordinal + 1).expect("lane fits i64")),
+                    );
+                    rule.insert(
+                        "dataspace".into(),
+                        TomlValue::String(format!("private-{}", ordinal + 1)),
+                    );
+                    rule.insert("matcher".into(), TomlValue::Table(matcher));
+                    TomlValue::Table(rule)
+                })
+                .collect::<Vec<_>>();
             let mut routing = Table::new();
             routing.insert("default_lane".into(), TomlValue::Integer(0));
             routing.insert(
                 "default_dataspace".into(),
                 TomlValue::String("universal".to_owned()),
             );
-            routing.insert("rules".into(), TomlValue::Array(Vec::new()));
+            routing.insert("rules".into(), TomlValue::Array(routing_rules));
             layer
                 .write(["nexus", "lane_count"], shape.lane_count() as i64)
                 .write(["nexus", "lane_catalog"], TomlValue::Array(lanes))
@@ -541,7 +662,14 @@ fn committees_from_network(
                         .bls_pop()
                         .ok_or_else(|| eyre!("validator has no BLS PoP"))?
                         .to_vec();
-                    Ok((validator, pop, Url::parse(&peer.torii_url())?))
+                    Ok((
+                        validator,
+                        pop,
+                        Url::parse(&peer.torii_url())?,
+                        peer.bls_key_pair()
+                            .ok_or_else(|| eyre!("validator has no BLS key pair"))?
+                            .clone(),
+                    ))
                 })
                 .collect::<Result<Vec<_>>>()?;
             rows.sort_by(|left, right| left.0.cmp(&right.0));
@@ -557,7 +685,8 @@ fn committees_from_network(
                 .wrap_err("validate real four-validator authority")?;
             Ok(CommitteeEndpoints {
                 authority,
-                endpoints: rows.into_iter().map(|row| row.2).collect(),
+                endpoints: rows.iter().map(|row| row.2.clone()).collect(),
+                validator_keys: rows.into_iter().map(|row| row.3).collect(),
             })
         })
         .collect()
@@ -1512,3 +1641,5 @@ fn unsupported_real_process_participant_count_fails_closed() {
     assert!(TopologyShape::new(17).validate().is_err());
     assert_eq!(GLOBAL_LANE_ID, 0);
 }
+
+include!("atomic_private_settlement_real_process_harness.rs");

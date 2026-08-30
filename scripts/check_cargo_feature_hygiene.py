@@ -208,7 +208,16 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     "iroha_zkp_halo2": {
-        "default": ("parallel",),
+        "default": ("full", "parallel"),
+        "full": (
+            "model-primitives",
+            "dep:tiny-keccak",
+            "dep:thiserror",
+            "dep:norito",
+            "dep:hex",
+            "dep:parking_lot",
+        ),
+        "parallel": ("full", "dep:rayon"),
     },
     "iroha_executor": {
         "default": ("bridge",),

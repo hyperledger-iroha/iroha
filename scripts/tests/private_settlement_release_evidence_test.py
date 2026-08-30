@@ -40,35 +40,36 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         audit_report_payload = b"independent cryptographic audit report\n"
         audit_report_digest = hashlib.sha256(audit_report_payload).hexdigest()
         hardware_description_path = Path("evidence") / "hardware_description.json"
+        hardware_description = {
+            "version": 1,
+            "protocol": MODULE.PROTOCOL,
+            "commit": "a" * 40,
+            "collected_at_utc": "2026-08-29T00:00:00Z",
+            "host_id": "bck26-lab-host-01",
+            "operating_system": "macOS 15.6",
+            "kernel": "Darwin 24.6.0",
+            "architecture": "arm64",
+            "cpu_model": "Apple M4 Max",
+            "physical_cores": 16,
+            "logical_cores": 16,
+            "memory_bytes": 137_438_953_472,
+            "storage_model": "pinned local NVMe",
+            "network_description": "isolated 10 GbE laboratory fabric",
+            "clock_policy": "performance cores pinned; synchronized monotonic clocks",
+            "power_profile": "AC power; high-performance mode",
+            "virtualized": False,
+            "passed": True,
+        }
         hardware_description_payload = (
-            json.dumps(
-                {
-                    "version": 1,
-                    "protocol": MODULE.PROTOCOL,
-                    "commit": "a" * 40,
-                    "collected_at_utc": "2026-08-29T00:00:00Z",
-                    "host_id": "bck26-lab-host-01",
-                    "operating_system": "macOS 15.6",
-                    "kernel": "Darwin 24.6.0",
-                    "architecture": "arm64",
-                    "cpu_model": "Apple M4 Max",
-                    "physical_cores": 16,
-                    "logical_cores": 16,
-                    "memory_bytes": 137_438_953_472,
-                    "storage_model": "pinned local NVMe",
-                    "network_description": "isolated 10 GbE laboratory fabric",
-                    "clock_policy": "performance cores pinned; synchronized monotonic clocks",
-                    "power_profile": "AC power; high-performance mode",
-                    "virtualized": False,
-                    "passed": True,
-                },
-                sort_keys=True,
-            )
+            json.dumps(hardware_description, sort_keys=True)
             + "\n"
         ).encode()
         hardware_description_digest = hashlib.sha256(
             hardware_description_payload
         ).hexdigest()
+        hardware_profile_digest = MODULE._hardware_profile_sha256(
+            hardware_description
+        )
         configuration_paths = {
             participants: Path("evidence")
             / "configurations"
@@ -774,6 +775,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                                         "protocol": MODULE.PROTOCOL,
                                         "commit": "a" * 40,
                                         "hardware_sha256": hardware_description_digest,
+                                        "hardware_profile_sha256": hardware_profile_digest,
                                         "configuration_sha256": configuration_digests[
                                             participants
                                         ],

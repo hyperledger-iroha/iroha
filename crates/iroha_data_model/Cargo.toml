@@ -69,7 +69,7 @@ error-stack = { workspace = true }
 iroha_version = { workspace = true, features = ["derive"] }
 iroha_schema = { workspace = true }
 iroha_ffi = { workspace = true, optional = true }
-iroha_zkp_halo2 = { workspace = true }
+iroha_zkp_halo2 = { path = "../iroha_zkp_halo2", default-features = false, features = ["model-primitives"] }
 hex = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 

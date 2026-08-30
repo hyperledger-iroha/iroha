@@ -86,6 +86,8 @@ fn retained_proposal_operator(proposal_kind: &ProposalKind) -> Result<&AccountId
         ProposalKind::ValidationFeePolicy(payload) => Ok(&payload.proposal_operator),
         ProposalKind::ValidationFeePayoutLifecycle(payload) => Ok(&payload.proposal_operator),
         ProposalKind::DeployContract(_)
+        | ProposalKind::ContractLifecycleGovernance(_)
+        | ProposalKind::ContractEmergencyHold(_)
         | ProposalKind::RuntimeUpgrade(_)
         | ProposalKind::SccpRouteGovernance(_)
         | ProposalKind::SorafsProviderGovernance(_)

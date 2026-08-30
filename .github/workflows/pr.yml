@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -31,8 +31,11 @@ jobs:
           cache-on-failure: "true"
       - name: Build binaries (iroha3d, iroha, kagami, koto) (release)
         run: |
-          cargo build --locked --release --bin iroha3d --bin iroha --bin kagami
-          cargo build --locked --release -p ivm --bin koto
+          cargo build --locked --release \
+            -p irohad --bin iroha3d \
+            -p iroha_cli --bin iroha \
+            -p iroha_kagami --bin kagami \
+            -p ivm --bin koto
           mkdir target/release/pre_build
           mv target/release/iroha3d target/release/iroha target/release/kagami target/release/koto target/release/pre_build
       - name: Upload binaries
@@ -494,6 +497,7 @@ jobs:
             printf 'CARGO_TARGET_DIR=%s\n' "$invocation_root/target"
             printf 'IROHA_RELEASE_ARTIFACT_ROOT=%s\n' "$invocation_root/artifacts"
             printf 'IROHA_RELEASE_CANCEL_REQUEST_PATH=%s\n' "$invocation_root/cancel-request.json"
+            printf 'ATOMIC_PRIVATE_SETTLEMENT_FORMAL_EVIDENCE_DIR=%s\n' "$invocation_root/artifacts/formal/atomic_private_settlement"
             printf 'SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR=%s\n' "$invocation_root/artifacts/formal/sora_parliament"
             printf 'SUMERAGI_V2_FORMAL_EVIDENCE_DIR=%s\n' "$invocation_root/artifacts/formal/sumeragi_v2"
             printf 'TMPDIR=%s\n' "$invocation_root/tmp"
@@ -530,6 +534,23 @@ jobs:
             >> "$GITHUB_PATH"
       - name: Sumeragi v2 TLAPS, bounded TLC, and production Verus gates
         run: bash ci/check_sumeragi_formal.sh
+      - name: Atomic private settlement bounded TLC corpus
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 \
+            python3 -m unittest scripts.tests.private_settlement_tlc_report_test
+          scripts/formal/run_atomic_private_settlement_tlc.sh \
+            --workers 2 \
+            --config AtomicPrivateSettlementV1_3.cfg \
+            --config AtomicPrivateSettlementV1_255.cfg \
+            --config AtomicPrivateSettlementV1_expiry.cfg \
+            --config AtomicPrivateSettlementV1CommitteeFaults_2_validator_focused.cfg \
+            --config AtomicPrivateSettlementV1CommitteeFaults_4_clean.cfg \
+            --config AtomicPrivateSettlementV1CommitteeFaults_expiry.cfg \
+            --config AtomicPrivateSettlementV1_partial_apply_bug.cfg \
+            --config AtomicPrivateSettlementV1_commit_before_prepare_bug.cfg \
+            --config AtomicPrivateSettlementV1_drop_stage_on_crash_bug.cfg \
+            --output-dir "$ATOMIC_PRIVATE_SETTLEMENT_FORMAL_EVIDENCE_DIR"
       - name: SORA Parliament source contract and bounded TLC model
         run: |
           set -euo pipefail
@@ -727,6 +748,13 @@ jobs:
           name: sumeragi-v2-formal-pr
           path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/sumeragi_v2
           if-no-files-found: ignore
+      - name: Upload atomic private settlement formal evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: atomic-private-settlement-formal-pr
+          path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/atomic_private_settlement
+          if-no-files-found: error
       - name: Upload SORA Parliament formal evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

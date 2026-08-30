@@ -86,6 +86,56 @@ class AtomicPrivateSettlementToriiClientV1Test {
     }
 
     @Test
+    fun sponsorPhaseCertificateRecoveryIsBoundAndStrictlyAllowlisted() {
+        val response = fixture.objectField("responses").objectField("phase_certificates")
+        val executor = CapturingSettlementExecutor(jsonResponse(response))
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            "alice@universal",
+            keyPair.private,
+            1_700_000_000_000L,
+            "settlement-phase-certificate-recovery-1",
+        )
+
+        val received = client(executor).getPhaseCertificates(payload, auth).join()
+
+        assertEquals(
+            "/api/v1/nexus/private-settlements/legs/${payload.pathComponent()}/phase-certificates",
+            executor.request.uri.path,
+        )
+        assertEquals("GET", executor.request.method)
+        assertEquals(RequestReplayPolicy.ONE_SHOT, executor.request.replayPolicy)
+        assertTrue(executor.request.headers.containsKey(CanonicalRequestSigner.HEADER_SIGNATURE))
+        assertFalse(executor.request.headers.containsKey(OperatorRequestSigner.HEADER_SIGNATURE))
+        assertTrue(received.toString().contains("[REDACTED]"))
+
+        val missingCertificate = LinkedHashMap(response)
+        missingCertificate.remove("commit_certificate")
+        assertFailsWith<java.util.concurrent.CompletionException> {
+            client(CapturingSettlementExecutor(jsonResponse(missingCertificate)))
+                .getPhaseCertificates(payload, auth)
+                .join()
+        }
+
+        val nonObjectCertificate = LinkedHashMap(response)
+        nonObjectCertificate["prepare_certificate"] = emptyList<Any?>()
+        assertFailsWith<java.util.concurrent.CompletionException> {
+            client(CapturingSettlementExecutor(jsonResponse(nonObjectCertificate)))
+                .getPhaseCertificates(payload, auth)
+                .join()
+        }
+
+        val leakedField = LinkedHashMap(response)
+        leakedField["plaintext"] = "LEAK_CANARY"
+        val error = assertFailsWith<java.util.concurrent.CompletionException> {
+            client(CapturingSettlementExecutor(jsonResponse(leakedField)))
+                .getPhaseCertificates(payload, auth)
+                .join()
+        }
+        assertFalse(error.cause?.message.orEmpty().contains("LEAK_CANARY"))
+    }
+
+    @Test
     fun auditorApprovalUsesPurposeSeparatedRoleHeadersAndExactPayloadPath() {
         val response = fixture.objectField("responses").objectField("audit_approval")
         val executor = CapturingSettlementExecutor(jsonResponse(response))

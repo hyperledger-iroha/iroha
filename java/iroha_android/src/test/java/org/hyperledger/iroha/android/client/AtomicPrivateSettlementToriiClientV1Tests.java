@@ -36,6 +36,7 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
   public static void main(final String[] args) {
     sharedFixturePinsEveryPreparedRouteAndShape();
     sponsorLegStatusIsNetworkBoundAndIdentityChecked();
+    sponsorPhaseCertificateRecoveryIsBoundAndStrictlyAllowlisted();
     auditorApprovalUsesPurposeSeparatedRoleHeaders();
     publicBundleQueriesAreUnsignedAndBindReceiptIdentity();
     malformedOrSubstitutedMaterialFailsWithoutLeakingErrorBodies();
@@ -101,6 +102,65 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
     assert received.toString().contains("[REDACTED]") : "response rendered in logs";
     assert !received.toString().contains(stringField(IDENTIFIERS, "payload_json"))
         : "response identifier rendered in logs";
+  }
+
+  private static void sponsorPhaseCertificateRecoveryIsBoundAndStrictlyAllowlisted() {
+    final Map<String, Object> response =
+        objectField(objectField(FIXTURE, "responses"), "phase_certificates");
+    final CapturingExecutor executor = new CapturingExecutor(jsonResponse(response));
+    final ToriiCanonicalRequestAuth auth =
+        new ToriiCanonicalRequestAuth(
+            "alice@universal",
+            AtomicPrivateSettlementToriiClientV1Tests::nonZeroSignature,
+            1_700_000_000_000L,
+            "settlement-phase-certificate-recovery-1");
+
+    final AtomicPrivateSettlementJsonResponseV1 received =
+        client(executor).getPhaseCertificates(PAYLOAD, auth).join();
+
+    assert executor.request.uri().getPath().equals(
+            "/api/v1/nexus/private-settlements/legs/"
+                + PAYLOAD.pathComponent()
+                + "/phase-certificates")
+        : "phase-certificate recovery path drift";
+    assert "GET".equals(executor.request.method()) : "phase-certificate recovery must use GET";
+    assert executor.request.replayPolicy() == RequestReplayPolicy.ONE_SHOT
+        : "signed phase-certificate recovery must not be replayed";
+    assert executor.request.headers().containsKey(CanonicalRequestSigner.HEADER_SIGNATURE)
+        : "sponsor signature missing";
+    assert !executor.request.headers().containsKey(OperatorRequestSigner.HEADER_SIGNATURE)
+        : "sponsor recovery request must not carry role identity";
+    assert received.toString().contains("[REDACTED]") : "recovery response rendered in logs";
+
+    final Map<String, Object> missingCertificate = new LinkedHashMap<>(response);
+    missingCertificate.remove("commit_certificate");
+    assertThrows(
+        CompletionException.class,
+        () ->
+            client(new CapturingExecutor(jsonResponse(missingCertificate)))
+                .getPhaseCertificates(PAYLOAD, auth)
+                .join());
+
+    final Map<String, Object> nonObjectCertificate = new LinkedHashMap<>(response);
+    nonObjectCertificate.put("prepare_certificate", List.of());
+    assertThrows(
+        CompletionException.class,
+        () ->
+            client(new CapturingExecutor(jsonResponse(nonObjectCertificate)))
+                .getPhaseCertificates(PAYLOAD, auth)
+                .join());
+
+    final Map<String, Object> leakedField = new LinkedHashMap<>(response);
+    leakedField.put("plaintext", "LEAK_CANARY");
+    final CompletionException error =
+        assertThrows(
+            CompletionException.class,
+            () ->
+                client(new CapturingExecutor(jsonResponse(leakedField)))
+                    .getPhaseCertificates(PAYLOAD, auth)
+                    .join());
+    assert !String.valueOf(error.getCause().getMessage()).contains("LEAK_CANARY")
+        : "rejected recovery field leaked through error";
   }
 
   private static void auditorApprovalUsesPurposeSeparatedRoleHeaders() {

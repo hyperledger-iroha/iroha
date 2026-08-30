@@ -190,8 +190,11 @@ ApproveAudit(leg) ==
      ]
 
 (***************************************************************************
-Prepare and Commit.  Every QC is over the exact bundle digest and is local to
-one leg's committee.  Durable staging precedes every Prepare vote and QC.
+Prepare and Commit.  Every QC is over the exact logical bundle digest and is
+local to one leg's committee.  The implementation normalizes equivalent
+three-of-four signature encodings before computing that digest; the model's
+"bundle" value represents the shared certified statement, not a signer bitmap.
+Durable staging precedes every Prepare vote and QC.
 ***************************************************************************)
 
 DurablyStageDelta(leg) ==

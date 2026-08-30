@@ -119,7 +119,8 @@ pub use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementLegUploadDispositionV1, PrivateSettlementLegUploadRequestV1,
     PrivateSettlementLegUploadResponseV1, PrivateSettlementLifecycleDtoV1,
     PrivateSettlementPhaseCertificateRequestV1, PrivateSettlementPhaseCertificateResponseV1,
-    PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
+    PrivateSettlementPhaseCertificatesResponseV1, PrivateSettlementPhaseVoteResponseV1,
+    PrivateSettlementPrepareVoteRequestV1,
 };
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{

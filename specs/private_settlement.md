@@ -245,6 +245,20 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
    finality and on restart. Only then do they mark the sidecar terminal and
    release its staged reservations.
 
+The complete prepared-bundle digest commits to every certified Prepare body and
+authority-catalog index, but normalizes away the signer bitmap and aggregate
+signature. Every exact three-of-four subset over the same body is therefore
+quorum-equivalent: a coordinator restart cannot fork Commit digests merely
+because a different honest validator is unavailable. Certificate cryptography
+is still verified independently before the normalized digest is accepted.
+Participant nodes expose a sponsor-authenticated, leg-scoped recovery read for
+their locally durable Prepare and Commit QCs. Restart-safe clients query at
+least three committee members, canonically select any recovered equivalent QC,
+re-fan it out, and verify that the certified body remains durably recoverable.
+The finalized carrier and receipt still retain the exact certificate bytes the
+sponsor presented; an authenticated coordinator transcript is the evidence for
+historical signer-subset collection when a deployment requires that provenance.
+
 Expiry or an authoritative abort releases local staged locks without applying
 any leg. Replaying a receipt is idempotent only when the exact stored receipt is
 identical; conflicting replay, finalized-after-abort, abort-after-finalized,
@@ -262,6 +276,7 @@ The canonical route catalog is
 | `POST .../phases/prepare-votes` | canonical account signature | one independently verified Prepare vote |
 | `POST .../phases/commit-votes` | canonical account signature | one complete-barrier Commit vote |
 | `POST .../phases/certificates` | canonical account signature | persist exact Prepare/Commit QC |
+| `GET .../legs/{payload_digest}/phase-certificates` | canonical sponsor signature | locally durable Prepare/Commit QCs for recovery |
 | `GET .../legs/{payload_digest}/status` | canonical account signature | redacted leg lifecycle |
 | `GET .../legs/{payload_digest}/committee-proof` | identity-bound exact validator | proof, approvals, opaque delta |
 | `GET .../legs/{payload_digest}/audit-capsule` | identity-bound governed auditor | padded encrypted capsule |
@@ -373,6 +388,17 @@ publication. Continuously assert that no strict subset becomes visible or
 spendable and that every node converges after healing. Keep signed RS16 DA/RBC
 enabled.
 
+The feature-isolated adversarial daemon exposes one-shot process cuts for the
+seven durability boundaries above. Each command binds the exact public bundle
+id, is stored in the peer's owner-only control directory, and is acknowledged
+with an fsynced canonical record before the process aborts. The sidecar,
+staged-delta, and committee-certificate cuts occur only after the corresponding
+record and directory entry are durable; the Kura cut follows the block and V2
+finality append; the WSV cut follows atomic state publication; and the receipt
+cut follows durable committee reconciliation. Shipping binaries do not compile
+these abort hooks. Presence of a hook is not evidence: the release harness must
+retain its exact command/acknowledgement and demonstrate restart convergence.
+
 Each real-process run emits one strict JSONL record for
 `scripts/private_settlement_fault_report.py`. The reporter requires the exact
 N=2,3,4,8,16 matrix across at least ten seeds per N, one validator restart in
@@ -441,11 +467,18 @@ the retained raw samples again, regenerates every p50/p95/p99, MAD, and
 deterministic confidence interval, and requires the published measured-run and
 seed identities, stage/resource shapes, counts, and passing regression result
 to match exactly. Every raw sample and the generated report bind the same full
-release commit, archived hardware-description digest, and exact N-specific
-configuration digest, so results from another build, host profile, network
-configuration, or altered summary cannot be relabeled. Later-release regression
-comparisons reject a baseline captured with different hardware, configurations,
-or benchmark requirements before applying the p95/p99 thresholds.
+release commit, archived hardware-description digest, stable hardware-profile
+digest, and exact N-specific configuration digest, so results from another
+build, host profile, network configuration, or altered summary cannot be
+relabeled. The stable profile is the canonical hash of the validated host,
+operating-system, kernel, architecture, CPU/core, memory, storage, network,
+clock, power, and virtualization fields; only the release-specific commit,
+collection timestamp, and validation marker are excluded. This lets a later
+candidate carry its own commit-bound hardware artifact while still proving that
+it ran on the same pinned environment. Later-release regression comparisons
+reject a baseline captured with a different stable hardware profile,
+configuration matrix, or benchmark requirements before applying the p95/p99
+thresholds.
 
 ### Release artifact
 
@@ -472,6 +505,8 @@ placeholder cannot satisfy them. Reproducible-build evidence must contain at
 least two distinct builder/environment records that produce byte-identical
 archived release binaries, and the CycloneDX 1.5/1.6 SBOM must bind the same
 commit and SHA-256 hashes. The hardware description is a commit-bound structured
-record, and the configuration manifest must bind every archived N=2,3,4,8,16
-configuration used by both the fault and benchmark matrices. This verifier
-deliberately does not manufacture or waive any of those external results.
+record and derives the stable hardware-profile binding used for cross-release
+benchmark comparison. The configuration manifest must bind every archived
+N=2,3,4,8,16 configuration used by both the fault and benchmark matrices. This
+verifier deliberately does not manufacture or waive any of those external
+results.

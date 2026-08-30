@@ -47527,6 +47527,7 @@ mod validation_fee_torii_ingress_tests {
             ParliamentBody::InterestPanel,
             ParliamentBody::ReviewPanel,
             ParliamentBody::CoordinationCouncil,
+            ParliamentBody::MpcCommittee,
             ParliamentBody::FmaCommittee,
             ParliamentBody::OversightCommittee,
             ParliamentBody::PolicyJury,

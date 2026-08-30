@@ -42,18 +42,29 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Atomic private settlement release qualification
 
-- Finish release-candidate qualification of the implemented prepared-leg,
-  audit, coordination, carrier, status, and receipt APIs in Rust/CLI, Kotlin,
-  mirrored Java, Swift, Python, and JavaScript. Rebuild the missing Swift native
-  bridge from the same settled commit, run every complete SDK suite against the
-  shared canonical fixture, and preserve opaque witness handles and plaintext
-  redaction through packaging and clean-consumer tests.
+- Release-candidate-qualify the implemented prepared-leg, audit, coordination,
+  restart-certificate recovery, carrier, status, and receipt APIs in Rust/CLI,
+  Kotlin, mirrored Java, Swift, Python, and JavaScript. The checked OpenAPI now
+  covers all 13 operations with strict V1 DTO/auth/redaction contracts; run its
+  focused Rust test and every complete SDK suite from the settled candidate.
+  Rebuild the missing Swift native bridge from that same commit and preserve
+  opaque witness handles and plaintext redaction through packaging and
+  clean-consumer tests.
 - Run real four-validator processes for every participating dataspace at
   N=2,3,4,8,16, with N=3 as the paper configuration and mandatory signed RS16
   DA/RBC throughout. Exercise one validator unavailable per committee,
   coordinator/global restarts, acknowledged authenticated 5/10/20-percent
   message loss, phase-cut partitions, delay/healing, and crashes after every
   sidecar, staged-delta, QC, Kura, WSV, and receipt-publication boundary.
+  The strict campaign planner/validator, acknowledged feature-isolated
+  process-cut hooks, and private-profile plus transparent Native-AMX
+  N=2,3,4,8,16 real-process benchmark entrypoints exist. Because transparent
+  DvP V1 is bilateral, its N-participant control is one atomic carrier with
+  N-1 consented star-topology DvPs whose Native-AMX receipt covers exactly N
+  participant routes. Finish the fault and leakage paths; compile and execute
+  the complete matrix; execute every hook; and archive the
+  controller acknowledgements instead of promoting the fixed N=3 smoke test,
+  an unexecuted harness, or synthetic responses.
   Continuously assert that no strict subset of legs becomes visible or
   spendable. Bind each raw run to the settled commit, the archived structured
   hardware description, and the exact N-specific configuration through the

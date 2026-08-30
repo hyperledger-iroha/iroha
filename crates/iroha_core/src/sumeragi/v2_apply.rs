@@ -100,6 +100,34 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
+
+#[cfg(feature = "test-network-native-amx-fault-injection")]
+fn private_settlement_carrier_bundle_source_v1(
+    transaction: &iroha_data_model::transaction::SignedTransaction,
+) -> Option<[u8; 32]> {
+    transaction
+        .instructions()
+        .explicit_instructions()
+        .find_map(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<
+                    iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
+                >()
+                .map(|carrier| *carrier.commit_bundle.manifest.bundle_id.as_ref())
+        })
+}
+
+#[cfg(feature = "test-network-native-amx-fault-injection")]
+fn private_settlement_carrier_bundle_sources_v1(block: &SignedBlock) -> Vec<[u8; 32]> {
+    block
+        .external_transactions()
+        .filter_map(private_settlement_carrier_bundle_source_v1)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// Fail-closed error while consuming or recovering durable lane reservations.
 #[derive(Debug, Error)]
 pub(crate) enum V2ReservationLifecycleError {
@@ -4793,6 +4821,16 @@ impl V2ApplyService {
                 "autonomous carrier reached durable Kura block/finality stage"
             );
         }
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        if store_block {
+            for source_id in private_settlement_carrier_bundle_sources_v1(committed_block.as_ref())
+            {
+                crate::native_amx_fault_injection::maybe_abort(
+                    crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend,
+                    source_id,
+                );
+            }
+        }
         let native_amx_prepublication = if store_block {
             Some(
                 self.kura
@@ -4984,6 +5022,13 @@ impl V2ApplyService {
         commit_result.map_err(|error| {
             V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
         })?;
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        for source_id in private_settlement_carrier_bundle_sources_v1(committed_block.as_ref()) {
+            crate::native_amx_fault_injection::maybe_abort(
+                crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication,
+                source_id,
+            );
+        }
         // Proof generation is post-finality, local, and best-effort: a stopped or saturated lane
         // must never turn a successfully committed block into a consensus application failure.
         if store_block && let Some(fastpq_witness_context) = fastpq_witness_context {
@@ -5100,6 +5145,31 @@ impl V2ApplyService {
     }
 }
 include!("v2_apply/error_recovery.rs");
+#[cfg(all(test, feature = "test-network-native-amx-fault-injection"))]
+mod private_settlement_fault_source_tests {
+    use super::*;
+    use crate::private_settlement::coordinator::tests::certified_commit_bundle_fixture;
+    use iroha_data_model::{
+        isi::private_settlement::FinalizeAtomicPrivateSettlementV1, transaction::TransactionBuilder,
+    };
+
+    #[test]
+    fn carrier_source_is_the_exact_public_bundle_id() {
+        let (bundle, sponsor_key) = certified_commit_bundle_fixture();
+        let expected = *bundle.manifest.bundle_id.as_ref();
+        let transaction = TransactionBuilder::new(
+            bundle.manifest.network_id,
+            bundle.manifest.sponsor.clone(),
+            bundle.manifest.public_fee_intent.clone(),
+        )
+        .with_instructions([FinalizeAtomicPrivateSettlementV1::new(bundle)])
+        .sign(sponsor_key.private_key());
+        assert_eq!(
+            private_settlement_carrier_bundle_source_v1(&transaction),
+            Some(expected)
+        );
+    }
+}
 #[cfg(test)]
 mod fastpq_submission_tests {
     use super::*;

@@ -1630,9 +1630,9 @@ mod tests {
             let first_snapshot_sha256 = first_snapshot
                 .content_sha256()
                 .expect("snapshot content hash is defined");
-            let first_bytes = checkpoint_set_bytes(&first_snapshot, &key_pairs, &replicas);
+            let first_bytes = checkpoint_set_bytes(&first_snapshot, &key_pairs, &config.replicas);
             let source = Arc::new(MutableSource::default());
-            source.set_all(&replicas, &first_bytes);
+            source.set_all(&config.replicas, &first_bytes);
             Self {
                 _temporary_root: temporary_root,
                 config,

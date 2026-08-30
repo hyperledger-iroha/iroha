@@ -484,7 +484,8 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
     let fee_sink_keypair =
         checked_torii_test_ed25519_keypair(0xd2, "derive unfunded fee fixture sink key");
     let fee_sink = AccountId::new(fee_sink_keypair.public_key().clone());
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let domain_id =
+        DomainId::parse_fully_qualified("universal.universal").expect("canonical XOR domain id");
     let fee_asset_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "xor".parse().expect("asset name"),

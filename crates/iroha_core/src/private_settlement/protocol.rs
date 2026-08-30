@@ -26,11 +26,14 @@ pub(crate) fn private_settlement_reserved_prepared_bundle_digest_v1() -> Hash {
     Hash::prehashed([0; Hash::LENGTH])
 }
 
-/// Commit to the exact complete all-Prepare barrier in canonical leg order.
+/// Commit to the complete all-Prepare barrier in canonical leg order.
 ///
 /// This is deliberately a canonical digest primitive, not a second admission
 /// path. Callers must validate each authority, delta, and Prepare certificate
-/// before treating the returned digest as certified protocol evidence.
+/// before treating the returned digest as certified protocol evidence. The
+/// data-model digest includes every signed Prepare body but normalizes away the
+/// signer bitmap and aggregate signature, so quorum-equivalent exact 3-of-4
+/// certificates cannot fork the bundle during crash recovery.
 pub(crate) fn private_settlement_prepared_bundle_digest_v1(
     manifest: &AtomicPrivateSettlementV1,
     authority_catalog: &[PrivateSettlementCommitteeAuthorityV1],
@@ -625,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_qcs_reject_cross_leg_prepare_substitution() {
+    fn commit_qcs_accept_quorum_equivalent_prepare_recovery() {
         let (_, mut receipt, fixture) = crate::private_settlement::global_state::tests::fixture();
         let leg_index = 1_usize;
         let body = receipt.legs[leg_index].prepare.body;
@@ -650,16 +653,14 @@ mod tests {
         .expect("substituted Prepare QC is independently valid");
 
         receipt.legs[leg_index].prepare = alternate_prepare;
-        assert_eq!(
-            verify_private_settlement_receipt_v1(&receipt),
-            Err(PrivateSettlementProtocolErrorV1::Binding),
-            "every Commit QC must bind every exact Prepare QC, including another leg's QC"
+        verify_private_settlement_receipt_v1(&receipt).expect(
+            "a different valid three-of-four signer subset over the same body is equivalent",
         );
     }
 
     #[test]
-    fn prepared_bundle_digest_commits_to_every_exact_component() {
-        let (_, receipt, _) = crate::private_settlement::global_state::tests::fixture();
+    fn prepared_bundle_digest_commits_to_statements_not_signature_encoding() {
+        let (_, receipt, fixture) = crate::private_settlement::global_state::tests::fixture();
         let deltas = receipt
             .legs
             .iter()
@@ -718,7 +719,7 @@ mod tests {
         );
 
         let mut changed_prepares = prepares.clone();
-        changed_prepares[1].aggregate_signature[0] ^= 1;
+        changed_prepares[1].body.manifest_digest = Hash::new(b"changed manifest binding");
         assert_ne!(
             private_settlement_prepared_bundle_digest_v1(
                 &receipt.manifest,
@@ -726,8 +727,35 @@ mod tests {
                 &deltas,
                 &changed_prepares,
             )
-            .expect("changed-Prepare-QC digest"),
+            .expect("changed-Prepare-statement digest"),
             digest
+        );
+
+        let leg_index = 1_usize;
+        let body = prepares[leg_index].body;
+        let alternate_votes = fixture.validator_keys[1..]
+            .iter()
+            .map(|key| sign_private_settlement_phase_vote_v1(body, key).expect("phase vote"))
+            .collect::<Vec<_>>();
+        let alternate = aggregate_private_settlement_phase_votes_v1(
+            body,
+            u8::try_from(leg_index).expect("fixture leg ordinal"),
+            &receipt.authority_catalog[leg_index],
+            &alternate_votes,
+        )
+        .expect("alternate valid Prepare QC");
+        let mut alternate_prepares = prepares.clone();
+        alternate_prepares[leg_index] = alternate;
+        assert_eq!(
+            private_settlement_prepared_bundle_digest_v1(
+                &receipt.manifest,
+                &receipt.authority_catalog,
+                &deltas,
+                &alternate_prepares,
+            )
+            .expect("quorum-equivalent Prepare digest"),
+            digest,
+            "signer-set and aggregate-signature encoding are not logical bundle content"
         );
         assert_eq!(
             private_settlement_prepared_bundle_digest_v1(

@@ -56,6 +56,7 @@ class Sample:
 
     commit: str
     hardware_sha256: str
+    hardware_profile_sha256: str
     configuration_sha256: str
     profile: str
     participants: int
@@ -85,6 +86,7 @@ def parse_sample(record: Any, source: str) -> Sample:
         "protocol",
         "commit",
         "hardware_sha256",
+        "hardware_profile_sha256",
         "configuration_sha256",
         "profile",
         "participants",
@@ -106,10 +108,13 @@ def parse_sample(record: Any, source: str) -> Sample:
     if not isinstance(commit, str) or _GIT_COMMIT.fullmatch(commit) is None:
         raise EvidenceError(f"{source}: sample commit must be a full Git object id")
     hardware_sha256 = record["hardware_sha256"]
+    hardware_profile_sha256 = record["hardware_profile_sha256"]
     configuration_sha256 = record["configuration_sha256"]
     if (
         not isinstance(hardware_sha256, str)
         or re.fullmatch(r"[0-9a-f]{64}", hardware_sha256) is None
+        or not isinstance(hardware_profile_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", hardware_profile_sha256) is None
         or not isinstance(configuration_sha256, str)
         or re.fullmatch(r"[0-9a-f]{64}", configuration_sha256) is None
     ):
@@ -152,6 +157,7 @@ def parse_sample(record: Any, source: str) -> Sample:
     return Sample(
         commit=commit,
         hardware_sha256=hardware_sha256,
+        hardware_profile_sha256=hardware_profile_sha256,
         configuration_sha256=configuration_sha256,
         profile=profile,
         participants=participants,
@@ -292,6 +298,11 @@ def build_report(
         raise EvidenceError(
             "benchmark evidence must use one pinned hardware description"
         )
+    hardware_profile_digests = {
+        sample.hardware_profile_sha256 for sample in samples
+    }
+    if len(hardware_profile_digests) != 1:
+        raise EvidenceError("benchmark evidence must use one pinned hardware profile")
     configuration_digests: dict[int, str] = {}
     for participants in REQUIRED_PARTICIPANTS:
         digests = {
@@ -310,6 +321,7 @@ def build_report(
         "commit": next(iter(commits)),
         "environment": {
             "hardware_sha256": next(iter(hardware_digests)),
+            "hardware_profile_sha256": next(iter(hardware_profile_digests)),
             "configuration_sha256_by_participants": {
                 str(participants): configuration_digests[participants]
                 for participants in REQUIRED_PARTICIPANTS
@@ -378,9 +390,40 @@ def compare_baseline(
         or baseline.get("protocol") != PROTOCOL
     ):
         raise EvidenceError("candidate and baseline must use the V1 settlement profile")
-    if candidate.get("environment") != baseline.get("environment"):
+    environments: list[dict[str, Any]] = []
+    for label, report in (("candidate", candidate), ("baseline", baseline)):
+        environment = report.get("environment")
+        expected = {
+            "hardware_sha256",
+            "hardware_profile_sha256",
+            "configuration_sha256_by_participants",
+        }
+        if not isinstance(environment, dict) or set(environment) != expected:
+            raise EvidenceError(f"{label} benchmark environment is malformed")
+        configurations = environment["configuration_sha256_by_participants"]
+        expected_participants = {str(value) for value in REQUIRED_PARTICIPANTS}
+        if any(
+            not isinstance(environment[field], str)
+            or re.fullmatch(r"[0-9a-f]{64}", environment[field]) is None
+            for field in ("hardware_sha256", "hardware_profile_sha256")
+        ) or not isinstance(configurations, dict):
+            raise EvidenceError(f"{label} benchmark environment is malformed")
+        if set(configurations) != expected_participants or any(
+            not isinstance(value, str)
+            or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in configurations.values()
+        ):
+            raise EvidenceError(f"{label} benchmark environment is malformed")
+        environments.append(environment)
+    candidate_environment, baseline_environment = environments
+    if (
+        candidate_environment["hardware_profile_sha256"]
+        != baseline_environment["hardware_profile_sha256"]
+        or candidate_environment["configuration_sha256_by_participants"]
+        != baseline_environment["configuration_sha256_by_participants"]
+    ):
         raise EvidenceError(
-            "candidate and baseline must use identical hardware and configurations"
+            "candidate and baseline must use identical hardware profiles and configurations"
         )
     if candidate.get("requirements") != baseline.get("requirements"):
         raise EvidenceError(

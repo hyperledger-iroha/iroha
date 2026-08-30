@@ -9,7 +9,7 @@ use crate::{AssetDefinitionId, NetworkId, account::AccountId, asset::AssetBalanc
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
-pub use iroha_zkp_halo2::vega::{
+pub use iroha_zkp_halo2::vega_constants::{
     VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, VEGA_MDL_BIRTH_RANDOM_BYTES_V1,
     VEGA_MDL_FULL_DATE_TEXT_BYTES_V1, VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1,
     VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MAX_PRESENTATION_YEAR_V1,

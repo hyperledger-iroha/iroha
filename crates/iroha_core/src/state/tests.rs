@@ -5733,7 +5733,18 @@ state_test! { sync merge_entrypoints_commit_in_canonical_carrier_membership
         .lanes
         .iter()
         .flat_map(|execution| {
-            StateBlock::merge_execution_entrypoint_hashes(&execution.entrypoints)
+            execution
+                .entrypoints
+                .iter()
+                .map(TransactionEntrypoint::hash)
+                .chain(
+                    execution
+                        .authenticated_signed_replay_aliases
+                        .iter()
+                        .flatten()
+                        .copied()
+                        .map(HashOf::<TransactionEntrypoint>::from_untyped_unchecked),
+                )
         })
         .collect::<HashSet<_>>();
     assert!(!expected_membership.is_empty());
@@ -39182,6 +39193,10 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
         manifest.code_hash = Some(code_hash);
         register_manifest(&ALICE_ID, manifest.signed(&ALICE_KEYPAIR), &mut stx)
             .expect("register raw trigger manifest");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            ALICE_ID.clone(),
+        );
         activate_instance(&ALICE_ID, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate raw trigger contract");
         let mut callback_metadata = Metadata::default();
@@ -39584,6 +39599,10 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
         manifest.code_hash = Some(code_hash);
         let manifest = manifest.signed(&ALICE_KEYPAIR);
         register_manifest(&ALICE_ID, manifest, &mut stx).expect("register contract manifest");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            ALICE_ID.clone(),
+        );
         activate_instance(&ALICE_ID, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate contract instance");
         let_row! { trigger = Trigger::new( trigger_id.clone(), Action::new( Executable::ContractCall(ContractInvocation { contract_address: contract_address.clone(), expected_code_hash: code_hash, entrypoint: "run".to_owned(), arguments: Some(callback_arguments), }), Repeats::Indefinitely, ALICE_ID.clone(), ExecuteTriggerEventFilter::new() .for_trigger(trigger_id.clone()) .under_authority(ALICE_ID.clone()), ) .expect("trigger action fixture satisfies validation invariants"), ) };
@@ -39875,6 +39894,10 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
         manifest.code_hash = Some(code_hash);
         register_manifest(&ALICE_ID, manifest.signed(&ALICE_KEYPAIR), &mut stx)
             .expect("register alias-transfer callback manifest");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            ALICE_ID.clone(),
+        );
         activate_instance(&ALICE_ID, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate alias-transfer callback contract");
         Register::asset_definition(AssetDefinition::numeric(

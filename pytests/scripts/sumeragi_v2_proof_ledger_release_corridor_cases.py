@@ -4283,8 +4283,8 @@ def test_formal_workflows_use_fresh_private_external_layouts() -> None:
     )
     assert "cancel-in-progress: false" in nightly
     assert "cancel-in-progress: true" not in nightly
-    assert "cancel-in-progress: false" in pull_request
-    assert "cancel-in-progress: true" not in pull_request
+    assert "cancel-in-progress: true" in pull_request
+    assert "cancel-in-progress: false" not in pull_request
     formal_jobs = (
         job(nightly, "sumeragi-v2-formal"),
         job(pull_request, "sumeragi_formal"),

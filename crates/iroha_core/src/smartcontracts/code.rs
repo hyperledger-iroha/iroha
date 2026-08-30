@@ -1272,7 +1272,7 @@ seiyaku LifecycleTwo {
         activate_instance(
             &authority,
             contract_address.clone(),
-            3,
+            2,
             v2_hash,
             &mut transaction,
         )
