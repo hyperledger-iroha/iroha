@@ -19,6 +19,8 @@ pub(in crate::sumeragi) enum LifecycleLedgerError {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct DurableWalVoteLedgerRepairReceipt {
     store_path: PathBuf,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    store_directory_identity: LifecycleStorageIdentity,
     context: LifecycleContext,
     parent_key: LifecycleKey,
     child_key: LifecycleKey,
@@ -59,7 +61,12 @@ impl DurableWalVoteLedgerRepairReceipt {
         store: &LifecycleLedgerStoreV1,
         ledger: &LifecycleLedgerV1,
     ) -> bool {
-        self.store_path == store.path
+        let mut exact_target = self.store_path == store.path;
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            exact_target &= self.store_directory_identity == store.directory.identity;
+        }
+        exact_target
             && self.context == store.context
             && ledger.context() == self.context
             && encode_frame(ledger, store.max_frame_bytes)
@@ -79,6 +86,8 @@ impl DurableWalVoteLedgerRepairReceipt {
 #[must_use = "a physically present lifecycle frame must enter its exact recovery join"]
 struct AuthenticatedPresentLifecycleFrameV1 {
     store_path: PathBuf,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    store_directory_identity: LifecycleStorageIdentity,
     context: LifecycleContext,
     max_records: usize,
     max_frame_bytes: u64,
@@ -102,12 +111,39 @@ impl AuthenticatedPresentLifecycleFrameV1 {
         self.store_path.parent().is_some_and(|root| {
             complete_tip.authorizes_predecessor_lifecycle_root(root)
                 && self.store_path == root.join(LEDGER_FILE)
+                && self.directory_identity_still_exact(root)
         }) && self.binds_ledger(ledger)
             && complete_tip.authorizes_retired_lifecycle(ledger.context())
     }
 
+    fn directory_identity_still_exact(&self, root: &Path) -> bool {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            bind_lifecycle_directory_path(root, false)
+                .and_then(|(_, directory)| {
+                    directory.metadata().map_err(|error| {
+                        lifecycle_storage_io("inspect authenticated lifecycle root", root, error)
+                    })
+                })
+                .is_ok_and(|metadata| {
+                    LifecycleStorageIdentity::from_metadata(&metadata)
+                        == self.store_directory_identity
+                })
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = root;
+            false
+        }
+    }
+
     fn exactly_matches(&self, store: &LifecycleLedgerStoreV1, ledger: &LifecycleLedgerV1) -> bool {
-        if self.store_path != store.path
+        let mut exact_target = self.store_path == store.path;
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            exact_target &= self.store_directory_identity == store.directory.identity;
+        }
+        if !exact_target
             || self.context != store.context
             || self.max_records != store.max_records
             || self.max_frame_bytes != store.max_frame_bytes
@@ -120,13 +156,940 @@ impl AuthenticatedPresentLifecycleFrameV1 {
             .is_ok_and(|(opened, present)| present && opened == *ledger)
     }
 }
+
+const LEDGER_TEMPORARY_FILE: &str = "lifecycle-ledger-v1.norito.tmp";
+const VALIDATE_SIDECAR_REGISTRATION_FILE: &str = "validate-sidecar-registration-v1.norito";
+const VALIDATE_SIDECAR_REGISTRATION_TEMPORARY_FILE: &str =
+    "validate-sidecar-registration-v1.norito.tmp";
+
+/// Retained owner of the exact directory inode containing both lifecycle
+/// durability leaves.
+///
+/// Production currently reaches this seam through an authenticated lifecycle
+/// root path. The first-release Kura capability can replace `open_or_create`
+/// with a consumed typed directory authority without changing any leaf I/O:
+/// no operation below reopens a leaf or its parent by path.
+#[derive(Debug)]
+struct BoundLifecycleLedgerDirectory {
+    expected_path: PathBuf,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    canonical_path: PathBuf,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    directory: File,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    identity: LifecycleStorageIdentity,
+    operation_lock: std::sync::Mutex<()>,
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LifecycleStorageIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+impl LifecycleStorageIdentity {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt as _;
+
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+
+    fn from_stat(stat: &rustix::fs::Stat) -> Self {
+        Self {
+            device: stat.st_dev as u64,
+            inode: stat.st_ino as u64,
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[derive(Clone, Copy, Debug)]
+struct BoundLifecycleStorageLeaf {
+    identity: LifecycleStorageIdentity,
+    length: u64,
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+struct LifecycleDirectoryOperationGuard<'directory> {
+    directory: &'directory BoundLifecycleLedgerDirectory,
+    _thread_lock: std::sync::MutexGuard<'directory, ()>,
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+impl Drop for LifecycleDirectoryOperationGuard<'_> {
+    fn drop(&mut self) {
+        #[cfg(not(any(
+            target_os = "horizon",
+            target_os = "solaris",
+            target_os = "vita",
+            target_os = "wasi"
+        )))]
+        let _ = rustix::fs::flock(
+            &self.directory.directory,
+            rustix::fs::FlockOperation::Unlock,
+        );
+    }
+}
+
+impl BoundLifecycleLedgerDirectory {
+    fn open_or_create(path: &Path) -> Result<Self, LifecycleLedgerError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            let (canonical_path, directory) = bind_lifecycle_directory_path(path, true)?;
+            let metadata = directory.metadata().map_err(|error| {
+                lifecycle_storage_io("inspect opened lifecycle directory", path, error)
+            })?;
+            validate_lifecycle_directory_metadata(&metadata, path)?;
+            Ok(Self {
+                expected_path: path.to_path_buf(),
+                canonical_path,
+                identity: LifecycleStorageIdentity::from_metadata(&metadata),
+                directory,
+                operation_lock: std::sync::Mutex::new(()),
+            })
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            Err(LifecycleLedgerError::Io(format!(
+                "descriptor-relative lifecycle storage is unsupported at {}",
+                path.display()
+            )))
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn same_directory(&self, other: &Self) -> bool {
+        self.identity == other.identity
+    }
+
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    fn same_directory(&self, _other: &Self) -> bool {
+        false
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn verify_linked(&self) -> Result<(), LifecycleLedgerError> {
+        let retained = self.directory.metadata().map_err(|error| {
+            lifecycle_storage_io(
+                "inspect retained lifecycle directory",
+                &self.expected_path,
+                error,
+            )
+        })?;
+        validate_lifecycle_directory_metadata(&retained, &self.expected_path)?;
+        if LifecycleStorageIdentity::from_metadata(&retained) != self.identity {
+            return Err(lifecycle_invalid_storage(
+                "retained lifecycle directory identity changed",
+            ));
+        }
+        let (canonical_path, linked) = bind_lifecycle_directory_path(&self.expected_path, false)?;
+        if canonical_path != self.canonical_path {
+            return Err(lifecycle_invalid_storage(
+                "lifecycle directory ancestry resolves to a different canonical target",
+            ));
+        }
+        let linked_metadata = linked.metadata().map_err(|error| {
+            lifecycle_storage_io(
+                "inspect linked lifecycle directory",
+                &self.expected_path,
+                error,
+            )
+        })?;
+        validate_lifecycle_directory_metadata(&linked_metadata, &self.expected_path)?;
+        if LifecycleStorageIdentity::from_metadata(&linked_metadata) != self.identity {
+            return Err(lifecycle_invalid_storage(
+                "lifecycle directory ancestry no longer names the retained inode",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn lock(&self) -> Result<LifecycleDirectoryOperationGuard<'_>, LifecycleLedgerError> {
+        let thread_lock = self.operation_lock.lock().map_err(|_| {
+            LifecycleLedgerError::Io("lifecycle storage operation lock was poisoned".to_owned())
+        })?;
+        #[cfg(not(any(
+            target_os = "horizon",
+            target_os = "solaris",
+            target_os = "vita",
+            target_os = "wasi"
+        )))]
+        rustix::fs::flock(&self.directory, rustix::fs::FlockOperation::LockExclusive)
+            .map_err(std::io::Error::from)
+            .map_err(|error| {
+                lifecycle_storage_io("lock lifecycle directory", &self.expected_path, error)
+            })?;
+        #[cfg(any(
+            target_os = "horizon",
+            target_os = "solaris",
+            target_os = "vita",
+            target_os = "wasi"
+        ))]
+        return Err(LifecycleLedgerError::Io(format!(
+            "exclusive lifecycle storage locking is unsupported at {}",
+            self.expected_path.display()
+        )));
+        let guard = LifecycleDirectoryOperationGuard {
+            directory: self,
+            _thread_lock: thread_lock,
+        };
+        guard.directory.verify_linked()?;
+        Ok(guard)
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn inspect_leaf(
+        &self,
+        name: &str,
+        maximum: u64,
+    ) -> Result<Option<BoundLifecycleStorageLeaf>, LifecycleLedgerError> {
+        let path = self.expected_path.join(name);
+        let stat = match rustix::fs::statat(
+            &self.directory,
+            name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(stat) => stat,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => {
+                return Err(lifecycle_storage_io(
+                    "inspect lifecycle storage leaf",
+                    &path,
+                    std::io::Error::from(error),
+                ));
+            }
+        };
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
+            || stat.st_nlink as u64 != 1
+            || stat.st_uid != rustix::process::geteuid().as_raw()
+            || stat.st_size < 0
+        {
+            return Err(lifecycle_invalid_storage(
+                "lifecycle storage leaf is not a direct owner-owned single-link regular file",
+            ));
+        }
+        let length = u64::try_from(stat.st_size).map_err(|_| {
+            lifecycle_invalid_storage("lifecycle storage leaf has an invalid length")
+        })?;
+        if length > maximum {
+            return Err(lifecycle_invalid_storage(
+                "lifecycle storage leaf exceeds its byte bound",
+            ));
+        }
+        Ok(Some(BoundLifecycleStorageLeaf {
+            identity: LifecycleStorageIdentity::from_stat(&stat),
+            length,
+        }))
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn verify_open_leaf(
+        &self,
+        file: &File,
+        name: &str,
+        expected: BoundLifecycleStorageLeaf,
+    ) -> Result<(), LifecycleLedgerError> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let path = self.expected_path.join(name);
+        let opened = file.metadata().map_err(|error| {
+            lifecycle_storage_io("inspect opened lifecycle storage leaf", &path, error)
+        })?;
+        let linked = self.inspect_leaf(name, expected.length)?.ok_or_else(|| {
+            lifecycle_invalid_storage("opened lifecycle storage leaf is no longer linked")
+        })?;
+        if !opened.is_file()
+            || opened.nlink() != 1
+            || opened.uid() != rustix::process::geteuid().as_raw()
+            || opened.len() != expected.length
+            || LifecycleStorageIdentity::from_metadata(&opened) != expected.identity
+            || linked.identity != expected.identity
+            || linked.length != expected.length
+        {
+            return Err(lifecycle_invalid_storage(
+                "lifecycle storage leaf changed its exact open-file identity",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn open_leaf(
+        &self,
+        name: &str,
+        leaf: BoundLifecycleStorageLeaf,
+    ) -> Result<File, LifecycleLedgerError> {
+        let path = self.expected_path.join(name);
+        let file = File::from(
+            rustix::fs::openat(
+                &self.directory,
+                name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC
+                    | rustix::fs::OFlags::NONBLOCK,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|error| lifecycle_storage_io("open lifecycle storage leaf", &path, error))?,
+        );
+        self.verify_open_leaf(&file, name, leaf)?;
+        Ok(file)
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn read_bounded_locked(
+        &self,
+        name: &str,
+        maximum: u64,
+    ) -> Result<Option<Vec<u8>>, LifecycleLedgerError> {
+        let Some(leaf) = self.inspect_leaf(name, maximum)? else {
+            self.verify_linked()?;
+            return Ok(None);
+        };
+        let mut file = self.open_leaf(name, leaf)?;
+        let mut bytes = Vec::with_capacity(usize::try_from(leaf.length).unwrap_or(0));
+        Read::by_ref(&mut file)
+            .take(maximum.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|error| {
+                lifecycle_storage_io(
+                    "read lifecycle storage leaf",
+                    &self.expected_path.join(name),
+                    error,
+                )
+            })?;
+        let observed = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if observed != leaf.length || observed > maximum {
+            return Err(lifecycle_invalid_storage(
+                "lifecycle storage leaf changed during bounded read",
+            ));
+        }
+        self.verify_open_leaf(&file, name, leaf)?;
+        self.verify_linked()?;
+        Ok(Some(bytes))
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn remove_stale_temporary_locked(
+        &self,
+        name: &str,
+        maximum: u64,
+    ) -> Result<(), LifecycleLedgerError> {
+        let Some(leaf) = self.inspect_leaf(name, maximum)? else {
+            return Ok(());
+        };
+        let file = self.open_leaf(name, leaf)?;
+        self.verify_open_leaf(&file, name, leaf)?;
+        rustix::fs::unlinkat(&self.directory, name, rustix::fs::AtFlags::empty())
+            .map_err(std::io::Error::from)
+            .map_err(|error| {
+                lifecycle_storage_io(
+                    "remove stale lifecycle temporary",
+                    &self.expected_path.join(name),
+                    error,
+                )
+            })?;
+        self.sync_locked()?;
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn create_synced_temporary_locked(
+        &self,
+        name: &str,
+        bytes: &[u8],
+        maximum: u64,
+    ) -> Result<(File, BoundLifecycleStorageLeaf), LifecycleLedgerError> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let length = u64::try_from(bytes.len()).map_err(|_| {
+            lifecycle_invalid_storage("lifecycle temporary length is not representable")
+        })?;
+        if length == 0 || length > maximum {
+            return Err(lifecycle_invalid_storage(
+                "lifecycle temporary payload violates its byte bound",
+            ));
+        }
+        let path = self.expected_path.join(name);
+        let mut file = File::from(
+            rustix::fs::openat(
+                &self.directory,
+                name,
+                rustix::fs::OFlags::RDWR
+                    | rustix::fs::OFlags::CREATE
+                    | rustix::fs::OFlags::EXCL
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC
+                    | rustix::fs::OFlags::NONBLOCK,
+                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|error| lifecycle_storage_io("create lifecycle temporary", &path, error))?,
+        );
+        let created = file.metadata().map_err(|error| {
+            lifecycle_storage_io("inspect created lifecycle temporary", &path, error)
+        })?;
+        let empty_leaf = BoundLifecycleStorageLeaf {
+            identity: LifecycleStorageIdentity::from_metadata(&created),
+            length: 0,
+        };
+        if !created.is_file()
+            || created.nlink() != 1
+            || created.uid() != rustix::process::geteuid().as_raw()
+        {
+            return Err(lifecycle_invalid_storage(
+                "exclusively created lifecycle temporary has an invalid identity",
+            ));
+        }
+        self.verify_open_leaf(&file, name, empty_leaf)?;
+        file.write_all(bytes)
+            .and_then(|()| file.flush())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| lifecycle_storage_io("sync lifecycle temporary", &path, error))?;
+        let leaf = BoundLifecycleStorageLeaf {
+            identity: empty_leaf.identity,
+            length,
+        };
+        self.verify_open_leaf(&file, name, leaf)?;
+        Ok((file, leaf))
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn unlink_if_identity_locked(&self, name: &str, expected: LifecycleStorageIdentity) {
+        if self
+            .inspect_leaf(name, u64::MAX)
+            .is_ok_and(|leaf| leaf.is_some_and(|leaf| leaf.identity == expected))
+        {
+            let _ = rustix::fs::unlinkat(&self.directory, name, rustix::fs::AtFlags::empty());
+            let _ = self.directory.sync_all();
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn publish_noreplace_locked(
+        &self,
+        temporary: &str,
+        destination: &str,
+        bytes: &[u8],
+        maximum: u64,
+    ) -> Result<bool, LifecycleLedgerError> {
+        self.remove_stale_temporary_locked(temporary, maximum)?;
+        if self.inspect_leaf(destination, maximum)?.is_some() {
+            return Ok(false);
+        }
+        let (file, leaf) = self.create_synced_temporary_locked(temporary, bytes, maximum)?;
+        let publication = (|| {
+            self.verify_linked()?;
+            match rename_lifecycle_leaf_noreplace(&self.directory, temporary, destination) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => return Ok(false),
+                Err(error) => {
+                    return Err(lifecycle_storage_io(
+                        "publish lifecycle storage leaf",
+                        &self.expected_path.join(destination),
+                        error,
+                    ));
+                }
+            }
+            self.verify_open_leaf(&file, destination, leaf)?;
+            self.sync_locked()?;
+            self.verify_open_leaf(&file, destination, leaf)?;
+            Ok(true)
+        })();
+        if publication.as_ref().is_err() || matches!(publication.as_ref(), Ok(false)) {
+            self.unlink_if_identity_locked(temporary, leaf.identity);
+        }
+        publication
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn publish_replace_locked(
+        &self,
+        temporary: &str,
+        destination: &str,
+        bytes: &[u8],
+        maximum: u64,
+    ) -> Result<(), LifecycleLedgerError> {
+        self.remove_stale_temporary_locked(temporary, maximum)?;
+        let destination_existed = self.inspect_leaf(destination, maximum)?.is_some();
+        let (file, leaf) = self.create_synced_temporary_locked(temporary, bytes, maximum)?;
+        let publication = (|| {
+            self.verify_linked()?;
+            if destination_existed {
+                rustix::fs::renameat(&self.directory, temporary, &self.directory, destination)
+                    .map_err(std::io::Error::from)
+                    .map_err(|error| {
+                        lifecycle_storage_io(
+                            "replace lifecycle storage leaf",
+                            &self.expected_path.join(destination),
+                            error,
+                        )
+                    })?;
+            } else {
+                rename_lifecycle_leaf_noreplace(&self.directory, temporary, destination).map_err(
+                    |error| {
+                        lifecycle_storage_io(
+                            "publish initial lifecycle storage leaf",
+                            &self.expected_path.join(destination),
+                            error,
+                        )
+                    },
+                )?;
+            }
+            self.verify_open_leaf(&file, destination, leaf)?;
+            self.sync_locked()?;
+            self.verify_open_leaf(&file, destination, leaf)
+        })();
+        if publication.is_err() {
+            self.unlink_if_identity_locked(temporary, leaf.identity);
+        }
+        publication
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn remove_exact_locked(&self, name: &str, maximum: u64) -> Result<(), LifecycleLedgerError> {
+        let leaf = self.inspect_leaf(name, maximum)?.ok_or_else(|| {
+            lifecycle_invalid_storage("lifecycle storage leaf disappeared before retirement")
+        })?;
+        let file = self.open_leaf(name, leaf)?;
+        self.verify_open_leaf(&file, name, leaf)?;
+        rustix::fs::unlinkat(&self.directory, name, rustix::fs::AtFlags::empty())
+            .map_err(std::io::Error::from)
+            .map_err(|error| {
+                lifecycle_storage_io(
+                    "retire lifecycle storage leaf",
+                    &self.expected_path.join(name),
+                    error,
+                )
+            })?;
+        self.sync_locked()
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn sync_locked(&self) -> Result<(), LifecycleLedgerError> {
+        self.verify_linked()?;
+        self.directory.sync_all().map_err(|error| {
+            lifecycle_storage_io(
+                "sync lifecycle storage directory",
+                &self.expected_path,
+                error,
+            )
+        })?;
+        self.verify_linked()
+    }
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn bind_lifecycle_directory_path(
+    path: &Path,
+    create_missing: bool,
+) -> Result<(PathBuf, File), LifecycleLedgerError> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    if path.as_os_str().is_empty() {
+        return Err(lifecycle_invalid_storage(
+            "lifecycle directory path is empty",
+        ));
+    }
+    match fs::symlink_metadata(path) {
+        Ok(lexical) => {
+            if lexical.file_type().is_symlink() || !lexical.is_dir() {
+                return Err(lifecycle_invalid_storage(
+                    "lifecycle storage root is a symlink or non-directory",
+                ));
+            }
+            let canonical = fs::canonicalize(path).map_err(|error| {
+                lifecycle_storage_io("canonicalize lifecycle directory", path, error)
+            })?;
+            let directory = open_canonical_lifecycle_directory_ancestry(&canonical)?;
+            let opened = directory.metadata().map_err(|error| {
+                lifecycle_storage_io("inspect bound lifecycle directory", path, error)
+            })?;
+            validate_lifecycle_directory_metadata(&opened, path)?;
+            if LifecycleStorageIdentity::from_metadata(&lexical)
+                != LifecycleStorageIdentity::from_metadata(&opened)
+            {
+                return Err(lifecycle_invalid_storage(
+                    "lifecycle storage root changed while binding its canonical directory",
+                ));
+            }
+            validate_lifecycle_directory_ownership(&opened)?;
+            Ok((canonical, directory))
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound && create_missing => {
+            let mut missing = Vec::new();
+            let mut ancestor = path.to_path_buf();
+            let (mut canonical, mut directory) = loop {
+                match fs::symlink_metadata(&ancestor) {
+                    Ok(lexical) => {
+                        if lexical.file_type().is_symlink() || !lexical.is_dir() {
+                            return Err(lifecycle_invalid_storage(
+                                "nearest lifecycle storage ancestor is a symlink or non-directory",
+                            ));
+                        }
+                        let canonical = fs::canonicalize(&ancestor).map_err(|error| {
+                            lifecycle_storage_io(
+                                "canonicalize lifecycle directory ancestor",
+                                &ancestor,
+                                error,
+                            )
+                        })?;
+                        let directory = open_canonical_lifecycle_directory_ancestry(&canonical)?;
+                        let opened = directory.metadata().map_err(|error| {
+                            lifecycle_storage_io(
+                                "inspect lifecycle directory ancestor",
+                                &ancestor,
+                                error,
+                            )
+                        })?;
+                        if LifecycleStorageIdentity::from_metadata(&lexical)
+                            != LifecycleStorageIdentity::from_metadata(&opened)
+                        {
+                            return Err(lifecycle_invalid_storage(
+                                "lifecycle storage ancestor changed while binding",
+                            ));
+                        }
+                        break (canonical, directory);
+                    }
+                    Err(error) if error.kind() == ErrorKind::NotFound => {
+                        let name = ancestor.file_name().ok_or_else(|| {
+                            lifecycle_invalid_storage(
+                                "missing lifecycle directory has no direct component name",
+                            )
+                        })?;
+                        missing.push(name.to_os_string());
+                        ancestor = ancestor
+                            .parent()
+                            .filter(|parent| !parent.as_os_str().is_empty())
+                            .unwrap_or_else(|| Path::new("."))
+                            .to_path_buf();
+                    }
+                    Err(error) => {
+                        return Err(lifecycle_storage_io(
+                            "inspect lifecycle directory ancestor",
+                            &ancestor,
+                            error,
+                        ));
+                    }
+                }
+            };
+            for name in missing.iter().rev() {
+                canonical.push(name);
+                let mut created = false;
+                let before = match rustix::fs::statat(
+                    &directory,
+                    name,
+                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                ) {
+                    Ok(stat) => stat,
+                    Err(rustix::io::Errno::NOENT) => {
+                        match rustix::fs::mkdirat(&directory, name, rustix::fs::Mode::RWXU) {
+                            Ok(()) => created = true,
+                            Err(rustix::io::Errno::EXIST) => {}
+                            Err(error) => {
+                                return Err(lifecycle_storage_io(
+                                    "create lifecycle directory component",
+                                    &canonical,
+                                    std::io::Error::from(error),
+                                ));
+                            }
+                        }
+                        rustix::fs::statat(&directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                            .map_err(std::io::Error::from)
+                            .map_err(|error| {
+                                lifecycle_storage_io(
+                                    "inspect created lifecycle directory component",
+                                    &canonical,
+                                    error,
+                                )
+                            })?
+                    }
+                    Err(error) => {
+                        return Err(lifecycle_storage_io(
+                            "inspect lifecycle directory component",
+                            &canonical,
+                            std::io::Error::from(error),
+                        ));
+                    }
+                };
+                if rustix::fs::FileType::from_raw_mode(before.st_mode)
+                    != rustix::fs::FileType::Directory
+                {
+                    return Err(lifecycle_invalid_storage(
+                        "created lifecycle ancestry contains a symlink or non-directory",
+                    ));
+                }
+                let child = File::from(
+                    rustix::fs::openat(
+                        &directory,
+                        name,
+                        rustix::fs::OFlags::RDONLY
+                            | rustix::fs::OFlags::DIRECTORY
+                            | rustix::fs::OFlags::NOFOLLOW
+                            | rustix::fs::OFlags::CLOEXEC,
+                        rustix::fs::Mode::empty(),
+                    )
+                    .map_err(std::io::Error::from)
+                    .map_err(|error| {
+                        lifecycle_storage_io(
+                            "open created lifecycle directory component",
+                            &canonical,
+                            error,
+                        )
+                    })?,
+                );
+                let opened = child.metadata().map_err(|error| {
+                    lifecycle_storage_io(
+                        "inspect opened lifecycle directory component",
+                        &canonical,
+                        error,
+                    )
+                })?;
+                let after =
+                    rustix::fs::statat(&directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                        .map_err(std::io::Error::from)
+                        .map_err(|error| {
+                            lifecycle_storage_io(
+                                "reinspect lifecycle directory component",
+                                &canonical,
+                                error,
+                            )
+                        })?;
+                let opened_identity = LifecycleStorageIdentity::from_metadata(&opened);
+                if !opened.is_dir()
+                    || LifecycleStorageIdentity::from_stat(&before) != opened_identity
+                    || LifecycleStorageIdentity::from_stat(&after) != opened_identity
+                {
+                    return Err(lifecycle_invalid_storage(
+                        "lifecycle directory changed during descriptor-relative creation",
+                    ));
+                }
+                if created {
+                    child.sync_all().map_err(|error| {
+                        lifecycle_storage_io("sync created lifecycle directory", &canonical, error)
+                    })?;
+                    directory.sync_all().map_err(|error| {
+                        lifecycle_storage_io(
+                            "sync parent of created lifecycle directory",
+                            &canonical,
+                            error,
+                        )
+                    })?;
+                }
+                directory = child;
+            }
+            let lexical = fs::symlink_metadata(path).map_err(|error| {
+                lifecycle_storage_io("inspect created lifecycle directory", path, error)
+            })?;
+            let opened = directory.metadata().map_err(|error| {
+                lifecycle_storage_io("inspect bound created lifecycle directory", path, error)
+            })?;
+            if lexical.file_type().is_symlink()
+                || !lexical.is_dir()
+                || LifecycleStorageIdentity::from_metadata(&lexical)
+                    != LifecycleStorageIdentity::from_metadata(&opened)
+            {
+                return Err(lifecycle_invalid_storage(
+                    "created lifecycle storage root changed before binding",
+                ));
+            }
+            validate_lifecycle_directory_ownership(&opened)?;
+            Ok((canonical, directory))
+        }
+        Err(error) => Err(lifecycle_storage_io(
+            "inspect lifecycle storage root",
+            path,
+            error,
+        )),
+    }
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn open_canonical_lifecycle_directory_ancestry(
+    canonical: &Path,
+) -> Result<File, LifecycleLedgerError> {
+    use std::path::Component;
+
+    if !canonical.is_absolute() {
+        return Err(lifecycle_invalid_storage(
+            "canonical lifecycle directory path is not absolute",
+        ));
+    }
+    let mut current = File::from(
+        rustix::fs::open(
+            "/",
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(std::io::Error::from)
+        .map_err(|error| {
+            lifecycle_storage_io("open lifecycle directory anchor", Path::new("/"), error)
+        })?,
+    );
+    let mut traversed = PathBuf::from("/");
+    for component in canonical.components() {
+        let name = match component {
+            Component::RootDir | Component::CurDir => continue,
+            Component::Normal(name) => name,
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(lifecycle_invalid_storage(
+                    "canonical lifecycle path contains an invalid traversal component",
+                ));
+            }
+        };
+        traversed.push(name);
+        let before = rustix::fs::statat(&current, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)
+            .map_err(|error| {
+                lifecycle_storage_io("inspect canonical lifecycle ancestry", &traversed, error)
+            })?;
+        if rustix::fs::FileType::from_raw_mode(before.st_mode) != rustix::fs::FileType::Directory {
+            return Err(lifecycle_invalid_storage(
+                "canonical lifecycle ancestry contains a symlink or non-directory",
+            ));
+        }
+        let child = File::from(
+            rustix::fs::openat(
+                &current,
+                name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|error| {
+                lifecycle_storage_io("open canonical lifecycle ancestry", &traversed, error)
+            })?,
+        );
+        let opened = child.metadata().map_err(|error| {
+            lifecycle_storage_io("inspect opened canonical ancestry", &traversed, error)
+        })?;
+        let after = rustix::fs::statat(&current, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)
+            .map_err(|error| {
+                lifecycle_storage_io("reinspect canonical lifecycle ancestry", &traversed, error)
+            })?;
+        let opened_identity = LifecycleStorageIdentity::from_metadata(&opened);
+        if !opened.is_dir()
+            || LifecycleStorageIdentity::from_stat(&before) != opened_identity
+            || LifecycleStorageIdentity::from_stat(&after) != opened_identity
+        {
+            return Err(lifecycle_invalid_storage(
+                "canonical lifecycle ancestry changed during no-follow traversal",
+            ));
+        }
+        current = child;
+    }
+    Ok(current)
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn validate_lifecycle_directory_ownership(
+    metadata: &std::fs::Metadata,
+) -> Result<(), LifecycleLedgerError> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0 {
+        return Err(lifecycle_invalid_storage(
+            "lifecycle directory must be owner-owned and not group/world writable",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn validate_lifecycle_directory_metadata(
+    metadata: &std::fs::Metadata,
+    _path: &Path,
+) -> Result<(), LifecycleLedgerError> {
+    if !metadata.is_dir() {
+        return Err(lifecycle_invalid_storage(
+            "lifecycle storage root is not a direct directory",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(
+    unix,
+    not(target_os = "espidf"),
+    any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    )
+))]
+fn rename_lifecycle_leaf_noreplace(
+    directory: &File,
+    source: &str,
+    destination: &str,
+) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        directory,
+        source,
+        directory,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+}
+
+#[cfg(all(
+    unix,
+    not(target_os = "espidf"),
+    not(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    ))
+))]
+fn rename_lifecycle_leaf_noreplace(
+    _directory: &File,
+    _source: &str,
+    _destination: &str,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        ErrorKind::Unsupported,
+        "atomic no-replace lifecycle publication is unavailable",
+    ))
+}
+
+fn lifecycle_storage_io(
+    operation: &str,
+    path: &Path,
+    error: std::io::Error,
+) -> LifecycleLedgerError {
+    LifecycleLedgerError::Io(format!("{operation} {}: {error}", path.display()))
+}
+
+fn lifecycle_invalid_storage(reason: &str) -> LifecycleLedgerError {
+    LifecycleLedgerError::InvalidFrame(reason.to_owned())
+}
+
 /// Crash-safe, bounded store for one height-local LifecycleLedgerV1.
 #[derive(Clone, Debug)]
 pub(in crate::sumeragi) struct LifecycleLedgerStoreV1 {
     path: PathBuf,
+    directory: std::sync::Arc<BoundLifecycleLedgerDirectory>,
     context: LifecycleContext,
     max_records: usize,
     max_frame_bytes: u64,
+    #[cfg(test)]
+    fail_persistence_for_test: bool,
 }
 impl LifecycleLedgerStoreV1 {
     /// Return the private sibling path reserved for the one lifecycle-owned
@@ -149,6 +1112,136 @@ impl LifecycleLedgerStoreV1 {
         self.context
     }
 
+    /// Load the exact bounded Validate sidecar registration through this
+    /// store's retained directory owner.
+    pub(super) fn load_validate_sidecar_registration_bytes(
+        &self,
+        maximum: u64,
+    ) -> Result<Option<Vec<u8>>, LifecycleLedgerError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.fail_persistence_if_injected()?;
+            let guard = self.directory.lock()?;
+            guard.directory.remove_stale_temporary_locked(
+                VALIDATE_SIDECAR_REGISTRATION_TEMPORARY_FILE,
+                maximum,
+            )?;
+            guard
+                .directory
+                .read_bounded_locked(VALIDATE_SIDECAR_REGISTRATION_FILE, maximum)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = maximum;
+            Err(LifecycleLedgerError::Io(format!(
+                "descriptor-relative lifecycle sidecar storage is unsupported at {}",
+                self.path.display()
+            )))
+        }
+    }
+
+    /// Publish one Validate sidecar registration without ever replacing an
+    /// incumbent. `Some(bytes)` is the complete incumbent observed under the
+    /// same directory lock; `None` means `bytes` was newly fsynced.
+    pub(super) fn publish_validate_sidecar_registration_bytes(
+        &self,
+        bytes: &[u8],
+        maximum: u64,
+    ) -> Result<Option<Vec<u8>>, LifecycleLedgerError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.fail_persistence_if_injected()?;
+            let guard = self.directory.lock()?;
+            guard.directory.remove_stale_temporary_locked(
+                VALIDATE_SIDECAR_REGISTRATION_TEMPORARY_FILE,
+                maximum,
+            )?;
+            if let Some(existing) = guard
+                .directory
+                .read_bounded_locked(VALIDATE_SIDECAR_REGISTRATION_FILE, maximum)?
+            {
+                return Ok(Some(existing));
+            }
+            if guard.directory.publish_noreplace_locked(
+                VALIDATE_SIDECAR_REGISTRATION_TEMPORARY_FILE,
+                VALIDATE_SIDECAR_REGISTRATION_FILE,
+                bytes,
+                maximum,
+            )? {
+                return Ok(None);
+            }
+            guard
+                .directory
+                .read_bounded_locked(VALIDATE_SIDECAR_REGISTRATION_FILE, maximum)?
+                .map(Some)
+                .ok_or_else(|| {
+                    lifecycle_invalid_storage(
+                        "sidecar destination appeared during no-replace publication but vanished before exact read",
+                    )
+                })
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (bytes, maximum);
+            Err(LifecycleLedgerError::Io(format!(
+                "descriptor-relative lifecycle sidecar storage is unsupported at {}",
+                self.path.display()
+            )))
+        }
+    }
+
+    /// Remove exactly the expected Validate sidecar registration and fsync
+    /// the retained directory before returning.
+    pub(super) fn clear_validate_sidecar_registration_bytes(
+        &self,
+        expected: &[u8],
+        maximum: u64,
+    ) -> Result<(), LifecycleLedgerError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.fail_persistence_if_injected()?;
+            let guard = self.directory.lock()?;
+            guard.directory.remove_stale_temporary_locked(
+                VALIDATE_SIDECAR_REGISTRATION_TEMPORARY_FILE,
+                maximum,
+            )?;
+            let observed = guard
+                .directory
+                .read_bounded_locked(VALIDATE_SIDECAR_REGISTRATION_FILE, maximum)?
+                .ok_or_else(|| {
+                    lifecycle_invalid_storage(
+                        "Validate sidecar registration disappeared before exact retirement",
+                    )
+                })?;
+            if observed != expected {
+                return Err(lifecycle_invalid_storage(
+                    "Validate sidecar retirement does not match the incumbent bytes",
+                ));
+            }
+            guard
+                .directory
+                .remove_exact_locked(VALIDATE_SIDECAR_REGISTRATION_FILE, maximum)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (expected, maximum);
+            Err(LifecycleLedgerError::Io(format!(
+                "descriptor-relative lifecycle sidecar storage is unsupported at {}",
+                self.path.display()
+            )))
+        }
+    }
+
+    fn fail_persistence_if_injected(&self) -> Result<(), LifecycleLedgerError> {
+        #[cfg(test)]
+        if self.fail_persistence_for_test {
+            return Err(LifecycleLedgerError::Io(
+                "injected lifecycle storage persistence failure".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     fn is_authorized_complete_tip_predecessor_target(
         &self,
         complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
@@ -161,6 +1254,7 @@ impl LifecycleLedgerStoreV1 {
     /// Compare the complete immutable publication target of two open handles.
     pub(super) fn same_publication_target(&self, other: &Self) -> bool {
         self.path == other.path
+            && self.directory.same_directory(&other.directory)
             && self.context == other.context
             && self.max_records == other.max_records
             && self.max_frame_bytes == other.max_frame_bytes
@@ -205,12 +1299,15 @@ impl LifecycleLedgerStoreV1 {
         root: &Path,
         context: LifecycleContext,
     ) -> Result<(Self, LifecycleLedgerV1), LifecycleLedgerError> {
-        ensure_durable_ledger_directory(root)?;
+        let directory = std::sync::Arc::new(BoundLifecycleLedgerDirectory::open_or_create(root)?);
         let store = Self {
             path: root.join(LEDGER_FILE),
+            directory,
             context,
             max_records: MAX_LIFECYCLE_RECORDS_PER_HEIGHT,
             max_frame_bytes: MAX_LEDGER_FRAME_BYTES,
+            #[cfg(test)]
+            fail_persistence_for_test: false,
         };
         let ledger = store.load()?;
         Ok((store, ledger))
@@ -219,40 +1316,35 @@ impl LifecycleLedgerStoreV1 {
         self.load_with_frame_presence().map(|(ledger, _)| ledger)
     }
     fn load_with_frame_presence(&self) -> Result<(LifecycleLedgerV1, bool), LifecycleLedgerError> {
-        let metadata = match fs::symlink_metadata(&self.path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                return Ok((LifecycleLedgerV1::empty(self.context), false));
-            }
-            Err(error) => {
-                return Err(LifecycleLedgerError::Io(format!(
-                    "failed to inspect lifecycle ledger {}: {error}",
-                    self.path.display()
-                )));
-            }
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.fail_persistence_if_injected()?;
+            let guard = self.directory.lock()?;
+            self.load_with_frame_presence_locked(&guard)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            Err(LifecycleLedgerError::Io(format!(
+                "descriptor-relative lifecycle storage is unsupported at {}",
+                self.path.display()
+            )))
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn load_with_frame_presence_locked(
+        &self,
+        guard: &LifecycleDirectoryOperationGuard<'_>,
+    ) -> Result<(LifecycleLedgerV1, bool), LifecycleLedgerError> {
+        guard
+            .directory
+            .remove_stale_temporary_locked(LEDGER_TEMPORARY_FILE, self.max_frame_bytes)?;
+        let Some(bytes) = guard
+            .directory
+            .read_bounded_locked(LEDGER_FILE, self.max_frame_bytes)?
+        else {
+            return Ok((LifecycleLedgerV1::empty(self.context), false));
         };
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(LifecycleLedgerError::InvalidFrame(
-                "ledger path is not a regular file".to_owned(),
-            ));
-        }
-        if metadata.len() > self.max_frame_bytes {
-            return Err(LifecycleLedgerError::InvalidFrame(
-                "ledger exceeds its configured byte bound".to_owned(),
-            ));
-        }
-        let read_limit = self.max_frame_bytes.checked_add(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidFrame("ledger read bound overflowed".to_owned())
-        })?;
-        let mut bytes = Vec::new();
-        File::open(&self.path)
-            .and_then(|file| file.take(read_limit).read_to_end(&mut bytes))
-            .map_err(|error| {
-                LifecycleLedgerError::Io(format!(
-                    "failed to read lifecycle ledger {}: {error}",
-                    self.path.display()
-                ))
-            })?;
         let ledger = decode_frame(&bytes, self.max_frame_bytes)?;
         if ledger.context() != self.context {
             return Err(LifecycleLedgerError::InvalidLedger(
@@ -282,6 +1374,8 @@ impl LifecycleLedgerStoreV1 {
         let frame = encode_frame(&opened, self.max_frame_bytes)?;
         Ok(Some(AuthenticatedPresentLifecycleFrameV1 {
             store_path: self.path.clone(),
+            #[cfg(all(unix, not(target_os = "espidf")))]
+            store_directory_identity: self.directory.identity,
             context: self.context,
             max_records: self.max_records,
             max_frame_bytes: self.max_frame_bytes,
@@ -304,16 +1398,29 @@ impl LifecycleLedgerStoreV1 {
         current: &LifecycleLedgerV1,
         successor: &LifecycleLedgerV1,
     ) -> Result<(), LifecycleLedgerError> {
-        let (loaded, frame_present) = self.load_with_frame_presence()?;
-        if loaded != *current {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "attached lifecycle ledger changed before successor publication".to_owned(),
-            ));
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.fail_persistence_if_injected()?;
+            let guard = self.directory.lock()?;
+            let (loaded, frame_present) = self.load_with_frame_presence_locked(&guard)?;
+            if loaded != *current {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "attached lifecycle ledger changed before successor publication".to_owned(),
+                ));
+            }
+            if current == successor && frame_present {
+                return Ok(());
+            }
+            self.persist_locked(&guard, successor)
         }
-        if current == successor && frame_present {
-            return Ok(());
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (current, successor);
+            Err(LifecycleLedgerError::Io(format!(
+                "descriptor-relative lifecycle storage is unsupported at {}",
+                self.path.display()
+            )))
         }
-        self.persist(successor)
     }
     /// Persist one ordinary coordinator successor without rewriting a sealed
     /// Validate/no-successor tombstone.
@@ -479,6 +1586,28 @@ impl LifecycleLedgerStoreV1 {
     }
     /// Atomically replace the ledger after validating all durable invariants.
     pub(super) fn persist(&self, ledger: &LifecycleLedgerV1) -> Result<(), LifecycleLedgerError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.fail_persistence_if_injected()?;
+            let guard = self.directory.lock()?;
+            self.persist_locked(&guard, ledger)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = ledger;
+            Err(LifecycleLedgerError::Io(format!(
+                "descriptor-relative lifecycle storage is unsupported at {}",
+                self.path.display()
+            )))
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn persist_locked(
+        &self,
+        guard: &LifecycleDirectoryOperationGuard<'_>,
+        ledger: &LifecycleLedgerV1,
+    ) -> Result<(), LifecycleLedgerError> {
         if ledger.context() != self.context {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "cannot persist a foreign height context".to_owned(),
@@ -486,60 +1615,12 @@ impl LifecycleLedgerStoreV1 {
         }
         ledger.validate(self.max_records)?;
         let bytes = encode_frame(ledger, self.max_frame_bytes)?;
-        let parent = self.path.parent().ok_or_else(|| {
-            LifecycleLedgerError::Io("ledger path has no parent directory".to_owned())
-        })?;
-        let temporary = self.path.with_extension("norito.tmp");
-        match fs::symlink_metadata(&temporary) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-                return Err(LifecycleLedgerError::InvalidFrame(
-                    "ledger temporary path is not a regular file".to_owned(),
-                ));
-            }
-            Ok(_) => {
-                fs::remove_file(&temporary).map_err(|error| {
-                    LifecycleLedgerError::Io(format!(
-                        "failed to discard lifecycle ledger temporary file {}: {error}",
-                        temporary.display()
-                    ))
-                })?;
-                sync_ledger_directory(parent)?;
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(LifecycleLedgerError::Io(format!(
-                    "failed to inspect lifecycle ledger temporary file {}: {error}",
-                    temporary.display()
-                )));
-            }
-        }
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)
-            .map_err(|error| {
-                LifecycleLedgerError::Io(format!(
-                    "failed to create lifecycle ledger temporary file {}: {error}",
-                    temporary.display()
-                ))
-            })?;
-        file.write_all(&bytes)
-            .and_then(|()| file.flush())
-            .and_then(|()| file.sync_all())
-            .map_err(|error| {
-                LifecycleLedgerError::Io(format!(
-                    "failed to sync lifecycle ledger temporary file {}: {error}",
-                    temporary.display()
-                ))
-            })?;
-        fs::rename(&temporary, &self.path).map_err(|error| {
-            LifecycleLedgerError::Io(format!(
-                "failed to publish lifecycle ledger {}: {error}",
-                self.path.display()
-            ))
-        })?;
-        sync_ledger_directory(parent)?;
-        Ok(())
+        guard.directory.publish_replace_locked(
+            LEDGER_TEMPORARY_FILE,
+            LEDGER_FILE,
+            &bytes,
+            self.max_frame_bytes,
+        )
     }
     /// Stage and fsync one authenticated WAL-ahead lifecycle repair.
     ///
@@ -581,11 +1662,13 @@ impl LifecycleLedgerStoreV1 {
             Ok(frame) => frame,
             Err(error) => return Err(Box::new((error, repair))),
         };
-        if let Err(error) = self.persist(&staged) {
+        if let Err(error) = self.persist_exact_successor(&loaded, &staged) {
             return Err(Box::new((error, repair)));
         }
         let receipt = DurableWalVoteLedgerRepairReceipt {
             store_path: self.path.clone(),
+            #[cfg(all(unix, not(target_os = "espidf")))]
+            store_directory_identity: self.directory.identity,
             context: self.context,
             parent_key: repair.parent().key,
             child_key: repair.child().key,
@@ -651,6 +1734,8 @@ impl LifecycleLedgerStoreV1 {
         };
         let receipt = DurableWalVoteLedgerRepairReceipt {
             store_path: self.path.clone(),
+            #[cfg(all(unix, not(target_os = "espidf")))]
+            store_directory_identity: self.directory.identity,
             context: self.context,
             parent_key: repair.parent().key,
             child_key: repair.child().key,
@@ -672,6 +1757,7 @@ impl LifecycleLedgerStoreV1 {
         }
     }
 }
+#[cfg(test)]
 fn sync_ledger_directory(directory: &Path) -> Result<(), LifecycleLedgerError> {
     File::open(directory)
         .and_then(|file| file.sync_all())
@@ -682,9 +1768,7 @@ fn sync_ledger_directory(directory: &Path) -> Result<(), LifecycleLedgerError> {
             ))
         })
 }
-fn ensure_durable_ledger_directory(root: &Path) -> Result<(), LifecycleLedgerError> {
-    ensure_durable_ledger_directory_with(root, &mut sync_ledger_directory)
-}
+#[cfg(test)]
 fn ensure_durable_ledger_directory_with<Sync>(
     root: &Path,
     sync: &mut Sync,
@@ -907,10 +1991,9 @@ impl LifecycleCoordinator {
     }
     #[cfg(test)]
     pub(super) fn redirect_test_ledger_to_missing_parent(&mut self, root: &Path) {
-        self.ledger_store
-            .as_mut()
-            .expect("test ledger is attached")
-            .path = root.join("missing-parent").join(LEDGER_FILE);
+        let store = self.ledger_store.as_mut().expect("test ledger is attached");
+        store.path = root.join("missing-parent").join(LEDGER_FILE);
+        store.fail_persistence_for_test = true;
     }
 }
 fn encode_frame(

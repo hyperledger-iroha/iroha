@@ -50,7 +50,7 @@
       "role": "message",
       "outer_curve": "bls12-381",
       "constraints": 34718292,
-      "kat_sha256": "77ed6524a11625e10b4b1ae363d8a305a9a67bf5d39a801e5bc80358cb5dd3c2"
+      "kat_sha256": "b469b281edb4d8cba398a631d68579b8459e4d39d9e71825350b80a30d9fd763"
     },
     {
       "profile": "sccp-final-v1-tron-mainnet-epoch-anchor-update",
@@ -86,11 +86,12 @@
     "profiles_requiring_fresh_r1cs": [
       "sccp-final-v1-bsc-mainnet-message",
       "sccp-final-v1-ethereum-mainnet-message",
+      "sccp-final-v1-ton-mainnet-epoch-anchor-update",
       "sccp-final-v1-ton-mainnet-message",
       "sccp-final-v1-tron-mainnet-epoch-anchor-update",
       "sccp-final-v1-tron-mainnet-message"
     ],
-    "reason": "Final-V1 payload discriminant, hub-kind, domain, and codec identifiers were aligned with the canonical Rust wire format. No earlier R1CS identity or dependent release artifact for these profiles is current."
+    "reason": "Final-V1 payload discriminant, hub-kind, domain, codec, and destination-backend identifiers were aligned with the canonical Rust wire format. No earlier R1CS identity or dependent release artifact for these profiles is current."
   },
   "production_admissible": false,
   "note": "Constraint counts are unchanged because only embedded constants changed. Corrected KATs are checked in, but fresh R1CS identities, circuit-specific ceremonies, destination deployments, and all three independent audits are mandatory before release."

@@ -4772,7 +4772,9 @@ fn derive_enum_json_deserialize(
                 let tag = __norito_tag.ok_or_else(|| norito::json::Error::Message(
                     format!("missing `{}` field", #tag_lit).into(),
                 ))?;
-                let __norito_content_str = __norito_raw.unwrap_or("null");
+                let __norito_content_str = __norito_raw.ok_or_else(||
+                    norito::json::Error::missing_field(#content_lit)
+                )?;
                 match tag.as_str() {
                     #( #arms ),*,
                     _ => Err(norito::json::Error::Message(

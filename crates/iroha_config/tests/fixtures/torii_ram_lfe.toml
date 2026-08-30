@@ -1,7 +1,6 @@
 extends = ["base.toml"]
 
 [torii.ram_lfe]
-enabled = true
 
 [[torii.ram_lfe.programs]]
 program_id = "phone_retail"

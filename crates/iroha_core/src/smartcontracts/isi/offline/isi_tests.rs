@@ -422,22 +422,36 @@ mod tests {
         }
     }
     #[test]
-    fn kagemusha_topup_capacity_reserves_the_successor_initialization_leaf() {
+    fn kagemusha_topup_capacity_reserves_the_complete_recursive_lifecycle() {
+        let tree_capacity =
+            usize::try_from(iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2)
+                .expect("the fixed depth-16 tree capacity fits usize");
+        let insertion_capacity = usize::try_from(
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2,
+        )
+        .expect("the fixed depth-16 insertion capacity fits usize");
         assert_eq!(
-            kagemusha_v4_topup_leaf_index(0, 8).expect("empty tree accepts a top-up"),
+            kagemusha_v4_topup_leaf_index(0, tree_capacity).expect("empty tree accepts a top-up"),
             0
         );
         assert_eq!(
-            kagemusha_v4_topup_leaf_index(6, 8).expect("penultimate insertion remains valid"),
-            6
+            kagemusha_v4_topup_leaf_index(insertion_capacity - 1, tree_capacity)
+                .expect("the last insertion retains the complete recursive lifecycle"),
+            u32::try_from(insertion_capacity - 1).expect("leaf index fits u32")
         );
-        for (commitment_count, tree_capacity) in [(0, 0), (0, 1), (7, 8), (8, 8)] {
-            let error = kagemusha_v4_topup_leaf_index(commitment_count, tree_capacity)
-                .expect_err("a top-up without a successor empty leaf must fail closed");
+        for (commitment_count, capacity) in [
+            (0, 0),
+            (0, 72),
+            (0, 73),
+            (insertion_capacity, tree_capacity),
+            (tree_capacity, tree_capacity),
+        ] {
+            let error = kagemusha_v4_topup_leaf_index(commitment_count, capacity)
+                .expect_err("a top-up without a complete future lifecycle must fail closed");
             assert!(
-                error
-                    .to_string()
-                    .contains(&format!("{OFFLINE_REJECTION_REASON_PREFIX}topup_tree_full:")),
+                error.to_string().contains(&format!(
+                    "{OFFLINE_REJECTION_REASON_PREFIX}topup_tree_full:"
+                )),
                 "unexpected capacity rejection: {error}"
             );
         }

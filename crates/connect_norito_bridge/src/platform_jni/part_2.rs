@@ -2520,10 +2520,11 @@ pub(super) fn java_native_kagemusha_project_operation_reference_v4(
         use iroha_torii_shared::offline_api::{
             OfflineOperationKind, OfflineOperationReference, OfflineOperationState,
         };
-        let reference = java_kagemusha_decode_archive::<OfflineOperationReference>(
+        let reference = java_kagemusha_decode_archive_bounded::<OfflineOperationReference>(
             env,
             &archive,
             "operationReference",
+            iroha_torii_shared::offline_api::OFFLINE_OPERATION_REFERENCE_MAX_BYTES,
         )?;
         let operation_id = java_kagemusha_lower_hex_32(&reference.operation_id, "operationId")?;
         let expected_status_uri = format!("/v1/offline/operations/{}", reference.operation_id);
@@ -2546,10 +2547,10 @@ pub(super) fn java_native_kagemusha_project_operation_reference_v4(
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
-pub(super) fn java_native_kagemusha_project_top_up_request_operation_id_v4(
+pub(super) fn java_native_kagemusha_project_top_up_request_identity_v4(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
+) -> jni::sys::jobjectArray {
     java_kagemusha_archive_array_result(env, "top-up request operation projection", |env| {
         let request = java_kagemusha_decode_archive_bounded::<
             iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
@@ -2562,15 +2563,18 @@ pub(super) fn java_native_kagemusha_project_top_up_request_operation_id_v4(
         request
             .validate_public_binding()
             .map_err(|_| "topUpRequest binding is invalid".to_owned())?;
-        env.byte_array_from_slice(&request.operation_id)
-            .map(jni::objects::JByteArray::into_raw)
-            .map_err(|error| error.to_string())
+        let fields = vec![
+            b"top_up".to_vec(),
+            request.operation_id.to_vec(),
+            request.authorization.issued_at_ms.to_string().into_bytes(),
+        ];
+        java_kagemusha_byte_arrays(env, &fields)
     })
 }
-pub(super) fn java_native_kagemusha_project_redeem_request_operation_id_v4(
+pub(super) fn java_native_kagemusha_project_redeem_request_identity_v4(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
+) -> jni::sys::jobjectArray {
     java_kagemusha_archive_array_result(env, "redeem request operation projection", |env| {
         let request = java_kagemusha_decode_archive_bounded::<
             iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV4,
@@ -2583,9 +2587,12 @@ pub(super) fn java_native_kagemusha_project_redeem_request_operation_id_v4(
         request
             .validate_public_binding()
             .map_err(|_| "redeemRequest binding is invalid".to_owned())?;
-        env.byte_array_from_slice(&request.operation_id)
-            .map(jni::objects::JByteArray::into_raw)
-            .map_err(|error| error.to_string())
+        let fields = vec![
+            b"redeem".to_vec(),
+            request.operation_id.to_vec(),
+            request.authorization.issued_at_ms.to_string().into_bytes(),
+        ];
+        java_kagemusha_byte_arrays(env, &fields)
     })
 }
 pub(super) fn java_native_kagemusha_project_operation_status_v4(
@@ -2596,11 +2603,13 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
         use iroha_torii_shared::offline_api::{
             OfflineOperationKind, OfflineOperationResult, OfflineOperationStatus,
         };
-        let status = java_kagemusha_decode_archive::<OfflineOperationStatus>(
+        let status = java_kagemusha_decode_archive_bounded::<OfflineOperationStatus>(
             env,
             &archive,
             "operationStatus",
+            iroha_torii_shared::offline_api::OFFLINE_OPERATION_STATUS_MAX_BYTES,
         )?;
+        status.validate_structure()?;
         let fields = match status {
             OfflineOperationStatus::Pending {
                 operation_id,
@@ -2661,15 +2670,6 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
                 transaction_hash,
                 error,
             } => {
-                if error.code.is_empty()
-                    || error.code.trim() != error.code
-                    || error.code.chars().any(char::is_control)
-                    || error.message.is_empty()
-                    || error.message.trim() != error.message
-                    || error.message.chars().any(char::is_control)
-                {
-                    return Err("rejected status contains a malformed error".to_owned());
-                }
                 vec![
                     b"rejected".to_vec(),
                     match kind {

@@ -3264,5 +3264,24 @@ fn instance_identity_names_only_the_exact_live_kura() {
             std::fs::symlink_metadata(&authority.directory.expected_path).expect("linked WAL root");
         assert!(opened.is_dir());
         assert!(super::Kura::sidecar_metadata_same_object(&opened, &linked));
+
+        let body_authority = first
+            .mint_v2_body_store_directory_authority()
+            .expect("mint descriptor-relative body-store authority");
+        assert!(body_authority.matches_kura(first.as_ref()));
+        assert!(!body_authority.matches_kura(second.as_ref()));
+        assert_eq!(
+            body_authority.directory.expected_path,
+            first.sumeragi_v2_storage_root().join("bodies")
+        );
+        let opened = body_authority
+            .directory
+            .file
+            .metadata()
+            .expect("opened body-store root");
+        let linked = std::fs::symlink_metadata(&body_authority.directory.expected_path)
+            .expect("linked body-store root");
+        assert!(opened.is_dir());
+        assert!(super::Kura::sidecar_metadata_same_object(&opened, &linked));
     }
 }

@@ -2576,6 +2576,28 @@ impl GlobalBeaconPartialSignature {
         Ok(())
     }
 }
+/// First-release wire tag for [`ConsensusMessageV2Payload::Proposal`].
+pub const CONSENSUS_MESSAGE_V2_PROPOSAL_TAG: u32 = 0;
+/// First-release wire tag for [`ConsensusMessageV2Payload::Vote`].
+pub const CONSENSUS_MESSAGE_V2_VOTE_TAG: u32 = 1;
+/// First-release wire tag for [`ConsensusMessageV2Payload::QuorumCertificate`].
+pub const CONSENSUS_MESSAGE_V2_QUORUM_CERTIFICATE_TAG: u32 = 2;
+/// First-release wire tag for [`ConsensusMessageV2Payload::TimeoutVote`].
+pub const CONSENSUS_MESSAGE_V2_TIMEOUT_VOTE_TAG: u32 = 3;
+/// First-release wire tag for [`ConsensusMessageV2Payload::TimeoutCertificate`].
+pub const CONSENSUS_MESSAGE_V2_TIMEOUT_CERTIFICATE_TAG: u32 = 4;
+/// First-release wire tag for [`ConsensusMessageV2Payload::PayloadChunk`].
+pub const CONSENSUS_MESSAGE_V2_PAYLOAD_CHUNK_TAG: u32 = 5;
+/// First-release wire tag for [`ConsensusMessageV2Payload::CertifiedBodyRequest`].
+pub const CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_REQUEST_TAG: u32 = 6;
+/// First-release wire tag for [`ConsensusMessageV2Payload::CertifiedBodyResponse`].
+pub const CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG: u32 = 7;
+/// First-release wire tag for [`ConsensusMessageV2Payload::CommitCertificateRequest`].
+pub const CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_REQUEST_TAG: u32 = 8;
+/// First-release wire tag for [`ConsensusMessageV2Payload::CommitCertificateResponse`].
+pub const CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_RESPONSE_TAG: u32 = 9;
+/// First-release wire tag for [`ConsensusMessageV2Payload::GlobalBeaconPartialSignature`].
+pub const CONSENSUS_MESSAGE_V2_GLOBAL_BEACON_PARTIAL_SIGNATURE_TAG: u32 = 10;
 /// First-release payload variants decoded by the Sumeragi v2 network envelope.
 ///
 /// The retired commit/reveal VRF variants have no wire representation here;
@@ -2594,26 +2616,37 @@ impl GlobalBeaconPartialSignature {
 )]
 pub enum ConsensusMessageV2Payload {
     /// Leader proposal.
+    #[codec(index = 0)]
     Proposal(Proposal),
     /// Prepare or Commit vote.
+    #[codec(index = 1)]
     Vote(Vote),
     /// Aggregate `PrepareQC` or `CommitQC`.
+    #[codec(index = 2)]
     QuorumCertificate(QuorumCertificate),
     /// Individual timeout vote.
+    #[codec(index = 3)]
     TimeoutVote(TimeoutVote),
     /// Aggregate timeout certificate.
+    #[codec(index = 4)]
     TimeoutCertificate(TimeoutCertificate),
     /// Encoded payload chunk.
+    #[codec(index = 5)]
     PayloadChunk(PayloadChunk),
     /// Request for a certified body.
+    #[codec(index = 6)]
     CertifiedBodyRequest(CertifiedBodyRequest),
     /// Response carrying a certified body.
+    #[codec(index = 7)]
     CertifiedBodyResponse(CertifiedBodyResponse),
     /// Request the durable `CommitQC` for the active height context.
+    #[codec(index = 8)]
     CommitCertificateRequest(CommitCertificateRequest),
     /// Response carrying the active height context's durable `CommitQC`.
+    #[codec(index = 9)]
     CommitCertificateResponse(CommitCertificateResponse),
     /// Adaptive global threshold-beacon share for one exact height and view.
+    #[codec(index = 10)]
     GlobalBeaconPartialSignature(GlobalBeaconPartialSignature),
 }
 /// Explicitly versioned Sumeragi v2 network envelope.

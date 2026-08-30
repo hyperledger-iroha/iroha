@@ -520,6 +520,7 @@ pub mod uri {
 }
 /// Queue pressure snapshot returned with transaction queue rejections.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
+#[norito(deny_unknown_fields)]
 pub struct QueueErrorSnapshot {
     /// Queue state label (`healthy` or `saturated`).
     pub state: String,
@@ -534,6 +535,7 @@ pub struct QueueErrorSnapshot {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
 )]
+#[norito(deny_unknown_fields)]
 pub struct AxtErrorDetails {
     /// Stable AXT rejection code.
     #[norito(default)]
@@ -568,6 +570,7 @@ pub struct AxtErrorDetails {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
 )]
+#[norito(deny_unknown_fields)]
 pub struct FeeErrorDetails {
     /// Stable snake-case [`iroha_data_model::nexus::FeeRejectionCode`] label.
     pub code: String,
@@ -610,6 +613,7 @@ pub struct FeeErrorDetails {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
 )]
+#[norito(deny_unknown_fields)]
 pub struct ErrorDetails {
     /// Public surface layer that produced the error (for example `cli`, `torii`, or `mcp`).
     #[norito(default)]
@@ -750,6 +754,7 @@ pub fn network_profile_names() -> String {
 }
 /// Canonical Torii error envelope returned for HTTP API failures.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
+#[norito(deny_unknown_fields)]
 pub struct ErrorEnvelope {
     /// Stable error code string.
     pub code: String,
@@ -2031,6 +2036,17 @@ mod tests {
                 format!(r#"{{"code":"bad_request","message":"invalid","details":{details}}}"#);
             norito::json::from_str::<ErrorEnvelope>(&json)
                 .expect_err("details must be the declared typed record or null");
+        }
+    }
+    #[test]
+    fn error_envelope_json_rejects_unknown_fields_recursively() {
+        for json in [
+            r#"{"code":"bad_request","message":"invalid","retired":null}"#,
+            r#"{"code":"bad_request","message":"invalid","details":{"retired":null}}"#,
+            r#"{"code":"bad_request","message":"invalid","details":{"fee":{"retired":null}}}"#,
+        ] {
+            norito::json::from_str::<ErrorEnvelope>(json)
+                .expect_err("error envelopes must reject unknown members at every owned boundary");
         }
     }
     #[test]

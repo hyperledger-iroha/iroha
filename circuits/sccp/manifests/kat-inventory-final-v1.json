@@ -7,7 +7,7 @@
     {"profile":"sccp-final-v1-ethereum-mainnet-epoch-anchor-update","path":"internal/circuit/testdata/kats/sccp-final-v1-ethereum-mainnet-epoch-anchor-update.json","sha256":"eec2fa96f1ec575e53aeaab74fcc80d99aad6a3425e27b41078cae6cf73cb878"},
     {"profile":"sccp-final-v1-ethereum-mainnet-message","path":"internal/circuit/testdata/kats/sccp-final-v1-ethereum-mainnet-message.json","sha256":"48715de72c792496a52d930e53573ac1abbd7571ebc09151ae9c94c8b268cf6f"},
     {"profile":"sccp-final-v1-ton-mainnet-epoch-anchor-update","path":"internal/circuit/testdata/kats/sccp-final-v1-ton-mainnet-epoch-anchor-update.json","sha256":"542b5d46a121aa144458be6666b109d8cb37e1b117895f237201c087b285af66"},
-    {"profile":"sccp-final-v1-ton-mainnet-message","path":"internal/circuit/testdata/kats/sccp-final-v1-ton-mainnet-message.json","sha256":"77ed6524a11625e10b4b1ae363d8a305a9a67bf5d39a801e5bc80358cb5dd3c2"},
+    {"profile":"sccp-final-v1-ton-mainnet-message","path":"internal/circuit/testdata/kats/sccp-final-v1-ton-mainnet-message.json","sha256":"b469b281edb4d8cba398a631d68579b8459e4d39d9e71825350b80a30d9fd763"},
     {"profile":"sccp-final-v1-tron-mainnet-epoch-anchor-update","path":"internal/circuit/testdata/kats/sccp-final-v1-tron-mainnet-epoch-anchor-update.json","sha256":"ed115b44ccfb5e1b19444021c03f1da604ad749c2f2aa656799004afeb368cf6"},
     {"profile":"sccp-final-v1-tron-mainnet-message","path":"internal/circuit/testdata/kats/sccp-final-v1-tron-mainnet-message.json","sha256":"43db673cc7c4d17c4bd71ed9a1e80b8f5dc3b378e0c8125fccc5e85d3c825518"}
   ]

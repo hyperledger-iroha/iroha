@@ -381,7 +381,7 @@ pub(crate) fn enacted_parliament_attempt_restore_fixture_v1(
     let mut tle_key_session_rosters = Vec::new();
     let mut tle_key_session_lifecycles = Vec::new();
     let mut timed_ovn_evidence = Vec::new();
-    let attempt = build_enacted_parliament_attempt_for_testing(
+    let mut attempt = build_certified_parliament_attempt_for_testing(
         proposal,
         candidates,
         network_id,
@@ -404,6 +404,10 @@ pub(crate) fn enacted_parliament_attempt_restore_fixture_v1(
             }
         },
     );
+    let governance_attempt_id = attempt.attempt().id;
+    attempt
+        .mark_enacted(governance_attempt_id, enact_at_height)
+        .expect("mark restore fixture enacted");
     EnactedParliamentRestoreFixtureV1 {
         attempt,
         tle_key_sessions,
@@ -1344,6 +1348,12 @@ fn beacon_demand_tracks_sortition_timeout_and_frozen_ballot_release_slot() {
         .fail_body_election_no_roster(governance_attempt_id, election_attempt_id, false, 21)
         .expect("missing sortition pulse becomes an objective retryable failure");
     assert!(!sortition.requires_beacon_pulse_at(session_id, 20));
+    assert_eq!(
+        sortition.unavailable_beacon_pulse_slots_v1(),
+        BTreeSet::from([(session_id, 20)])
+    );
+    assert!(sortition.classifies_beacon_pulse_unavailable_at(session_id, 20));
+    assert!(!sortition.classifies_beacon_pulse_unavailable_at(session_id, 21));
     sortition
         .validate()
         .expect("pulse-missing NoRoster is a canonical persistable terminal shape");

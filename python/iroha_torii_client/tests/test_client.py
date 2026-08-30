@@ -8886,11 +8886,96 @@ def test_offline_public_request_annotations_are_closed_first_release_types() -> 
     assert get_type_hints(ToriiClient.submit_kagemusha_top_up)["request"] is KagemushaTopUpRequestV4
     assert get_type_hints(ToriiClient.submit_kagemusha_redeem)["request"] is KagemushaRedeemRequestV4
     assert get_args(OfflineAssetScale) == tuple(range(29))
+    for exported_type in (
+        "OfflineHardwareAssertionJson",
+        "OfflineRecursiveOperationVectorV4Json",
+        "OfflineRecursiveStateBoundaryV5Json",
+        "OfflinePastaCycleProofEnvelopeV4Json",
+    ):
+        assert exported_type in torii_module.__all__
+        assert getattr(torii_module, exported_type) is getattr(client_module, exported_type)
     assert "next_zero_leaf_index" in (
         client_module.OfflineRecursiveSpendStatementJson.__required_keys__
     )
     assert "network_id" in client_module.OfflineSpendableNoteJson.__required_keys__
     assert "chain_id" not in client_module.OfflineSpendableNoteJson.__required_keys__
+    assert client_module.OfflineAuthorizationJson.__required_keys__ == frozenset(
+        {
+            "authority",
+            "device_id",
+            "asset_definition_id",
+            "operation_id",
+            "issued_at_ms",
+            "expires_at_ms",
+            "nonce",
+            "payload_digest",
+            "registration_hash",
+            "hardware_assertion",
+        }
+    )
+    assert client_module.OfflineAuthorizationJson.__optional_keys__ == frozenset()
+    assert get_type_hints(client_module.OfflineAuthorizationJson)[
+        "hardware_assertion"
+    ] == client_module.OfflineHardwareAssertionJson
+    assert get_type_hints(client_module.OfflineAndroidKeyMintAssertionJson)[
+        "signature"
+    ] == List[List[int]]
+    assert (
+        client_module.OfflineAndroidKeyMintHardwareAssertionVariantJson.__required_keys__
+        == frozenset({"platform", "assertion"})
+    )
+    assert get_args(
+        get_type_hints(
+            client_module.OfflineAndroidKeyMintHardwareAssertionVariantJson
+        )["platform"]
+    ) == ("android_key_mint",)
+    assert (
+        client_module.OfflineIosAppAttestHardwareAssertionVariantJson.__required_keys__
+        == frozenset({"platform", "assertion"})
+    )
+    assert get_args(
+        get_type_hints(
+            client_module.OfflineIosAppAttestHardwareAssertionVariantJson
+        )["platform"]
+    ) == ("ios_app_attest",)
+    assert client_module.OfflineIosAppAttestAssertionJson.__required_keys__ == frozenset(
+        {"authenticator_data", "signature"}
+    )
+    assert client_module.OfflineSpendBranchJson.__required_keys__ == frozenset(
+        {"branch", "value"}
+    )
+    assert client_module.OfflineRecursiveSpendBundleJson.__required_keys__ == frozenset(
+        {"statement", "operation", "recursive_proof"}
+    )
+    assert client_module.OfflineRecursiveSpendProofJson.__required_keys__ == frozenset(
+        {"verifier_key_id", "public_statement_digest", "proof_envelope"}
+    )
+    assert (
+        client_module.OfflineRecursiveOperationVectorV4Json.__required_keys__
+        == frozenset({"limbs"})
+    )
+    assert client_module.OfflineRecursiveStateBoundaryV5Json.__required_keys__ == frozenset(
+        {"layout_version", "state_limbs"}
+    )
+    assert client_module.OfflinePastaCycleProofEnvelopeV4Json.__required_keys__ == frozenset(
+        {
+            "version",
+            "proof_backend",
+            "transcript_profile",
+            "step_eq_circuit_id",
+            "step_ep_circuit_id",
+            "artifact_generation",
+            "manifest_sha256",
+            "step_eq_parameter_generation",
+            "step_ep_parameter_generation",
+            "step_eq_circuit_params_sha256",
+            "step_ep_circuit_params_sha256",
+            "step_eq_verifier_key_sha256",
+            "step_ep_verifier_key_sha256",
+            "state_boundary",
+            "proof",
+        }
+    )
 
 
 def test_offline_finality_execution_commitment_requires_executed_wire_identity() -> None:
@@ -9320,6 +9405,7 @@ def test_offline_acceptance_cross_checks_reference_and_location() -> None:
         (_offline_operation_reference(), None),
         (_offline_operation_reference(unexpected=True), OFFLINE_STATUS_URI),
         (_offline_operation_reference(kind={"kind": "top_up"}), OFFLINE_STATUS_URI),
+        (_offline_operation_reference(state={"state": "pending"}), OFFLINE_STATUS_URI),
         (
             _offline_operation_reference(
                 state={"state": "pending", "value": None, "unexpected": True}

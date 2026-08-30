@@ -162,10 +162,11 @@ impl SccpReplayArchiveCheckpointBodyV1 {
     pub fn from_snapshot(
         snapshot: &SccpReplayArchiveSnapshotV1,
     ) -> Result<Self, SccpReplayArchiveError> {
-        validate_snapshot(snapshot, SccpReplayArchiveDecodeLimitsV1::default())?;
+        let validated =
+            validate_snapshot(snapshot, SccpReplayArchiveDecodeLimitsV1::default(), None)?;
         Ok(Self {
             version: CHECKPOINT_VERSION_V1,
-            snapshot_sha256: snapshot.content_sha256()?,
+            snapshot_sha256: validated.content_sha256,
             accumulator_id: snapshot.accumulator_id.clone(),
             domain: snapshot.domain,
             finality: snapshot.finality,
@@ -496,9 +497,10 @@ impl SccpReplayArchiveV1 {
                 })
                 .collect(),
         };
-        validate_snapshot(&snapshot, SccpReplayArchiveDecodeLimitsV1::default())?;
+        let validated =
+            validate_snapshot(&snapshot, SccpReplayArchiveDecodeLimitsV1::default(), None)?;
         let head = SnapshotHeadV1 {
-            content_sha256: snapshot.content_sha256()?,
+            content_sha256: validated.content_sha256,
             finality,
             forest: snapshot.forest.clone(),
         };
@@ -515,8 +517,8 @@ impl SccpReplayArchiveV1 {
         bytes: &[u8],
         limits: SccpReplayArchiveDecodeLimitsV1,
     ) -> Result<(), SccpReplayArchiveError> {
-        let snapshot = decode_sccp_replay_archive_snapshot_v1(bytes, limits)?;
-        self.restore_snapshot(snapshot, limits)
+        let (snapshot, validated) = decode_validated_snapshot(bytes, limits)?;
+        self.restore_validated_snapshot(snapshot, validated)
     }
 
     /// Restore one already-decoded snapshot after recomputing every shard root,
@@ -526,8 +528,19 @@ impl SccpReplayArchiveV1 {
         snapshot: SccpReplayArchiveSnapshotV1,
         limits: SccpReplayArchiveDecodeLimitsV1,
     ) -> Result<(), SccpReplayArchiveError> {
-        let leaves = validate_snapshot(&snapshot, limits)?;
-        let content_sha256 = snapshot.content_sha256()?;
+        let validated = validate_snapshot(&snapshot, limits, None)?;
+        self.restore_validated_snapshot(snapshot, validated)
+    }
+
+    fn restore_validated_snapshot(
+        &mut self,
+        snapshot: SccpReplayArchiveSnapshotV1,
+        validated: ValidatedSnapshotV1,
+    ) -> Result<(), SccpReplayArchiveError> {
+        let ValidatedSnapshotV1 {
+            leaves,
+            content_sha256,
+        } = validated;
         if let Some(existing) = self.accumulators.get(&snapshot.accumulator_id) {
             if existing.domain != snapshot.domain {
                 return Err(SccpReplayArchiveError::AccumulatorDomainMismatch);
@@ -580,6 +593,13 @@ pub fn decode_sccp_replay_archive_snapshot_v1(
     bytes: &[u8],
     limits: SccpReplayArchiveDecodeLimitsV1,
 ) -> Result<SccpReplayArchiveSnapshotV1, SccpReplayArchiveError> {
+    decode_validated_snapshot(bytes, limits).map(|(snapshot, _)| snapshot)
+}
+
+fn decode_validated_snapshot(
+    bytes: &[u8],
+    limits: SccpReplayArchiveDecodeLimitsV1,
+) -> Result<(SccpReplayArchiveSnapshotV1, ValidatedSnapshotV1), SccpReplayArchiveError> {
     if limits.max_snapshot_bytes == 0
         || limits.max_snapshot_leaves == 0
         || bytes.is_empty()
@@ -595,12 +615,8 @@ pub fn decode_sccp_replay_archive_snapshot_v1(
     let decode_limits = norito::canonical_decode_limits(bytes.len());
     let snapshot = norito::decode_canonical_with_limits(bytes, decode_limits)
         .map_err(|_| SccpReplayArchiveError::Malformed)?;
-    validate_snapshot(&snapshot, limits)?;
-    let canonical = norito::to_bytes(&snapshot).map_err(|_| SccpReplayArchiveError::Malformed)?;
-    if canonical != bytes {
-        return Err(SccpReplayArchiveError::Malformed);
-    }
-    Ok(snapshot)
+    let validated = validate_snapshot(&snapshot, limits, Some(bytes))?;
+    Ok((snapshot, validated))
 }
 
 impl SccpReplayArchiveProviderV1 for SccpReplayArchiveV1 {
@@ -678,7 +694,10 @@ pub fn verify_sccp_replay_archive_checkpoint_v1(
 fn validate_checkpoint_body(
     body: &SccpReplayArchiveCheckpointBodyV1,
 ) -> Result<(), SccpReplayArchiveError> {
-    if body.version != CHECKPOINT_VERSION_V1 || !body.finality.is_well_formed() {
+    if body.version != CHECKPOINT_VERSION_V1
+        || body.snapshot_sha256 == [0; 32]
+        || !body.finality.is_well_formed()
+    {
         return Err(SccpReplayArchiveError::Malformed);
     }
     validate_accumulator_domain(&body.accumulator_id, &body.domain)?;
@@ -712,10 +731,16 @@ fn validate_accumulator_domain(
     Ok(())
 }
 
+struct ValidatedSnapshotV1 {
+    leaves: BTreeMap<[u8; 32], [u8; 32]>,
+    content_sha256: [u8; 32],
+}
+
 fn validate_snapshot(
     snapshot: &SccpReplayArchiveSnapshotV1,
     limits: SccpReplayArchiveDecodeLimitsV1,
-) -> Result<BTreeMap<[u8; 32], [u8; 32]>, SccpReplayArchiveError> {
+    expected_canonical_bytes: Option<&[u8]>,
+) -> Result<ValidatedSnapshotV1, SccpReplayArchiveError> {
     if limits.max_snapshot_bytes == 0
         || limits.max_snapshot_leaves == 0
         || snapshot.version != SNAPSHOT_VERSION_V1
@@ -725,6 +750,17 @@ fn validate_snapshot(
         return Err(SccpReplayArchiveError::SnapshotLimit);
     }
     validate_accumulator_domain(&snapshot.accumulator_id, &snapshot.domain)?;
+    let canonical_bytes =
+        norito::to_bytes(snapshot).map_err(|_| SccpReplayArchiveError::Malformed)?;
+    if canonical_bytes.len() > limits.max_snapshot_bytes {
+        return Err(SccpReplayArchiveError::SnapshotLimit);
+    }
+    if expected_canonical_bytes.is_some_and(|expected| canonical_bytes.as_slice() != expected) {
+        return Err(SccpReplayArchiveError::Malformed);
+    }
+    let content_sha256 = sha256(&[&canonical_bytes]);
+    drop(canonical_bytes);
+
     let mut leaves = BTreeMap::new();
     let mut previous = None;
     for leaf in &snapshot.leaves {
@@ -740,7 +776,10 @@ fn validate_snapshot(
     if rebuilt != snapshot.forest {
         return Err(SccpReplayArchiveError::RebuildMismatch);
     }
-    Ok(leaves)
+    Ok(ValidatedSnapshotV1 {
+        leaves,
+        content_sha256,
+    })
 }
 
 fn validate_snapshot_successor(
@@ -1079,25 +1118,36 @@ mod tests {
             .publish_snapshot(&id, finality(3, [0; 32]))
             .expect("empty snapshot publishes");
         let encoded = norito::to_bytes(&snapshot).expect("snapshot encodes");
+        let below_encoded_limit = SccpReplayArchiveDecodeLimitsV1 {
+            max_snapshot_bytes: encoded.len() - 1,
+            max_snapshot_leaves: 1,
+        };
+        let exact_encoded_limit = SccpReplayArchiveDecodeLimitsV1 {
+            max_snapshot_bytes: encoded.len(),
+            max_snapshot_leaves: 1,
+        };
+        let mut typed_restored = SccpReplayArchiveV1::default();
+        assert_eq!(
+            typed_restored.restore_snapshot(snapshot.clone(), below_encoded_limit),
+            Err(SccpReplayArchiveError::SnapshotLimit)
+        );
+        typed_restored
+            .restore_snapshot(snapshot.clone(), exact_encoded_limit)
+            .expect("typed snapshot at the exact byte limit restores");
+        let mut mismatched_encoding = encoded.clone();
+        mismatched_encoding[0] ^= 1;
+        assert!(matches!(
+            validate_snapshot(&snapshot, exact_encoded_limit, Some(&mismatched_encoding)),
+            Err(SccpReplayArchiveError::Malformed)
+        ));
+
         let mut restored = SccpReplayArchiveV1::default();
         assert_eq!(
-            restored.restore_snapshot_bytes(
-                &encoded,
-                SccpReplayArchiveDecodeLimitsV1 {
-                    max_snapshot_bytes: encoded.len() - 1,
-                    max_snapshot_leaves: 1,
-                }
-            ),
+            restored.restore_snapshot_bytes(&encoded, below_encoded_limit),
             Err(SccpReplayArchiveError::SnapshotLimit)
         );
         restored
-            .restore_snapshot_bytes(
-                &encoded,
-                SccpReplayArchiveDecodeLimitsV1 {
-                    max_snapshot_bytes: encoded.len(),
-                    max_snapshot_leaves: 1,
-                },
-            )
+            .restore_snapshot_bytes(&encoded, exact_encoded_limit)
             .expect("exact bounded canonical snapshot restores");
 
         let over_limit_leaves =
@@ -1159,11 +1209,12 @@ mod tests {
         )
     }
 
-    #[test]
-    fn exactly_three_pinned_replica_signatures_must_agree() {
-        let (policy, pairs, body) = replica_fixture();
-        let message = body.signing_message().expect("message hashes");
-        let attestations = core::array::from_fn(|index| {
+    fn attestations_for_message(
+        policy: &SccpReplayArchiveReplicaPolicyV1,
+        pairs: &[KeyPair; 3],
+        message: [u8; 32],
+    ) -> [SccpReplayArchiveReplicaAttestationV1; 3] {
+        core::array::from_fn(|index| {
             let signature =
                 Signature::try_new(pairs[index].private_key(), &message).expect("fixture signs");
             SccpReplayArchiveReplicaAttestationV1 {
@@ -1173,7 +1224,14 @@ mod tests {
                     .try_into()
                     .expect("Ed25519 signature is 64 bytes"),
             }
-        });
+        })
+    }
+
+    #[test]
+    fn exactly_three_pinned_replica_signatures_must_agree() {
+        let (policy, pairs, body) = replica_fixture();
+        let message = body.signing_message().expect("message hashes");
+        let attestations = attestations_for_message(&policy, &pairs, message);
         let checkpoint = SccpReplayArchiveSignedCheckpointV1 {
             body: body.clone(),
             attestations,
@@ -1195,6 +1253,32 @@ mod tests {
         assert_eq!(
             verify_sccp_replay_archive_checkpoint_v1(&policy, &duplicated),
             Err(SccpReplayArchiveError::ReplicaQuorum)
+        );
+    }
+
+    #[test]
+    fn fully_signed_zero_snapshot_content_hash_is_malformed() {
+        let (policy, pairs, mut body) = replica_fixture();
+        body.snapshot_sha256 = [0; 32];
+
+        // Sign the raw agreement statement so the rejection cannot be caused
+        // by missing, mismatched, or forged attestations.
+        let encoded = norito::to_bytes(&body).expect("checkpoint body encodes");
+        let encoded_len = u64::try_from(encoded.len()).expect("fixture length fits u64");
+        let agreement = sha256(&[
+            REPLICA_AGREEMENT_DOMAIN_V1,
+            &encoded_len.to_be_bytes(),
+            &encoded,
+        ]);
+        let message = sha256(&[CHECKPOINT_SIGNATURE_DOMAIN_V1, &agreement]);
+        let checkpoint = SccpReplayArchiveSignedCheckpointV1 {
+            body,
+            attestations: attestations_for_message(&policy, &pairs, message),
+        };
+
+        assert_eq!(
+            verify_sccp_replay_archive_checkpoint_v1(&policy, &checkpoint),
+            Err(SccpReplayArchiveError::Malformed)
         );
     }
 }

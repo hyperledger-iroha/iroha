@@ -132,6 +132,7 @@ impl ParliamentAttemptStateV1 {
     ) -> Result<(), ParliamentReducerErrorV1> {
         self.validate_sortition_registration_batch_v1(governance_attempt_id, &registrations)?;
         if candidate_snapshot.len() >= 2
+            || !candidate_snapshot_fits_resource_bounds_v1(&candidate_snapshot)
             || !candidate_snapshot.windows(2).all(|pair| pair[0] < pair[1])
             || !registrations.iter().any(|entry| {
                 self.required_bodies.iter().any(|required| {
@@ -178,6 +179,7 @@ impl ParliamentAttemptStateV1 {
         let candidate_count = u32::try_from(candidate_snapshot.len())
             .map_err(|_| ParliamentReducerErrorV1::InvalidCandidateSnapshot)?;
         if candidate_count >= 2
+            || !candidate_snapshot_fits_resource_bounds_v1(&candidate_snapshot)
             || !candidate_snapshot.windows(2).all(|pair| pair[0] < pair[1])
             || request_intent.governance_attempt_id != governance_attempt_id
             || request_intent.body_election_attempt_id
@@ -438,6 +440,7 @@ impl ParliamentAttemptStateV1 {
             return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
         }
         if candidate_snapshot.is_empty()
+            || !candidate_snapshot_fits_resource_bounds_v1(&candidate_snapshot)
             || (requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot
                 && candidate_snapshot.len() < 2)
             || !candidate_snapshot.windows(2).all(|pair| pair[0] < pair[1])

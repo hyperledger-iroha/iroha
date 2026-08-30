@@ -13,7 +13,8 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
     let source = include_str!("../v2_runner/lifecycle_run_inner.rs");
     let anchors = [
         "V2BodyStoreCapacity::new(",
-        "V2BodyStore::open_with_policy_and_capacity(",
+        ".mint_v2_body_store_directory_authority()",
+        "V2BodyStore::open_with_kura_authority_and_capacity(",
         ".into_quarantined_recovered_startup()",
         "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry(",
         ".authenticate_final_wal_startup_authority()",

@@ -260,7 +260,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS == 8;
     assert KagemushaRecursiveSpendProver.MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4
         == 384 * 1024;
-    assert KagemushaRecursiveSpendProver.TOP_UP_SHIELD_INSERTION_CAPACITY == 65_535;
+    assert KagemushaRecursiveSpendProver.TOP_UP_SHIELD_INSERTION_CAPACITY == 65_463;
     final int lastValidLeaf =
         KagemushaRecursiveSpendProver.TOP_UP_SHIELD_INSERTION_CAPACITY - 1;
     final byte[] lastValidDirections = leafDirections(lastValidLeaf);
@@ -1615,19 +1615,26 @@ public final class KagemushaRecursiveSpendProverTest {
             toriiBaseUri, transport, localSigningContext, Duration.ofMillis(-1)));
     final Duration requestTimeout = Duration.ofSeconds(37);
     final byte[] projectedOperationId = filled(0x11);
+    final KagemushaRecursiveSpendProver.OperationRequestIdentity topUpIdentity =
+        operationRequestIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP, projectedOperationId, 1L);
+    final KagemushaRecursiveSpendProver.OperationRequestIdentity redeemIdentity =
+        operationRequestIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.REDEEM, projectedOperationId, 1L);
     final KagemushaRecursiveSpendProver.ToriiClient client =
         new KagemushaRecursiveSpendProver.ToriiClient(
             toriiBaseUri,
             transport,
             localSigningContext,
             requestTimeout,
-            ignored -> projectedOperationId,
-            ignored -> projectedOperationId,
+            ignored -> topUpIdentity,
+            ignored -> redeemIdentity,
             ignored -> operationReferenceProjection(
                 captured.get().uri().getPath().endsWith("/redeem")
                     ? KagemushaRecursiveSpendProver.OperationKind.REDEEM
                     : KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
-                projectedOperationId),
+                projectedOperationId,
+                1L),
             ignored -> operationProjection(
                 KagemushaRecursiveSpendProver.OperationState.PENDING,
                 KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
@@ -1726,12 +1733,12 @@ public final class KagemushaRecursiveSpendProverTest {
         signature);
 
     final String operationId = repeat("11", 32);
-    client
+    final KagemushaRecursiveSpendProver.OperationHandle topUpHandle = client
         .submitTopUp(
             new KagemushaRecursiveSpendProver.TopUpRequest(
-                archive("iroha.torii.v1.offline.top_up.request")),
-            operationId)
+                archive("iroha.torii.v1.offline.top_up.request")))
         .join();
+    assert topUpHandle.operationIdHex().equals(operationId);
     assert captured.get().method().equals("POST");
     assert captured.get().uri().getPath().equals("/api/v1/offline/top-up");
     assert captured.get().headers().get("Content-Type")
@@ -1742,13 +1749,12 @@ public final class KagemushaRecursiveSpendProverTest {
     client
         .submitRedeem(
             new KagemushaRecursiveSpendProver.RedeemSubmissionRequest(
-                archive("iroha.torii.v1.offline.redeem.request")),
-            operationId)
+                archive("iroha.torii.v1.offline.redeem.request")))
         .join();
     assert captured.get().uri().getPath().equals("/api/v1/offline/redeem");
     assert captured.get().timeout().equals(requestTimeout);
 
-    client.getOperation(operationId).join();
+    client.getOperation(topUpHandle).join();
     assert captured.get().uri().getPath().equals("/api/v1/offline/operations/" + operationId);
     assert captured.get().timeout().equals(requestTimeout);
   }
@@ -1799,13 +1805,19 @@ public final class KagemushaRecursiveSpendProverTest {
               },
               new LocalSigningContext(networkId),
               null,
-              ignored -> filled(0x11),
-              ignored -> filled(0x11),
+              ignored -> operationRequestIdentity(
+                  KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                  filled(0x11),
+                  1L),
+              ignored -> operationRequestIdentity(
+                  KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                  filled(0x11),
+                  1L),
               ignored -> { throw new AssertionError("invalid headers reached body projection"); },
               ignored -> { throw new AssertionError("invalid headers reached status projection"); });
       boolean rejected = false;
       try {
-        client.submitTopUp(request, operationId).join();
+        client.submitTopUp(request).join();
       } catch (final RuntimeException expected) {
         rejected = true;
       }
@@ -1819,34 +1831,84 @@ public final class KagemushaRecursiveSpendProverTest {
     final String operationIdHex = hex(operationId);
     final KagemushaRecursiveSpendProver.OperationReferenceProjection reference =
         operationReferenceProjection(
-            KagemushaRecursiveSpendProver.OperationKind.TOP_UP, operationId);
-    KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
-        reference, operationIdHex, KagemushaRecursiveSpendProver.OperationKind.TOP_UP);
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP, operationId, 7L);
+    final KagemushaRecursiveSpendProver.OperationRequestIdentity identity =
+        operationRequestIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP, operationId, 7L);
+    final KagemushaRecursiveSpendProver.OperationHandle handle =
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
+            reference, identity);
+    assert handle.operationIdHex().equals(operationIdHex);
+    assert handle.submittedAtMilliseconds() == 7L;
     assertThrowsIllegalState(() ->
         KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
             reference,
-            hex(otherOperationId),
-            KagemushaRecursiveSpendProver.OperationKind.TOP_UP));
+            operationRequestIdentity(
+                KagemushaRecursiveSpendProver.OperationKind.TOP_UP, otherOperationId, 7L)));
     assertThrowsIllegalState(() ->
         KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
             reference,
-            operationIdHex,
-            KagemushaRecursiveSpendProver.OperationKind.REDEEM));
+            operationRequestIdentity(
+                KagemushaRecursiveSpendProver.OperationKind.REDEEM, operationId, 7L)));
+    assertThrowsIllegalState(() ->
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
+            reference,
+            operationRequestIdentity(
+                KagemushaRecursiveSpendProver.OperationKind.TOP_UP, operationId, 8L)));
     final KagemushaRecursiveSpendProver.OperationStatusProjection status =
         operationProjection(
             KagemushaRecursiveSpendProver.OperationState.PENDING,
             KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
             operationId,
-            1L,
+            7L,
             null,
             null,
             null);
+    KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(status, handle);
     assertThrowsIllegalState(() ->
         KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
-            status, hex(otherOperationId)));
+            status,
+            new KagemushaRecursiveSpendProver.OperationHandle(
+                otherOperationId,
+                KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                operationId,
+                7L)));
     assertThrowsIllegalState(() ->
-        KagemushaRecursiveSpendProver.ToriiClient.requireSubmittedOperationIdMatches(
-            operationId, hex(otherOperationId)));
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+            status,
+            new KagemushaRecursiveSpendProver.OperationHandle(
+                operationId,
+                KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                operationId,
+                7L)));
+    assertThrowsIllegalState(() ->
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+            status,
+            new KagemushaRecursiveSpendProver.OperationHandle(
+                operationId,
+                KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                otherOperationId,
+                7L)));
+    assertThrowsIllegalState(() ->
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+            status,
+            new KagemushaRecursiveSpendProver.OperationHandle(
+                operationId,
+                KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                operationId,
+                8L)));
+    final KagemushaRecursiveSpendProver.OperationStatusProjection appliedRedeem =
+        operationProjection(
+            KagemushaRecursiveSpendProver.OperationState.APPLIED,
+            KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+            operationId,
+            null,
+            1L,
+            1L,
+            null);
+    assertThrowsIllegalState(() ->
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+            appliedRedeem, handle));
 
     final AtomicReference<TransportRequest> dispatched = new AtomicReference<>();
     final NetworkId networkId = NetworkId.parse(
@@ -1860,14 +1922,20 @@ public final class KagemushaRecursiveSpendProverTest {
             },
             new LocalSigningContext(networkId),
             null,
-            ignored -> otherOperationId,
-            ignored -> otherOperationId,
+            ignored -> operationRequestIdentity(
+                KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                otherOperationId,
+                7L),
+            ignored -> operationRequestIdentity(
+                KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                otherOperationId,
+                7L),
             ignored -> reference,
             ignored -> status);
     final KagemushaRecursiveSpendProver.TopUpRequest request =
         new KagemushaRecursiveSpendProver.TopUpRequest(
             archive("iroha.torii.v1.offline.top_up.request"));
-    assertThrowsIllegalState(() -> client.submitTopUp(request, operationIdHex));
+    assertThrowsIllegalState(() -> client.submitTopUp(request));
     assert dispatched.get() == null;
   }
 
@@ -1977,7 +2045,8 @@ public final class KagemushaRecursiveSpendProverTest {
   private static KagemushaRecursiveSpendProver.OperationReferenceProjection
       operationReferenceProjection(
       final KagemushaRecursiveSpendProver.OperationKind kind,
-      final byte[] operationId) {
+      final byte[] operationId,
+      final long submittedAtMilliseconds) {
     return construct(
         KagemushaRecursiveSpendProver.OperationReferenceProjection.class,
         new Class<?>[] {
@@ -1991,7 +2060,24 @@ public final class KagemushaRecursiveSpendProverTest {
         operationId,
         operationId,
         "/v1/offline/operations/" + hex(operationId),
-        1L);
+        submittedAtMilliseconds);
+  }
+
+  private static KagemushaRecursiveSpendProver.OperationRequestIdentity
+      operationRequestIdentity(
+      final KagemushaRecursiveSpendProver.OperationKind kind,
+      final byte[] operationId,
+      final long authorizationIssuedAtMilliseconds) {
+    return construct(
+        KagemushaRecursiveSpendProver.OperationRequestIdentity.class,
+        new Class<?>[] {
+            KagemushaRecursiveSpendProver.OperationKind.class,
+            byte[].class,
+            long.class,
+        },
+        kind,
+        operationId,
+        authorizationIssuedAtMilliseconds);
   }
 
   private static String unexpectedToriiRoute(final TransportRequest request) {
@@ -2097,12 +2183,12 @@ public final class KagemushaRecursiveSpendProverTest {
             "projectOperationReference",
             "projectOperationStatus",
             "projectPeerPayment",
-            "projectRedeemRequestOperationId",
+            "projectRedeemRequestIdentity",
             "projectRecipientPaymentRequest",
             "projectRecipientReceiveOfferV2",
             "projectRedeemBuildResultV4",
             "projectSplitResultV4",
-            "projectTopUpRequestOperationId",
+            "projectTopUpRequestIdentity",
             "projectVerifyResultV4",
             "restoreInitBranchV4",
             "restorePeerPaymentBranchV4",

@@ -99,8 +99,10 @@ preflight remains bodyless and does not require `Content-Type`.
 
 Structured query DTOs accept at most one value for each decoded key. Literal
 duplicates and percent-encoded equivalents such as `limit` and `%6cimit` return
-`400 request_query_invalid`; only explicitly documented protocol parsers may
-define repeated-key semantics.
+`400 request_query_invalid`. Percent-decoded keys and values must be exact
+UTF-8; invalid UTF-8 byte sequences are rejected rather than replaced with
+Unicode replacement characters. Only explicitly documented
+protocol parsers may define repeated-key semantics.
 
 ## Errors and correlation
 
@@ -246,13 +248,14 @@ authentication and network policy rather than by claiming a separate socket.
 | Method/path or family | Surface and exposure | Media/protocol | Authentication | Reason |
 | --- | --- | --- | --- | --- |
 | `GET /health` | protocol, public | framework health response | deployment policy | load-balancer probe |
-| `GET /status`, `GET /status/blocks`, `GET /status/peers` | diagnostic, restricted on the public listener | diagnostic JSON/text | CIDR/API-token and network policy | root status plus exact infrastructure probes; never an SDK or MCP tool |
+| `GET /status`, `GET /status/blocks`, `GET /status/peers` | diagnostic, restricted on the public listener | root status negotiates JSON or canonical Norito; exact probes are JSON integers | CIDR/API-token and network policy | root status plus exact infrastructure probes; never an SDK or MCP tool |
 | `GET /metrics` | diagnostic, restricted on the public listener | Prometheus text | CIDR/API-token policy | scraper protocol; never an SDK or MCP tool |
 | `GET /debug/pprof/profile` | diagnostic, restricted on the public listener | profiler bytes | CIDR/API-token policy | diagnostic artifact |
 | `GET /openapi.json`, `GET /v1/schema` | protocol documentation | JSON document | deployment policy | schema/document endpoints are JSON-only; the extensionless OpenAPI alias is not part of V1 |
 | `POST /v1/mcp` | protocol | MCP Streamable HTTP JSON-RPC | bounded nested-route boundary which preserves the selected catalog route's exact authentication and admission | tool transport, not an ordinary generated REST operation; GET returns 405 because no SSE stream is provided |
 | `GET /v1/ledger/block/{height}` and `GET /v1/ledger/block/{height}/proof/{entry_hash}` | public, OpenAPI and SDK | exact `application/x-norito` cryptographic carrier | listener policy | the executed `SignedBlockWire` and `BlockProofs` bytes must not be projected through a separately evolving JSON shape; the block carrier is finalized-state-bound and limited to 32 MiB |
 | `POST /v1/operator/auth/{registration,login}/{options,verify}` | operator, OpenAPI only | WebAuthn JSON | mTLS plus handler-enforced first-credential operator-token bootstrap or authenticated session, rate-limit, lockout, and WebAuthn challenge policy; listener API tokens are not accepted | credential exchange cannot require an already-established operator request signature; after initial enrollment only a session may add rollover credentials; it never enters SDK or MCP projections |
+| `GET /v1/operator/auth/credentials`, `DELETE /v1/operator/auth/credentials/{credential_id}` | operator, OpenAPI only | closed credential-metadata JSON | exact-network operator request signature plus mTLS and a valid WebAuthn session; listener API tokens are not accepted | inventory and revocation only; verification keys are never returned and these operations never enter SDK or MCP projections |
 | `GET /v1/content/{bundle}/{*path}` and hosted-site reads | protocol | manifest-selected content type, ranges | content policy | raw/static content delivery; an empty wildcard is not a bundle-root alias |
 | any method on `/api` or `/api/{*tail}` with the registered alias or Taira Mon alias in `Host` | protocol | proxied SoraCloud HTTP runtime | no route-specific credential; listener-wide API-token and gateway rate/inflight policy apply | reviewed host-routed public-runtime gateways; path-encoded aliases are rejected and these are not OpenAPI, SDK, or MCP operations |
 | query-projection, attachment, and SoraFS export reads documented as binary | operator/protocol | `application/octet-stream` or declared artifact media | route policy | exact binary artifacts |
@@ -267,7 +270,8 @@ close-code rules are specified in [the Torii streaming contract](streaming.md).
 
 The four operator-authentication operations accept at most 64 KiB of JSON and
 use one normalized credential envelope rather than accepting a browser's
-open-ended `PublicKeyCredential` object. The top-level object contains exactly
+open-ended `PublicKeyCredential` object. The two options operations require an
+exactly empty body; the 64 KiB limit applies to the two verify envelopes. The top-level object contains exactly
 `id`, `rawId`, `response`, and `type`; `type` is exactly `public-key`, and `id`
 and `rawId` are equal canonical unpadded base64url encodings of a non-empty
 credential identifier no longer than 1,024 decoded bytes. Registration
@@ -284,16 +288,41 @@ data on assertions, extension data it does not interpret, and trailing CBOR or
 authenticator bytes.
 
 Challenges, sessions, and lockout identities share a configured per-kind live
-entry bound and expire without full-map scans. New state fails closed with
-`503 operator_auth_state_capacity_exhausted` when that bound is occupied.
-Credential enrollment is separately bounded; an authenticated attempt to add
+entry bound (at most 65,536 per kind) and expire without full-map scans. New
+challenge or session state fails closed with
+`503 operator_auth_state_capacity_exhausted` when its bound is occupied. A full
+lockout table preserves every tracked identity and its lock, but stops tracking
+new identities instead of rejecting otherwise valid unseen callers. Missing-mTLS
+denials never consume per-identity lockout state.
+First enrollment requires one of the configured unique 32..=256-byte
+visible-ASCII bootstrap tokens. Torii retains only domain-separated token
+digests after initialization; an enabled empty credential store without a
+token is a startup error, bootstrap tokens may be removed after enrollment,
+and no more than 16 may be configured. Credential enrollment is separately
+bounded to at most 1,024 entries; an authenticated attempt to add
 a new credential at the configured limit returns
 `409 operator_webauthn_credential_capacity_exhausted`, while replacing the
-same credential identifier remains permitted. Persisted credential state is
+same credential identifier is rejected with
+`409 operator_webauthn_credential_duplicate`; credential rotation is a new
+enrollment with a distinct identifier. Persisted credential state is
 validated exactly at startup, including its version, fields, canonical
 encodings, identifier and counter bounds, allowed algorithm, public key, and
 duplicate identifiers. Corrupt or policy-incompatible state prevents Torii
 from starting operator authentication instead of being repaired or ignored.
+
+Credential management is a separate, fully authenticated operator boundary.
+`GET /v1/operator/auth/credentials` returns exactly `credentials` and
+`credentials_total`; entries contain only `credential_id`, `algorithm`,
+`sign_count`, and `created_at_ms`, sorted by canonical credential identifier.
+`DELETE /v1/operator/auth/credentials/{credential_id}` accepts only the same
+non-empty canonical unpadded base64url identifier grammar as credential
+exchange. An unknown identifier returns
+`404 operator_webauthn_credential_not_found`. Deletion atomically persists the
+new credential set and then revokes all outstanding operator sessions and
+challenges. The final credential cannot be deleted unless a bootstrap recovery
+token remains configured; otherwise Torii returns
+`409 operator_webauthn_last_credential`. Every success and error response from
+these routes is `private, no-store`.
 
 ## Typed JSON mapping
 

@@ -71111,42 +71111,60 @@ pub fn handle_peers(
     }
 }
 #[cfg(feature = "telemetry")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// Exact representation exposed by the public Torii status handlers.
-pub enum StatusView {
-    /// Complete status document with content negotiation.
-    Full,
-    /// Canonical committed block height as JSON.
-    Blocks,
-    /// Current online peer count as JSON.
-    Peers,
+fn ensure_status_visible(telemetry: &MaybeTelemetry, endpoint: &'static str) -> Result<()> {
+    if !telemetry.allows_metrics() {
+        return Err(Error::telemetry_profile_forbidden(
+            endpoint,
+            telemetry.profile(),
+        ));
+    }
+    Ok(())
 }
 #[cfg(feature = "telemetry")]
-/// Render one of the explicitly supported status views.
+fn status_scalar_response(value: u64) -> Result<Response> {
+    let body = norito::json::to_json(&value)
+        .map_err(|error| Error::StatusFailure(eyre!(error)))?;
+    let mut response = axum::response::Response::new(axum::body::Body::from(body));
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(response)
+}
+#[cfg(feature = "telemetry")]
+/// Render the canonical committed block height without constructing a full status snapshot.
+pub fn handle_status_blocks(
+    telemetry: &MaybeTelemetry,
+    authoritative_block_height: u64,
+) -> Result<Response> {
+    ensure_status_visible(telemetry, "status/blocks")?;
+    status_scalar_response(authoritative_block_height)
+}
+#[cfg(feature = "telemetry")]
+/// Render the current online-peer count without constructing a full status snapshot.
+pub fn handle_status_peers(telemetry: &MaybeTelemetry, online_peer_count: u64) -> Result<Response> {
+    ensure_status_visible(telemetry, "status/peers")?;
+    status_scalar_response(online_peer_count)
+}
+#[cfg(feature = "telemetry")]
+/// Render the complete status document with content negotiation.
 pub async fn handle_status(
     telemetry: &MaybeTelemetry,
     accept: Option<axum::http::HeaderValue>,
-    view: StatusView,
     nexus_routing_policy: ActualLaneRoutingPolicy,
     authoritative_block_height: u64,
     offline: Option<iroha_torii_shared::offline_api::OfflineStatus>,
 ) -> Result<Response> {
     iroha_logger::debug!(
-        ?view,
         accept = ?accept,
         "serving /status"
     );
-    if !telemetry.allows_metrics() {
-        return Err(Error::telemetry_profile_forbidden(
-            "status",
-            telemetry.profile(),
-        ));
-    }
+    ensure_status_visible(telemetry, "status")?;
     // Keep the Kura-derived total and semantic non-empty counters on the same
-    // classified frontier before replacing total height with the authoritative
-    // applied-state height below. A lazy snapshot can otherwise transiently
-    // publish `blocks = N` with `blocks_non_empty = N - 1` for a valid
-    // NPoS-effects-only block and falsely report an empty block.
+    // classified frontier as the authoritative applied-state height. A lazy
+    // snapshot can otherwise transiently publish `blocks = N` with
+    // `blocks_non_empty = N - 1` for a valid NPoS-effects-only block and falsely
+    // report an empty block.
     let metrics =
         telemetry
             .metrics_fresh_checked()
@@ -71170,49 +71188,30 @@ pub async fn handle_status(
         txs_rejected = status.txs_rejected,
         "status snapshot built"
     );
-    match view {
-        StatusView::Blocks | StatusView::Peers => {
-            let value = match view {
-                StatusView::Blocks => status.blocks,
-                StatusView::Peers => status.peers,
-                StatusView::Full => unreachable!("matched exact status probes"),
-            };
-            let body = norito::json::to_json(&value)
-                .map_err(|error| Error::StatusFailure(eyre!(error)))?;
-            let mut response = axum::response::Response::new(axum::body::Body::from(body));
-            response.headers_mut().insert(
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    match format {
+        crate::utils::ResponseFormat::Norito => {
+            let bytes = norito::to_bytes(&status)
+                .map_err(|err| Error::StatusFailure(eyre!(err)))?;
+            let mut resp = axum::response::Response::new(axum::body::Body::from(bytes));
+            resp.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+            );
+            Ok(resp)
+        }
+        crate::utils::ResponseFormat::Json => {
+            let s = norito::json::to_json_pretty(&status)
+                .map_err(|e| Error::StatusFailure(eyre!(e)))?;
+            let mut resp = axum::response::Response::new(axum::body::Body::from(s));
+            resp.headers_mut().insert(
                 axum::http::header::CONTENT_TYPE,
                 axum::http::HeaderValue::from_static("application/json"),
             );
-            Ok(response)
-        }
-        StatusView::Full => {
-            let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-                Ok(fmt) => fmt,
-                Err(resp) => return Ok(resp),
-            };
-            match format {
-                crate::utils::ResponseFormat::Norito => {
-                    let bytes = norito::to_bytes(&status)
-                        .map_err(|err| Error::StatusFailure(eyre!(err)))?;
-                    let mut resp = axum::response::Response::new(axum::body::Body::from(bytes));
-                    resp.headers_mut().insert(
-                        axum::http::header::CONTENT_TYPE,
-                        axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
-                    );
-                    Ok(resp)
-                }
-                crate::utils::ResponseFormat::Json => {
-                    let s = norito::json::to_json_pretty(&status)
-                        .map_err(|e| Error::StatusFailure(eyre!(e)))?;
-                    let mut resp = axum::response::Response::new(axum::body::Body::from(s));
-                    resp.headers_mut().insert(
-                        axum::http::header::CONTENT_TYPE,
-                        axum::http::HeaderValue::from_static("application/json"),
-                    );
-                    Ok(resp)
-                }
-            }
+            Ok(resp)
         }
     }
 }

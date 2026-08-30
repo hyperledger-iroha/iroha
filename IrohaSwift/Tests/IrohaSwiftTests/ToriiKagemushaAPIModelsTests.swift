@@ -314,6 +314,17 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             ).anchorDigest
         )
+        let lastValidLeaf = KagemushaRecursiveSpend.topUpShieldInsertionCapacityV2 - 1
+        XCTAssertNoThrow(try KagemushaRecursiveSpendCodecs.decodeTopUpAnchorV4(
+            canonicalTopUpAnchorArchive(shieldLeafIndex: lastValidLeaf),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ))
+        XCTAssertThrowsError(try KagemushaRecursiveSpendCodecs.decodeTopUpAnchorV4(
+            canonicalTopUpAnchorArchive(
+                shieldLeafIndex: KagemushaRecursiveSpend.topUpShieldInsertionCapacityV2
+            ),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ))
         XCTAssertEqual(anchor, try KagemushaTopUpAnchor(
             noritoArchive: archive,
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
@@ -935,7 +946,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         return payload.data
     }
 
-    private func canonicalTopUpAnchorArchive() throws -> Data {
+    private func canonicalTopUpAnchorArchive(shieldLeafIndex: UInt32 = 7) throws -> Data {
         func fields(_ values: [Data]) -> Data {
             var writer = CompactNoritoWriter()
             values.forEach { writer.writeField($0) }
@@ -1022,7 +1033,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             amount(),
             fixed32(0xd2),
             fixed32(0xd3),
-            uint32(7),
+            uint32(shieldLeafIndex),
             note(),
             fixed32(0xd5),
             verifierKeyID(),

@@ -72,6 +72,14 @@ const (
 	TransferHubMessageKind      byte = 0
 )
 
+// Final-V1 destination-proof backend tags. These values mirror the closed
+// Rust BridgeSccpDestinationProofBackendV1 discriminants exactly.
+const (
+	EVMBackendTag  byte = 0
+	TRONBackendTag byte = 1
+	TONBackendTag  byte = 2
+)
+
 // Config is compile-time configuration for one fixed circuit.
 type Config struct {
 	ID               string
@@ -94,10 +102,10 @@ var catalogue = buildCatalogue()
 
 func buildCatalogue() map[string]Config {
 	lanes := []Config{
-		{Lane: "ethereum-mainnet", Curve: BN254, SignalHash: KeccakSignal, TargetDomain: EthereumDomain, TargetNetworkTag: EthereumNetworkTag, BackendTag: 0, RecipientCodec: EVMAddress20Codec, RecipientLength: 20, RouteID: "taira_eth_xor", Phase1CeremonyID: "sccp-final-v1-bn254-phase1"},
-		{Lane: "bsc-mainnet", Curve: BN254, SignalHash: KeccakSignal, TargetDomain: BSCDomain, TargetNetworkTag: BSCNetworkTag, BackendTag: 0, RecipientCodec: EVMAddress20Codec, RecipientLength: 20, RouteID: "taira_bsc_xor", Phase1CeremonyID: "sccp-final-v1-bn254-phase1"},
-		{Lane: "tron-mainnet", Curve: BN254, SignalHash: KeccakSignal, TargetDomain: TRONDomain, TargetNetworkTag: TRONNetworkTag, BackendTag: 1, RecipientCodec: TRONAddress21Codec, RecipientLength: 21, RouteID: "taira_tron_xor", Phase1CeremonyID: "sccp-final-v1-bn254-phase1"},
-		{Lane: "ton-mainnet", Curve: BLS12381, SignalHash: SHA256Signal, TargetDomain: TONDomain, TargetNetworkTag: TONNetworkTag, BackendTag: 3, RecipientCodec: TONAccount36Codec, RecipientLength: 36, RouteID: "taira_ton_xor", Phase1CeremonyID: "sccp-final-v1-bls12-381-phase1"},
+		{Lane: "ethereum-mainnet", Curve: BN254, SignalHash: KeccakSignal, TargetDomain: EthereumDomain, TargetNetworkTag: EthereumNetworkTag, BackendTag: EVMBackendTag, RecipientCodec: EVMAddress20Codec, RecipientLength: 20, RouteID: "taira_eth_xor", Phase1CeremonyID: "sccp-final-v1-bn254-phase1"},
+		{Lane: "bsc-mainnet", Curve: BN254, SignalHash: KeccakSignal, TargetDomain: BSCDomain, TargetNetworkTag: BSCNetworkTag, BackendTag: EVMBackendTag, RecipientCodec: EVMAddress20Codec, RecipientLength: 20, RouteID: "taira_bsc_xor", Phase1CeremonyID: "sccp-final-v1-bn254-phase1"},
+		{Lane: "tron-mainnet", Curve: BN254, SignalHash: KeccakSignal, TargetDomain: TRONDomain, TargetNetworkTag: TRONNetworkTag, BackendTag: TRONBackendTag, RecipientCodec: TRONAddress21Codec, RecipientLength: 21, RouteID: "taira_tron_xor", Phase1CeremonyID: "sccp-final-v1-bn254-phase1"},
+		{Lane: "ton-mainnet", Curve: BLS12381, SignalHash: SHA256Signal, TargetDomain: TONDomain, TargetNetworkTag: TONNetworkTag, BackendTag: TONBackendTag, RecipientCodec: TONAccount36Codec, RecipientLength: 36, RouteID: "taira_ton_xor", Phase1CeremonyID: "sccp-final-v1-bls12-381-phase1"},
 	}
 	out := make(map[string]Config, 8)
 	for _, lane := range lanes {

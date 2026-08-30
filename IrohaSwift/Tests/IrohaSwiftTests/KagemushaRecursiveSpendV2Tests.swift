@@ -857,7 +857,8 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testTopUpShieldInsertionReservesFinalTreeLeaf() throws {
+    func testTopUpShieldInsertionReservesCircuitTail() throws {
+        XCTAssertEqual(KagemushaRecursiveSpend.topUpShieldInsertionCapacityV2, 65_463)
         let proofAttachment = framedArchive(
             typeName: KagemushaRecursiveSpend.proofAttachmentWireName
         )
@@ -876,6 +877,44 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             finalizedRoot: fixed32(0x13),
             leafIndex: KagemushaRecursiveSpend.topUpShieldInsertionCapacityV2,
             proofAttachment: proofAttachment
+        ))
+
+        let payerPublicKey = try Keypair(privateKeyBytes: fixed32(0xC1)).publicKey
+        let payer = try AccountAddress
+            .fromAccount(publicKey: payerPublicKey)
+            .toI105(networkPrefix: 0x02F1)
+        let zeroPath = try PrivacyConfidentialMerklePathWitnessV2(
+            siblings: (0..<16).map { fixed32(UInt8($0 + 1)) },
+            directions: Data(repeating: 0, count: 16),
+            root: fixed32(0x21)
+        )
+        let opening = try KagemushaNoteOpening(
+            spendKey: fixed32(0x31),
+            rho: fixed32(0x32),
+            diversifier: fixed32(0x33)
+        )
+        let artifactBinding = try KagemushaRecursiveSpendArtifactBindingV4(
+            generation: "leaf-bound-test",
+            manifestSHA256: fixed32(0x41)
+        )
+        func buildRequest(leafIndex: UInt32) throws -> KagemushaTopUpShieldBuildRequestV4 {
+            try KagemushaTopUpShieldBuildRequestV4(
+                networkID: TestNetworkIds.canonical,
+                assetID: "\(assetDefinitionID())#\(payer)",
+                amount: KagemushaScaledAmount(atomicUnits: "1", scale: 2),
+                payer: payer,
+                operationID: fixed32(0x51),
+                opening: opening,
+                leafIndex: leafIndex,
+                zeroPath: zeroPath,
+                shieldVerifierID: "halo2/ipa:leaf-bound-test",
+                shieldVerifierCommitment: fixed32(0x61),
+                artifactBinding: artifactBinding
+            )
+        }
+        XCTAssertEqual(try buildRequest(leafIndex: lastValidLeaf).leafIndex, lastValidLeaf)
+        XCTAssertThrowsError(try buildRequest(
+            leafIndex: KagemushaRecursiveSpend.topUpShieldInsertionCapacityV2
         ))
     }
 

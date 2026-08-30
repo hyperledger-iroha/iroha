@@ -779,13 +779,13 @@ get fun `test canonical four-cell payload and hashes match Rust vectors`() {
     expect(ordinaryByteLength(payload.chunk3)).toEqual(0);
     expect(canonicalPayloadByteLength(payload)).toEqual(208);
     expect(sccpPayloadHash(payload)).toEqual(
-        0xa5b2070d585a783ee4450eb9694cb864fe8cb6a57622c6ec29f15ea168b8afff,
+        0x76070726615ac0915b69bf2d94018ba5b8335f3b26aa86e49606053067597e5e,
     );
     expect(sccpPayloadHashBlockCountV1(payload)).toEqual(2);
     var incremental = sccpPayloadHashBlockV1(payload, sccpBlake2bInitialStateV1(), 0);
     incremental = sccpPayloadHashBlockV1(payload, incremental, 1);
     expect(sccpPayloadHashFromStateV1(incremental)).toEqual(
-        0xa5b2070d585a783ee4450eb9694cb864fe8cb6a57622c6ec29f15ea168b8afff,
+        0x76070726615ac0915b69bf2d94018ba5b8335f3b26aa86e49606053067597e5e,
     );
     val lane = beginCell().storeSlice("lane".literalSlice()).endCell();
     expect(sccpLaneHash(lane)).toEqual(
@@ -793,10 +793,10 @@ get fun `test canonical four-cell payload and hashes match Rust vectors`() {
     );
     val messageId = sccpMessageId(lane, payload);
     expect(messageId).toEqual(
-        0x515d4b69a9303452d5d580c4bca71978a60fd3cb4dc906dff5c414d64117c24d,
+        0x83efac3e640cd3319da756d4c90ebb358260bd495de76349f1724675d4f7f641,
     );
     expect(sccpSourceEventDigest(sccpLaneHash(lane), messageId, sccpPayloadHash(payload))).toEqual(
-        0xdeb773d913725a4b7557329552b29501ae2de915321d02d59488036b513703ed,
+        0x3554d5545dd97062e3c34779c723c271a07f8db5052ba2c967265c389e5ec277,
     );
 }
 

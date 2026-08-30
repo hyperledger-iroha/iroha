@@ -8490,9 +8490,10 @@ pub(crate) mod valid {
                 iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
                     &context.network_id,
                 );
-            let parliament_requested = world.parliament_attempts().iter().any(|(_, attempt)| {
-                attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)
-            });
+            let parliament_requested = world
+                .parliament_required_beacon_pulse_slots
+                .get(&(logical_beacon_id, context.height))
+                .is_some_and(|attempts| !attempts.is_empty());
             let pulse_requested = pulse_required_for_successor || parliament_requested;
             let Some(pulse) = pulse else {
                 return if pulse_requested {
@@ -8517,9 +8518,11 @@ pub(crate) mod valid {
                     "global beacon pulse differs from the authenticated block height, fixed protocol round, or network",
                 ));
             }
-            if world.parliament_attempts().iter().any(|(_, attempt)| {
-                attempt.classifies_beacon_pulse_unavailable_at(logical_beacon_id, pulse.height)
-            }) {
+            if world
+                .parliament_unavailable_beacon_pulse_slots
+                .get(&(logical_beacon_id, pulse.height))
+                .is_some_and(|attempts| !attempts.is_empty())
+            {
                 return Err(Self::npos_effects_error(
                     "global beacon pulse arrives after Parliament terminally classified its slot as unavailable",
                 ));
@@ -8547,11 +8550,11 @@ pub(crate) mod valid {
             }
             if world
                 .global_beacon_pulse_slots
-                .get(&(pulse.network_id, pulse.height))
+                .get(&(logical_beacon_id, pulse.height))
                 .is_some()
             {
                 return Err(Self::npos_effects_error(
-                    "global beacon pulse replays a network-height slot already in committed state",
+                    "global beacon pulse replays a logical-beacon-height slot already in committed state",
                 ));
             }
             let active_session = world
@@ -19100,7 +19103,7 @@ pub(crate) mod valid {
                 .iter()
                 .map(|entry| entry.validator.clone())
                 .collect::<Vec<_>>();
-            let (attempt_id, _request_ids, attempt) =
+            let (_attempt_id, _request_ids, attempt) =
                 crate::beacon::tests::pending_batched_sortition_attempt(
                     &context.network_id,
                     &roster,
@@ -19108,7 +19111,16 @@ pub(crate) mod valid {
                 );
             {
                 let mut block = state.world.block();
-                block.parliament_attempts.insert(attempt_id, attempt);
+                {
+                    let mut transaction = block.transaction_without_telemetry(
+                        iroha_config::parameters::actual::LaneConfig::default(),
+                        0,
+                    );
+                    transaction
+                        .put_parliament_attempt(attempt)
+                        .expect("persist the committed Parliament pulse request and its indexes");
+                    transaction.apply();
+                }
                 block.commit();
             }
             let candidate = npos_effects_block(&leader_private, context.height, None);

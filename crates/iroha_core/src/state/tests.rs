@@ -40460,6 +40460,11 @@ fn parliament_timed_ovn_resource_index_rebuild_is_deterministic_and_fail_atomic(
         .iter()
         .map(|(id, reservation)| (*id, *reservation))
         .collect::<BTreeMap<_, _>>();
+    let certified_sentinel = BTreeMap::from([(
+        77_u64,
+        BTreeSet::from([GovernanceAttemptId::new([0x54; 32])]),
+    )]);
+    world.parliament_certified_enactments = certified_sentinel.clone().into_iter().collect();
     assert!(world.rebuild_governance_read_indexes().is_err());
     assert_eq!(
         world
@@ -40470,6 +40475,373 @@ fn parliament_timed_ovn_resource_index_rebuild_is_deterministic_and_fail_atomic(
             .collect::<BTreeMap<_, _>>(),
         before_failed_rebuild,
         "a failed restore rebuild must not publish a partial derived index"
+    );
+    assert_eq!(
+        world
+            .parliament_certified_enactments
+            .view()
+            .iter()
+            .map(|(height, attempts)| (*height, attempts.clone()))
+            .collect::<BTreeMap<_, _>>(),
+        certified_sentinel,
+        "a failed restore rebuild must retain the previous certified-enactment index"
+    );
+}
+
+#[test]
+fn parliament_certified_enactment_index_tracks_rebuild_transition_and_removal() {
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; 32])),
+    );
+    let candidates = (0x31_u8..=0x40)
+        .map(|marker| {
+            KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
+                .map(|key| AccountId::new(key.public_key().clone()))
+                .expect("derive deterministic Parliament candidate")
+        })
+        .collect::<Vec<_>>();
+    let proposal = indexed_deploy_contract_proposal(1).kind;
+    let enact_at_height = 60;
+    let certified = crate::governance::parliament::certified_parliament_attempt_for_testing(
+        &proposal,
+        candidates,
+        &network_id,
+        enact_at_height,
+    );
+    let governance_attempt_id = certified.attempt().id;
+
+    let mut restored = World::new();
+    restored
+        .parliament_attempts
+        .insert(governance_attempt_id, certified.clone());
+    restored
+        .rebuild_governance_read_indexes()
+        .expect("rebuild the certified-enactment index");
+    assert_eq!(
+        restored
+            .parliament_certified_enactments
+            .view()
+            .get(&enact_at_height),
+        Some(&BTreeSet::from([governance_attempt_id]))
+    );
+
+    let world = World::new();
+    let mut block = world.block();
+    let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+    transaction
+        .put_parliament_attempt(certified.clone())
+        .expect("index one certified attempt");
+    transaction
+        .put_parliament_attempt(certified.clone())
+        .expect("idempotent replacement retains one index member");
+    assert_eq!(
+        transaction
+            .parliament_certified_enactments
+            .get(&enact_at_height),
+        Some(&BTreeSet::from([governance_attempt_id]))
+    );
+
+    let mut enacted = certified.clone();
+    enacted
+        .mark_enacted(governance_attempt_id, enact_at_height)
+        .expect("execute the certificate at its exact height");
+    transaction
+        .put_parliament_attempt(enacted)
+        .expect("terminal replacement removes the due index member");
+    assert!(
+        transaction
+            .parliament_certified_enactments
+            .get(&enact_at_height)
+            .is_none()
+    );
+
+    let removal_world = World::new();
+    let mut removal_block = removal_world.block();
+    let mut removal = removal_block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+    removal
+        .put_parliament_attempt(certified)
+        .expect("index the removable certified attempt");
+    assert!(
+        removal
+            .remove_parliament_attempt_for_testing(&governance_attempt_id)
+            .is_some()
+    );
+    assert!(
+        removal
+            .parliament_certified_enactments
+            .get(&enact_at_height)
+            .is_none()
+    );
+}
+
+#[test]
+fn parliament_required_beacon_slot_index_tracks_lifecycle_and_removal() {
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD9; 32])),
+    );
+    let roster = (1_u8..=4)
+        .map(|marker| {
+            KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
+                .map(|key| PeerId::new(key.public_key().clone()))
+                .expect("derive deterministic Parliament candidate")
+        })
+        .collect::<Vec<_>>();
+    let pulse_height = 41;
+    let (governance_attempt_id, _, mut attempt) =
+        crate::beacon::tests::pending_batched_sortition_attempt(&network_id, &roster, pulse_height);
+    let election_attempt_id = iroha_data_model::governance::types::BodyElectionAttemptId::derive_v1(
+        governance_attempt_id,
+        iroha_data_model::governance::types::ParliamentBody::RulesCommittee,
+        0,
+    );
+    let pulse_slot = (
+        iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&network_id),
+        pulse_height,
+    );
+
+    let world = World::new();
+    let mut block = world.block();
+    let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+    transaction
+        .put_parliament_attempt(attempt.clone())
+        .expect("persist the live sortition request");
+    assert_eq!(
+        transaction
+            .parliament_required_beacon_pulse_slots
+            .get(&pulse_slot),
+        Some(&BTreeSet::from([governance_attempt_id]))
+    );
+
+    attempt
+        .fail_body_election_no_roster(
+            governance_attempt_id,
+            election_attempt_id,
+            false,
+            pulse_height + 1,
+        )
+        .expect("terminally classify the unavailable sortition slot");
+    transaction
+        .put_parliament_attempt(attempt)
+        .expect("replace the live request with its terminal transcript");
+    assert!(
+        transaction
+            .parliament_required_beacon_pulse_slots
+            .get(&pulse_slot)
+            .is_none()
+    );
+    assert_eq!(
+        transaction
+            .parliament_unavailable_beacon_pulse_slots
+            .get(&pulse_slot),
+        Some(&BTreeSet::from([governance_attempt_id]))
+    );
+
+    assert!(
+        transaction
+            .remove_parliament_attempt_for_testing(&governance_attempt_id)
+            .is_some()
+    );
+    assert!(
+        transaction
+            .parliament_unavailable_beacon_pulse_slots
+            .get(&pulse_slot)
+            .is_none()
+    );
+}
+
+#[test]
+fn parliament_unavailable_beacon_slot_index_rebuilds_and_tracks_removal() {
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD4; 32])),
+    );
+    let roster = (1_u8..=4)
+        .map(|marker| {
+            KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
+                .map(|key| PeerId::new(key.public_key().clone()))
+                .expect("derive deterministic Parliament candidate")
+        })
+        .collect::<Vec<_>>();
+    let pulse_height = 41;
+    let (governance_attempt_id, _, mut attempt) =
+        crate::beacon::tests::pending_batched_sortition_attempt(&network_id, &roster, pulse_height);
+    let election_attempt_id = iroha_data_model::governance::types::BodyElectionAttemptId::derive_v1(
+        governance_attempt_id,
+        iroha_data_model::governance::types::ParliamentBody::RulesCommittee,
+        0,
+    );
+    attempt
+        .fail_body_election_no_roster(
+            governance_attempt_id,
+            election_attempt_id,
+            false,
+            pulse_height + 1,
+        )
+        .expect("terminally classify the unavailable sortition slot");
+    let pulse_slot = (
+        iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&network_id),
+        pulse_height,
+    );
+
+    let mut world = World::new();
+    world
+        .parliament_attempts
+        .insert(governance_attempt_id, attempt);
+    world
+        .rebuild_governance_read_indexes()
+        .expect("rebuild unavailable Parliament pulse slots");
+    assert_eq!(
+        world
+            .parliament_unavailable_beacon_pulse_slots
+            .view()
+            .get(&pulse_slot),
+        Some(&BTreeSet::from([governance_attempt_id]))
+    );
+
+    world.parliament_unavailable_beacon_pulse_slots = Storage::default();
+    world
+        .rebuild_governance_read_indexes()
+        .expect("repeating unavailable-slot rebuild succeeds");
+    assert_eq!(
+        world
+            .parliament_unavailable_beacon_pulse_slots
+            .view()
+            .get(&pulse_slot),
+        Some(&BTreeSet::from([governance_attempt_id]))
+    );
+
+    let mut block = world.block();
+    let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+    assert!(
+        transaction
+            .remove_parliament_attempt_for_testing(&governance_attempt_id)
+            .is_some()
+    );
+    assert!(
+        transaction
+            .parliament_unavailable_beacon_pulse_slots
+            .get(&pulse_slot)
+            .is_none()
+    );
+}
+
+#[test]
+fn parliament_attempt_rejects_unavailable_slot_after_pulse_finalization_atomically() {
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD5; 32])),
+    );
+    let (_, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+    let roster = (1_u8..=4)
+        .map(|marker| {
+            KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
+                .map(|key| PeerId::new(key.public_key().clone()))
+                .expect("derive deterministic Parliament candidate")
+        })
+        .collect::<Vec<_>>();
+    let (governance_attempt_id, _, mut attempt) =
+        crate::beacon::tests::pending_batched_sortition_attempt(&network_id, &roster, pulse.height);
+    let election_attempt_id = iroha_data_model::governance::types::BodyElectionAttemptId::derive_v1(
+        governance_attempt_id,
+        iroha_data_model::governance::types::ParliamentBody::RulesCommittee,
+        0,
+    );
+    attempt
+        .fail_body_election_no_roster(
+            governance_attempt_id,
+            election_attempt_id,
+            false,
+            pulse.height + 1,
+        )
+        .expect("terminally classify the unavailable sortition slot");
+
+    let mut world = World::new();
+    world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
+    world
+        .rebuild_global_beacon_pulse_slots()
+        .expect("rebuild finalized logical beacon slots");
+    let mut block = world.block();
+    let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+
+    assert_eq!(
+        transaction.put_parliament_attempt(attempt),
+        Err(ParliamentReducerErrorV1::BeaconPulseAlreadyAvailable)
+    );
+    assert!(
+        transaction
+            .parliament_attempts
+            .get(&governance_attempt_id)
+            .is_none()
+    );
+    assert!(
+        transaction
+            .parliament_unavailable_beacon_pulse_slots
+            .iter()
+            .next()
+            .is_none(),
+        "rejection must not publish a partial unavailable-slot index"
+    );
+}
+
+#[test]
+fn parliament_unavailable_slot_rebuild_rejects_finalized_pulse_fail_atomically() {
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD6; 32])),
+    );
+    let (_, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+    let roster = (1_u8..=4)
+        .map(|marker| {
+            KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
+                .map(|key| PeerId::new(key.public_key().clone()))
+                .expect("derive deterministic Parliament candidate")
+        })
+        .collect::<Vec<_>>();
+    let (governance_attempt_id, _, mut attempt) =
+        crate::beacon::tests::pending_batched_sortition_attempt(&network_id, &roster, pulse.height);
+    let election_attempt_id = iroha_data_model::governance::types::BodyElectionAttemptId::derive_v1(
+        governance_attempt_id,
+        iroha_data_model::governance::types::ParliamentBody::RulesCommittee,
+        0,
+    );
+    attempt
+        .fail_body_election_no_roster(
+            governance_attempt_id,
+            election_attempt_id,
+            false,
+            pulse.height + 1,
+        )
+        .expect("terminally classify the unavailable sortition slot");
+
+    let sentinel_slot = (
+        iroha_data_model::governance::types::BeaconSessionId::new([0xD7; 32]),
+        99,
+    );
+    let sentinel_attempt = GovernanceAttemptId::new([0xD8; 32]);
+    let sentinel = BTreeMap::from([(sentinel_slot, BTreeSet::from([sentinel_attempt]))]);
+    let mut world = World::new();
+    world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
+    world
+        .rebuild_global_beacon_pulse_slots()
+        .expect("rebuild finalized logical beacon slots");
+    world
+        .parliament_attempts
+        .insert(governance_attempt_id, attempt);
+    world.parliament_unavailable_beacon_pulse_slots = sentinel.clone().into_iter().collect();
+
+    let error = world
+        .rebuild_governance_read_indexes()
+        .expect_err("a finalized pulse cannot also be terminally unavailable");
+    assert!(
+        error.contains("classifies finalized logical beacon slot"),
+        "unexpected rebuild rejection: {error}"
+    );
+    assert_eq!(
+        world
+            .parliament_unavailable_beacon_pulse_slots
+            .view()
+            .iter()
+            .map(|(slot, attempts)| (*slot, attempts.clone()))
+            .collect::<BTreeMap<_, _>>(),
+        sentinel,
+        "a failed rebuild must retain the previously published derived index"
     );
 }
 
@@ -40722,7 +41094,7 @@ fn parliament_timed_ovn_resource_index_tracks_only_the_active_retry() {
 }
 
 #[test]
-fn parliament_timed_ovn_resource_index_is_snapshot_skipped_and_rebuilt() {
+fn parliament_derived_indexes_are_snapshot_skipped_and_rebuilt() {
     let mut world = World::new();
     world.parliament_timed_ovn_resource_reservations.insert(
         BallotAttemptId::new([0xA1; 32]),
@@ -40732,8 +41104,28 @@ fn parliament_timed_ovn_resource_index_is_snapshot_skipped_and_rebuilt() {
             cast_capable: true,
         },
     );
+    world.parliament_unavailable_beacon_pulse_slots.insert(
+        (
+            iroha_data_model::governance::types::BeaconSessionId::new([0xA3; 32]),
+            41,
+        ),
+        BTreeSet::from([GovernanceAttemptId::new([0xA4; 32])]),
+    );
+    world.parliament_required_beacon_pulse_slots.insert(
+        (
+            iroha_data_model::governance::types::BeaconSessionId::new([0xA5; 32]),
+            42,
+        ),
+        BTreeSet::from([GovernanceAttemptId::new([0xA6; 32])]),
+    );
+    world
+        .parliament_certified_enactments
+        .insert(43, BTreeSet::from([GovernanceAttemptId::new([0xA7; 32])]));
     let encoded = norito::json::to_json(&world).expect("serialize world snapshot");
     assert!(!encoded.contains("parliament_timed_ovn_resource_reservations"));
+    assert!(!encoded.contains("parliament_required_beacon_pulse_slots"));
+    assert!(!encoded.contains("parliament_certified_enactments"));
+    assert!(!encoded.contains("parliament_unavailable_beacon_pulse_slots"));
 
     world
         .rebuild_governance_read_indexes()
@@ -40741,6 +41133,30 @@ fn parliament_timed_ovn_resource_index_is_snapshot_skipped_and_rebuilt() {
     assert!(
         world
             .parliament_timed_ovn_resource_reservations
+            .view()
+            .iter()
+            .next()
+            .is_none()
+    );
+    assert!(
+        world
+            .parliament_required_beacon_pulse_slots
+            .view()
+            .iter()
+            .next()
+            .is_none()
+    );
+    assert!(
+        world
+            .parliament_certified_enactments
+            .view()
+            .iter()
+            .next()
+            .is_none()
+    );
+    assert!(
+        world
+            .parliament_unavailable_beacon_pulse_slots
             .view()
             .iter()
             .next()
@@ -40782,9 +41198,13 @@ fn global_beacon_pulse_slot_index_is_snapshot_skipped_rebuilt_and_unique() {
     );
     let mut world = World::new();
     world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
+    let pulse_slot = (
+        iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id),
+        pulse.height,
+    );
     world
         .global_beacon_pulse_slots
-        .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+        .insert(pulse_slot, pulse.pulse_id);
 
     let encoded = norito::json::to_json(&world).expect("serialize world snapshot");
     assert!(!encoded.contains("global_beacon_pulse_slots"));
@@ -40793,6 +41213,10 @@ fn global_beacon_pulse_slot_index_is_snapshot_skipped_rebuilt_and_unique() {
     world
         .rebuild_global_beacon_pulse_slots()
         .expect("restore rebuilds the skipped exact-slot index");
+    assert_eq!(
+        world.global_beacon_pulse_slots.view().get(&pulse_slot),
+        Some(&pulse.pulse_id)
+    );
     assert_eq!(
         world
             .view()
@@ -40807,7 +41231,29 @@ fn global_beacon_pulse_slot_index_is_snapshot_skipped_rebuilt_and_unique() {
         .insert(duplicate_slot.pulse_id, duplicate_slot);
     assert!(
         world.rebuild_global_beacon_pulse_slots().is_err(),
-        "restore must reject two pulse records claiming one network-height slot"
+        "restore must reject two pulse records claiming one logical-beacon-height slot"
+    );
+}
+
+#[test]
+fn global_beacon_fixture_installs_the_logical_slot_index() {
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; 32])),
+    );
+    let (key_record, pulse) =
+        crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+    let world = World::new();
+    let mut block = world.block();
+    block
+        .install_global_beacon_fixture_for_testing(key_record, pulse)
+        .expect("install proof-valid global beacon fixture");
+    block.commit();
+
+    assert_eq!(
+        world
+            .view()
+            .global_beacon_pulse_at_slot(&pulse.network_id, pulse.height),
+        Some(&pulse)
     );
 }
 

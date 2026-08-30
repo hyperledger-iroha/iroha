@@ -767,11 +767,11 @@ fn take_nonzero_generation(counter: &AtomicU64) -> Option<u64> {
         )
         .ok()
 }
-static NEXT_QUERY_MEMORY_POOL_GENERATION: AtomicU64 = AtomicU64::new(1);
+static NEXT_BYTE_WEIGHTED_POOL_GENERATION: AtomicU64 = AtomicU64::new(1);
 static NEXT_ORDINARY_QUERY_POLICY_GENERATION: AtomicU64 = AtomicU64::new(1);
-fn next_query_memory_pool_generation() -> u64 {
-    take_nonzero_generation(&NEXT_QUERY_MEMORY_POOL_GENERATION)
-        .expect("query memory pool generation must not wrap")
+fn next_byte_weighted_pool_generation() -> u64 {
+    take_nonzero_generation(&NEXT_BYTE_WEIGHTED_POOL_GENERATION)
+        .expect("byte-weighted memory pool generation must not wrap")
 }
 fn next_ordinary_query_policy_generation() -> u64 {
     take_nonzero_generation(&NEXT_ORDINARY_QUERY_POLICY_GENERATION)
@@ -785,19 +785,19 @@ fn weighted_permit_count(bytes: u64, bytes_per_permit: NonZeroU64) -> Option<u32
     let permits = (bytes / quantum).checked_add(u64::from(bytes % quantum != 0))?;
     u32::try_from(permits).ok()
 }
-/// One app-local byte-weighted pool shared by fanout and ordinary queries.
+/// One app-local byte-weighted admission pool.
 ///
 /// Tokio exposes weighted acquisition through a `u32` permit count, while its semaphore has a
 /// platform-dependent larger maximum. The pool therefore chooses a conservative byte quantum and
 /// never represents more bytes than the configured capacity.
 #[derive(Clone, Debug)]
-struct QueryWeightedMemoryPool {
+struct ByteWeightedMemoryPool {
     semaphore: Arc<tokio::sync::Semaphore>,
     bytes_per_permit: NonZeroU64,
     total_permits: NonZeroU32,
     generation: u64,
 }
-impl QueryWeightedMemoryPool {
+impl ByteWeightedMemoryPool {
     fn new(pool_bytes: usize) -> Option<Self> {
         let max_permits = tokio::sync::Semaphore::MAX_PERMITS
             .min(usize::try_from(u32::MAX).unwrap_or(usize::MAX));
@@ -827,7 +827,7 @@ impl QueryWeightedMemoryPool {
             )),
             bytes_per_permit,
             total_permits,
-            generation: next_query_memory_pool_generation(),
+            generation: next_byte_weighted_pool_generation(),
         })
     }
     fn permits_for_parts<const N: usize>(&self, byte_parts: [u64; N]) -> Option<NonZeroU32> {

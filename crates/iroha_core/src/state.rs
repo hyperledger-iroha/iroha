@@ -1,5 +1,6 @@
 //! This module provides the [`State`] — an in-memory representation of the current blockchain state.
 #![allow(clippy::items_after_statements, clippy::used_underscore_binding)]
+use crate::governance::parliament::ParliamentReducerErrorV1;
 use crate::private_settlement::{
     carrier::{PrivateSettlementCarrierBindingErrorV1, PrivateSettlementCarrierBindingV1},
     global_state::{
@@ -89,8 +90,9 @@ use iroha_data_model::{
     executor::ExecutorDataModel,
     fastpq::{TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle},
     governance::types::{
-        BallotAttemptId, BallotAttemptStatusV1, BodyInstanceStatusV1, GovernanceAttemptId,
-        GovernanceAttemptStatusV1, ProposalKind, TleKeySessionId,
+        BallotAttemptId, BallotAttemptStatusV1, BeaconSessionId, BodyInstanceStatusV1,
+        GovernanceAttemptId, GovernanceAttemptStatusV1, MAX_PARLIAMENT_CITIZENS_V1, ProposalKind,
+        TleKeySessionId,
     },
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierPolicyId},
     isi::{
@@ -1326,6 +1328,9 @@ macro_rules! with_world_overlay_fields {
             governance_last_unlock_sweep_height,
             governance_unlock_stats,
             parliament_attempts,
+            parliament_required_beacon_pulse_slots,
+            parliament_certified_enactments,
+            parliament_unavailable_beacon_pulse_slots,
             tle_key_sessions,
             tle_key_session_rosters,
             tle_key_session_lifecycles,
@@ -4614,6 +4619,18 @@ pub struct World {
     #[norito(skip)]
     parliament_timed_ovn_resource_reservations:
         Storage<BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
+    /// Governance attempts that currently require a logical beacon slot.
+    #[norito(skip)]
+    pub(crate) parliament_required_beacon_pulse_slots:
+        Storage<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Certified governance attempts keyed by their exact enactment height.
+    #[norito(skip)]
+    pub(crate) parliament_certified_enactments:
+        Storage<u64, BTreeSet<GovernanceAttemptId>>,
+    /// Governance attempts that terminally classified a logical beacon slot as unavailable.
+    #[norito(skip)]
+    pub(crate) parliament_unavailable_beacon_pulse_slots:
+        Storage<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions: Storage<TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Frozen ordered validator roster bound to each finalized TLE key session.
@@ -4636,9 +4653,9 @@ pub struct World {
     /// Append-only finalized beacon pulse history keyed by canonical pulse id.
     pub(crate) global_beacon_pulses:
         Storage<[u8; 32], iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
-    /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
+    /// Derived unique pulse id keyed by the authoritative logical-beacon height slot.
     #[norito(skip)]
-    pub(crate) global_beacon_pulse_slots: Storage<(iroha_data_model::NetworkId, u64), [u8; 32]>,
+    pub(crate) global_beacon_pulse_slots: Storage<(BeaconSessionId, u64), [u8; 32]>,
     /// Placeholder buffer of events pending publication to external subscribers.
     /// Included for formal correctness, although used only below the block level.
     external_event_buf: Cell<Vec<EventBox>>,
@@ -5371,6 +5388,18 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     parliament_timed_ovn_resource_reservations:
         StorageBlock<'world, BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
+    /// Governance attempts that currently require a logical beacon slot.
+    #[norito(skip)]
+    pub(crate) parliament_required_beacon_pulse_slots:
+        StorageBlock<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Certified governance attempts keyed by their exact enactment height.
+    #[norito(skip)]
+    pub(crate) parliament_certified_enactments:
+        StorageBlock<'world, u64, BTreeSet<GovernanceAttemptId>>,
+    /// Governance attempts that terminally classified a logical beacon slot as unavailable.
+    #[norito(skip)]
+    pub(crate) parliament_unavailable_beacon_pulse_slots:
+        StorageBlock<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions: StorageBlock<'world, TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Frozen ordered validator roster bound to each finalized TLE key session.
@@ -5399,10 +5428,9 @@ pub struct WorldBlock<'world> {
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
-    /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
+    /// Derived unique pulse id keyed by the authoritative logical-beacon height slot.
     #[norito(skip)]
-    pub(crate) global_beacon_pulse_slots:
-        StorageBlock<'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
+    pub(crate) global_beacon_pulse_slots: StorageBlock<'world, (BeaconSessionId, u64), [u8; 32]>,
     /// Latest lane merge-hint roots observed via the merge ledger during this block.
     pub(crate) merge_hint_roots: CellBlock<'world, Vec<Hash>>,
     /// Latest reduced global state root observed via the merge ledger during this block.
@@ -6771,6 +6799,15 @@ pub struct WorldTransaction<'block, 'world> {
         BallotAttemptId,
         ParliamentTimedOvnResourceReservationV1,
     >,
+    /// Governance attempts that currently require a logical beacon slot.
+    pub(crate) parliament_required_beacon_pulse_slots:
+        StorageTransaction<'block, 'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Certified governance attempts keyed by their exact enactment height.
+    pub(crate) parliament_certified_enactments:
+        StorageTransaction<'block, 'world, u64, BTreeSet<GovernanceAttemptId>>,
+    /// Governance attempts that terminally classified a logical beacon slot as unavailable.
+    pub(crate) parliament_unavailable_beacon_pulse_slots:
+        StorageTransaction<'block, 'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions:
         StorageTransaction<'block, 'world, TleKeySessionId, TleKeySessionPublicStateV1>,
@@ -6803,7 +6840,7 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
     pub(crate) global_beacon_pulse_slots:
-        StorageTransaction<'block, 'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
+        StorageTransaction<'block, 'world, (BeaconSessionId, u64), [u8; 32]>,
     /// Buffer of events pending publication to external subscribers.
     pub(crate) merge_hint_roots: CellTransaction<'block, 'world, Vec<Hash>>,
     /// Latest reduced global state root observed in this transaction scope.
@@ -8746,6 +8783,15 @@ pub struct WorldView<'world> {
         iroha_data_model::governance::types::GovernanceAttemptId,
         ParliamentAttemptStateV1,
     >,
+    /// Governance attempts that currently require a logical beacon slot.
+    pub(crate) parliament_required_beacon_pulse_slots:
+        StorageView<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Certified governance attempts keyed by their exact enactment height.
+    pub(crate) parliament_certified_enactments:
+        StorageView<'world, u64, BTreeSet<GovernanceAttemptId>>,
+    /// Governance attempts that terminally classified a logical beacon slot as unavailable.
+    pub(crate) parliament_unavailable_beacon_pulse_slots:
+        StorageView<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions: StorageView<'world, TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Frozen ordered validator roster bound to each finalized TLE key session.
@@ -8773,9 +8819,8 @@ pub struct WorldView<'world> {
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
-    /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
-    pub(crate) global_beacon_pulse_slots:
-        StorageView<'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
+    /// Derived unique pulse id keyed by the authoritative logical-beacon height slot.
+    pub(crate) global_beacon_pulse_slots: StorageView<'world, (BeaconSessionId, u64), [u8; 32]>,
 }
 
 /// Exact public-map counts bound by the non-shipping private-settlement state
@@ -17821,6 +17866,13 @@ impl World {
         Ok(())
     }
     fn rebuild_governance_read_indexes(&mut self) -> Result<(), String> {
+        let maximum_citizens = usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
+            .expect("the V1 Parliament citizen cap fits usize");
+        if self.citizens.view().len() > maximum_citizens {
+            return Err(format!(
+                "Parliament citizen registry exceeds the first-release limit of {MAX_PARLIAMENT_CITIZENS_V1}"
+            ));
+        }
         let mut lock_expiries =
             BTreeMap::<u64, BTreeSet<(String, iroha_data_model::account::AccountId)>>::new();
         for (referendum_id, locks) in self.governance_locks.view().iter() {
@@ -17880,8 +17932,59 @@ impl World {
             })
             .map(|(proposal_id, proposal)| ((proposal.created_height, *proposal_id), ()))
             .collect();
+        let finalized_beacon_pulse_slots = {
+            let pulses = self.global_beacon_pulses.view();
+            pulses
+                .iter()
+                .map(|(_, pulse)| {
+                    (
+                        BeaconSessionId::for_network_v1(&pulse.network_id),
+                        pulse.height,
+                    )
+                })
+                .collect::<BTreeSet<_>>()
+        };
         let mut timed_ovn_resource_reservations = BTreeMap::new();
+        let mut required_beacon_pulse_slots =
+            BTreeMap::<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>::new();
+        let mut certified_enactments =
+            BTreeMap::<u64, BTreeSet<GovernanceAttemptId>>::new();
+        let mut unavailable_beacon_pulse_slots =
+            BTreeMap::<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>::new();
         for (governance_attempt_id, attempt) in self.parliament_attempts.view().iter() {
+            attempt.validate().map_err(|error| {
+                format!(
+                    "invalid Parliament attempt {governance_attempt_id:?} while rebuilding derived indexes: {error}"
+                )
+            })?;
+            if attempt.attempt().id != *governance_attempt_id {
+                return Err(format!(
+                    "Parliament attempt {governance_attempt_id:?} is stored under a noncanonical id"
+                ));
+            }
+            if let Some(enact_at_height) = attempt.certified_enactment_height_v1() {
+                certified_enactments
+                    .entry(enact_at_height)
+                    .or_default()
+                    .insert(*governance_attempt_id);
+            }
+            for pulse_slot in attempt.required_beacon_pulse_slots_v1() {
+                required_beacon_pulse_slots
+                    .entry(pulse_slot)
+                    .or_default()
+                    .insert(*governance_attempt_id);
+            }
+            for pulse_slot in attempt.unavailable_beacon_pulse_slots_v1() {
+                if finalized_beacon_pulse_slots.contains(&pulse_slot) {
+                    return Err(format!(
+                        "Parliament attempt {governance_attempt_id:?} classifies finalized logical beacon slot {pulse_slot:?} as unavailable"
+                    ));
+                }
+                unavailable_beacon_pulse_slots
+                    .entry(pulse_slot)
+                    .or_default()
+                    .insert(*governance_attempt_id);
+            }
             for (ballot_attempt_id, _) in attempt.ballot_attempts() {
                 let Some((ballot_attempt_id, reservation)) =
                     parliament_timed_ovn_resource_reservation_v1(
@@ -17906,6 +18009,11 @@ impl World {
         }
         self.parliament_timed_ovn_resource_reservations =
             timed_ovn_resource_reservations.into_iter().collect();
+        self.parliament_required_beacon_pulse_slots =
+            required_beacon_pulse_slots.into_iter().collect();
+        self.parliament_certified_enactments = certified_enactments.into_iter().collect();
+        self.parliament_unavailable_beacon_pulse_slots =
+            unavailable_beacon_pulse_slots.into_iter().collect();
         Ok(())
     }
     fn validate_plain_governance_tally_capacity(
@@ -17937,7 +18045,7 @@ impl World {
         }
         Ok(())
     }
-    /// Rebuild the unique `(network, height)` lookup for finalized global-beacon pulses.
+    /// Rebuild the unique logical-beacon height lookup for finalized global-beacon pulses.
     ///
     /// # Errors
     /// Returns an error when an authoritative pulse is stored under a noncanonical id or two
@@ -17954,10 +18062,13 @@ impl World {
                         hex::encode(stored_pulse_id)
                     ));
                 }
-                let slot = (pulse.network_id, pulse.height);
+                let slot = (
+                    BeaconSessionId::for_network_v1(&pulse.network_id),
+                    pulse.height,
+                );
                 if let Some(existing_pulse_id) = rebuilt.insert(slot, *stored_pulse_id) {
                     return Err(format!(
-                        "global beacon pulses {} and {} claim the same network-height slot",
+                        "global beacon pulses {} and {} claim the same logical-beacon-height slot",
                         hex::encode(existing_pulse_id),
                         hex::encode(stored_pulse_id)
                     ));
@@ -19256,9 +19367,9 @@ macro_rules! world_ro_accessors {
             /// Append-only finalized beacon pulse history by pulse id.
             storage global_beacon_pulses:
                 [u8; 32] => iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1;
-            /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
+            /// Derived unique pulse id keyed by the authoritative logical-beacon height slot.
             storage global_beacon_pulse_slots:
-                (iroha_data_model::NetworkId, u64) => [u8; 32];
+                (BeaconSessionId, u64) => [u8; 32];
         );
     };
 }
@@ -19470,9 +19581,10 @@ pub trait WorldReadOnly {
         network_id: &iroha_data_model::NetworkId,
         height: u64,
     ) -> Option<&iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
+        let logical_session = BeaconSessionId::for_network_v1(network_id);
         let pulse_id = self
             .global_beacon_pulse_slots()
-            .get(&(*network_id, height))?;
+            .get(&(logical_session, height))?;
         let pulse = self.global_beacon_pulses().get(pulse_id)?;
         (pulse.pulse_id == *pulse_id && pulse.network_id == *network_id && pulse.height == height)
             .then_some(pulse)
@@ -20405,6 +20517,10 @@ impl<'world> WorldBlock<'world> {
         pulse: iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     ) -> Result<(), crate::beacon::GlobalThresholdBeaconError> {
         key_record.validate()?;
+        let pulse_slot = (
+            BeaconSessionId::for_network_v1(&pulse.network_id),
+            pulse.height,
+        );
         if key_record.session.session_id != pulse.session_id
             || !key_record.is_active_at(pulse.height)
             || key_record.retired_at_height.is_some()
@@ -20412,7 +20528,12 @@ impl<'world> WorldBlock<'world> {
             || self.global_beacon_key_sessions.iter().next().is_some()
             || self.global_beacon_active_session.iter().next().is_some()
             || self.global_beacon_pulses.iter().next().is_some()
+            || self.global_beacon_pulse_slots.iter().next().is_some()
             || self.global_beacon_latest_pulse.iter().next().is_some()
+            || self
+                .parliament_unavailable_beacon_pulse_slots
+                .get(&pulse_slot)
+                .is_some_and(|attempts| !attempts.is_empty())
         {
             return Err(crate::beacon::GlobalThresholdBeaconError::PersistenceConflict);
         }
@@ -20439,6 +20560,8 @@ impl<'world> WorldBlock<'world> {
         self.global_beacon_active_session
             .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
         self.global_beacon_pulses.insert(pulse.pulse_id, pulse);
+        self.global_beacon_pulse_slots
+            .insert(pulse_slot, pulse.pulse_id);
         self.global_beacon_latest_pulse
             .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
         Ok(())
@@ -20784,6 +20907,9 @@ impl<'world> WorldBlock<'world> {
             governance_unlock_stats,
             parliament_attempts,
             parliament_timed_ovn_resource_reservations,
+            parliament_required_beacon_pulse_slots,
+            parliament_certified_enactments,
+            parliament_unavailable_beacon_pulse_slots,
             tle_key_sessions,
             tle_key_session_rosters,
             tle_key_session_lifecycles,
@@ -20950,6 +21076,9 @@ impl<'world> WorldBlock<'world> {
         governance_unlock_stats.commit();
         parliament_attempts.commit();
         parliament_timed_ovn_resource_reservations.commit();
+        parliament_required_beacon_pulse_slots.commit();
+        parliament_certified_enactments.commit();
+        parliament_unavailable_beacon_pulse_slots.commit();
         tle_key_sessions.commit();
         tle_key_session_rosters.commit();
         tle_key_session_lifecycles.commit();
@@ -22117,16 +22246,66 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> Result<(), crate::governance::parliament::ParliamentReducerErrorV1> {
         attempt.validate()?;
         let id = attempt.attempt().id;
-        crate::governance::parliament::validate_parliament_randomness_redraw_lineage_v1(
-            self.parliament_attempts
-                .iter()
-                .filter_map(|(persisted_id, persisted)| {
-                    (*persisted_id != id
-                        && persisted.proposal_content_id() == attempt.proposal_content_id())
-                    .then_some(persisted)
-                })
-                .chain(std::iter::once(&attempt)),
-        )?;
+        {
+            let mut history = Vec::new();
+            for (expected_sequence, persisted_id) in
+                crate::governance::parliament::canonical_governance_attempt_ids_v1(
+                    attempt.proposal_content_id(),
+                )
+                .enumerate()
+            {
+                let expected_sequence = u32::try_from(expected_sequence)
+                    .map_err(|_| ParliamentReducerErrorV1::RetrySequenceMismatch)?;
+                if persisted_id == id {
+                    if let Some(previous) = self.parliament_attempts.get(&persisted_id) {
+                        previous.validate()?;
+                        if previous.attempt().id != persisted_id
+                            || previous.attempt().sequence != expected_sequence
+                            || previous.proposal_content_id() != attempt.proposal_content_id()
+                        {
+                            return Err(ParliamentReducerErrorV1::AttemptBindingMismatch);
+                        }
+                    }
+                    history.push(&attempt);
+                    continue;
+                }
+                let Some(persisted) = self.parliament_attempts.get(&persisted_id) else {
+                    continue;
+                };
+                if expected_sequence > attempt.attempt().sequence {
+                    return Err(ParliamentReducerErrorV1::RetrySequenceMismatch);
+                }
+                persisted.validate()?;
+                if persisted.attempt().id != persisted_id
+                    || persisted.attempt().sequence != expected_sequence
+                    || persisted.proposal_content_id() != attempt.proposal_content_id()
+                {
+                    return Err(ParliamentReducerErrorV1::AttemptBindingMismatch);
+                }
+                history.push(persisted);
+            }
+            crate::governance::parliament::validate_parliament_randomness_redraw_lineage_v1(
+                history,
+            )?;
+        }
+        let previous_attempt = self.parliament_attempts.get(&id);
+        let previous_required_slots = previous_attempt
+            .map(ParliamentAttemptStateV1::required_beacon_pulse_slots_v1)
+            .unwrap_or_default();
+        let previous_enactment_height = previous_attempt
+            .and_then(ParliamentAttemptStateV1::certified_enactment_height_v1);
+        let previous_unavailable_slots = previous_attempt
+            .map(ParliamentAttemptStateV1::unavailable_beacon_pulse_slots_v1)
+            .unwrap_or_default();
+        let next_required_slots = attempt.required_beacon_pulse_slots_v1();
+        let next_enactment_height = attempt.certified_enactment_height_v1();
+        let next_unavailable_slots = attempt.unavailable_beacon_pulse_slots_v1();
+        if next_unavailable_slots
+            .iter()
+            .any(|slot| self.global_beacon_pulse_slots.get(slot).is_some())
+        {
+            return Err(ParliamentReducerErrorV1::BeaconPulseAlreadyAvailable);
+        }
         let stale_reservations = self
             .parliament_timed_ovn_resource_reservations
             .iter()
@@ -22166,10 +22345,86 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             self.parliament_timed_ovn_resource_reservations
                 .remove(ballot_attempt_id);
         }
+        for slot in previous_required_slots.difference(&next_required_slots) {
+            let Some(mut attempts) = self
+                .parliament_required_beacon_pulse_slots
+                .get(slot)
+                .cloned()
+            else {
+                continue;
+            };
+            attempts.remove(&id);
+            if attempts.is_empty() {
+                self.parliament_required_beacon_pulse_slots.remove(*slot);
+            } else {
+                self.parliament_required_beacon_pulse_slots
+                    .insert(*slot, attempts);
+            }
+        }
+        if previous_enactment_height != next_enactment_height
+            && let Some(height) = previous_enactment_height
+            && let Some(mut attempts) = self.parliament_certified_enactments.get(&height).cloned()
+        {
+            attempts.remove(&id);
+            if attempts.is_empty() {
+                self.parliament_certified_enactments.remove(height);
+            } else {
+                self.parliament_certified_enactments
+                    .insert(height, attempts);
+            }
+        }
+        for slot in previous_unavailable_slots.difference(&next_unavailable_slots) {
+            let Some(mut attempts) = self
+                .parliament_unavailable_beacon_pulse_slots
+                .get(slot)
+                .cloned()
+            else {
+                continue;
+            };
+            attempts.remove(&id);
+            if attempts.is_empty() {
+                self.parliament_unavailable_beacon_pulse_slots.remove(*slot);
+            } else {
+                self.parliament_unavailable_beacon_pulse_slots
+                    .insert(*slot, attempts);
+            }
+        }
         self.parliament_attempts.insert(id, attempt);
         for (ballot_attempt_id, reservation) in active_reservations {
             self.parliament_timed_ovn_resource_reservations
                 .insert(ballot_attempt_id, reservation);
+        }
+        for slot in next_required_slots.difference(&previous_required_slots) {
+            let mut attempts = self
+                .parliament_required_beacon_pulse_slots
+                .get(slot)
+                .cloned()
+                .unwrap_or_default();
+            attempts.insert(id);
+            self.parliament_required_beacon_pulse_slots
+                .insert(*slot, attempts);
+        }
+        if previous_enactment_height != next_enactment_height
+            && let Some(height) = next_enactment_height
+        {
+            let mut attempts = self
+                .parliament_certified_enactments
+                .get(&height)
+                .cloned()
+                .unwrap_or_default();
+            attempts.insert(id);
+            self.parliament_certified_enactments
+                .insert(height, attempts);
+        }
+        for slot in next_unavailable_slots.difference(&previous_unavailable_slots) {
+            let mut attempts = self
+                .parliament_unavailable_beacon_pulse_slots
+                .get(slot)
+                .cloned()
+                .unwrap_or_default();
+            attempts.insert(id);
+            self.parliament_unavailable_beacon_pulse_slots
+                .insert(*slot, attempts);
         }
         Ok(())
     }
@@ -22530,18 +22785,19 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if self.global_beacon_pulses.get(&pulse.pulse_id).is_some() {
             return Err(GlobalThresholdBeaconError::ReusedPulse);
         }
-        let pulse_slot = (pulse.network_id, pulse.height);
+        let logical_beacon_session_id = BeaconSessionId::for_network_v1(&pulse.network_id);
+        let pulse_slot = (logical_beacon_session_id, pulse.height);
         if self.global_beacon_pulse_slots.len() != self.global_beacon_pulses.len() {
             return Err(GlobalThresholdBeaconError::InvalidPulseHistory);
         }
         if self.global_beacon_pulse_slots.get(&pulse_slot).is_some() {
             return Err(GlobalThresholdBeaconError::ReusedPulse);
         }
-        let logical_beacon_session_id =
-            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id);
-        if self.parliament_attempts.iter().any(|(_, attempt)| {
-            attempt.classifies_beacon_pulse_unavailable_at(logical_beacon_session_id, pulse.height)
-        }) {
+        if self
+            .parliament_unavailable_beacon_pulse_slots
+            .get(&(logical_beacon_session_id, pulse.height))
+            .is_some_and(|attempts| !attempts.is_empty())
+        {
             // Once consensus has objectively closed an absent sortition or release slot,
             // accepting a late pulse would make the persisted Parliament transcript
             // contradictory and non-restartable.
@@ -22618,7 +22874,51 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             self.parliament_timed_ovn_resource_reservations
                 .remove(ballot_attempt_id);
         }
-        self.parliament_attempts.remove(*id)
+        let removed = self.parliament_attempts.remove(*id)?;
+        if let Some(height) = removed.certified_enactment_height_v1()
+            && let Some(mut attempts) = self.parliament_certified_enactments.get(&height).cloned()
+        {
+            attempts.remove(id);
+            if attempts.is_empty() {
+                self.parliament_certified_enactments.remove(height);
+            } else {
+                self.parliament_certified_enactments
+                    .insert(height, attempts);
+            }
+        }
+        for slot in ParliamentAttemptStateV1::required_beacon_pulse_slots_v1(&removed) {
+            let Some(mut attempts) = self
+                .parliament_required_beacon_pulse_slots
+                .get(&slot)
+                .cloned()
+            else {
+                continue;
+            };
+            attempts.remove(id);
+            if attempts.is_empty() {
+                self.parliament_required_beacon_pulse_slots.remove(slot);
+            } else {
+                self.parliament_required_beacon_pulse_slots
+                    .insert(slot, attempts);
+            }
+        }
+        for slot in ParliamentAttemptStateV1::unavailable_beacon_pulse_slots_v1(&removed) {
+            let Some(mut attempts) = self
+                .parliament_unavailable_beacon_pulse_slots
+                .get(&slot)
+                .cloned()
+            else {
+                continue;
+            };
+            attempts.remove(id);
+            if attempts.is_empty() {
+                self.parliament_unavailable_beacon_pulse_slots.remove(slot);
+            } else {
+                self.parliament_unavailable_beacon_pulse_slots
+                    .insert(slot, attempts);
+            }
+        }
+        Some(removed)
     }
     /// Test helper: get mutable access to citizenship storage for direct seeding.
     pub fn citizens_mut(
@@ -22958,6 +23258,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             governance_unlock_stats,
             parliament_attempts,
             parliament_timed_ovn_resource_reservations,
+            parliament_required_beacon_pulse_slots,
+            parliament_certified_enactments,
+            parliament_unavailable_beacon_pulse_slots,
             tle_key_sessions,
             tle_key_session_rosters,
             tle_key_session_lifecycles,
@@ -23174,6 +23477,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         governance_unlock_stats.apply();
         parliament_attempts.apply();
         parliament_timed_ovn_resource_reservations.apply();
+        parliament_required_beacon_pulse_slots.apply();
+        parliament_certified_enactments.apply();
+        parliament_unavailable_beacon_pulse_slots.apply();
         tle_key_sessions.apply();
         tle_key_session_rosters.apply();
         tle_key_session_lifecycles.apply();
@@ -27081,33 +27387,25 @@ impl State {
         sb.activate_due_public_lane_validators(current_epoch);
         // Height-trigger: open/close referenda at scheduled heights
         let now_h = sb._curr_block.height().get();
-        let mut due_parliament_certificates = Vec::new();
-        for (governance_attempt_id, attempt) in sb.world.parliament_attempts.iter() {
-            attempt.validate().unwrap_or_else(|error| {
+        if let Some((enact_at_height, attempts)) =
+            sb.world.parliament_certified_enactments.iter().next()
+            && *enact_at_height < now_h
+        {
+            let governance_attempt_id = attempts.iter().next().unwrap_or_else(|| {
                 panic!(
-                    "persisted Parliament attempt {governance_attempt_id:?} is invalid at block-start height {now_h}: {error}"
+                    "Parliament certified-enactment index contains an empty bucket at height {enact_at_height}"
                 )
             });
-            if attempt.attempt().status
-                != iroha_data_model::governance::types::GovernanceAttemptStatusV1::Certified
-            {
-                continue;
-            }
-            let certificate = attempt.certificate().unwrap_or_else(|| {
-                panic!(
-                    "certified Parliament attempt {governance_attempt_id:?} has no certificate at block-start height {now_h}"
-                )
-            });
-            if certificate.enact_at_height < now_h {
-                panic!(
-                    "certified Parliament attempt {governance_attempt_id:?} missed exact enactment height {} before block-start height {now_h}",
-                    certificate.enact_at_height
-                );
-            }
-            if certificate.enact_at_height == now_h {
-                due_parliament_certificates.push(*governance_attempt_id);
-            }
+            panic!(
+                "certified Parliament attempt {governance_attempt_id:?} missed exact enactment height {enact_at_height} before block-start height {now_h}"
+            );
         }
+        let due_parliament_certificates = sb
+            .world
+            .parliament_certified_enactments
+            .get(&now_h)
+            .cloned()
+            .unwrap_or_default();
         for governance_attempt_id in due_parliament_certificates {
             let mut enactment = sb.transaction();
             match crate::smartcontracts::isi::world::isi::execute_due_parliament_certificate_v1(
@@ -27142,6 +27440,16 @@ impl State {
                     failure.apply();
                 }
             }
+        }
+        if sb
+            .world
+            .parliament_certified_enactments
+            .get(&now_h)
+            .is_some()
+        {
+            panic!(
+                "Parliament certified-enactment index retained a due bucket after block-start execution at height {now_h}"
+            );
         }
         let current_slot =
             current_axt_slot_from_block(&sb._curr_block, sb.nexus.axt.slot_length_ms);

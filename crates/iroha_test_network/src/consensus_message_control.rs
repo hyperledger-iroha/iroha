@@ -348,8 +348,8 @@ pub struct ConsensusMessageControlRule {
     /// Exact block height, or zero for a payload-chunk selector whose wire
     /// payload has no directly encoded round.
     pub height: u64,
-    /// Exact consensus view, or zero for a payload-chunk selector whose wire
-    /// payload has no directly encoded round.
+    /// Exact consensus view, or zero for a payload-chunk selector or a
+    /// height-only commit-certificate request.
     pub view: u64,
     /// Optional exact proposal block hash.
     pub block_hash: Option<HashOf<BlockHeader>>,

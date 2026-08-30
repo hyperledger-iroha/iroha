@@ -6,6 +6,7 @@
 /// network I/O.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct OfflineAndroidAttestationStatusSnapshotV1 {
     /// Snapshot layout marker.
     pub version: u16,
@@ -31,6 +32,7 @@ pub struct OfflineAndroidAttestationStatusSnapshotV1 {
 /// identities without relying on external middleware state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct OfflineDeviceAttestationPolicy {
     /// Policy format marker.
     pub version: u16,
@@ -60,6 +62,7 @@ pub struct OfflineDeviceAttestationPolicy {
 /// Trusted platform root certificate for Offline device attestation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct OfflineDeviceAttestationTrustedRoot {
     /// Platform class, for example `ios-appattest` or `android-keymint`.
     pub platform: String,
@@ -74,6 +77,7 @@ pub struct OfflineDeviceAttestationTrustedRoot {
 /// Allowed iOS App Attest app identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct OfflineIosAppAttestationPolicy {
     /// Apple App ID prefix (normally the Apple Developer Team ID).
     pub team_id: String,
@@ -90,6 +94,7 @@ pub struct OfflineIosAppAttestationPolicy {
 /// Allowed Android `KeyMint` app identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct OfflineAndroidAppAttestationPolicy {
     /// Android package name.
     pub package_name: String,
@@ -160,5 +165,17 @@ mod device_attestation_policy_tests {
         let decoded: OfflineAndroidAttestationStatusSnapshotV1 =
             norito::json::from_str(&json).expect("decode Android attestation status snapshot JSON");
         assert_eq!(decoded, expected);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn device_attestation_policy_json_rejects_unknown_members() {
+        let mut value = norito::json::to_value(&snapshot()).expect("encode snapshot JSON");
+        value
+            .as_object_mut()
+            .expect("snapshot JSON object")
+            .insert("retired_status".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<OfflineAndroidAttestationStatusSnapshotV1>(value)
+            .expect_err("device-attestation policy records must reject unknown members");
     }
 }

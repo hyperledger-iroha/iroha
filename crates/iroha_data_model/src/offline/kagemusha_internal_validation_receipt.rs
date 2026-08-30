@@ -74,6 +74,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_MAX_ARGUMENT_BYTES_V1: u
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(tag = "role", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
 pub enum KagemushaInternalValidationToolRoleV1 {
     /// Cargo executable used for every Rust workspace command.
     Cargo,
@@ -122,6 +123,7 @@ pub struct KagemushaInternalValidationToolV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(tag = "directory", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
 pub enum KagemushaInternalValidationWorkingDirectoryV1 {
     /// Root of the immutable candidate source snapshot.
     SourceRoot,
@@ -134,6 +136,7 @@ pub enum KagemushaInternalValidationWorkingDirectoryV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(tag = "target", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
 pub enum KagemushaInternalValidationFuzzTargetV1 {
     /// Bounded canonical release-bundle and receipt parsing.
     Parser,

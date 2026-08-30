@@ -59,6 +59,8 @@ PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
 TON_PROOF_REQUEST_NORITO_TYPE = (
     "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1"
 )
+
+
 def _b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
 

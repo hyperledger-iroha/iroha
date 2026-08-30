@@ -7,7 +7,8 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     offline::{
-        KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KagemushaRecursiveSpendArtifactBindingV4,
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2, KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2, KagemushaRecursiveSpendArtifactBindingV4,
         KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
         KagemushaRecursiveSpendInputBranchV2, KagemushaRecursiveSpendRedemptionIntentV4,
         KagemushaRecursiveSpendSplitIntentV4, KagemushaRecursiveSpendStateBoundaryV5,
@@ -78,6 +79,18 @@ fn anchor_ref() -> KagemushaRecursiveSpendTopUpAnchorRefV2 {
         topup_operation_id: [0x11; 32],
         anchor_digest: [0x12; 32],
     }
+}
+fn claim_at_depth(depth: u8) -> KagemushaRecursiveSpendBranchClaimV2 {
+    let mut claim =
+        KagemushaRecursiveSpendBranchClaimV2::root(anchor_ref().anchor_digest).expect("root claim");
+    for step in 0..depth {
+        let mut digest = [0x55; 32];
+        digest[0] = step.saturating_add(1);
+        claim = claim
+            .child(KagemushaRecursiveSpendBranchV2::Recipient, digest)
+            .expect("extend canonical branch claim");
+    }
+    claim
 }
 fn artifact_binding_v4() -> KagemushaRecursiveSpendArtifactBindingV4 {
     KagemushaRecursiveSpendArtifactBindingV4 {
@@ -433,18 +446,6 @@ fn branch_claim_conflicts_bind_paths_and_exact_transition_history() {
 }
 #[test]
 fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
-    fn claim_at_depth(depth: u8) -> KagemushaRecursiveSpendBranchClaimV2 {
-        let mut claim = KagemushaRecursiveSpendBranchClaimV2::root(anchor_ref().anchor_digest)
-            .expect("root claim");
-        for step in 0..depth {
-            let mut digest = [0x55; 32];
-            digest[0] = step.saturating_add(1);
-            claim = claim
-                .child(KagemushaRecursiveSpendBranchV2::Recipient, digest)
-                .expect("extend canonical branch claim");
-        }
-        claim
-    }
     let mut last_permitted_parent = split_intent_v4();
     let maximum_hops = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2;
     last_permitted_parent.inputs[0].branch_claims = vec![claim_at_depth(
@@ -504,6 +505,41 @@ fn redemption_supports_exact_full_and_partial_value_conservation() {
         ),
         Some(TOTAL)
     );
+}
+
+#[test]
+fn redemption_at_a_recursive_limit_must_be_terminal() {
+    let mut full = redemption_intent_v4(TOTAL, None);
+    full.parent_proof_step_count = KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2;
+    full.validate_public_binding()
+        .expect("full redemption does not create another recursive proof step");
+
+    let mut partial = redemption_intent_v4(TRANSFER, Some(CHANGE));
+    partial.parent_proof_step_count = KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2;
+    assert!(matches!(
+        partial.validate_public_binding(),
+        Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "redemption.v4"
+        })
+    ));
+
+    let mut full = redemption_intent_v4(TOTAL, None);
+    full.parent_branch_claims = vec![claim_at_depth(
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
+    )];
+    full.validate_public_binding()
+        .expect("full redemption does not extend the branch path");
+
+    let mut partial = redemption_intent_v4(TRANSFER, Some(CHANGE));
+    partial.parent_branch_claims = vec![claim_at_depth(
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
+    )];
+    assert!(matches!(
+        partial.validate_public_binding(),
+        Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "redemption.v4"
+        })
+    ));
 }
 #[test]
 fn unshield_public_input_digest_rejects_impossible_standalone_shapes() {
@@ -587,4 +623,28 @@ fn redemption_rejects_nonconservation_and_reused_input_material() {
         .digest()
         .expect("updated unshield digest");
     assert!(wrong_change.validate_public_binding().is_err());
+}
+
+#[test]
+fn kagemusha_json_requires_closed_objects_and_explicit_enum_content() {
+    let branch = norito::json::from_str::<KagemushaRecursiveSpendBranchV2>(
+        r#"{"branch":"recipient","value":null}"#,
+    )
+    .expect("canonical branch JSON");
+    assert_eq!(branch, KagemushaRecursiveSpendBranchV2::Recipient);
+    let missing_content = norito::json::from_str::<KagemushaRecursiveSpendBranchV2>(
+        r#"{"branch":"recipient"}"#,
+    )
+    .expect_err("a unit branch must carry an explicit null content member");
+    assert!(missing_content.to_string().contains("missing field `value`"));
+
+    let amount = KagemushaScaledAmountV2::new(1, SCALE).expect("canonical amount");
+    let mut amount_json = norito::json::to_value(&amount).expect("encode amount JSON");
+    amount_json
+        .as_object_mut()
+        .expect("amount JSON object")
+        .insert("retired_scale_hint".to_owned(), norito::json::Value::Null);
+    let unknown = norito::json::from_value::<KagemushaScaledAmountV2>(amount_json)
+        .expect_err("Kagemusha objects must reject unknown members");
+    assert!(unknown.to_string().contains("unknown field"));
 }

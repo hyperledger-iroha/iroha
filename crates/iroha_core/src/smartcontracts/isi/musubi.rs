@@ -4,6 +4,9 @@
 //! decoding or compatibility aliases live here.
 use super::prelude::*;
 use crate::{
+    governance::parliament::{
+        canonical_governance_attempt_ids_v1, validate_parliament_randomness_redraw_lineage_v1,
+    },
     prelude::ValidSingularQuery,
     smartcontracts::Execute,
     state::{
@@ -4240,19 +4243,64 @@ fn verify_parliament_decision(
         );
     }
     let proposal_content_id = ProposalContentId::new(decision.decision_id);
-    let mut enacted_attempts = state_transaction
-        .world
-        .parliament_attempts
-        .iter()
-        .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
-        .filter(|(_, attempt)| {
-            attempt.attempt().status == GovernanceAttemptStatusV1::Enacted
-                && attempt.terminal_height() == Some(decision.enacted_at_height)
-                && attempt.certificate().is_some_and(|certificate| {
-                    certificate.proposal_content_id == proposal_content_id
-                        && certificate.enact_at_height == decision.enacted_at_height
-                })
-        });
+    let mut history = Vec::new();
+    let mut history_ended = false;
+    for attempt_id in canonical_governance_attempt_ids_v1(proposal_content_id) {
+        let Some(attempt) = state_transaction.world.parliament_attempts.get(&attempt_id) else {
+            history_ended = true;
+            continue;
+        };
+        if history_ended {
+            return reject_governance_mutation(
+                rejection_reason,
+                MusubiGovernanceRejectionReasonV1::InvalidDecision,
+                invariant("Musubi Parliament proposal has a sparse attempt history"),
+            );
+        }
+        if let Err(error) = attempt.validate() {
+            return reject_governance_mutation(
+                rejection_reason,
+                MusubiGovernanceRejectionReasonV1::InvalidDecision,
+                invariant(format!("Musubi Parliament attempt is invalid: {error}")),
+            );
+        }
+        if attempt.attempt().id != attempt_id
+            || attempt.proposal_content_id() != proposal_content_id
+        {
+            return reject_governance_mutation(
+                rejection_reason,
+                MusubiGovernanceRejectionReasonV1::InvalidDecision,
+                invariant("Musubi Parliament attempt is stored under the wrong canonical key"),
+            );
+        }
+        if let Err(error) = attempt.validate_proposal_bindings_v1(&proposal.kind) {
+            return reject_governance_mutation(
+                rejection_reason,
+                MusubiGovernanceRejectionReasonV1::InvalidDecision,
+                invariant(format!(
+                    "Musubi Parliament attempt has invalid proposal bindings: {error}"
+                )),
+            );
+        }
+        history.push(attempt);
+    }
+    if let Err(error) = validate_parliament_randomness_redraw_lineage_v1(history.iter().copied()) {
+        return reject_governance_mutation(
+            rejection_reason,
+            MusubiGovernanceRejectionReasonV1::InvalidDecision,
+            invariant(format!(
+                "Musubi Parliament proposal has invalid attempt lineage: {error}"
+            )),
+        );
+    }
+    let mut enacted_attempts = history.into_iter().filter(|attempt| {
+        attempt.attempt().status == GovernanceAttemptStatusV1::Enacted
+            && attempt.terminal_height() == Some(decision.enacted_at_height)
+            && attempt.certificate().is_some_and(|certificate| {
+                certificate.proposal_content_id == proposal_content_id
+                    && certificate.enact_at_height == decision.enacted_at_height
+            })
+    });
     if enacted_attempts.next().is_none() || enacted_attempts.next().is_some() {
         return reject_governance_mutation(
             rejection_reason,

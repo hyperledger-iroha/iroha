@@ -35,6 +35,28 @@ fn v2_decode_limit_policy(
     (encoded, limits)
 }
 
+fn v2_decode_limit_encode_with_layout(message: &NetworkMessage, requested_flags: u8) -> Vec<u8> {
+    let encoded = {
+        let _layout = ncore::DecodeFlagsGuard::enter(requested_flags);
+        ncore::to_bytes(message).expect("encode V2 decode-limit fixture under requested layout")
+    };
+    let view = ncore::from_bytes_view(&encoded).expect("inspect alternate-layout V2 fixture");
+    let (network_tag, remaining) = super::inbound_enum_parts(view.as_bytes())
+        .expect("extract alternate-layout network discriminant");
+    assert_eq!(network_tag, 0);
+    let framed = super::inbound_owned_enum_field(remaining, view.flags())
+        .expect("extract alternate-layout Sumeragi frame");
+    let (block_tag, _, block_flags) =
+        super::inbound_sumeragi_enum_field(framed).expect("inspect alternate-layout block frame");
+    assert_eq!(block_tag, 10);
+    assert_eq!(
+        block_flags & ncore::supported_header_flags(),
+        requested_flags,
+        "nested V2 frame did not advertise the requested Norito layout"
+    );
+    encoded
+}
+
 fn v2_decode_limit_manifest(
     chunk_hash_count: usize,
     payload_size_bytes: u64,
@@ -281,6 +303,93 @@ fn sumeragi_v2_proposal_manifest_hash_vector_is_bounded_before_allocation() {
 }
 
 #[test]
+fn sumeragi_v2_manifest_limit_covers_every_supported_norito_layout() {
+    use iroha_data_model::block::consensus_v2 as wire;
+
+    const COMPACT: u8 = ncore::header_flags::COMPACT_LEN;
+    const PACKED_SEQUENCE: u8 = ncore::header_flags::PACKED_SEQ;
+    const PACKED_STRUCT: u8 = ncore::header_flags::PACKED_STRUCT;
+    const FIELD_BITSET: u8 = ncore::header_flags::FIELD_BITSET;
+    const LAYOUTS: [u8; 10] = [
+        0,
+        COMPACT,
+        PACKED_SEQUENCE,
+        PACKED_SEQUENCE | COMPACT,
+        PACKED_STRUCT,
+        PACKED_STRUCT | COMPACT,
+        PACKED_STRUCT | PACKED_SEQUENCE,
+        PACKED_STRUCT | PACKED_SEQUENCE | COMPACT,
+        PACKED_STRUCT | COMPACT | FIELD_BITSET,
+        PACKED_STRUCT | PACKED_SEQUENCE | COMPACT | FIELD_BITSET,
+    ];
+
+    let proposal = |chunk_hash_count| {
+        v2_decode_limit_proposal(
+            v2_decode_limit_manifest(
+                chunk_hash_count,
+                wire::MAX_DA_PAYLOAD_SIZE_BYTES,
+                32 * 1024,
+                Hash::new(b"v2-all-layout-manifest-payload"),
+            ),
+            vec![0x5A; wire::MAX_CONSENSUS_SIGNATURE_BYTES],
+        )
+    };
+    let maximum = proposal(wire::MAX_DA_CHUNK_COUNT as usize);
+    let oversized = proposal(wire::MAX_DA_CHUNK_COUNT as usize + 1);
+
+    for requested_flags in LAYOUTS {
+        let maximum_encoded = v2_decode_limit_encode_with_layout(&maximum, requested_flags);
+        let maximum_view =
+            ncore::from_bytes_view(&maximum_encoded).expect("inspect maximum-layout fixture");
+        assert_eq!(
+            <NetworkMessage as ClassifyTopic>::inbound_topic(
+                maximum_view.as_bytes(),
+                maximum_view.flags(),
+            )
+            .expect("classify maximum-layout proposal"),
+            Some(iroha_p2p::network::message::Topic::ConsensusSafety),
+        );
+        let limits = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+            maximum_view.as_bytes(),
+            maximum_encoded.len(),
+            maximum_view.flags(),
+        )
+        .expect("preflight maximum-layout proposal")
+        .expect("V2 proposal installs decode limits");
+        assert_eq!(
+            limits.max_sequence_elements(),
+            super::MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS,
+            "control policy must admit every protocol-bounded peer public key"
+        );
+        ncore::decode_from_bytes_with_limits::<NetworkMessage>(&maximum_encoded, limits)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "maximum manifest failed under Norito flags 0x{requested_flags:02x}: {error}"
+                )
+            });
+
+        let oversized_encoded = v2_decode_limit_encode_with_layout(&oversized, requested_flags);
+        let oversized_view =
+            ncore::from_bytes_view(&oversized_encoded).expect("inspect oversized-layout fixture");
+        let error = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+            oversized_view.as_bytes(),
+            oversized_encoded.len(),
+            oversized_view.flags(),
+        )
+        .expect_err("every supported layout must reject one excess manifest hash");
+        assert!(
+            matches!(
+                error,
+                ncore::Error::SequenceLengthExceeded { length, limit }
+                    if length == u64::from(wire::MAX_DA_CHUNK_COUNT) + 1
+                        && limit == u64::from(wire::MAX_DA_CHUNK_COUNT)
+            ),
+            "unexpected flags 0x{requested_flags:02x} rejection: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn sumeragi_v2_certified_body_response_raw_fields_enforce_exact_protocol_maxima() {
     use iroha_data_model::block::consensus_v2 as wire;
 
@@ -364,6 +473,62 @@ fn sumeragi_v2_certified_body_response_raw_fields_enforce_exact_protocol_maxima(
             "unexpected certified response {label} raw-preflight rejection: {error:?}"
         );
     }
+}
+
+#[test]
+fn sumeragi_v2_certified_body_response_preflights_responder_public_key_size() {
+    use iroha_data_model::block::consensus_v2 as wire;
+
+    let flags = ncore::header_flags::COMPACT_LEN;
+    let (manifest, body, signature) = {
+        let _layout = ncore::DecodeFlagsGuard::enter(flags);
+        (
+            v2_decode_limit_manifest(1, 1, 1, Hash::new(b"x")).encode(),
+            vec![0x78_u8].encode(),
+            vec![0x5A_u8].encode(),
+        )
+    };
+    let oversized_count = super::MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS + 1;
+    let public_key = u64::try_from(oversized_count)
+        .expect("public-key limit fits u64")
+        .to_le_bytes();
+    let mut peer_id = Vec::new();
+    ncore::write_len_to_vec_with_flags(
+        &mut peer_id,
+        u64::try_from(public_key.len()).expect("forged public-key prefix fits u64"),
+        flags,
+    );
+    peer_id.extend_from_slice(&public_key);
+
+    let request_hash = [0xA5_u8];
+    let mut response = Vec::new();
+    for field in [
+        request_hash.as_slice(),
+        manifest.as_slice(),
+        body.as_slice(),
+        peer_id.as_slice(),
+        signature.as_slice(),
+    ] {
+        ncore::write_len_to_vec_with_flags(
+            &mut response,
+            u64::try_from(field.len()).expect("response field length fits u64"),
+            flags,
+        );
+        response.extend_from_slice(field);
+    }
+
+    let error = super::enforce_inbound_consensus_v2_payload_limits(
+        wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG,
+        &response,
+        flags,
+    )
+    .expect_err("large-body policy must not permit an oversized responder key sequence");
+    assert!(matches!(
+        error,
+        ncore::Error::SequenceLengthExceeded { length, limit }
+            if length == oversized_count as u64
+                && limit == super::MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS as u64
+    ));
 }
 
 #[test]

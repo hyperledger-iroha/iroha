@@ -98,6 +98,14 @@ reconstruction, so their explicit schema profiles retain Norito's conservative
 schema-specific nesting limits. A compressed length field, forged collection
 count, oversized unshield proof, or structurally decodable non-canonical
 representation therefore fails within its body and allocation ceilings.
+Torii authenticates the listener credential and validates media type and
+idempotency headers before polling a command body. Admitted bodies share the
+proof-bearing request count/deadline gate and reserve a dedicated byte-weighted
+raw-body plus canonical-decode working set through handler completion. One
+validated `Content-Length` selects the reservation weight; lengthless or
+chunked requests reserve the route maximum. The derived pool admits one
+maximum-size configured redemption, so resource backpressure never narrows the
+published request contract under default configuration.
 
 Capability and operation responses support Torii's typed response negotiation.
 The capability response contains exactly
@@ -187,7 +195,10 @@ acknowledgement archives.
 Redemption uses the current unshield-v3 evidence API. Full redemption binds a
 zero private output. Partial redemption binds exactly one non-zero Kagemusha
 change output and proves exact conservation between the redeemed public amount
-and the offline change branch.
+and the offline change branch. Because that change is another recursive child,
+partial redemption requires its parent to be below both the 128-step proof
+limit and the 64-decision branch-depth limit. A parent exactly at either limit
+remains fully redeemable but cannot create change.
 
 Core validates the finalized top-up provenance, current recursive proof,
 active recursive StepEq, recursive StepEp, and unshield verifier records,

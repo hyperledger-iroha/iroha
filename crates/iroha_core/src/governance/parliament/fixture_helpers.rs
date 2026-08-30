@@ -208,7 +208,7 @@ fn complete_enacted_fixture_body(
 }
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
-fn build_enacted_parliament_attempt_for_testing<F>(
+fn build_certified_parliament_attempt_for_testing<F>(
     proposal: &ProposalKind,
     mut candidates: Vec<AccountId>,
     network_id: &NetworkId,
@@ -311,11 +311,8 @@ where
         .construct_certificate(governance_attempt_id, certified_at_height, enact_at_height)
         .expect("construct enacted-attempt fixture certificate");
     attempt
-        .mark_enacted(governance_attempt_id, enact_at_height)
-        .expect("mark enacted-attempt fixture enacted");
-    attempt
         .validate_proposal_bindings_v1(proposal)
-        .expect("enacted-attempt fixture retains exact proposal bindings");
+        .expect("certified-attempt fixture retains exact proposal bindings");
     attempt
 }
 
@@ -331,7 +328,32 @@ pub fn enacted_parliament_attempt_for_testing(
     network_id: &NetworkId,
     enact_at_height: u64,
 ) -> ParliamentAttemptStateV1 {
-    build_enacted_parliament_attempt_for_testing(
+    let mut attempt = build_certified_parliament_attempt_for_testing(
+        proposal,
+        candidates,
+        network_id,
+        enact_at_height,
+        complete_enacted_fixture_body,
+    );
+    let governance_attempt_id = attempt.attempt().id;
+    attempt
+        .mark_enacted(governance_attempt_id, enact_at_height)
+        .expect("mark enacted-attempt fixture enacted");
+    attempt
+}
+
+/// Build one complete, proposal-bound certified Parliament attempt for integration fixtures.
+///
+/// The returned attempt is waiting for automatic execution at `enact_at_height`.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+#[doc(hidden)]
+pub fn certified_parliament_attempt_for_testing(
+    proposal: &ProposalKind,
+    candidates: Vec<AccountId>,
+    network_id: &NetworkId,
+    enact_at_height: u64,
+) -> ParliamentAttemptStateV1 {
+    build_certified_parliament_attempt_for_testing(
         proposal,
         candidates,
         network_id,

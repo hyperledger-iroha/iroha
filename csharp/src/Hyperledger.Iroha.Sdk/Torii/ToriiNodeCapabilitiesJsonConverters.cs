@@ -193,7 +193,6 @@ internal static class ToriiNodeCapabilitiesJson
             throw new JsonException($"{context}.da_v1_enabled must be false.");
         }
 
-        ValidateProjectionFeatureFlags(response, context);
         ValidateExactInt32(response.ArchiveVersion, QueryProjectionArchiveVersion, $"{context}.archive_version");
         ValidateExactInt32(response.SchemaVersion, QueryProjectionSchemaVersion, $"{context}.schema_version");
         ValidateExactInt32(response.BlobClassCustomId, QueryProjectionBlobClassCustomId, $"{context}.blob_class_custom_id");
@@ -831,8 +830,6 @@ internal static class ToriiNodeCapabilitiesJson
                             context,
                             "checkpoint_contract_v1"),
                         DaV1Enabled = RequireBool(fields.DaV1Enabled, context, "da_v1_enabled"),
-                        CheckpointPlanV1 = RequireBool(fields.CheckpointPlanV1, context, "checkpoint_plan_v1"),
-                        CheckpointPublishV1 = RequireBool(fields.CheckpointPublishV1, context, "checkpoint_publish_v1"),
                         ShardCatalogV1 = RequireBool(fields.ShardCatalogV1, context, "shard_catalog_v1"),
                         ArchiveExportV1 = RequireBool(fields.ArchiveExportV1, context, "archive_export_v1"),
                         ArchiveVersion = RequireInt32(fields.ArchiveVersion, context, "archive_version"),
@@ -991,8 +988,6 @@ internal static class ToriiNodeCapabilitiesJson
         writer.WriteStartObject();
         writer.WriteBoolean("checkpoint_contract_v1", response.CheckpointContractV1);
         writer.WriteBoolean("da_v1_enabled", response.DaV1Enabled);
-        writer.WriteBoolean("checkpoint_plan_v1", response.CheckpointPlanV1);
-        writer.WriteBoolean("checkpoint_publish_v1", response.CheckpointPublishV1);
         writer.WriteBoolean("shard_catalog_v1", response.ShardCatalogV1);
         writer.WriteBoolean("archive_export_v1", response.ArchiveExportV1);
         writer.WriteNumber("archive_version", response.ArchiveVersion);
@@ -1036,12 +1031,6 @@ internal static class ToriiNodeCapabilitiesJson
                 break;
             case "da_v1_enabled":
                 fields.DaV1Enabled = ReadBool(ref reader, $"{context}.da_v1_enabled");
-                break;
-            case "checkpoint_plan_v1":
-                fields.CheckpointPlanV1 = ReadBool(ref reader, $"{context}.checkpoint_plan_v1");
-                break;
-            case "checkpoint_publish_v1":
-                fields.CheckpointPublishV1 = ReadBool(ref reader, $"{context}.checkpoint_publish_v1");
                 break;
             case "shard_catalog_v1":
                 fields.ShardCatalogV1 = ReadBool(ref reader, $"{context}.shard_catalog_v1");
@@ -1358,15 +1347,6 @@ internal static class ToriiNodeCapabilitiesJson
         }
     }
 
-    private static void ValidateProjectionFeatureFlags(ToriiNodeProjectionCapabilities response, string context)
-    {
-        if (response.CheckpointPlanV1 || response.CheckpointPublishV1)
-        {
-            throw new JsonException(
-                $"{context}.checkpoint_plan_v1 and {context}.checkpoint_publish_v1 must be false until the DA projection worker can verify and persist uploaded archives.");
-        }
-    }
-
     private static void ValidateExactUniqueTokenList(IReadOnlyList<string>? values, string field)
     {
         if (values is null)
@@ -1553,10 +1533,6 @@ internal static class ToriiNodeCapabilitiesJson
         public bool? CheckpointContractV1 { get; set; }
 
         public bool? DaV1Enabled { get; set; }
-
-        public bool? CheckpointPlanV1 { get; set; }
-
-        public bool? CheckpointPublishV1 { get; set; }
 
         public bool? ShardCatalogV1 { get; set; }
 

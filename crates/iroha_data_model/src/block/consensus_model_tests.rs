@@ -7,6 +7,80 @@ use norito::core::DecodeFromSlice;
 use std::num::NonZeroU64;
 #[expect(
     dead_code,
+    reason = "retired DTO layouts are retained solely to encode decode-negative evidence fixtures"
+)]
+#[derive(Clone, Copy, norito::codec::Encode)]
+struct RetiredQcRefFixture {
+    height: Height,
+    view: View,
+    epoch: u64,
+    subject_block_hash: HashOf<BlockHeader>,
+    phase: CertPhase,
+}
+#[expect(
+    dead_code,
+    reason = "retired DTO layouts are retained solely to encode decode-negative evidence fixtures"
+)]
+#[derive(Clone, Copy, norito::codec::Encode)]
+struct RetiredConsensusBlockHeaderFixture {
+    parent_hash: HashOf<BlockHeader>,
+    tx_root: Hash,
+    state_root: Hash,
+    proposer: ValidatorIndex,
+    height: Height,
+    view: View,
+    epoch: u64,
+    highest_qc: RetiredQcRefFixture,
+}
+#[expect(
+    dead_code,
+    reason = "retired DTO layouts are retained solely to encode decode-negative evidence fixtures"
+)]
+#[derive(Clone, Copy, norito::codec::Encode)]
+struct RetiredProposalFixture {
+    header: RetiredConsensusBlockHeaderFixture,
+    payload_hash: Hash,
+}
+#[derive(Clone, norito::codec::Encode)]
+struct RetiredQcVoteFixture {
+    phase: CertPhase,
+    block_hash: HashOf<BlockHeader>,
+    parent_state_root: Hash,
+    post_state_root: Hash,
+    height: Height,
+    view: View,
+    epoch: u64,
+    chain_order_hash: Hash,
+    rechain_seq: u64,
+    highest_qc: Option<RetiredQcRefFixture>,
+    signer: ValidatorIndex,
+    bls_sig: Vec<u8>,
+}
+#[derive(Clone, norito::codec::Encode)]
+struct RetiredQcAggregateFixture {
+    signers_bitmap: Vec<u8>,
+    bls_aggregate_signature: Vec<u8>,
+}
+#[derive(Clone, norito::codec::Encode)]
+struct RetiredQcFixture {
+    phase: CertPhase,
+    subject_block_hash: HashOf<BlockHeader>,
+    parent_state_root: Hash,
+    post_state_root: Hash,
+    height: Height,
+    view: View,
+    epoch: u64,
+    chain_order_hash: Hash,
+    rechain_seq: u64,
+    mode_tag: String,
+    highest_qc: Option<RetiredQcRefFixture>,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    validator_set_hash_version: u16,
+    validator_set: Vec<PeerId>,
+    aggregate: RetiredQcAggregateFixture,
+}
+#[expect(
+    dead_code,
     reason = "all retired discriminants are retained solely to encode decode-negative fixtures"
 )]
 #[derive(norito::codec::Encode)]
@@ -26,15 +100,15 @@ enum RetiredEvidenceKind {
 #[derive(norito::codec::Encode)]
 enum RetiredEvidencePayload {
     DoubleVote {
-        v1: QcVote,
-        v2: QcVote,
+        v1: RetiredQcVoteFixture,
+        v2: RetiredQcVoteFixture,
     },
     InvalidQc {
-        certificate: Qc,
+        certificate: RetiredQcFixture,
         reason: String,
     },
     InvalidProposal {
-        proposal: Proposal,
+        proposal: RetiredProposalFixture,
         reason: String,
     },
     Censorship {
@@ -70,6 +144,9 @@ struct RetiredEvidenceRecord {
 }
 fn dummy_hash() -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32]))
+}
+fn retired_chain_order_hash() -> Hash {
+    Hash::new(b"iroha:sumeragi:v1:chain-order:default")
 }
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked consensus fixture keypair")
@@ -109,25 +186,13 @@ fn sample_roster() -> Vec<PeerId> {
         .collect()
 }
 include!("consensus/wire_schema_tests.rs");
-fn sample_qc_ref() -> QcRef {
-    QcRef {
+fn sample_retired_qc_ref() -> RetiredQcRefFixture {
+    RetiredQcRefFixture {
         height: 4,
         view: 1,
         epoch: 1,
         subject_block_hash: dummy_hash(),
         phase: CertPhase::Prepare,
-    }
-}
-fn sample_consensus_header() -> ConsensusBlockHeader {
-    ConsensusBlockHeader {
-        parent_hash: dummy_hash(),
-        tx_root: Hash::new(b"tx_root"),
-        state_root: Hash::new(b"state_root"),
-        proposer: 1,
-        height: 6,
-        view: 3,
-        epoch: 1,
-        highest_qc: sample_qc_ref(),
     }
 }
 #[test]
@@ -2262,40 +2327,6 @@ fn lane_block_certificate_decodes_exactly_and_rejects_trailing_bytes() {
     norito::core::decode_field_canonical::<LaneBlockCertificateV1>(&tailed)
         .expect_err("unframed trailing bytes must be rejected");
 }
-fn sample_proposal() -> Proposal {
-    Proposal {
-        header: sample_consensus_header(),
-        payload_hash: Hash::new(b"payload"),
-    }
-}
-#[test]
-fn qc_roundtrip_encode_decode() {
-    let roster = sample_roster();
-    let highest = sample_qc_ref();
-    let cert = Qc {
-        phase: CertPhase::NewView,
-        subject_block_hash: highest.subject_block_hash,
-        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-        height: highest.height,
-        view: 7,
-        epoch: 0,
-        chain_order_hash: default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: Some(highest),
-        validator_set_hash: HashOf::new(&roster),
-        validator_set_hash_version: 1,
-        validator_set: roster,
-        aggregate: QcAggregate {
-            signers_bitmap: vec![0xAA, 0x01],
-            bls_aggregate_signature: vec![1, 2, 3],
-        },
-    };
-    let bytes = cert.encode();
-    let dec = Qc::decode(&mut &bytes[..]).expect("decode certificate");
-    assert_eq!(cert, dec);
-}
 #[test]
 fn exec_witness_roundtrip_codec() {
     let w = ExecWitness {
@@ -2320,7 +2351,7 @@ fn retired_invalid_qc_evidence_fails_decode() {
     let ev = RetiredEvidence {
         kind: RetiredEvidenceKind::InvalidQc,
         payload: RetiredEvidencePayload::InvalidQc {
-            certificate: Qc {
+            certificate: RetiredQcFixture {
                 phase: CertPhase::Commit,
                 subject_block_hash: dummy_hash(),
                 parent_state_root: Hash::new(b"parent_root"),
@@ -2328,14 +2359,14 @@ fn retired_invalid_qc_evidence_fails_decode() {
                 height: 12,
                 view: 3,
                 epoch: 0,
-                chain_order_hash: default_chain_order_hash(),
+                chain_order_hash: retired_chain_order_hash(),
                 rechain_seq: 0,
                 mode_tag: PERMISSIONED_TAG.to_string(),
                 highest_qc: None,
                 validator_set_hash: HashOf::new(&roster),
                 validator_set_hash_version: 1,
                 validator_set: roster,
-                aggregate: QcAggregate {
+                aggregate: RetiredQcAggregateFixture {
                     signers_bitmap: vec![0xFF],
                     bls_aggregate_signature: vec![4, 5, 6],
                 },
@@ -2374,7 +2405,7 @@ fn retired_evidence_record_fails_decode() {
     let ev = RetiredEvidence {
         kind: RetiredEvidenceKind::DoublePrepare,
         payload: RetiredEvidencePayload::DoubleVote {
-            v1: QcVote {
+            v1: RetiredQcVoteFixture {
                 phase: CertPhase::Prepare,
                 block_hash: dummy_hash(),
                 parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
@@ -2382,13 +2413,13 @@ fn retired_evidence_record_fails_decode() {
                 height: 10,
                 view: 1,
                 epoch: 0,
-                chain_order_hash: default_chain_order_hash(),
+                chain_order_hash: retired_chain_order_hash(),
                 rechain_seq: 0,
                 highest_qc: None,
                 signer: 2,
                 bls_sig: vec![],
             },
-            v2: QcVote {
+            v2: RetiredQcVoteFixture {
                 phase: CertPhase::Prepare,
                 block_hash: dummy_hash(),
                 parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
@@ -2396,7 +2427,7 @@ fn retired_evidence_record_fails_decode() {
                 height: 10,
                 view: 1,
                 epoch: 0,
-                chain_order_hash: default_chain_order_hash(),
+                chain_order_hash: retired_chain_order_hash(),
                 rechain_seq: 0,
                 highest_qc: None,
                 signer: 2,
@@ -2453,13 +2484,6 @@ fn lane_settlement_receipt_decode_from_slice_requires_canonical_bare_prefix() {
     assert_eq!(used, canonical.len());
     LaneSettlementReceipt::decode_from_slice(&alternate)
         .expect_err("alternate bare layout must be rejected");
-}
-#[test]
-fn proposal_roundtrip_codec() {
-    let prop = sample_proposal();
-    let bytes = prop.encode();
-    let dec = Proposal::decode(&mut &bytes[..]).expect("decode proposal");
-    assert_eq!(prop, dec);
 }
 fn checked_seeded_peer_id(seed: u8) -> PeerId {
     PeerId::new(
@@ -2659,6 +2683,5 @@ fn lane_payload_ownership_status_roundtrip_codec() {
     assert_eq!(decoded_from_slice, ownership);
     assert_eq!(used, encoded.len());
 }
-include!("consensus/quorum_policy_tests.rs");
 include!("consensus/runtime_diagnostics_tests.rs");
 include!("consensus/npos_diagnostics_tests.rs");

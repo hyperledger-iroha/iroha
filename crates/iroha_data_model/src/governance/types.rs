@@ -1157,6 +1157,20 @@ pub const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1: usize = 2_858;
 pub const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32;
 /// Hard protocol ceiling for one canonical framed Parliament attempt state.
 pub const MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1: usize = 16 * 1024 * 1024;
+/// Hard protocol ceiling for registered citizens eligible to enter a Parliament snapshot.
+///
+/// Core rejects a new citizenship before it would exceed this bound. This keeps
+/// complete-electorate sortition finite without truncating or otherwise biasing
+/// the canonically ordered citizen set.
+pub const MAX_PARLIAMENT_CITIZENS_V1: u32 = 65_536;
+/// Hard protocol ceiling for the canonical Norito payload of one candidate snapshot.
+///
+/// A snapshot receives half of the complete attempt-state budget so candidate
+/// derivation cannot consume the whole reducer allowance before lifecycle state
+/// is added. Core enforces this while streaming the citizen registry, before it
+/// clones an account identifier into the snapshot.
+pub const MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1: usize =
+    MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1 / 2;
 
 /// Return the minimum number of blocks needed to admit a configured ballot corpus.
 ///
@@ -1203,6 +1217,13 @@ pub enum SortitionRequestErrorV1 {
     NonCanonicalIdentifier,
     /// The frozen candidate snapshot contained no eligible candidates.
     EmptyCandidateSnapshot,
+    /// The frozen candidate snapshot exceeded the V1 citizen-registry ceiling.
+    CandidateCountExceedsMaximum {
+        /// Candidate count committed by the request.
+        candidate_count: u32,
+        /// V1 protocol maximum.
+        maximum: u32,
+    },
     /// The requested body target had zero seats.
     ZeroTargetSeats,
     /// The requested body target exceeded the V1 protocol maximum.
@@ -1241,6 +1262,13 @@ impl fmt::Display for SortitionRequestErrorV1 {
                 f.write_str("sortition request identifier is not canonical")
             }
             Self::EmptyCandidateSnapshot => f.write_str("sortition candidate snapshot is empty"),
+            Self::CandidateCountExceedsMaximum {
+                candidate_count,
+                maximum,
+            } => write!(
+                f,
+                "sortition candidate count {candidate_count} exceeds V1 maximum {maximum}"
+            ),
             Self::ZeroTargetSeats => f.write_str("sortition target seats must be non-zero"),
             Self::TargetSeatsExceedMaximum {
                 target_seats,
@@ -1454,6 +1482,12 @@ impl SortitionRequestV1 {
         }
         if self.candidate_count == 0 && !allow_empty_candidate_snapshot {
             return Err(SortitionRequestErrorV1::EmptyCandidateSnapshot);
+        }
+        if self.candidate_count > MAX_PARLIAMENT_CITIZENS_V1 {
+            return Err(SortitionRequestErrorV1::CandidateCountExceedsMaximum {
+                candidate_count: self.candidate_count,
+                maximum: MAX_PARLIAMENT_CITIZENS_V1,
+            });
         }
         if self.target_seats == 0 {
             return Err(SortitionRequestErrorV1::ZeroTargetSeats);
@@ -3824,6 +3858,13 @@ mod tests {
         assert_eq!(
             checked_sortition_request(0, 500, 40, 50, None),
             Err(SortitionRequestErrorV1::EmptyCandidateSnapshot)
+        );
+        assert_eq!(
+            checked_sortition_request(MAX_PARLIAMENT_CITIZENS_V1 + 1, 500, 40, 50, None),
+            Err(SortitionRequestErrorV1::CandidateCountExceedsMaximum {
+                candidate_count: MAX_PARLIAMENT_CITIZENS_V1 + 1,
+                maximum: MAX_PARLIAMENT_CITIZENS_V1,
+            })
         );
         assert_eq!(
             checked_sortition_request(500, 0, 40, 50, None),

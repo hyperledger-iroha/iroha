@@ -296,6 +296,39 @@ mod kagemusha_v4_topup_provenance_tests {
             })
         ));
     }
+
+    #[test]
+    fn finalized_topup_terminal_binding_is_complete_and_fail_closed() {
+        let fixture = fixture_with_seeds(&[0x10]);
+        let evidence = &fixture.provenance.topup_finality_evidence[0];
+        let anchor = &evidence.topup_anchor;
+        let proof = &evidence.topup_finality_proof;
+
+        proof
+            .validate_terminal_binding(anchor, [0x15; 32], [0x17; 32], 42)
+            .expect("validated fixture terminal binding");
+        for (operation_id, transaction_hash, height) in [
+            ([0x25; 32], [0x17; 32], 42),
+            ([0x15; 32], [0x27; 32], 42),
+            ([0x15; 32], [0x17; 32], 43),
+        ] {
+            assert!(matches!(
+                proof.validate_terminal_binding(anchor, operation_id, transaction_hash, height),
+                Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "topup_finality.terminal_binding"
+                })
+            ));
+        }
+
+        let mut substituted_proof = proof.clone();
+        substituted_proof.anchor.anchor_digest[0] ^= 1;
+        assert!(matches!(
+            substituted_proof.validate_terminal_binding(anchor, [0x15; 32], [0x17; 32], 42),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.terminal_binding"
+            })
+        ));
+    }
     #[test]
     fn topup_anchor_requires_the_fixed_portable_shield_verifier_role() {
         let fixture = fixture_with_seeds(&[0x12]);

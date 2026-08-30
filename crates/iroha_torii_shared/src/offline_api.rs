@@ -465,19 +465,30 @@ pub type OfflineTopUpAnchor = iroha_data_model::offline::KagemushaRecursiveSpend
 /// directly. It is never wrapped as an opaque base64 payload and is required
 /// before a wallet may initialize recursive spending from the returned anchor.
 pub type OfflineTopUpFinalityProof = iroha_data_model::offline::KagemushaTopUpFinalityProofV2;
+/// Maximum negotiated response size accepted for the universal capability.
+pub const OFFLINE_STATUS_MAX_BYTES: usize = 4 * 1024;
+/// Maximum canonical archive size accepted for one operation reference.
+pub const OFFLINE_OPERATION_REFERENCE_MAX_BYTES: usize = 4 * 1024;
+/// Maximum canonical archive size accepted for one operation status.
+///
+/// This leaves bounded framing headroom above the 2 MiB finality proof and
+/// 64 KiB finalized anchor while remaining aligned with the first-release SDK
+/// response ceiling.
+pub const OFFLINE_OPERATION_STATUS_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum JSON response size accepted for one operation status.
+///
+/// Canonical Norito proof bytes may expand when byte vectors are represented
+/// as JSON arrays. This remains far below the transport-wide default while
+/// covering the full bounded finality proof.
+pub const OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Offline lifecycle command selected by an operation.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
-#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum OfflineOperationKind {
     /// Move online value into an offline spendable note.
     #[norito(rename = "top_up")]
@@ -486,28 +497,100 @@ pub enum OfflineOperationKind {
     #[norito(rename = "redeem")]
     Redeem,
 }
+impl norito::json::JsonDeserialize for OfflineOperationKind {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        match deserialize_strict_unit_tagged_enum(parser, "kind", "value")?.as_str() {
+            "top_up" => Ok(Self::TopUp),
+            "redeem" => Ok(Self::Redeem),
+            _ => Err(norito::json::Error::Message(
+                "unknown JSON enum variant".into(),
+            )),
+        }
+    }
+}
 /// Initial state returned after an offline command is accepted.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(
+    tag = "state",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
-#[norito(tag = "state", content = "value", rename_all = "snake_case")]
 pub enum OfflineOperationState {
     /// The signed transaction has been accepted for asynchronous processing.
     #[norito(rename = "pending")]
     Pending,
 }
+impl norito::json::JsonDeserialize for OfflineOperationState {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        match deserialize_strict_unit_tagged_enum(parser, "state", "value")?.as_str() {
+            "pending" => Ok(Self::Pending),
+            _ => Err(norito::json::Error::Message(
+                "unknown JSON enum variant".into(),
+            )),
+        }
+    }
+}
+fn deserialize_strict_unit_tagged_enum(
+    parser: &mut norito::json::Parser<'_>,
+    tag_field: &str,
+    content_field: &str,
+) -> Result<String, norito::json::Error> {
+    parser.skip_ws();
+    parser.preflight_object_entries()?;
+    parser.expect(b'{')?;
+    parser.skip_ws();
+    let mut tag = None;
+    let mut content_seen = false;
+    if !parser.try_consume_char(b'}')? {
+        loop {
+            parser.skip_ws();
+            let key = parser.parse_key()?;
+            if key.as_str() == tag_field {
+                if tag.is_some() {
+                    return Err(norito::json::Error::duplicate_field(tag_field));
+                }
+                tag = Some(parser.parse_string()?);
+            } else if key.as_str() == content_field {
+                if content_seen {
+                    return Err(norito::json::Error::duplicate_field(content_field));
+                }
+                let raw = parser.raw_value_slice()?;
+                let mut content_parser = norito::json::Parser::new(raw);
+                content_parser.parse_null()?;
+                content_parser.skip_ws();
+                if !content_parser.eof() {
+                    return Err(norito::json::Error::Message(
+                        "unexpected content for unit enum variant".into(),
+                    ));
+                }
+                content_seen = true;
+            } else {
+                return Err(norito::json::Error::unknown_field(key.as_str()));
+            }
+            parser.skip_ws();
+            if parser.try_consume_char(b',')? {
+                continue;
+            }
+            parser.expect(b'}')?;
+            break;
+        }
+    }
+    let tag = tag.ok_or_else(|| norito::json::Error::missing_field(tag_field))?;
+    if !content_seen {
+        return Err(norito::json::Error::missing_field(content_field));
+    }
+    Ok(tag)
+}
 /// Reference returned by an accepted offline command.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct OfflineOperationReference {
     /// Lowercase hexadecimal operation identifier.
     pub operation_id: String,
@@ -526,6 +609,7 @@ pub struct OfflineOperationReference {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct OfflineTopUpResult {
     /// Canonical signed transaction hash.
     pub transaction_hash: String,
@@ -538,10 +622,48 @@ pub struct OfflineTopUpResult {
     /// Typed consensus proof bound to the exact finalized top-up anchor.
     pub finality_proof: OfflineTopUpFinalityProof,
 }
+impl OfflineTopUpResult {
+    /// Validate every terminal top-up field against the selected operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation or transaction hash is malformed,
+    /// the anchor or finality proof is structurally invalid, or any operation,
+    /// network, transaction, height, or anchor reference disagrees.
+    pub fn validate_for_operation_id(&self, operation_id: &str) -> Result<(), String> {
+        let operation_id = exact_nonzero_operation_id(operation_id)?;
+        let transaction_hash = exact_iroha_transaction_hash(&self.transaction_hash)?;
+        if self.finalized_block_height == 0 {
+            return Err("offline applied result finalized_block_height must be at least 1".into());
+        }
+        if self.server_time_ms == 0 {
+            return Err("offline applied result server_time_ms must be at least 1".into());
+        }
+        self.anchor
+            .validate_public_binding()
+            .map_err(|error| format!("applied top-up anchor is invalid: {error}"))?;
+        self.finality_proof
+            .validate_structure()
+            .map_err(|error| format!("applied top-up finality proof is invalid: {error}"))?;
+        self.finality_proof
+            .validate_terminal_binding(
+                &self.anchor,
+                operation_id,
+                transaction_hash,
+                self.finalized_block_height,
+            )
+            .map_err(|_| {
+                "applied top-up anchor, finality proof, and terminal result are not mutually bound"
+                    .to_owned()
+            })?;
+        Ok(())
+    }
+}
 /// Final result of an applied redemption operation.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct OfflineRedeemResult {
     /// Canonical signed transaction hash.
     pub transaction_hash: String,
@@ -549,6 +671,24 @@ pub struct OfflineRedeemResult {
     pub finalized_block_height: u64,
     /// Finalized chain time in Unix milliseconds.
     pub server_time_ms: u64,
+}
+impl OfflineRedeemResult {
+    /// Validate the canonical terminal redemption fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the transaction hash is malformed or either
+    /// finality field is zero.
+    pub fn validate_structure(&self) -> Result<(), String> {
+        exact_iroha_transaction_hash(&self.transaction_hash)?;
+        if self.finalized_block_height == 0 {
+            return Err("offline applied result finalized_block_height must be at least 1".into());
+        }
+        if self.server_time_ms == 0 {
+            return Err("offline applied result server_time_ms must be at least 1".into());
+        }
+        Ok(())
+    }
 }
 /// Applied offline operation result, discriminated by command kind.
 #[expect(
@@ -558,7 +698,12 @@ pub struct OfflineRedeemResult {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
-#[norito(tag = "kind", content = "result", rename_all = "snake_case")]
+#[norito(
+    tag = "kind",
+    content = "result",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum OfflineOperationResult {
     /// Applied top-up result.
     #[norito(rename = "top_up")]
@@ -573,7 +718,12 @@ pub enum OfflineOperationResult {
     reason = "boxing a status variant would change the canonical public V1 Norito enum wire shape"
 )]
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
-#[norito(tag = "state", content = "value", rename_all = "snake_case")]
+#[norito(
+    tag = "state",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum OfflineOperationStatus {
     /// The transaction is queued or awaiting finality.
     #[norito(rename = "pending")]
@@ -607,6 +757,96 @@ pub enum OfflineOperationStatus {
         /// Stable typed Torii error.
         error: ErrorEnvelope,
     },
+}
+impl OfflineOperationStatus {
+    /// Return the operation identifier selected by this status.
+    #[must_use]
+    pub fn operation_id(&self) -> &str {
+        match self {
+            Self::Pending { operation_id, .. }
+            | Self::Applied { operation_id, .. }
+            | Self::Rejected { operation_id, .. } => operation_id,
+        }
+    }
+
+    /// Validate the complete status without external request context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed identifiers, transaction hashes,
+    /// timestamps, rejection text, or terminal result bindings.
+    pub fn validate_structure(&self) -> Result<(), String> {
+        let operation_id = self.operation_id();
+        exact_nonzero_operation_id(operation_id)?;
+        match self {
+            Self::Pending {
+                transaction_hash,
+                submitted_at_ms,
+                ..
+            } => {
+                exact_iroha_transaction_hash(transaction_hash)?;
+                if *submitted_at_ms == 0 {
+                    return Err("offline pending result submitted_at_ms must be at least 1".into());
+                }
+            }
+            Self::Applied {
+                result: OfflineOperationResult::TopUp(result),
+                ..
+            } => result.validate_for_operation_id(operation_id)?,
+            Self::Applied {
+                result: OfflineOperationResult::Redeem(result),
+                ..
+            } => result.validate_structure()?,
+            Self::Rejected {
+                transaction_hash,
+                error,
+                ..
+            } => {
+                exact_iroha_transaction_hash(transaction_hash)?;
+                validate_rejection_text("code", &error.code)?;
+                validate_rejection_text("message", &error.message)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate the complete status against the requested operation resource.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when structural validation fails or the status selects
+    /// a different operation identifier.
+    pub fn validate_for_operation_id(&self, expected_operation_id: &str) -> Result<(), String> {
+        let expected = exact_nonzero_operation_id(expected_operation_id)?;
+        self.validate_structure()?;
+        if exact_nonzero_operation_id(self.operation_id())? != expected {
+            return Err("operation status id does not match the requested resource".into());
+        }
+        Ok(())
+    }
+}
+
+fn exact_nonzero_operation_id(value: &str) -> Result<[u8; 32], String> {
+    let operation_id = exact_lower_hex_32("operation_id", value)?;
+    if operation_id.iter().all(|byte| *byte == 0) {
+        return Err("operation_id must be non-zero".into());
+    }
+    Ok(operation_id)
+}
+
+fn exact_iroha_transaction_hash(value: &str) -> Result<[u8; 32], String> {
+    let transaction_hash = exact_lower_hex_32("transaction_hash", value)?;
+    if transaction_hash[31] & 1 != 1 {
+        return Err("transaction_hash must preserve the Iroha hash marker".into());
+    }
+    Ok(transaction_hash)
+}
+
+fn validate_rejection_text(field: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
+        return Err(format!("rejected status contains a malformed {field}"));
+    }
+    Ok(())
 }
 #[cfg(test)]
 #[path = "offline_cash_v1_api_tests.rs"]
@@ -703,6 +943,33 @@ mod tests {
         }
     }
     #[test]
+    fn unit_tagged_operation_json_requires_explicit_null_content_and_exact_members() {
+        let kind: OfflineOperationKind =
+            norito::json::from_str(r#"{"kind":"top_up","value":null}"#)
+                .expect("decode canonical operation kind");
+        assert_eq!(kind, OfflineOperationKind::TopUp,);
+        let state: OfflineOperationState =
+            norito::json::from_str(r#"{"state":"pending","value":null}"#)
+                .expect("decode canonical operation state");
+        assert_eq!(state, OfflineOperationState::Pending,);
+        for invalid in [
+            r#"{"kind":"top_up"}"#,
+            r#"{"kind":"top_up","value":false}"#,
+            r#"{"kind":"top_up","value":null,"legacy":null}"#,
+        ] {
+            norito::json::from_str::<OfflineOperationKind>(invalid)
+                .expect_err("operation kind must use the exact tagged-unit shape");
+        }
+        for invalid in [
+            r#"{"state":"pending"}"#,
+            r#"{"state":"pending","value":{}}"#,
+            r#"{"state":"pending","value":null,"legacy":null}"#,
+        ] {
+            norito::json::from_str::<OfflineOperationState>(invalid)
+                .expect_err("operation state must use the exact tagged-unit shape");
+        }
+    }
+    #[test]
     fn operation_reference_is_direct_and_roundtrips() {
         let reference = OfflineOperationReference {
             operation_id: "11".repeat(32),
@@ -769,12 +1036,138 @@ mod tests {
         assert!(error.to_string().contains("duplicate field `operation_id`"));
     }
     #[test]
+    fn operation_response_json_rejects_unknown_fields_at_every_owned_boundary() {
+        let reference_error =
+            norito::json::from_str::<OfflineOperationReference>(r#"{"legacy":null}"#)
+                .expect_err("operation references must reject unknown fields");
+        assert!(
+            reference_error
+                .to_string()
+                .contains("unknown field `legacy`")
+        );
+
+        let top_up_error = norito::json::from_str::<OfflineTopUpResult>(r#"{"legacy":null}"#)
+            .expect_err("top-up results must reject unknown fields");
+        assert!(top_up_error.to_string().contains("unknown field `legacy`"));
+
+        let redeem = OfflineOperationResult::Redeem(OfflineRedeemResult {
+            transaction_hash: "22".repeat(32),
+            finalized_block_height: 42,
+            server_time_ms: 1_725_000_000_123,
+        });
+        let canonical_redeem =
+            norito::json::to_value(&redeem).expect("encode canonical redeem result");
+        assert_eq!(
+            norito::json::from_value::<OfflineOperationResult>(canonical_redeem.clone())
+                .expect("decode canonical redeem result"),
+            redeem,
+        );
+        let mut unknown_result_envelope = canonical_redeem.clone();
+        unknown_result_envelope
+            .as_object_mut()
+            .expect("operation result JSON object")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<OfflineOperationResult>(unknown_result_envelope)
+            .expect_err("operation result envelopes must reject unknown fields");
+        let mut unknown_redeem_result = canonical_redeem;
+        unknown_redeem_result
+            .as_object_mut()
+            .expect("operation result JSON object")
+            .get_mut("result")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("redeem result JSON object")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<OfflineOperationResult>(unknown_redeem_result)
+            .expect_err("selected operation results must reject unknown fields");
+
+        let pending = OfflineOperationStatus::Pending {
+            operation_id: "11".repeat(32),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: "22".repeat(32),
+            submitted_at_ms: 1_725_000_000_123,
+        };
+        let canonical_pending =
+            norito::json::to_value(&pending).expect("encode canonical pending status");
+        let mut unknown_status_envelope = canonical_pending.clone();
+        unknown_status_envelope
+            .as_object_mut()
+            .expect("operation status JSON object")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<OfflineOperationStatus>(unknown_status_envelope)
+            .expect_err("operation status envelopes must reject unknown fields");
+        let mut unknown_pending_status = canonical_pending;
+        unknown_pending_status
+            .as_object_mut()
+            .expect("operation status JSON object")
+            .get_mut("value")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("pending status JSON object")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<OfflineOperationStatus>(unknown_pending_status)
+            .expect_err("selected operation statuses must reject unknown fields");
+    }
+    #[test]
     fn operation_kind_json_rejects_unknown_tags() {
         let error = norito::json::from_str::<OfflineOperationKind>(
             r#"{"kind":"unknown_command","value":null}"#,
         )
         .expect_err("unknown operation kind must be rejected");
         assert_eq!(error.to_string(), "unknown JSON enum variant");
+    }
+    #[test]
+    fn operation_status_structure_rejects_invalid_continuity_fields() {
+        let operation_id = "11".repeat(32);
+        let transaction_hash = format!("{}25", "22".repeat(31));
+        let pending = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: transaction_hash.clone(),
+            submitted_at_ms: 42,
+        };
+        pending
+            .validate_for_operation_id(&operation_id)
+            .expect("canonical pending status");
+
+        let mut zero_time = pending.clone();
+        let OfflineOperationStatus::Pending {
+            submitted_at_ms, ..
+        } = &mut zero_time
+        else {
+            unreachable!()
+        };
+        *submitted_at_ms = 0;
+        assert!(zero_time.validate_structure().is_err());
+
+        let unmarked = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: "22".repeat(32),
+            submitted_at_ms: 42,
+        };
+        assert!(unmarked.validate_structure().is_err());
+        assert!(pending.validate_for_operation_id(&"33".repeat(32)).is_err());
+
+        let redeem = OfflineOperationStatus::Applied {
+            operation_id,
+            result: OfflineOperationResult::Redeem(OfflineRedeemResult {
+                transaction_hash,
+                finalized_block_height: 1,
+                server_time_ms: 1,
+            }),
+        };
+        redeem
+            .validate_structure()
+            .expect("canonical applied redemption");
+        let mut zero_height = redeem;
+        let OfflineOperationStatus::Applied {
+            result: OfflineOperationResult::Redeem(result),
+            ..
+        } = &mut zero_height
+        else {
+            unreachable!()
+        };
+        result.finalized_block_height = 0;
+        assert!(zero_height.validate_structure().is_err());
     }
     #[test]
     fn operation_reference_golden_vector() {

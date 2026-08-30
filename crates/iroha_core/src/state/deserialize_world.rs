@@ -5063,6 +5063,7 @@ fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Erro
     let aliases = world.musubi_aliases.view();
     let alias_history = world.musubi_alias_history.view();
     let registry_policy = world.musubi_registry_policy.view();
+    let parliament_attempts = world.parliament_attempts.view();
     let mut actions_by_digest = BTreeMap::new();
     let mut policy_actions = Vec::new();
     let mut owner_recovery_revisions = BTreeSet::new();
@@ -5103,21 +5104,19 @@ fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Erro
         }
         let proposal_content_id =
             iroha_data_model::governance::types::ProposalContentId::new(*decision_id);
-        let enacted_attempts = world
-            .parliament_attempts
-            .view()
-            .iter()
-            .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
-            .filter(|(_, attempt)| {
-                attempt.attempt().status
-                    == iroha_data_model::governance::types::GovernanceAttemptStatusV1::Enacted
-                    && attempt.terminal_height() == Some(decision.enacted_at_height)
-                    && attempt.certificate().is_some_and(|certificate| {
-                        certificate.proposal_content_id == proposal_content_id
-                            && certificate.enact_at_height == decision.enacted_at_height
-                    })
-            })
-            .count();
+        let enacted_attempts =
+            crate::governance::parliament::canonical_governance_attempt_ids_v1(proposal_content_id)
+                .filter_map(|attempt_id| parliament_attempts.get(&attempt_id))
+                .filter(|attempt| {
+                    attempt.attempt().status
+                        == iroha_data_model::governance::types::GovernanceAttemptStatusV1::Enacted
+                        && attempt.terminal_height() == Some(decision.enacted_at_height)
+                        && attempt.certificate().is_some_and(|certificate| {
+                            certificate.proposal_content_id == proposal_content_id
+                                && certificate.enact_at_height == decision.enacted_at_height
+                        })
+                })
+                .count();
         if enacted_attempts != 1 {
             return Err(invalid_musubi_state(
                 "musubi_governance_decisions",
@@ -5553,7 +5552,9 @@ fn validate_global_beacon_persistence(world: &World) -> Result<(), json::Error> 
                 "pulse storage key differs from its canonical pulse id",
             ));
         }
-        if pulse_slots.get(&(pulse.network_id, pulse.height)) != Some(pulse_id) {
+        let logical_session =
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id);
+        if pulse_slots.get(&(logical_session, pulse.height)) != Some(pulse_id) {
             return Err(invalid_global_beacon_persistence(
                 "derived pulse-slot index differs from finalized history",
             ));
@@ -5582,13 +5583,16 @@ fn validate_global_beacon_persistence(world: &World) -> Result<(), json::Error> 
             ));
         }
     }
-    let parliament_attempts = world.parliament_attempts.view();
-    for ((network_id, height), _) in pulse_slots.iter() {
+    let unavailable_beacon_pulse_slots = world
+        .parliament_attempts
+        .view()
+        .iter()
+        .flat_map(|(_, attempt)| attempt.unavailable_beacon_pulse_slots_v1())
+        .collect::<BTreeSet<_>>();
+    for (_, pulse) in pulses.iter() {
         let logical_session =
-            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(network_id);
-        if parliament_attempts.iter().any(|(_, attempt)| {
-            attempt.classifies_beacon_pulse_unavailable_at(logical_session, *height)
-        }) {
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id);
+        if unavailable_beacon_pulse_slots.contains(&(logical_session, pulse.height)) {
             return Err(invalid_global_beacon_persistence(
                 "finalized pulse conflicts with a Parliament slot terminally classified as unavailable",
             ));
@@ -5679,9 +5683,15 @@ mod global_beacon_persistence_tests {
             .global_beacon_active_session
             .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
         world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
-        world
-            .global_beacon_pulse_slots
-            .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+        world.global_beacon_pulse_slots.insert(
+            (
+                iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
+                    &pulse.network_id,
+                ),
+                pulse.height,
+            ),
+            pulse.pulse_id,
+        );
         world
             .global_beacon_latest_pulse
             .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
@@ -7831,6 +7841,9 @@ fn parse_world(
         governance_unlock_stats,
         parliament_attempts,
         parliament_timed_ovn_resource_reservations: Storage::default(),
+        parliament_required_beacon_pulse_slots: Storage::default(),
+        parliament_certified_enactments: Storage::default(),
+        parliament_unavailable_beacon_pulse_slots: Storage::default(),
         tle_key_sessions,
         tle_key_session_rosters,
         tle_key_session_lifecycles,
@@ -7855,6 +7868,10 @@ fn parse_world(
     {
         let parliament_attempts_view = world.parliament_attempts.view();
         let governance_proposals_view = world.governance_proposals.view();
+        let mut parliament_attempts_by_proposal = BTreeMap::<
+            iroha_data_model::governance::types::ProposalContentId,
+            Vec<&ParliamentAttemptStateV1>,
+        >::new();
         for (attempt_id, attempt) in parliament_attempts_view.iter() {
             if attempt_id != &attempt.attempt().id {
                 return Err(json::Error::InvalidField {
@@ -7886,6 +7903,10 @@ fn parse_world(
                     "Parliament attempt differs from its exact governance proposal policy: {error}"
                 ),
             })?;
+            parliament_attempts_by_proposal
+                .entry(attempt.proposal_content_id())
+                .or_default()
+                .push(attempt);
         }
         validate_tle_ovn_persistence(&world)?;
         validate_global_beacon_persistence(&world)?;
@@ -7930,11 +7951,10 @@ fn parse_world(
             })?;
             let proposal_content_id =
                 iroha_data_model::governance::types::ProposalContentId::new(*proposal_id);
-            let mut proposal_attempts = parliament_attempts_view
-                .iter()
-                .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
-                .map(|(_, attempt)| attempt)
-                .collect::<Vec<_>>();
+            let mut proposal_attempts = parliament_attempts_by_proposal
+                .get(&proposal_content_id)
+                .cloned()
+                .unwrap_or_default();
             proposal_attempts.sort_unstable_by_key(|attempt| attempt.attempt().sequence);
             crate::governance::parliament::validate_parliament_randomness_redraw_lineage_v1(
                 proposal_attempts.iter().copied(),

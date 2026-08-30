@@ -13095,12 +13095,13 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testOfflineOperationsUseCanonicalPathsAndDirectNoritoBodies() async throws {
         let operationId = String(repeating: "11", count: 32)
+        let transactionHash = String(repeating: "22", count: 31) + "23"
         func reference(_ kind: KagemushaOperationKind) throws -> KagemushaOperationReference {
             try KagemushaOperationReference(
                 operationId: operationId,
                 kind: kind,
                 state: .pending,
-                transactionHash: String(repeating: "22", count: 32),
+                transactionHash: transactionHash,
                 statusUri: "/v1/offline/operations/\(operationId)",
                 submittedAtMs: 1_700_000_000_000
             )
@@ -13118,7 +13119,7 @@ final class ToriiClientTests: XCTestCase {
             operationIdFieldIndex: 8
         )
         let pendingStatusArchive = try XCTUnwrap(Data(hexString:
-            "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff"
+            "4e5254300000fb04214104df1bdcd39249bddd4db23a0096000000000000008b9a6668d701e20402000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323308ffffffffffffffff"
         ))
 
         StubURLProtocol.handler = { request in
@@ -13179,7 +13180,7 @@ final class ToriiClientTests: XCTestCase {
             .pending(try .init(
                 operationId: operationId,
                 kind: .topUp,
-                transactionHash: String(repeating: "22", count: 32),
+                transactionHash: transactionHash,
                 submittedAtMs: UInt64.max
             ))
         )
@@ -13550,7 +13551,7 @@ final class ToriiClientTests: XCTestCase {
     func testOfflineSubmissionRejectsUnboundReferencesMediaTypesAndLocations() async throws {
         let submittedOperationId = String(repeating: "11", count: 32)
         let otherOperationId = String(repeating: "33", count: 32)
-        let transactionHash = String(repeating: "22", count: 32)
+        let transactionHash = String(repeating: "22", count: 31) + "23"
         let request = try KagemushaTopUpRequest(
             noritoArchive: kagemushaOperationRequestArchive(
                 schema: KagemushaRecursiveSpend.topUpRequestWireName,

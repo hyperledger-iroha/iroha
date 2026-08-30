@@ -1228,22 +1228,6 @@ export interface SccpTonProofRequest {
   readonly request_hash: string;
 }
 export type SccpProofRequest = SccpBn254ProofRequest | SccpTonProofRequest;
-export type SccpDetachedSigningState =
-  | Readonly<{ signature_b64?: never; transaction_payload_b64?: never; creation_time_ms?: number }>
-  | Readonly<{ signature_b64: string; transaction_payload_b64: string; creation_time_ms: number }>;
-export type SccpBridgeProofSubmitPayload = Readonly<{
-  authority: string;
-  fee_payment: NoritoFeePaymentIntent;
-  destination_proof_b64: string;
-}> & SccpDetachedSigningState;
-export type SccpBridgeMessageSubmitPayload = Readonly<{
-  authority: string;
-  fee_payment: NoritoFeePaymentIntent;
-  native_proof_b64: string;
-  replay_witness_b64: string;
-}> & SccpDetachedSigningState;
-export interface SccpBridgeSubmitResponse { readonly submitted: boolean; readonly payload_kind: SccpPayloadKind; readonly message_id_hex: string; readonly backend: string; readonly counterparty_domain: number; readonly counterparty_chain: SccpNetworkProfile; readonly route_configuration_hash_hex: string; readonly range_start_height: number; readonly range_end_height: number; readonly creation_time_ms: number; readonly tx_hash_hex: string | null; readonly transaction_payload_b64: string | null; readonly signing_message_b64: string | null; }
-export interface SccpBridgeResponseExpectations { readonly submitted?: boolean; readonly creation_time_ms?: number; }
 export function normalizeSccpCapabilities(value: unknown): SccpCapabilities;
 export function normalizeSccpSoraOutboundMaterial(value: unknown, expectations?: SccpSoraOutboundMaterialExpectations): SccpSoraOutboundMaterialV1;
 export function normalizeSccpRegistry(value: unknown): SccpRegistry;
@@ -1251,10 +1235,6 @@ export function normalizeSccpRouteGovernanceAction(value: SccpRouteGovernanceAct
 export function normalizeSccpRecentMessages(value: unknown): SccpRecentMessages;
 export function normalizeSccpMessageBundle(value: unknown): SccpMessageBundle;
 export function normalizeSccpProofRequest(value: unknown): SccpProofRequest;
-export function normalizeBridgeProofSubmitPayload(value: SccpBridgeProofSubmitPayload): Readonly<SccpBridgeProofSubmitPayload>;
-export function normalizeBridgeMessageSubmitPayload(value: SccpBridgeMessageSubmitPayload): Readonly<SccpBridgeMessageSubmitPayload>;
-export function normalizeSccpBridgeSubmitResponse(value: unknown, expectations?: SccpBridgeResponseExpectations): SccpBridgeSubmitResponse;
-export function parseSccpBridgeSubmitResponseJson(text: string, expectations?: SccpBridgeResponseExpectations): SccpBridgeSubmitResponse;
 export function parseSccpJsonObject(text: string, label?: string): Readonly<Record<string, unknown>>;
 
 export interface DefiOracleAttestationQuery {
@@ -6303,9 +6283,6 @@ export type ToriiSccpCapabilities = SccpCapabilities;
 export type ToriiSccpRegistry = SccpRegistry;
 export type ToriiSccpSoraOutboundMaterial = SccpSoraOutboundMaterialV1;
 export type ToriiSccpRecentMessages = SccpRecentMessages;
-export type ToriiBridgeProofSubmitPayload = SccpBridgeProofSubmitPayload;
-export type ToriiBridgeMessageSubmitPayload = SccpBridgeMessageSubmitPayload;
-export type ToriiSccpBridgeSubmitResponse = SccpBridgeSubmitResponse;
 
 export interface ToriiLoggerConfig {
   level: string;
@@ -11736,14 +11713,6 @@ export declare class ToriiClient {
     limit?: number;
     signal?: AbortSignal;
   }): Promise<ToriiSccpRecentMessages>;
-  submitBridgeProof(
-    payload: ToriiBridgeProofSubmitPayload,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiSccpBridgeSubmitResponse>;
-  submitBridgeMessage(
-    payload: ToriiBridgeMessageSubmitPayload,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiSccpBridgeSubmitResponse>;
   getRuntimeAbiActive(options: RequiredCanonicalRequestOptions): Promise<ToriiRuntimeAbiActiveResponse>;
   getRuntimeAbiHash(options?: {
     signal?: AbortSignal;

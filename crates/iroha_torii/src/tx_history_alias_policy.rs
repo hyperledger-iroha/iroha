@@ -44,7 +44,7 @@ impl MandatoryAliasPolicy {
     }
 }
 #[derive(Debug)]
-enum PolicyLoadError {
+pub(crate) enum PolicyLoadError {
     Io(io::Error),
     Invalid(&'static str),
 }
@@ -61,6 +61,14 @@ impl From<io::Error> for PolicyLoadError {
         Self::Io(error)
     }
 }
+impl std::error::Error for PolicyLoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Invalid(_) => None,
+        }
+    }
+}
 /// Load the configured mandatory-alias policy under its complete startup envelope.
 ///
 /// The file is opened without following its final path component and must keep the same identity,
@@ -71,13 +79,8 @@ pub(crate) fn load_mandatory_alias_policy(
     path: &Path,
     catalog: &DataSpaceCatalog,
     maximum_file_bytes: usize,
-) -> MandatoryAliasPolicy {
-    try_load_mandatory_alias_policy(path, catalog, maximum_file_bytes).unwrap_or_else(|error| {
-        panic!(
-            "failed to load tx history alias policy `{}`: {error}",
-            path.display()
-        )
-    })
+) -> Result<MandatoryAliasPolicy, PolicyLoadError> {
+    try_load_mandatory_alias_policy(path, catalog, maximum_file_bytes)
 }
 fn try_load_mandatory_alias_policy(
     path: &Path,
@@ -721,6 +724,24 @@ mod tests {
             b"{}"
         );
         assert!(read_exact_stable_policy_file(&path, 1).is_err());
+    }
+    #[test]
+    fn policy_loader_returns_missing_and_malformed_file_errors_without_unwinding() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let missing = directory.path().join("missing.json");
+        let missing_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load_mandatory_alias_policy(&missing, &catalog(), 1024)
+        }))
+        .expect("missing policy must return an error instead of unwinding");
+        assert!(missing_result.is_err());
+
+        let malformed = directory.path().join("malformed.json");
+        fs::write(&malformed, b"[").expect("write malformed policy");
+        let malformed_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load_mandatory_alias_policy(&malformed, &catalog(), 1024)
+        }))
+        .expect("malformed policy must return an error instead of unwinding");
+        assert!(malformed_result.is_err());
     }
     #[test]
     fn policy_file_reader_rejects_path_replacement() {

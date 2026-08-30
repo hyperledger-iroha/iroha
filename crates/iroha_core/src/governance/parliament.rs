@@ -29,6 +29,7 @@ use iroha_data_model::{
         GovernanceCertificateV1, GovernanceExpectedHeadV1, GovernanceStageV1,
         MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1, MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1,
         MAX_PARLIAMENT_BALLOT_RETRIES_V1, MAX_PARLIAMENT_BODY_TARGET_SEATS_V1,
+        MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1, MAX_PARLIAMENT_CITIZENS_V1,
         MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, MAX_PARLIAMENT_SORTITION_RETRIES_V1,
         ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1, ParliamentBallotAttemptV1,
         ParliamentBallotCertificateBindingV1, ParliamentBallotFailureKindV1, ParliamentBody,
@@ -61,6 +62,18 @@ use super::{
 /// exposing an independently tunable consensus parameter.
 pub(crate) const MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1: u32 =
     MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1;
+
+/// Enumerate every canonical attempt identity available to one V1 proposal.
+///
+/// Runtime consumers use this bounded keyspace instead of scanning the global
+/// Parliament attempt map. Restore validation still scans the complete map so
+/// that it can reject arbitrary corrupt or non-canonical keys.
+pub fn canonical_governance_attempt_ids_v1(
+    proposal_content_id: ProposalContentId,
+) -> impl DoubleEndedIterator<Item = GovernanceAttemptId> {
+    (0..=MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1)
+        .map(move |sequence| GovernanceAttemptId::derive_v1(proposal_content_id, sequence))
+}
 
 /// A reducible entity named by [`ParliamentReducerErrorV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +154,8 @@ pub enum ParliamentReducerErrorV1 {
     InvalidSortitionPulseSchedule,
     /// A beacon pulse identifier or session-height slot was already consumed.
     BeaconPulseAlreadyConsumed,
+    /// A finalized beacon pulse contradicts a transcript that would classify its slot as absent.
+    BeaconPulseAlreadyAvailable,
     /// A TLE session was already bound to another ballot attempt.
     TleSessionAlreadyConsumed,
     /// The roster was empty, oversized, non-canonical, or internally duplicated.
@@ -276,6 +291,9 @@ impl fmt::Display for ParliamentReducerErrorV1 {
                 f.write_str("invalid deterministic Parliament sortition pulse schedule")
             }
             Self::BeaconPulseAlreadyConsumed => f.write_str("beacon pulse already consumed"),
+            Self::BeaconPulseAlreadyAvailable => {
+                f.write_str("beacon pulse is already finalized for the unavailable slot")
+            }
             Self::TleSessionAlreadyConsumed => f.write_str("TLE session already consumed"),
             Self::InvalidRoster => f.write_str("invalid or non-canonical Parliament roster"),
             Self::InvalidAssignmentPlan => {
@@ -1012,6 +1030,33 @@ pub struct ParliamentAttemptStateV1 {
 
 fn root_is_zero(root: &[u8; 32]) -> bool {
     root.iter().all(|byte| *byte == 0)
+}
+
+fn candidate_snapshot_fits_resource_bounds_v1(candidate_snapshot: &[AccountId]) -> bool {
+    if candidate_snapshot.len()
+        > usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
+            .expect("the V1 Parliament citizen cap fits usize")
+    {
+        return false;
+    }
+    let canonical_flags = norito::core::default_encode_flags();
+    let _canonical_flags = norito::core::DecodeFlagsGuard::enter(canonical_flags);
+    candidate_snapshot
+        .iter()
+        .try_fold(norito::core::seq_len_prefix_len(0), |bytes, candidate| {
+            norito::core::encoded_payload_len(candidate)
+                .ok()
+                .and_then(|candidate_bytes| {
+                    bytes
+                        .checked_add(norito::core::len_prefix_len_with_flags(
+                            candidate_bytes,
+                            canonical_flags,
+                        ))?
+                        .checked_add(candidate_bytes)
+                })
+                .filter(|next| *next <= MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1)
+        })
+        .is_some()
 }
 
 fn election_awaiting_pulse_shape_is_empty(election: &ParliamentElectionStateV1) -> bool {
@@ -2006,11 +2051,70 @@ impl ParliamentAttemptStateV1 {
         })
     }
 
-    /// Return whether the reducer has terminally classified an exact beacon slot as absent.
+    /// Return every live beacon slot currently required by this attempt.
+    ///
+    /// The deduplicated set is used to maintain the world-level consensus
+    /// index; point queries should use [`Self::requires_beacon_pulse_at`].
+    #[must_use]
+    pub(crate) fn required_beacon_pulse_slots_v1(&self) -> BTreeSet<(BeaconSessionId, u64)> {
+        if self.attempt.status != GovernanceAttemptStatusV1::Active {
+            return BTreeSet::new();
+        }
+        self.elections
+            .values()
+            .filter_map(|election| {
+                (election.attempt.status == BodyElectionAttemptStatusV1::AwaitingPulse).then_some((
+                    election.attempt.request.beacon_session_id,
+                    election.attempt.request.pulse_height,
+                ))
+            })
+            .chain(self.ballots.values().filter_map(|ballot| {
+                if !matches!(
+                    ballot.attempt.status,
+                    BallotAttemptStatusV1::Registration
+                        | BallotAttemptStatusV1::SurvivorFreeze
+                        | BallotAttemptStatusV1::TimedCommitment
+                        | BallotAttemptStatusV1::AwaitingRelease
+                ) || ballot.release_pulse_id.is_some()
+                {
+                    return None;
+                }
+                Some((ballot.release_beacon_session_id?, ballot.release_height?))
+            }))
+            .collect()
+    }
+
+    /// Return every beacon slot the reducer has terminally classified as absent.
     ///
     /// Historical superseded retries remain authoritative: admitting a late pulse for any slot
     /// already closed as unavailable would make the persisted Parliament transcript internally
     /// contradictory after restart.
+    #[must_use]
+    pub(crate) fn unavailable_beacon_pulse_slots_v1(&self) -> BTreeSet<(BeaconSessionId, u64)> {
+        self.elections
+            .values()
+            .filter_map(|election| {
+                (election.failure_kind == Some(ParliamentElectionFailureKindV1::PulseUnavailable))
+                    .then_some((
+                        election.attempt.request.beacon_session_id,
+                        election.attempt.request.pulse_height,
+                    ))
+            })
+            .chain(self.ballots.values().filter_map(|ballot| {
+                if ballot.failure_kind
+                    != Some(ParliamentBallotFailureKindV1::ReleasePulseUnavailable)
+                {
+                    return None;
+                }
+                Some((ballot.release_beacon_session_id?, ballot.release_height?))
+            }))
+            .collect()
+    }
+
+    /// Return whether the reducer has terminally classified an exact beacon slot as absent.
+    ///
+    /// This hot-path lookup short-circuits over the authoritative records rather
+    /// than allocating the deduplicated set used for index construction.
     #[must_use]
     pub(crate) fn classifies_beacon_pulse_unavailable_at(
         &self,
@@ -2032,6 +2136,17 @@ impl ParliamentAttemptStateV1 {
     #[must_use]
     pub const fn certificate(&self) -> Option<&GovernanceCertificateV1> {
         self.certificate.as_ref()
+    }
+
+    /// Return the exact scheduled height while this attempt awaits enactment.
+    #[must_use]
+    pub(crate) fn certified_enactment_height_v1(&self) -> Option<u64> {
+        if !matches!(self.attempt.status, GovernanceAttemptStatusV1::Certified) {
+            return None;
+        }
+        self.certificate
+            .as_ref()
+            .map(|certificate| certificate.enact_at_height)
     }
 
     /// Return the committed height of a terminal enactment outcome.
@@ -2302,7 +2417,7 @@ impl ParliamentAttemptStateV1 {
 /// Returns an error when attempt sequences are not exactly contiguous from
 /// zero, a successor does not inherit its predecessor's exact terminal count,
 /// proposals are mixed, or any attempt exceeds the V1 cumulative ceiling.
-pub(crate) fn validate_parliament_randomness_redraw_lineage_v1<I, A>(
+pub fn validate_parliament_randomness_redraw_lineage_v1<I, A>(
     attempts: I,
 ) -> Result<(), ParliamentReducerErrorV1>
 where
@@ -2393,6 +2508,25 @@ pub(crate) mod tests {
             derive_parliament_timed_ovn_casting_snapshot_v1,
         },
     };
+
+    #[test]
+    fn canonical_governance_attempt_id_keyspace_is_exact_and_bounded() {
+        let proposal_content_id = ProposalContentId::new([0xA7; 32]);
+        let ids = canonical_governance_attempt_ids_v1(proposal_content_id).collect::<Vec<_>>();
+        assert_eq!(
+            ids.len(),
+            usize::try_from(MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1)
+                .expect("the V1 retry ceiling fits usize")
+                + 1
+        );
+        for (sequence, id) in ids.iter().enumerate() {
+            let sequence = u32::try_from(sequence).expect("the bounded sequence fits u32");
+            assert_eq!(
+                *id,
+                GovernanceAttemptId::derive_v1(proposal_content_id, sequence)
+            );
+        }
+    }
 
     include!("parliament/tests/fixtures.rs");
     include!("parliament/tests/sortition.rs");

@@ -26167,6 +26167,14 @@
         ],
         "type": "object"
       },
+      "OperatorWebAuthnAlgorithm": {
+        "description": "Exact algorithm recorded for an enrolled operator WebAuthn credential.",
+        "enum": [
+          "es256",
+          "ed25519"
+        ],
+        "type": "string"
+      },
       "OperatorWebAuthnAssertionRequest": {
         "additionalProperties": false,
         "description": "Exact WebAuthn PublicKeyCredential assertion accepted by the operator login verifier.",
@@ -26262,12 +26270,88 @@
         "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}|[A-Za-z0-9_-]{3})?$",
         "type": "string"
       },
+      "OperatorWebAuthnCredentialDeleteResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_id": {
+            "$ref": "#/components/schemas/OperatorWebAuthnCredentialId"
+          },
+          "credentials_total": {
+            "format": "uint32",
+            "maximum": 1024,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "const": "ok",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "credential_id",
+          "credentials_total"
+        ],
+        "type": "object"
+      },
       "OperatorWebAuthnCredentialId": {
         "description": "Canonical unpadded base64url credential identifier; the decoded identifier is at most 1024 bytes.",
         "maxLength": 1366,
         "minLength": 1,
         "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}|[A-Za-z0-9_-]{3})?$",
         "type": "string"
+      },
+      "OperatorWebAuthnCredentialListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "credentials": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorWebAuthnCredentialMetadata"
+            },
+            "maxItems": 1024,
+            "type": "array"
+          },
+          "credentials_total": {
+            "format": "uint32",
+            "maximum": 1024,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "credentials",
+          "credentials_total"
+        ],
+        "type": "object"
+      },
+      "OperatorWebAuthnCredentialMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "$ref": "#/components/schemas/OperatorWebAuthnAlgorithm"
+          },
+          "created_at_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "credential_id": {
+            "$ref": "#/components/schemas/OperatorWebAuthnCredentialId"
+          },
+          "sign_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "credential_id",
+          "algorithm",
+          "sign_count",
+          "created_at_ms"
+        ],
+        "type": "object"
       },
       "OperatorWebAuthnLoginResponse": {
         "additionalProperties": false,
@@ -52043,28 +52127,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/openapi": {
-      "get": {
-        "description": "Return the Torii OpenAPI document.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch the OpenAPI specification.",
-        "tags": [
-          "System"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/openapi.json": {
       "get": {
         "description": "Return the Torii OpenAPI document.",
@@ -52370,6 +52432,13 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/JsonValue"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the complete node status payload.",
+                  "format": "binary",
+                  "type": "string"
                 }
               }
             },
@@ -76282,6 +76351,401 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/operator/auth/credentials": {
+      "get": {
+        "description": "Lists enrolled operator WebAuthn credential metadata. Verification keys are never returned. Requires both an exact-network operator request signature and a configured WebAuthn session.",
+        "operationId": "operatorAuthCredentials",
+        "parameters": [
+          {
+            "description": "Iroha multihash public key of the canonical request signer.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, empty-body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical 32-byte WebAuthn session token issued by the operator login verifier.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 43,
+              "minLength": 43,
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorWebAuthnCredentialListResponse"
+                }
+              }
+            },
+            "description": "Canonical credential metadata sorted by credential identifier.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The exact request signature or WebAuthn session is missing, invalid, or expired.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Operator WebAuthn is disabled, mTLS is required, or the signer is not an allowed exact-network operator.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Operator authentication is rate limited or locked out.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Credential state is unavailable (`operator_webauthn_state_unavailable`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List operator WebAuthn credentials.",
+        "tags": [
+          "OperatorAuth"
+        ],
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/operator/auth/credentials/{credential_id}": {
+      "delete": {
+        "description": "Deletes one operator WebAuthn credential and revokes every outstanding operator session and challenge. Requires both an exact-network operator request signature and a configured WebAuthn session.",
+        "operationId": "operatorAuthCredentialDelete",
+        "parameters": [
+          {
+            "description": "Canonical unpadded base64url credential identifier.",
+            "in": "path",
+            "name": "credential_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OperatorWebAuthnCredentialId"
+            }
+          },
+          {
+            "description": "Iroha multihash public key of the canonical request signer.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, empty-body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical 32-byte WebAuthn session token issued by the operator login verifier.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 43,
+              "minLength": 43,
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorWebAuthnCredentialDeleteResponse"
+                }
+              }
+            },
+            "description": "Credential deleted and outstanding operator authorization state revoked.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The credential identifier is empty, oversized, padded, or not canonical base64url.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The exact request signature or WebAuthn session is missing, invalid, or expired.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Operator WebAuthn is disabled, mTLS is required, or the signer is not an allowed exact-network operator.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The credential is unknown (`operator_webauthn_credential_not_found`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The last credential cannot be deleted without a configured bootstrap recovery token (`operator_webauthn_last_credential`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Operator authentication is rate limited or locked out.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Credential state could not be read (`operator_webauthn_state_unavailable`) or persisted (`operator_webauthn_persist_failed`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete an operator WebAuthn credential.",
+        "tags": [
+          "OperatorAuth"
+        ],
+        "x-iroha-tool-effect": "operator"
+      }
+    },
     "/v1/operator/auth/login/options": {
       "post": {
         "description": "Issues WebAuthn authentication options.",
@@ -76815,7 +77279,7 @@
                 }
               }
             },
-            "description": "The bounded operator WebAuthn credential store is full (`operator_webauthn_credential_capacity_exhausted`).",
+            "description": "The credential ID is already enrolled (`operator_webauthn_credential_duplicate`) or the bounded operator WebAuthn credential store is full (`operator_webauthn_credential_capacity_exhausted`).",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",

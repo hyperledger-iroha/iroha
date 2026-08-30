@@ -779,6 +779,24 @@ impl WalRetirementAuthorization {
             certificate: finalized.decision().reference(),
         }
     }
+    /// Construct a self-consistent retirement token for filesystem adapter tests.
+    #[cfg(test)]
+    pub(crate) fn from_durable_decision_for_test(
+        context_id: ContextId,
+        height: u64,
+        subject: Subject,
+        certificate: CertificateRef,
+    ) -> Option<Self> {
+        let authorization = Self {
+            context_id,
+            height,
+            subject,
+            certificate,
+        };
+        authorization
+            .matches_durable_decision(context_id, height, subject, certificate)
+            .then_some(authorization)
+    }
     /// Return the frozen height-context identity.
     #[must_use]
     pub const fn context_id(self) -> ContextId {
@@ -1943,6 +1961,47 @@ mod byte_lifecycle_tests {
                 Err(WalCodecError::IdentityMismatch(expected))
             );
         }
+    }
+    #[test]
+    fn retirement_authorization_targets_one_exact_wal_identity() {
+        let subject = Subject::repeat(0x66);
+        let certificate = CertificateRef::new(
+            IDENTITY.context_id(),
+            Round::new(IDENTITY.height(), 2),
+            Phase::Commit,
+            subject,
+        );
+        let authorization = WalRetirementAuthorization {
+            context_id: IDENTITY.context_id(),
+            height: IDENTITY.height(),
+            subject,
+            certificate,
+        };
+        assert!(authorization.authorizes_wal(IDENTITY));
+        assert!(!authorization.authorizes_wal(WalFileIdentity::new(
+            IDENTITY.protocol_version(),
+            IDENTITY.network_id(),
+            ContextId::repeat(0x77),
+            IDENTITY.height(),
+            IDENTITY.consensus_key_hash(),
+        )));
+        assert!(!authorization.authorizes_wal(WalFileIdentity::new(
+            IDENTITY.protocol_version(),
+            IDENTITY.network_id(),
+            IDENTITY.context_id(),
+            IDENTITY.height() + 1,
+            IDENTITY.consensus_key_hash(),
+        )));
+        let invalid_phase = WalRetirementAuthorization {
+            certificate: CertificateRef::new(
+                IDENTITY.context_id(),
+                Round::new(IDENTITY.height(), 2),
+                Phase::Prepare,
+                subject,
+            ),
+            ..authorization
+        };
+        assert!(!invalid_phase.authorizes_wal(IDENTITY));
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum FakeIoError {

@@ -10,7 +10,8 @@ use mv::storage::StorageReadOnly;
 
 use crate::{
     governance::parliament::{
-        MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1, validate_parliament_randomness_redraw_lineage_v1,
+        MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1, canonical_governance_attempt_ids_v1,
+        validate_parliament_randomness_redraw_lineage_v1,
     },
     state::{GovernanceProposalStatus, StateTransaction},
 };
@@ -77,7 +78,7 @@ fn terminal_status_matches_attempt(
 
 /// Prove that a terminal fee proposal has no remaining proposal-wide redraw.
 ///
-/// This intentionally repeats the restore-time history checks at the rekey boundary. A missing,
+/// This intentionally repeats the canonical history checks at the rekey boundary. A missing,
 /// sparse, malformed, or proposal-mismatched history must not be mistaken for exhausted history.
 fn terminal_validation_fee_retry_budget_is_exhausted(
     state_transaction: &StateTransaction<'_, '_>,
@@ -103,13 +104,15 @@ fn terminal_validation_fee_retry_budget_is_exhausted(
     }
 
     let proposal_content_id = ProposalContentId::new(proposal_id);
-    let mut attempts = state_transaction
-        .world
-        .parliament_attempts
-        .iter()
-        .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
+    let attempts = canonical_governance_attempt_ids_v1(proposal_content_id)
+        .filter_map(|attempt_id| {
+            state_transaction
+                .world
+                .parliament_attempts
+                .get(&attempt_id)
+                .map(|attempt| (attempt_id, attempt))
+        })
         .collect::<Vec<_>>();
-    attempts.sort_unstable_by_key(|(_, attempt)| attempt.attempt().sequence);
     let Some((_, latest)) = attempts.last().copied() else {
         return false;
     };
@@ -128,7 +131,7 @@ fn terminal_validation_fee_retry_budget_is_exhausted(
         let Ok(expected_sequence) = u32::try_from(index) else {
             return false;
         };
-        key == &attempt.attempt().id
+        key == attempt.attempt().id
             && attempt.attempt().sequence == expected_sequence
             && attempt.validate().is_ok()
             && attempt

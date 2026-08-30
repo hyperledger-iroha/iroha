@@ -359,7 +359,6 @@ const DEFAULT_ISO_POLL_ATTEMPTS = 12;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
-const SCCP_SUBMIT_RESPONSE_MAX_BYTES = SCCP_JSON_RESPONSE_MAX_BYTES;
 const SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES =
   SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024;
@@ -6975,54 +6974,6 @@ export class ToriiClient {
       "SCCP recent messages",
       SCCP_RECENT_RESPONSE_MAX_BYTES,
     );
-  }
-
-  /**
-   * Prepare or submit a bridge proof DTO (`POST /v1/bridge/proofs/submit`). Signed submission
-   * resends the byte-identical prepared transaction payload with its detached signature.
-   * @param {object} payload
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<object>}
-   */
-  async submitBridgeProof(payload, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "submitBridgeProof");
-    const { normalizeBridgeProofSubmitPayload } = await loadToriiOptionalModule();
-    const body = normalizeBridgeProofSubmitPayload(payload, "submitBridgeProof.payload");
-    const response = await this._request("POST", "/v1/bridge/proofs/submit", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(body),
-      signal,
-    });
-    await this._expectStatus(response, [200], {
-      maximumBodyBytes: SCCP_SUBMIT_RESPONSE_MAX_BYTES,
-      responseLabel: "SCCP bridge proof submit",
-      signal,
-    });
-    return readSccpBridgeSubmitResponse(response, body);
-  }
-
-  /**
-   * Prepare or submit an inbound bridge message DTO (`POST /v1/bridge/messages`). Signed
-   * submission resends the byte-identical prepared transaction payload with its detached signature.
-   * @param {object} payload
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<object>}
-   */
-  async submitBridgeMessage(payload, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "submitBridgeMessage");
-    const { normalizeBridgeMessageSubmitPayload } = await loadToriiOptionalModule();
-    const body = normalizeBridgeMessageSubmitPayload(payload, "submitBridgeMessage.payload");
-    const response = await this._request("POST", "/v1/bridge/messages", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(body),
-      signal,
-    });
-    await this._expectStatus(response, [200], {
-      maximumBodyBytes: SCCP_SUBMIT_RESPONSE_MAX_BYTES,
-      responseLabel: "SCCP bridge message submit",
-      signal,
-    });
-    return readSccpBridgeSubmitResponse(response, body);
   }
 
   /**
@@ -31808,39 +31759,6 @@ function normalizeSignalOnlyOption(options, context) {
     }
   }
   return { signal };
-}
-
-async function readSccpBridgeSubmitResponse(response, request) {
-  const contentType = response.headers?.get?.("content-type") ?? "";
-  if (!/^application\/json(?:\s*;|$)/iu.test(contentType)) {
-    const error = new TypeError(
-      "SCCP bridge submit response must use application/json content type",
-    );
-    await cancelSccpResponseBody(response, error);
-    throw error;
-  }
-  const text = decodeSccpUtf8(
-    await readBoundedSccpResponseBytes(
-      response,
-      SCCP_SUBMIT_RESPONSE_MAX_BYTES,
-      "SCCP bridge submit",
-    ),
-    "SCCP bridge submit",
-  );
-  const expectations = { submitted: request.signature_b64 !== undefined };
-  if (request.creation_time_ms !== undefined) {
-    expectations.creation_time_ms = request.creation_time_ms;
-  }
-  if (request.destination_proof_b64 !== undefined) {
-    expectations.proof_b64 = request.destination_proof_b64;
-    expectations.destination = true;
-  } else {
-    expectations.proof_b64 = request.native_proof_b64;
-    expectations.replay_witness_b64 = request.replay_witness_b64;
-    expectations.destination = false;
-  }
-  const { parseSccpBridgeSubmitResponseJson } = await loadToriiOptionalModule();
-  return parseSccpBridgeSubmitResponseJson(text, expectations);
 }
 
 function normalizeSccpMessageIdPath(value, context) {

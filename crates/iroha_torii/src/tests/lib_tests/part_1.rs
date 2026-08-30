@@ -2114,6 +2114,133 @@ fn sample_tx_history_jwt(secret: &str) -> String {
 }
 #[cfg(feature = "app_api")]
 #[test]
+fn tx_history_jwt_algorithm_labels_are_exact() {
+    for algorithm in [
+        JwtAlgorithm::HS256,
+        JwtAlgorithm::HS384,
+        JwtAlgorithm::HS512,
+        JwtAlgorithm::RS256,
+        JwtAlgorithm::RS384,
+        JwtAlgorithm::RS512,
+        JwtAlgorithm::PS256,
+        JwtAlgorithm::PS384,
+        JwtAlgorithm::PS512,
+        JwtAlgorithm::ES256,
+        JwtAlgorithm::ES384,
+        JwtAlgorithm::EdDSA,
+    ] {
+        assert_eq!(
+            parse_tx_history_jwt_algorithm(tx_history_jwt_algorithm_name(algorithm)),
+            Some(algorithm)
+        );
+    }
+    for alias in ["hs256", " HS256", "HS256 ", "EDDSA", "eddsa"] {
+        assert_eq!(parse_tx_history_jwt_algorithm(alias), None);
+    }
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn tx_history_policy_loader_rejects_malformed_asymmetric_keys_without_unwinding() {
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+    ])
+    .expect("dataspace catalog");
+    for algorithm in ["RS256", "ES256", "EdDSA"] {
+        let config = actual::ToriiTxHistory {
+            mandatory_aliases_path: None,
+            mandatory_aliases_max_file_bytes:
+                iroha_config::parameters::defaults::torii::tx_history::
+                    MANDATORY_ALIASES_MAX_FILE_BYTES_V1,
+            allowed_asset_definition_id: None,
+            jwt: Some(actual::ToriiTxHistoryJwt {
+                algorithm: algorithm.to_owned(),
+                secret: None,
+                public_key_pem: Some(
+                    "-----BEGIN PUBLIC KEY-----\nnot-base64\n-----END PUBLIC KEY-----".to_owned(),
+                ),
+                issuer: None,
+                audience: None,
+            }),
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load_tx_history_access_policy(Some(&config), &catalog)
+        }))
+        .expect("malformed asymmetric key must return an error instead of unwinding");
+        let error = match outcome {
+            Err(error) => error,
+            Ok(_) => panic!("malformed {algorithm} key must fail policy construction"),
+        };
+        assert!(matches!(
+            &error,
+            TxHistoryStartupError::InvalidJwtPublicKey {
+                algorithm: rejected,
+                ..
+            } if rejected == algorithm
+        ));
+        let unavailable = TxHistoryAccessPolicy::with_startup_error(error);
+        assert!(matches!(
+            ensure_tx_history_access_policy_ready(&unavailable),
+            Err(Error::TxHistoryStartup { .. })
+        ));
+    }
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn tx_history_policy_loader_propagates_missing_alias_policy_as_startup_error() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("missing-alias-policy.json");
+    let config = actual::ToriiTxHistory {
+        mandatory_aliases_path: Some(path.clone()),
+        mandatory_aliases_max_file_bytes: 1024,
+        allowed_asset_definition_id: None,
+        jwt: None,
+    };
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+    ])
+    .expect("dataspace catalog");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        load_tx_history_access_policy(Some(&config), &catalog)
+    }))
+    .expect("missing alias policy must return an error instead of unwinding");
+    let error = match outcome {
+        Err(error) => error,
+        Ok(_) => panic!("missing alias policy must fail policy construction"),
+    };
+    assert!(matches!(
+        &error,
+        TxHistoryStartupError::MandatoryAliasPolicy { path: rejected, .. } if rejected == &path
+    ));
+    assert!(matches!(
+        ensure_tx_history_access_policy_ready(&TxHistoryAccessPolicy::with_startup_error(error)),
+        Err(Error::TxHistoryStartup { .. })
+    ));
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn invalid_tx_history_policy_fails_closed_when_test_router_bypasses_startup() {
+    let mut app = mk_app_state_for_tests();
+    Arc::get_mut(&mut app)
+        .expect("unique app state")
+        .tx_history_access_policy = Arc::new(TxHistoryAccessPolicy::with_startup_error(
+            TxHistoryStartupError::InvalidJwtPublicKey {
+                algorithm: "RS256".to_owned(),
+                reason: "invalid test key".to_owned(),
+            },
+        ));
+    let response = tx_history_viewer_from_headers(&app, &HeaderMap::new())
+        .expect_err("invalid startup policy must not degrade to unconfigured authentication");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(matches!(
+        resolve_tx_history_allowed_asset_definition_id(app.as_ref()),
+        Err(Error::AppServiceUnavailable {
+            code: "tx_history_configuration_invalid",
+            ..
+        })
+    ));
+}
+#[cfg(feature = "app_api")]
+#[test]
 fn tx_history_jwt_claims_accept_valid_hmac_token() {
     let secret = "shared-secret";
     let token = sample_tx_history_jwt(secret);

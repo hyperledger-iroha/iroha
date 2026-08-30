@@ -2312,10 +2312,10 @@ pub(crate) fn verified_persisted_global_threshold_beacon_pulse_v1(
     pulse: FinalizedGlobalThresholdBeaconPulseV1,
 ) -> Result<FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconError> {
     if world.global_beacon_pulses().get(&pulse.pulse_id) != Some(&pulse)
-        || world
-            .global_beacon_pulse_slots()
-            .get(&(pulse.network_id, pulse.height))
-            != Some(&pulse.pulse_id)
+        || world.global_beacon_pulse_slots().get(&(
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id),
+            pulse.height,
+        )) != Some(&pulse.pulse_id)
         || pulse.network_id != *network_id
         || pulse.finalized_chain_anchor.height.checked_add(1) != Some(pulse.height)
     {
@@ -3496,9 +3496,16 @@ pub(crate) mod tests {
             pending_batched_sortition_attempt(&network_id, &roster, context.height);
         {
             let mut block = state.world.block();
-            block
-                .parliament_attempts
-                .insert(governance_attempt_id, attempt);
+            {
+                let mut transaction = block.transaction_without_telemetry(
+                    iroha_config::parameters::actual::LaneConfig::default(),
+                    0,
+                );
+                transaction
+                    .put_parliament_attempt(attempt)
+                    .expect("persist the Parliament request and its beacon-slot index");
+                transaction.apply();
+            }
             block.commit();
         }
         assert!(matches!(
@@ -3705,9 +3712,16 @@ pub(crate) mod tests {
             let (governance_attempt_id, _request_ids, attempt) =
                 pending_batched_sortition_attempt(&network_id, &roster, context.height);
             let mut block = state.world.block();
-            block
-                .parliament_attempts
-                .insert(governance_attempt_id, attempt);
+            {
+                let mut transaction = block.transaction_without_telemetry(
+                    iroha_config::parameters::actual::LaneConfig::default(),
+                    0,
+                );
+                transaction
+                    .put_parliament_attempt(attempt)
+                    .expect("persist the Parliament request and its beacon-slot index");
+                transaction.apply();
+            }
             block.commit();
             Some(governance_attempt_id)
         } else {
@@ -4465,7 +4479,7 @@ pub(crate) mod tests {
                 anchor,
             ),
             Err(GlobalThresholdBeaconError::ReusedPulse),
-            "a distinct pulse id cannot claim an already indexed network-height slot"
+            "a distinct pulse id cannot claim an already indexed logical-beacon-height slot"
         );
     }
 
@@ -4518,8 +4532,8 @@ pub(crate) mod tests {
             .global_beacon_key_sessions
             .insert(pulse.session_id, key_record);
         transaction
-            .parliament_attempts
-            .insert(governance_attempt_id, restored_attempt);
+            .put_parliament_attempt(restored_attempt)
+            .expect("index restored terminal Parliament pulse classification");
         assert_eq!(
             transaction.verify_and_advance_global_beacon_pulse(&fixture.session, pulse, anchor,),
             Err(GlobalThresholdBeaconError::PersistenceConflict),
@@ -4633,7 +4647,10 @@ pub(crate) mod tests {
                     .global_beacon_pulses
                     .insert(stored_pulse.pulse_id, stored_pulse);
                 block.global_beacon_pulse_slots.insert(
-                    (stored_pulse.network_id, stored_pulse.height),
+                    (
+                        BeaconSessionId::for_network_v1(&stored_pulse.network_id),
+                        stored_pulse.height,
+                    ),
                     stored_pulse.pulse_id,
                 );
                 block
@@ -4778,9 +4795,13 @@ pub(crate) mod tests {
                 .global_beacon_active_session
                 .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
             block.global_beacon_pulses.insert(pulse.pulse_id, pulse);
-            block
-                .global_beacon_pulse_slots
-                .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+            block.global_beacon_pulse_slots.insert(
+                (
+                    BeaconSessionId::for_network_v1(&pulse.network_id),
+                    pulse.height,
+                ),
+                pulse.pulse_id,
+            );
             block
                 .global_beacon_latest_pulse
                 .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);

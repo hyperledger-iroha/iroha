@@ -24123,6 +24123,239 @@
           }
         ]
       },
+      "OfflineActiveReceiverActiveEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/OfflineActiveReceiverKey"
+          },
+          "value": {
+            "$ref": "#/components/schemas/OfflineActiveReceiverValue"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
+      "OfflineActiveReceiverAmbiguousEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_count": {
+            "format": "uint32",
+            "maximum": 512,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "candidates_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "key": {
+            "$ref": "#/components/schemas/OfflineActiveReceiverKey"
+          }
+        },
+        "required": [
+          "key",
+          "candidate_count",
+          "candidates_digest"
+        ],
+        "type": "object"
+      },
+      "OfflineActiveReceiverEntry": {
+        "discriminator": {
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "active",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/OfflineActiveReceiverActiveEntry"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "ambiguous",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/OfflineActiveReceiverAmbiguousEntry"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "OfflineActiveReceiverKey": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Canonical domainless receiver account id.",
+            "type": "string"
+          },
+          "asset_definition_id": {
+            "description": "Canonical offline-cash asset definition id.",
+            "type": "string"
+          },
+          "device_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "device_id",
+          "asset_definition_id"
+        ],
+        "type": "object"
+      },
+      "OfflineActiveReceiverMembershipProof": {
+        "additionalProperties": false,
+        "properties": {
+          "leaf_count": {
+            "format": "uint32",
+            "maximum": 512,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "leaf_index": {
+            "format": "uint32",
+            "maximum": 511,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "siblings": {
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            },
+            "maxItems": 9,
+            "minItems": 0,
+            "type": "array"
+          }
+        },
+        "required": [
+          "leaf_index",
+          "leaf_count",
+          "siblings"
+        ],
+        "type": "object"
+      },
+      "OfflineActiveReceiverValue": {
+        "additionalProperties": false,
+        "properties": {
+          "account_exists": {
+            "const": true,
+            "type": "boolean"
+          },
+          "admission_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "admission_policy_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "admission_transaction_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "asset_definition_exists": {
+            "const": true,
+            "type": "boolean"
+          },
+          "current_policy_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "expires_at_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "public_key": {
+            "$ref": "#/components/schemas/OfflineDevicePublicKey"
+          },
+          "registration_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "registration_state_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "registration_hash",
+          "registration_state_hash",
+          "admission_policy_hash",
+          "current_policy_hash",
+          "admission_height",
+          "admission_transaction_hash",
+          "public_key",
+          "expires_at_ms",
+          "account_exists",
+          "asset_definition_exists"
+        ],
+        "type": "object"
+      },
+      "OfflineActiveReceiverWitnessProof": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 35,
+            "minItems": 35,
+            "type": "array"
+          },
+          "siblings": {
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            },
+            "maxItems": 256,
+            "minItems": 256,
+            "type": "array"
+          },
+          "value": {
+            "$ref": "#/components/schemas/OfflineByteArray"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "siblings"
+        ],
+        "type": "object"
+      },
+      "OfflineAndroidKeyMintHardwareAssertion": {
+        "additionalProperties": false,
+        "properties": {
+          "signature": {
+            "$ref": "#/components/schemas/OfflineSignature"
+          }
+        },
+        "required": [
+          "signature"
+        ],
+        "type": "object"
+      },
       "OfflineArtifactBinding": {
         "additionalProperties": false,
         "description": "Installed authenticated first-release artifact. Native code resolves the operation-specific key from this manifest identity.",
@@ -24202,6 +24435,17 @@
         },
         "type": "array"
       },
+      "OfflineDevicePublicKey": {
+        "description": "Canonical uncompressed SEC1 NIST P-256 point (0x04 || x || y).",
+        "items": {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxItems": 65,
+        "minItems": 65,
+        "type": "array"
+      },
       "OfflineFixed32Bytes": {
         "description": "Norito JSON representation of an internal 32-byte field.",
         "items": {
@@ -24228,6 +24472,69 @@
         "description": "Canonical typed hash literal used in Merkle audit paths.",
         "pattern": "^hash:[0-9A-F]{64}$",
         "type": "string"
+      },
+      "OfflineHardwareAssertion": {
+        "discriminator": {
+          "propertyName": "platform"
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "assertion": {
+                "$ref": "#/components/schemas/OfflineAndroidKeyMintHardwareAssertion"
+              },
+              "platform": {
+                "enum": [
+                  "android_key_mint"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "platform",
+              "assertion"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "assertion": {
+                "$ref": "#/components/schemas/OfflineIosAppAttestHardwareAssertion"
+              },
+              "platform": {
+                "enum": [
+                  "ios_app_attest"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "platform",
+              "assertion"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "OfflineIosAppAttestHardwareAssertion": {
+        "additionalProperties": false,
+        "properties": {
+          "authenticator_data": {
+            "$ref": "#/components/schemas/OfflineByteArray",
+            "maxItems": 4096,
+            "minItems": 38
+          },
+          "signature": {
+            "$ref": "#/components/schemas/OfflineSignature"
+          }
+        },
+        "required": [
+          "authenticator_data",
+          "signature"
+        ],
+        "type": "object"
       },
       "OfflineLaneCommitmentId": {
         "description": "Norito JSON tuple representation of a lane commitment identifier.",
@@ -24420,7 +24727,8 @@
         "type": "array"
       },
       "OfflineOperationKind": {
-        "description": "Norito tagged unit enum selecting top-up or redemption. Canonical output includes value=null; decoders also accept omitted value and ignore unknown object members.",
+        "additionalProperties": false,
+        "description": "Norito tagged unit enum selecting top-up or redemption. The exact canonical object requires value=null and rejects unknown members.",
         "properties": {
           "kind": {
             "enum": [
@@ -24434,7 +24742,8 @@
           }
         },
         "required": [
-          "kind"
+          "kind",
+          "value"
         ],
         "type": "object"
       },
@@ -24573,7 +24882,8 @@
         ]
       },
       "OfflineOperationState": {
-        "description": "Norito tagged initial operation state. Canonical output includes value=null; decoders also accept omitted value and ignore unknown object members.",
+        "additionalProperties": false,
+        "description": "Norito tagged initial operation state. The exact canonical object requires value=null and rejects unknown members.",
         "properties": {
           "state": {
             "enum": [
@@ -24586,7 +24896,8 @@
           }
         },
         "required": [
-          "state"
+          "state",
+          "value"
         ],
         "type": "object"
       },
@@ -24788,23 +25099,72 @@
         ],
         "type": "string"
       },
-      "OfflineRecipientRegistrationLineage": {
+      "OfflineRecipientLineageRequest": {
         "additionalProperties": false,
-        "description": "Proof-bearing receiver registration lineage. Clients verify the request/registration tuple, the admitting transaction and its Merkle paths against the block header, and the header hash against the finality artifact before accepting offline cash.",
+        "description": "Request-independent receiver lookup anchored at a caller-trusted durable checkpoint.",
         "properties": {
-          "admission_block_header": {
-            "$ref": "#/components/schemas/BlockHeader"
+          "selector": {
+            "$ref": "#/components/schemas/OfflineRecipientLineageSelector"
           },
-          "admission_block_height": {
+          "trusted_checkpoint_height": {
             "format": "uint64",
             "minimum": 1,
             "type": "integer"
           },
-          "admission_finality": {
-            "$ref": "#/components/schemas/SumeragiV2FinalityArtifact"
+          "version": {
+            "const": 2,
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "selector",
+          "trusted_checkpoint_height"
+        ],
+        "type": "object"
+      },
+      "OfflineRecipientLineageSelector": {
+        "additionalProperties": false,
+        "description": "Exact network, account, device, and asset tuple selected independently of a later payment request.",
+        "properties": {
+          "asset": {
+            "description": "Canonical offline-cash asset definition id.",
+            "type": "string"
           },
-          "admission_policy_hash": {
-            "$ref": "#/components/schemas/OfflineTransactionHash"
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "receiver_device_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "recipient": {
+            "description": "Canonical domainless receiver account id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "network_id",
+          "recipient",
+          "receiver_device_id",
+          "asset"
+        ],
+        "type": "object"
+      },
+      "OfflineRecipientRegistrationLineage": {
+        "additionalProperties": false,
+        "description": "Reusable active-receiver snapshot membership and execution-witness proofs authenticated by a bounded consecutive finality chain beginning at the caller's checkpoint.",
+        "properties": {
+          "active_receiver_entry": {
+            "$ref": "#/components/schemas/OfflineActiveReceiverEntry"
+          },
+          "active_receiver_membership": {
+            "$ref": "#/components/schemas/OfflineActiveReceiverMembershipProof"
+          },
+          "active_receiver_witness": {
+            "$ref": "#/components/schemas/OfflineActiveReceiverWitnessProof"
           },
           "evaluated_block_hash": {
             "$ref": "#/components/schemas/OfflineTransactionHash"
@@ -24814,46 +25174,35 @@
             "minimum": 1,
             "type": "integer"
           },
-          "evaluated_policy_hash": {
-            "$ref": "#/components/schemas/OfflineTransactionHash"
+          "evaluated_context_id": {
+            "$ref": "#/components/schemas/SumeragiV2HeightContextId"
           },
-          "registration": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Exact canonical OfflineDeviceAttestationRegistration committed by the admitting transaction."
+          "finality_chain": {
+            "items": {
+              "$ref": "#/components/schemas/BridgeFinalityProof"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array",
+            "x-iroha-max-bytes": 3145728
           },
-          "registration_hash": {
-            "$ref": "#/components/schemas/OfflineTransactionHash"
-          },
-          "registration_transaction": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Exact CommittedTransaction with bounded entrypoint and result Merkle paths."
-          },
-          "registration_transaction_hash": {
-            "$ref": "#/components/schemas/OfflineTransactionHash"
-          },
-          "request_digest": {
-            "$ref": "#/components/schemas/OfflineTransactionHash"
+          "selector": {
+            "$ref": "#/components/schemas/OfflineRecipientLineageSelector"
           },
           "version": {
-            "enum": [
-              1
-            ],
+            "const": 2,
             "format": "uint16",
             "type": "integer"
           }
         },
         "required": [
           "version",
-          "request_digest",
-          "registration_hash",
-          "admission_policy_hash",
-          "evaluated_policy_hash",
-          "registration",
-          "admission_block_height",
-          "admission_block_header",
-          "registration_transaction_hash",
-          "registration_transaction",
-          "admission_finality",
+          "selector",
+          "active_receiver_entry",
+          "active_receiver_membership",
+          "active_receiver_witness",
+          "finality_chain",
+          "evaluated_context_id",
           "evaluated_block_height",
           "evaluated_block_hash"
         ],
@@ -25169,26 +25518,11 @@
         "type": "object"
       },
       "OfflineRequestAuthorization": {
+        "additionalProperties": false,
         "properties": {
-          "app_attest_evidence": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OfflineByteArray"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "app_attest_evidence_sha256": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OfflineFixed32Bytes"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "asset_definition_id": {
+            "description": "Canonical asset definition bound into the hardware-signed operation.",
+            "type": "string"
           },
           "authority": {
             "type": "string"
@@ -25198,9 +25532,13 @@
             "type": "string"
           },
           "expires_at_ms": {
+            "description": "Exclusive Unix expiry in milliseconds.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "hardware_assertion": {
+            "$ref": "#/components/schemas/OfflineHardwareAssertion"
           },
           "issued_at_ms": {
             "format": "uint64",
@@ -25216,19 +25554,21 @@
           "payload_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
-          "signature": {
-            "$ref": "#/components/schemas/OfflineSignature"
+          "registration_hash": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
           }
         },
         "required": [
           "authority",
           "device_id",
+          "asset_definition_id",
           "operation_id",
           "issued_at_ms",
           "expires_at_ms",
           "nonce",
           "payload_digest",
-          "signature"
+          "registration_hash",
+          "hardware_assertion"
         ],
         "type": "object"
       },
@@ -25260,7 +25600,8 @@
         "type": "string"
       },
       "OfflineSpendBranch": {
-        "description": "Tagged unit enum. Canonical output includes value=null; decoders also accept an omitted value member.",
+        "additionalProperties": false,
+        "description": "Tagged unit enum whose exact canonical object requires value=null and rejects unknown members.",
         "properties": {
           "branch": {
             "enum": [
@@ -25274,7 +25615,8 @@
           }
         },
         "required": [
-          "branch"
+          "branch",
+          "value"
         ],
         "type": "object"
       },
@@ -25552,7 +25894,7 @@
           },
           "shield_leaf_index": {
             "format": "uint32",
-            "maximum": 65535,
+            "maximum": 65462,
             "minimum": 0,
             "type": "integer"
           },
@@ -25865,7 +26207,7 @@
           },
           "leaf_index": {
             "format": "uint32",
-            "maximum": 65535,
+            "maximum": 65462,
             "minimum": 0,
             "type": "integer"
           },
@@ -25882,8 +26224,8 @@
         "type": "object"
       },
       "OfflineTransactionHash": {
-        "description": "Canonical lowercase hexadecimal Blake2b-256 signed transaction hash.",
-        "pattern": "^[0-9a-f]{64}$",
+        "description": "Canonical lowercase hexadecimal Blake2b-256 signed transaction hash with the Iroha marker bit set.",
+        "pattern": "^[0-9a-f]{63}[13579bdf]$",
         "type": "string"
       },
       "OfflineTransitionProofBundle": {
@@ -26167,6 +26509,14 @@
         ],
         "type": "object"
       },
+      "OperatorWebAuthnAlgorithm": {
+        "description": "Exact algorithm recorded for an enrolled operator WebAuthn credential.",
+        "enum": [
+          "es256",
+          "ed25519"
+        ],
+        "type": "string"
+      },
       "OperatorWebAuthnAssertionRequest": {
         "additionalProperties": false,
         "description": "Exact WebAuthn PublicKeyCredential assertion accepted by the operator login verifier.",
@@ -26262,12 +26612,88 @@
         "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}|[A-Za-z0-9_-]{3})?$",
         "type": "string"
       },
+      "OperatorWebAuthnCredentialDeleteResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_id": {
+            "$ref": "#/components/schemas/OperatorWebAuthnCredentialId"
+          },
+          "credentials_total": {
+            "format": "uint32",
+            "maximum": 1024,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "const": "ok",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "credential_id",
+          "credentials_total"
+        ],
+        "type": "object"
+      },
       "OperatorWebAuthnCredentialId": {
         "description": "Canonical unpadded base64url credential identifier; the decoded identifier is at most 1024 bytes.",
         "maxLength": 1366,
         "minLength": 1,
         "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}|[A-Za-z0-9_-]{3})?$",
         "type": "string"
+      },
+      "OperatorWebAuthnCredentialListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "credentials": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorWebAuthnCredentialMetadata"
+            },
+            "maxItems": 1024,
+            "type": "array"
+          },
+          "credentials_total": {
+            "format": "uint32",
+            "maximum": 1024,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "credentials",
+          "credentials_total"
+        ],
+        "type": "object"
+      },
+      "OperatorWebAuthnCredentialMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "$ref": "#/components/schemas/OperatorWebAuthnAlgorithm"
+          },
+          "created_at_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "credential_id": {
+            "$ref": "#/components/schemas/OperatorWebAuthnCredentialId"
+          },
+          "sign_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "credential_id",
+          "algorithm",
+          "sign_count",
+          "created_at_ms"
+        ],
+        "type": "object"
       },
       "OperatorWebAuthnLoginResponse": {
         "additionalProperties": false,
@@ -52043,28 +52469,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/openapi": {
-      "get": {
-        "description": "Return the Torii OpenAPI document.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch the OpenAPI specification.",
-        "tags": [
-          "System"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/openapi.json": {
       "get": {
         "description": "Return the Torii OpenAPI document.",
@@ -52370,6 +52774,13 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/JsonValue"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the complete node status payload.",
+                  "format": "binary",
+                  "type": "string"
                 }
               }
             },
@@ -76282,6 +76693,401 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/operator/auth/credentials": {
+      "get": {
+        "description": "Lists enrolled operator WebAuthn credential metadata. Verification keys are never returned. Requires both an exact-network operator request signature and a configured WebAuthn session.",
+        "operationId": "operatorAuthCredentials",
+        "parameters": [
+          {
+            "description": "Iroha multihash public key of the canonical request signer.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, empty-body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical 32-byte WebAuthn session token issued by the operator login verifier.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 43,
+              "minLength": 43,
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorWebAuthnCredentialListResponse"
+                }
+              }
+            },
+            "description": "Canonical credential metadata sorted by credential identifier.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The exact request signature or WebAuthn session is missing, invalid, or expired.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Operator WebAuthn is disabled, mTLS is required, or the signer is not an allowed exact-network operator.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Operator authentication is rate limited or locked out.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Credential state is unavailable (`operator_webauthn_state_unavailable`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List operator WebAuthn credentials.",
+        "tags": [
+          "OperatorAuth"
+        ],
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/operator/auth/credentials/{credential_id}": {
+      "delete": {
+        "description": "Deletes one operator WebAuthn credential and revokes every outstanding operator session and challenge. Requires both an exact-network operator request signature and a configured WebAuthn session.",
+        "operationId": "operatorAuthCredentialDelete",
+        "parameters": [
+          {
+            "description": "Canonical unpadded base64url credential identifier.",
+            "in": "path",
+            "name": "credential_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OperatorWebAuthnCredentialId"
+            }
+          },
+          {
+            "description": "Iroha multihash public key of the canonical request signer.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, empty-body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical 32-byte WebAuthn session token issued by the operator login verifier.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 43,
+              "minLength": 43,
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorWebAuthnCredentialDeleteResponse"
+                }
+              }
+            },
+            "description": "Credential deleted and outstanding operator authorization state revoked.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The credential identifier is empty, oversized, padded, or not canonical base64url.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The exact request signature or WebAuthn session is missing, invalid, or expired.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Operator WebAuthn is disabled, mTLS is required, or the signer is not an allowed exact-network operator.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The credential is unknown (`operator_webauthn_credential_not_found`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The last credential cannot be deleted without a configured bootstrap recovery token (`operator_webauthn_last_credential`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Operator authentication is rate limited or locked out.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Credential state could not be read (`operator_webauthn_state_unavailable`) or persisted (`operator_webauthn_persist_failed`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete an operator WebAuthn credential.",
+        "tags": [
+          "OperatorAuth"
+        ],
+        "x-iroha-tool-effect": "operator"
+      }
+    },
     "/v1/operator/auth/login/options": {
       "post": {
         "description": "Issues WebAuthn authentication options.",
@@ -76815,7 +77621,7 @@
                 }
               }
             },
-            "description": "The bounded operator WebAuthn credential store is full (`operator_webauthn_credential_capacity_exhausted`).",
+            "description": "The credential ID is already enrolled (`operator_webauthn_credential_duplicate`) or the bounded operator WebAuthn credential store is full (`operator_webauthn_credential_capacity_exhausted`).",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",

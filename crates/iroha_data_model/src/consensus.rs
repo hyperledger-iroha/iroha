@@ -1,13 +1,12 @@
 //! Consensus-related data model DTOs for on-chain persistence.
 pub use crate::block::consensus::{
-    CertPhase, Qc, QcAggregate, QcRef, QcVote, SumeragiCommitPipelineStatus,
-    SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
+    CertPhase, SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus,
+    SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
     SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
     SumeragiPeerKeyPolicyStatus, SumeragiQcStatus, SumeragiRoundGapStatus,
     SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
     SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
     SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-    default_chain_order_hash,
 };
 /// Canonical Sumeragi v2 wire types.
 pub use crate::block::consensus_v2 as v2;
@@ -30,7 +29,6 @@ pub const GLOBAL_THRESHOLD_BEACON_VERSION_V1: u16 = 1;
 /// This bounds proposal, vote, quorum-certificate, drain, and persisted proof
 /// envelopes across configuration, runtime admission, and restart recovery.
 pub const MAX_LANE_CONSENSUS_VALIDATORS: usize = 128;
-// QC types are defined in `block::consensus` and re-exported above.
 /// Signed validator set checkpoint used for bootstrap and audit.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -64,40 +62,10 @@ pub struct ValidatorSetCheckpoint {
     pub expires_at_height: Option<u64>,
 }
 impl ValidatorSetCheckpoint {
-    /// Construct a checkpoint using the supplied block hash, validator set, and signatures.
+    /// Construct a checkpoint with an explicit chain-order binding.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        height: u64,
-        view: u64,
-        block_hash: HashOf<crate::block::BlockHeader>,
-        parent_state_root: Hash,
-        post_state_root: Hash,
-        validator_set: Vec<crate::peer::PeerId>,
-        signers_bitmap: Vec<u8>,
-        bls_aggregate_signature: Vec<u8>,
-        validator_set_hash_version: u16,
-        expires_at_height: Option<u64>,
-    ) -> Self {
-        Self::new_with_chain_order(
-            height,
-            view,
-            block_hash,
-            default_chain_order_hash(),
-            0,
-            parent_state_root,
-            post_state_root,
-            validator_set,
-            signers_bitmap,
-            bls_aggregate_signature,
-            validator_set_hash_version,
-            expires_at_height,
-        )
-    }
-    /// Construct a checkpoint with an explicit vNext chain-order binding.
-    #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_with_chain_order(
         height: u64,
         view: u64,
         block_hash: HashOf<crate::block::BlockHeader>,
@@ -928,10 +896,13 @@ mod tests {
         );
         let parent_state_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
         let post_state_root = iroha_crypto::Hash::prehashed([1u8; iroha_crypto::Hash::LENGTH]);
+        let chain_order_hash = iroha_crypto::Hash::new(b"checkpoint-chain-order");
         let checkpoint = ValidatorSetCheckpoint::new(
             42,
             7,
             block_hash,
+            chain_order_hash,
+            5,
             parent_state_root,
             post_state_root,
             validator_set.clone(),
@@ -942,8 +913,8 @@ mod tests {
         );
         let expected_hash = HashOf::new(&validator_set);
         assert_eq!(checkpoint.validator_set_hash, expected_hash);
-        assert_eq!(checkpoint.chain_order_hash, default_chain_order_hash());
-        assert_eq!(checkpoint.rechain_seq, 0);
+        assert_eq!(checkpoint.chain_order_hash, chain_order_hash);
+        assert_eq!(checkpoint.rechain_seq, 5);
         let buf = checkpoint.encode();
         let decoded =
             ValidatorSetCheckpoint::decode(&mut &buf[..]).expect("validator checkpoint decodes");
@@ -951,70 +922,10 @@ mod tests {
         assert_eq!(decoded.view, 7);
         assert_eq!(decoded.parent_state_root, parent_state_root);
         assert_eq!(decoded.post_state_root, post_state_root);
-        assert_eq!(decoded.chain_order_hash, default_chain_order_hash());
-        assert_eq!(decoded.rechain_seq, 0);
+        assert_eq!(decoded.chain_order_hash, chain_order_hash);
+        assert_eq!(decoded.rechain_seq, 5);
         assert_eq!(decoded.validator_set_hash, expected_hash);
         assert_eq!(decoded.validator_set, validator_set);
-        let chain_order_hash = iroha_crypto::Hash::new(b"checkpoint-chain-order");
-        let explicit = ValidatorSetCheckpoint::new_with_chain_order(
-            42,
-            7,
-            block_hash,
-            chain_order_hash,
-            5,
-            parent_state_root,
-            post_state_root,
-            decoded.validator_set,
-            vec![0x01],
-            vec![0xAA, 0xBB],
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        );
-        assert_eq!(explicit.chain_order_hash, chain_order_hash);
-        assert_eq!(explicit.rechain_seq, 5);
-    }
-    #[test]
-    fn commit_qc_roundtrip() {
-        let kp_a = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_b = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
-        let validator_set = vec![
-            crate::peer::PeerId::new(kp_a.public_key().clone()),
-            crate::peer::PeerId::new(kp_b.public_key().clone()),
-        ];
-        let validator_set_hash = HashOf::new(&validator_set);
-        let block_hash = HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
-            iroha_crypto::Hash::prehashed([0xCC; 32]),
-        );
-        let cert = Qc {
-            phase: CertPhase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 7,
-            view: 3,
-            epoch: 0,
-            chain_order_hash: crate::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::block::consensus_v2::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: validator_set.clone(),
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0x03],
-                bls_aggregate_signature: vec![0x01, 0x02],
-            },
-        };
-        let buf = cert.encode();
-        let decoded = Qc::decode(&mut &buf[..]).expect("decode commit cert");
-        assert_eq!(decoded.height, cert.height);
-        assert_eq!(decoded.view, cert.view);
-        assert_eq!(decoded.validator_set_hash, validator_set_hash);
-        assert_eq!(decoded.validator_set, validator_set);
-        assert_eq!(
-            decoded.aggregate.bls_aggregate_signature,
-            cert.aggregate.bls_aggregate_signature
-        );
     }
     #[test]
     fn consensus_key_record_liveness_respects_activation_and_expiry() {

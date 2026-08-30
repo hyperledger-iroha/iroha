@@ -34,11 +34,25 @@ pub struct KagemushaV4RuntimeValidatorProjectionV1 {
     /// Canonical BLS validator identity.
     pub validator_id: PeerId,
     /// Effective public P2P address; a hostname must use canonical ASCII IDNA,
-    /// non-IP spelling without a trailing root dot.
+    /// must not use a canonical or legacy numeric IP spelling, and must not
+    /// carry a trailing root dot.
     pub public_address: SocketAddr,
     /// Exact `PoP` retained by the frozen height-one context.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub bls_pop: Vec<u8>,
+}
+
+fn is_legacy_ipv4_numeric_spelling(host: &str) -> bool {
+    let mut component_count = 0_usize;
+    let all_numeric = host.split('.').all(|component| {
+        component_count += 1;
+        if let Some(hex) = component.strip_prefix("0x") {
+            !hex.is_empty() && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        } else {
+            !component.is_empty() && component.bytes().all(|byte| byte.is_ascii_digit())
+        }
+    });
+    all_numeric && (1..=4).contains(&component_count)
 }
 
 impl KagemushaV4RuntimeValidatorProjectionV1 {
@@ -54,6 +68,7 @@ impl KagemushaV4RuntimeValidatorProjectionV1 {
                     .is_ok_and(|canonical| canonical == host)
                     && !host.ends_with('.')
                     && unbracketed_host.parse::<std::net::IpAddr>().is_err()
+                    && !is_legacy_ipv4_numeric_spelling(host)
             }
             SocketAddr::Ipv4(_) | SocketAddr::Ipv6(_) => true,
         };
@@ -263,18 +278,32 @@ mod tests {
     #[test]
     fn runtime_projection_rejects_numeric_host_variants_without_a_duplicate() {
         let mut projection = valid_projection();
-        projection.validators[0].public_address =
-            SocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
-                host: "127.0.0.1".into(),
-                port: 16_000,
-            });
-        assert!(projection.validate().is_err());
+        for host in [
+            "127.0.0.1",
+            "127.1",
+            "0177.0.0.1",
+            "0x7f000001",
+            "2130706433",
+            "[::1]",
+        ] {
+            projection.validators[0].public_address =
+                SocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
+                    host: host.into(),
+                    port: 16_000,
+                });
+            assert!(
+                projection.validate().is_err(),
+                "numeric host spelling `{host}` must use the canonical IP variant",
+            );
+        }
 
         projection.validators[0].public_address =
             SocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
-                host: "[::1]".into(),
+                host: "123.example".into(),
                 port: 16_000,
             });
-        assert!(projection.validate().is_err());
+        projection
+            .validate()
+            .expect("a hostname with one numeric label is not an IP spelling");
     }
 }

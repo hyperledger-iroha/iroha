@@ -176,6 +176,7 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 	expectedFreshR1CS := []string{
 		"sccp-final-v1-bsc-mainnet-message",
 		"sccp-final-v1-ethereum-mainnet-message",
+		"sccp-final-v1-ton-mainnet-epoch-anchor-update",
 		"sccp-final-v1-ton-mainnet-message",
 		"sccp-final-v1-tron-mainnet-epoch-anchor-update",
 		"sccp-final-v1-tron-mainnet-message",

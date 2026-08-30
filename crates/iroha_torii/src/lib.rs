@@ -1029,8 +1029,8 @@ pub use routing::{
 pub use routing::{QueryOptions, SignedQueryAdmission};
 #[cfg(feature = "telemetry")]
 pub use routing::{
-    RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, StatusView, handle_metrics,
-    handle_status,
+    RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
+    handle_status_blocks, handle_status_peers,
 };
 pub use routing::{
     ZkMerklePathDto, ZkMerklePathGetRequestDto, ZkMerklePathGetResponseDto, ZkRootsGetRequestDto,
@@ -2045,15 +2045,37 @@ struct TxHistoryAccessPolicy {
     jwt: Option<TxHistoryJwtConfig>,
     mandatory_aliases: tx_history_alias_policy::MandatoryAliasPolicy,
     allowed_asset_definition_id: Option<String>,
+    startup_error: Option<TxHistoryStartupError>,
 }
 #[cfg(feature = "app_api")]
 impl TxHistoryAccessPolicy {
+    fn with_startup_error(error: TxHistoryStartupError) -> Self {
+        Self {
+            startup_error: Some(error),
+            ..Self::default()
+        }
+    }
+
     fn is_mandatory_alias(&self, dataspace_id: &str, alias: &str) -> bool {
         let dataspace = dataspace_id.trim().to_ascii_lowercase();
         let canonical_alias = normalize_tx_history_alias(alias);
         self.mandatory_aliases
             .contains(dataspace.as_str(), canonical_alias.as_str())
     }
+}
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, thiserror::Error)]
+enum TxHistoryStartupError {
+    #[error("failed to load mandatory-alias policy `{path}`: {reason}")]
+    MandatoryAliasPolicy { path: PathBuf, reason: String },
+    #[error("unsupported JWT algorithm `{algorithm}`")]
+    UnsupportedJwtAlgorithm { algorithm: String },
+    #[error("JWT secret is required for `{algorithm}`")]
+    MissingJwtSecret { algorithm: String },
+    #[error("JWT public key is required for `{algorithm}`")]
+    MissingJwtPublicKey { algorithm: String },
+    #[error("invalid JWT public key for `{algorithm}`: {reason}")]
+    InvalidJwtPublicKey { algorithm: String, reason: String },
 }
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
@@ -2082,7 +2104,7 @@ struct TxHistoryJwtClaims {
 }
 #[cfg(feature = "app_api")]
 fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
-    match value.trim().to_ascii_uppercase().as_str() {
+    match value {
         "HS256" => Some(JwtAlgorithm::HS256),
         "HS384" => Some(JwtAlgorithm::HS384),
         "HS512" => Some(JwtAlgorithm::HS512),
@@ -2094,7 +2116,7 @@ fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
         "PS512" => Some(JwtAlgorithm::PS512),
         "ES256" => Some(JwtAlgorithm::ES256),
         "ES384" => Some(JwtAlgorithm::ES384),
-        "EDDSA" => Some(JwtAlgorithm::EdDSA),
+        "EdDSA" => Some(JwtAlgorithm::EdDSA),
         _ => None,
     }
 }
@@ -2135,9 +2157,9 @@ fn canonical_tx_history_subject_alias(
 fn load_tx_history_access_policy(
     config: Option<&iroha_config::parameters::actual::ToriiTxHistory>,
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-) -> TxHistoryAccessPolicy {
+) -> Result<TxHistoryAccessPolicy, TxHistoryStartupError> {
     let Some(config) = config else {
-        return TxHistoryAccessPolicy::default();
+        return Ok(TxHistoryAccessPolicy::default());
     };
     let mandatory_aliases = config
         .mandatory_aliases_path
@@ -2148,32 +2170,34 @@ fn load_tx_history_access_policy(
                 catalog,
                 config.mandatory_aliases_max_file_bytes,
             )
+            .map_err(|error| TxHistoryStartupError::MandatoryAliasPolicy {
+                path: path.to_path_buf(),
+                reason: error.to_string(),
+            })
         })
+        .transpose()?
         .unwrap_or_default();
     let jwt = config.jwt.as_ref().map(|jwt| {
-        let algorithm = parse_tx_history_jwt_algorithm(&jwt.algorithm).unwrap_or_else(|| {
-            panic!(
-                "unsupported torii.tx_history.jwt.algorithm `{}`",
-                jwt.algorithm
-            )
-        });
+        let algorithm = parse_tx_history_jwt_algorithm(&jwt.algorithm).ok_or_else(|| {
+            TxHistoryStartupError::UnsupportedJwtAlgorithm {
+                algorithm: jwt.algorithm.clone(),
+            }
+        })?;
         let key = match algorithm {
             JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {
-                let secret = jwt.secret.as_ref().unwrap_or_else(|| {
-                    panic!(
-                        "torii.tx_history.jwt.secret is required for `{}`",
-                        jwt.algorithm
-                    )
-                });
+                let secret = jwt.secret.as_ref().ok_or_else(|| {
+                    TxHistoryStartupError::MissingJwtSecret {
+                        algorithm: jwt.algorithm.clone(),
+                    }
+                })?;
                 TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec())
             }
             _ => {
-                let pem = jwt.public_key_pem.as_ref().unwrap_or_else(|| {
-                    panic!(
-                        "torii.tx_history.jwt.public_key_pem is required for `{}`",
-                        jwt.algorithm
-                    )
-                });
+                let pem = jwt.public_key_pem.as_ref().ok_or_else(|| {
+                    TxHistoryStartupError::MissingJwtPublicKey {
+                        algorithm: jwt.algorithm.clone(),
+                    }
+                })?;
                 TxHistoryJwtKey::Pem(pem.clone())
             }
         };
@@ -2185,14 +2209,26 @@ fn load_tx_history_access_policy(
         };
         cfg.key
             .decoding_key(cfg.algorithm)
-            .unwrap_or_else(|err| panic!("invalid torii.tx_history.jwt config: {err}"));
-        cfg
-    });
-    TxHistoryAccessPolicy {
+            .map_err(|reason| TxHistoryStartupError::InvalidJwtPublicKey {
+                algorithm: jwt.algorithm.clone(),
+                reason,
+            })?;
+        Ok(cfg)
+    }).transpose()?;
+    Ok(TxHistoryAccessPolicy {
         jwt,
         mandatory_aliases,
         allowed_asset_definition_id: config.allowed_asset_definition_id.clone(),
-    }
+        startup_error: None,
+    })
+}
+#[cfg(feature = "app_api")]
+fn ensure_tx_history_access_policy_ready(policy: &TxHistoryAccessPolicy) -> Result<(), Error> {
+    policy.startup_error.as_ref().map_or(Ok(()), |error| {
+        Err(Error::TxHistoryStartup {
+            reason: error.to_string(),
+        })
+    })
 }
 #[cfg(feature = "app_api")]
 fn parse_public_dataspace_upstream_selector(
@@ -2324,7 +2360,7 @@ struct AppState {
     /// Limits concurrent signed-query body reads independently of fanout work.
     query_ingress_inflight: Arc<tokio::sync::Semaphore>,
     /// Byte-weighted capacity shared by complete fanout and ordinary-query work.
-    query_fanout_inflight: QueryWeightedMemoryPool,
+    query_fanout_inflight: ByteWeightedMemoryPool,
     #[cfg(feature = "app_api")]
     app_api_routed_read_body_read_timeout: Duration,
     /// Immutable app-local ordinary-query geometry and configuration identity.
@@ -2361,6 +2397,9 @@ struct AppState {
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
     proof_body_inflight: Arc<tokio::sync::Semaphore>,
+    #[cfg(feature = "app_api")]
+    /// Byte-weighted working-set capacity for proof-bearing offline commands.
+    offline_command_memory_inflight: ByteWeightedMemoryPool,
     soracloud_public_rate_limiter: limits::RateLimiter,
     soracloud_mutation_rate_limiter: limits::RateLimiter,
     soracloud_mutation_inflight: Arc<tokio::sync::Semaphore>,
@@ -5463,7 +5502,7 @@ enum SccpSubmitBodyReadError {
 }
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SccpSubmitContentLengthError {
+enum BoundedContentLengthError {
     TooLarge,
     Invalid,
 }
@@ -5525,21 +5564,21 @@ async fn collect_sccp_submit_body(
         })
 }
 #[cfg(feature = "app_api")]
-fn validate_sccp_submit_content_length(
+fn validate_bounded_content_length(
     headers: &axum::http::HeaderMap,
     max_body_bytes: usize,
-) -> Result<Option<usize>, SccpSubmitContentLengthError> {
+) -> Result<Option<usize>, BoundedContentLengthError> {
     use axum::http::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
     let mut values = headers.get_all(CONTENT_LENGTH).iter();
     let Some(value) = values.next() else {
         return Ok(None);
     };
     if values.next().is_some() || headers.contains_key(TRANSFER_ENCODING) {
-        return Err(SccpSubmitContentLengthError::Invalid);
+        return Err(BoundedContentLengthError::Invalid);
     }
     let encoded = value.as_bytes();
     if encoded.is_empty() || !encoded.iter().all(u8::is_ascii_digit) {
-        return Err(SccpSubmitContentLengthError::Invalid);
+        return Err(BoundedContentLengthError::Invalid);
     }
     let declared = match value
         .to_str()
@@ -5547,14 +5586,14 @@ fn validate_sccp_submit_content_length(
         .and_then(|value| value.parse::<u64>().ok())
     {
         Some(declared) => declared,
-        None => return Err(SccpSubmitContentLengthError::TooLarge),
+        None => return Err(BoundedContentLengthError::TooLarge),
     };
     if declared > u64::try_from(max_body_bytes).unwrap_or(u64::MAX) {
-        return Err(SccpSubmitContentLengthError::TooLarge);
+        return Err(BoundedContentLengthError::TooLarge);
     }
     usize::try_from(declared)
         .map(Some)
-        .map_err(|_| SccpSubmitContentLengthError::TooLarge)
+        .map_err(|_| BoundedContentLengthError::TooLarge)
 }
 #[cfg(feature = "app_api")]
 fn validate_sccp_submit_content_type(
@@ -5676,14 +5715,14 @@ async fn enforce_sccp_submit_ingress(
         .into_response());
     }
     let declared_content_length =
-        match validate_sccp_submit_content_length(req.headers(), max_body_bytes) {
+        match validate_bounded_content_length(req.headers(), max_body_bytes) {
             Ok(declared) => declared,
             Err(error) => {
                 app.telemetry.with_metrics(|metrics| {
                     metrics.inc_torii_contract_error(policy.telemetry_label)
                 });
                 return Ok(match error {
-                    SccpSubmitContentLengthError::TooLarge => (
+                    BoundedContentLengthError::TooLarge => (
                         StatusCode::PAYLOAD_TOO_LARGE,
                         format!(
                             "SCCP submission body exceeds the {}-byte endpoint limit",
@@ -5691,7 +5730,7 @@ async fn enforce_sccp_submit_ingress(
                         ),
                     )
                         .into_response(),
-                    SccpSubmitContentLengthError::Invalid => (
+                    BoundedContentLengthError::Invalid => (
                         StatusCode::BAD_REQUEST,
                         "invalid or ambiguous SCCP submission Content-Length",
                     )
@@ -6286,6 +6325,12 @@ fn has_percent_encoded_offline_operation_id(path: &str) -> bool {
     path.strip_prefix(PREFIX)
         .is_some_and(|operation_id| !operation_id.contains('/') && operation_id.contains('%'))
 }
+fn has_percent_encoded_operator_credential_id(path: &str) -> bool {
+    const PREFIX: &str = "/v1/operator/auth/credentials/";
+    path.strip_prefix(PREFIX).is_some_and(|credential_id| {
+        !credential_id.is_empty() && !credential_id.contains('/') && credential_id.contains('%')
+    })
+}
 fn has_percent_encoded_governance_selector(path: &str) -> bool {
     const PREFIXES: [&str; 4] = [
         "/v1/gov/proposals/",
@@ -6309,6 +6354,7 @@ async fn enforce_strict_request_target(
         || has_percent_encoded_separator(path)
         || has_dot_segment(path)
         || has_percent_encoded_offline_operation_id(path)
+        || has_percent_encoded_operator_credential_id(path)
         || has_percent_encoded_governance_selector(path)
     {
         Some((
@@ -10676,6 +10722,26 @@ async fn collect_proof_body_with_deadline(
     .await
 }
 #[cfg(feature = "app_api")]
+async fn collect_offline_command_body_with_deadline(
+    request: axum::http::Request<Body>,
+    max_bytes: usize,
+    deadline: Duration,
+) -> Result<axum::http::Request<Body>, Response> {
+    collect_bounded_body_with_deadline(
+        request,
+        max_bytes,
+        deadline,
+        BoundedBodyReadMessages {
+            context: "offline command request body",
+            too_large: "offline command request body exceeds the route byte limit",
+            protocol_error: "offline command request body stream ended with a protocol error",
+            timeout:
+                "offline command request body was not completed before the absolute read deadline",
+        },
+    )
+    .await
+}
+#[cfg(feature = "app_api")]
 async fn collect_verified_source_body_with_deadline(
     request: axum::http::Request<Body>,
     max_bytes: usize,
@@ -13559,6 +13625,72 @@ const fn offline_redeem_body_limit(transaction_max_content_len: usize) -> usize 
     }
 }
 #[cfg(feature = "app_api")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OfflineCommandBodyPolicy {
+    route_hint: &'static str,
+    max_body_bytes: usize,
+    decode_allocation_multiplier: usize,
+    fixed_decode_allocation_bytes: usize,
+}
+#[cfg(feature = "app_api")]
+impl OfflineCommandBodyPolicy {
+    fn top_up(transaction_max_content_len: usize) -> Self {
+        Self {
+            route_hint: "v1/offline/top-up",
+            max_body_bytes: offline_top_up_body_limit(transaction_max_content_len),
+            decode_allocation_multiplier:
+                iroha_data_model::offline::KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4,
+            fixed_decode_allocation_bytes:
+                iroha_data_model::offline::KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4,
+        }
+    }
+
+    fn redeem(transaction_max_content_len: usize) -> Self {
+        Self {
+            route_hint: "v1/offline/redeem",
+            max_body_bytes: offline_redeem_body_limit(transaction_max_content_len),
+            decode_allocation_multiplier:
+                iroha_data_model::offline::KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4
+                    .saturating_add(
+                        iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4,
+                    ),
+            fixed_decode_allocation_bytes:
+                iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4,
+        }
+    }
+
+    fn working_set_parts(self, encoded_len: usize) -> Option<[u64; 2]> {
+        if encoded_len > self.max_body_bytes {
+            return None;
+        }
+        let decode_allocation_bytes = encoded_len
+            .checked_mul(self.decode_allocation_multiplier)?
+            .checked_add(self.fixed_decode_allocation_bytes)?;
+        Some([
+            u64::try_from(encoded_len).ok()?,
+            u64::try_from(decode_allocation_bytes).ok()?,
+        ])
+    }
+
+    fn maximum_working_set_bytes(self) -> Option<usize> {
+        self.working_set_parts(self.max_body_bytes)?
+            .into_iter()
+            .try_fold(0_u64, u64::checked_add)
+            .and_then(|bytes| usize::try_from(bytes).ok())
+    }
+}
+#[cfg(feature = "app_api")]
+fn offline_command_memory_pool_bytes(transaction_max_content_len: usize) -> Option<usize> {
+    Some(
+        OfflineCommandBodyPolicy::top_up(transaction_max_content_len)
+            .maximum_working_set_bytes()?
+            .max(
+                OfflineCommandBodyPolicy::redeem(transaction_max_content_len)
+                    .maximum_working_set_bytes()?,
+            ),
+    )
+}
+#[cfg(feature = "app_api")]
 fn encode_offline_capability_representation(
     payload: &iroha_torii_shared::offline_api::OfflineStatus,
     format: crate::utils::ResponseFormat,
@@ -13855,11 +13987,39 @@ async fn handler_offline_recipient_lineage(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod universal_offline_capability_tests {
-    use super::{
-        encode_offline_capability_representation, handler_livez, handler_readyz,
-        offline_redeem_body_limit, offline_top_up_body_limit, strong_etag_for_representation,
-        universal_offline_capability_status,
+    use super::*;
+    use axum::{
+        body::{Body, Bytes},
+        extract::Extension,
+        http::{Request, StatusCode, header},
     };
+    use std::{sync::Arc, time::Duration};
+    use tower::ServiceExt as _;
+
+    fn configured_offline_command_runtime() -> Arc<offline_commands::OfflineCommandRuntime> {
+        let key_pair = iroha_crypto::KeyPair::try_from_seed(
+            vec![0x4f; 32],
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("derive offline command admission fixture key");
+        Arc::new(offline_commands::OfflineCommandRuntime::from_config(
+            iroha_config::parameters::actual::ToriiKagemushaCommands {
+                authority: iroha_data_model::account::AccountId::new(
+                    key_pair.public_key().clone(),
+                ),
+                key_pair,
+                minimum_xor_balance: iroha_primitives::numeric::Quantity::from(1_u32),
+                max_tx_value: iroha_primitives::numeric::Quantity::from(1_u32),
+                operation_registry_max_entries: std::num::NonZeroUsize::new(1)
+                    .expect("positive offline command registry entry limit"),
+                operation_registry_max_bytes: std::num::NonZeroUsize::new(
+                    iroha_config::parameters::defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY,
+                )
+                .expect("positive offline command registry byte limit"),
+            },
+        ))
+    }
+
     #[test]
     fn universal_capability_is_ready_and_asset_neutral() {
         let capability = universal_offline_capability_status();
@@ -13916,6 +14076,220 @@ mod universal_offline_capability_tests {
         assert_eq!(offline_top_up_body_limit(1024), 1024);
         assert_eq!(offline_redeem_body_limit(1024), 1024);
     }
+    #[test]
+    fn offline_command_memory_pool_admits_each_maximum_working_set() {
+        let listener_limit = usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
+            .expect("default listener limit fits usize");
+        let pool = ByteWeightedMemoryPool::new(
+            offline_command_memory_pool_bytes(listener_limit)
+                .expect("offline command working sets fit usize"),
+        )
+        .expect("offline command pool geometry");
+        for policy in [
+            OfflineCommandBodyPolicy::top_up(listener_limit),
+            OfflineCommandBodyPolicy::redeem(listener_limit),
+        ] {
+            let parts = policy
+                .working_set_parts(policy.max_body_bytes)
+                .expect("maximum route working set");
+            assert!(pool.can_reserve_parts(parts));
+            assert!(
+                policy
+                    .working_set_parts(policy.max_body_bytes.saturating_add(1))
+                    .is_none()
+            );
+        }
+    }
+    #[tokio::test]
+    async fn disabled_offline_commands_reject_before_body_or_resource_admission() {
+        let mut app = super::mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("unique offline admission app state");
+        assert!(state.offline_commands.is_none());
+        state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        let memory_capacity = state.offline_command_memory_inflight.capacity_bytes();
+
+        let body_guard = Arc::clone(&app.proof_body_inflight)
+            .try_acquire_owned()
+            .expect("occupy the offline body admission permit");
+        let memory_guard = app
+            .offline_command_memory_inflight
+            .try_acquire_parts([memory_capacity, 0])
+            .expect("occupy the offline command memory pool");
+        let router = Router::new()
+            .route(
+                route_catalog::offline::TOP_UP.path(),
+                axum::routing::post(|| async { StatusCode::NO_CONTENT }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_offline_command_prebody_admission,
+            ));
+        let body = Body::from_stream(futures::stream::poll_fn(
+            |_context| -> std::task::Poll<
+                Option<Result<Bytes, std::convert::Infallible>>,
+            > { panic!("disabled offline command admission polled the request body") },
+        ));
+        let mut request = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri(route_catalog::offline::TOP_UP.path())
+            .header(header::CONTENT_TYPE, crate::utils::NORITO_MIME_TYPE)
+            .header(header::CONTENT_LENGTH, "1")
+            .header("idempotency-key", "00".repeat(32))
+            .body(body)
+            .expect("disabled offline command request");
+        request
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(
+                route_catalog::offline::TOP_UP,
+            ));
+
+        let response = router
+            .oneshot(request)
+            .await
+            .expect("disabled offline command response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response.headers().get("x-iroha-reject-code"),
+            Some(&axum::http::HeaderValue::from_static(
+                "offline_service_unavailable"
+            ))
+        );
+        assert_eq!(app.proof_body_inflight.available_permits(), 0);
+        assert_eq!(app.offline_command_memory_inflight.available_bytes(), 0);
+
+        drop(memory_guard);
+        drop(body_guard);
+        assert_eq!(app.proof_body_inflight.available_permits(), 1);
+        assert_eq!(
+            app.offline_command_memory_inflight.available_bytes(),
+            memory_capacity
+        );
+    }
+    #[tokio::test]
+    async fn offline_command_resource_leases_precede_body_polling_and_cover_handler_work() {
+        let mut app = super::mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("unique offline admission app state");
+        state.offline_commands = Some(configured_offline_command_runtime());
+        state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        state.proof_limits.body_read_timeout = Duration::from_secs(1);
+        let memory_capacity = state.offline_command_memory_inflight.capacity_bytes();
+        let memory_available = state.offline_command_memory_inflight.available_bytes();
+        assert_eq!(memory_available, memory_capacity);
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let handler_app = Arc::clone(&app);
+        let handler_entered = Arc::clone(&entered);
+        let handler_release = Arc::clone(&release);
+        let router = Router::new()
+            .route(
+                route_catalog::offline::TOP_UP.path(),
+                axum::routing::post(
+                    move |Extension(_lease): Extension<OfflineCommandBodyAdmissionLease>| {
+                        let app = Arc::clone(&handler_app);
+                        let entered = Arc::clone(&handler_entered);
+                        let release = Arc::clone(&handler_release);
+                        async move {
+                            assert_eq!(app.proof_body_inflight.available_permits(), 0);
+                            assert!(
+                                app.offline_command_memory_inflight.available_bytes()
+                                    < memory_capacity
+                            );
+                            entered.notify_one();
+                            release.notified().await;
+                            StatusCode::NO_CONTENT
+                        }
+                    },
+                ),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_offline_command_prebody_admission,
+            ));
+        let request = |body: Body| {
+            let mut request = Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(route_catalog::offline::TOP_UP.path())
+                .header(header::CONTENT_TYPE, crate::utils::NORITO_MIME_TYPE)
+                .header(header::CONTENT_LENGTH, "1")
+                .header("idempotency-key", "00".repeat(32))
+                .body(body)
+                .expect("offline command request");
+            request
+                .extensions_mut()
+                .insert(MatchedRouteMetadata::from_descriptor(
+                    route_catalog::offline::TOP_UP,
+                ));
+            request
+        };
+
+        let first_router = router.clone();
+        let first = tokio::spawn(async move {
+            first_router
+                .oneshot(request(Body::from("x")))
+                .await
+                .expect("first offline command response")
+        });
+        tokio::time::timeout(Duration::from_secs(1), entered.notified())
+            .await
+            .expect("first offline command reaches handler");
+
+        let body_that_must_not_be_polled = || {
+            Body::from_stream(futures::stream::poll_fn(
+                |_context| -> std::task::Poll<
+                    Option<Result<Bytes, std::convert::Infallible>>,
+                > { panic!("saturated offline command admission polled the request body") },
+            ))
+        };
+        let saturated = router
+            .clone()
+            .oneshot(request(body_that_must_not_be_polled()))
+            .await
+            .expect("body-admission saturation response");
+        assert_eq!(saturated.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        release.notify_one();
+        assert_eq!(
+            first.await.expect("first offline command task").status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(app.proof_body_inflight.available_permits(), 1);
+        assert_eq!(
+            app.offline_command_memory_inflight.available_bytes(),
+            memory_available
+        );
+
+        let memory_guard = app
+            .offline_command_memory_inflight
+            .try_acquire_parts([memory_capacity, 0])
+            .expect("occupy the complete offline command memory pool");
+        let saturated = router
+            .clone()
+            .oneshot(request(body_that_must_not_be_polled()))
+            .await
+            .expect("memory-admission saturation response");
+        assert_eq!(saturated.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(app.proof_body_inflight.available_permits(), 1);
+        drop(memory_guard);
+        assert_eq!(
+            app.offline_command_memory_inflight.available_bytes(),
+            memory_available
+        );
+
+        let mismatched = tokio::time::timeout(
+            Duration::from_secs(1),
+            router.oneshot(request(Body::from("xx"))),
+        )
+        .await
+        .expect("known Content-Length mismatch must not reach the waiting handler")
+        .expect("Content-Length mismatch response");
+        assert_eq!(mismatched.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(app.proof_body_inflight.available_permits(), 1);
+        assert_eq!(
+            app.offline_command_memory_inflight.available_bytes(),
+            memory_available
+        );
+    }
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -13945,19 +14319,23 @@ async fn enforce_offline_command_prebody_admission(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<AxResponse, Infallible> {
-    let route_hint = req
+    let policy = req
         .extensions()
         .get::<MatchedRouteMetadata>()
         .and_then(|route| match route.stable_route_id() {
             id if id == route_catalog::offline::TOP_UP.stable_route_id() => {
-                Some("v1/offline/top-up")
+                Some(OfflineCommandBodyPolicy::top_up(
+                    app.transaction_max_content_len,
+                ))
             }
             id if id == route_catalog::offline::REDEEM.stable_route_id() => {
-                Some("v1/offline/redeem")
+                Some(OfflineCommandBodyPolicy::redeem(
+                    app.transaction_max_content_len,
+                ))
             }
             _ => None,
         });
-    let Some(route_hint) = route_hint else {
+    let Some(policy) = policy else {
         return Ok(next.run(req).await);
     };
     let transport_remote = req
@@ -13971,7 +14349,7 @@ async fn enforce_offline_command_prebody_admission(
     );
     let mut headers = req.headers().clone();
     headers.remove(limits::REMOTE_ADDR_HEADER);
-    if let Err(error) = check_access(&app, &headers, remote, route_hint).await {
+    if let Err(error) = check_access(&app, &headers, remote, policy.route_hint).await {
         return Ok(error.into_response());
     }
     if let Err(response) = crate::utils::norito_request_content_type(&headers) {
@@ -13980,7 +14358,138 @@ async fn enforce_offline_command_prebody_admission(
     if let Err(error) = offline_commands::validate_command_headers_before_body(&headers) {
         return Ok(error.into_response());
     }
-    Ok(next.run(req).await)
+    let declared_content_length = match validate_bounded_content_length(&headers, policy.max_body_bytes) {
+        Ok(declared) => declared,
+        Err(BoundedContentLengthError::TooLarge) => {
+            return Ok((
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!(
+                    "offline command request body exceeds the {}-byte route limit",
+                    policy.max_body_bytes
+                ),
+            )
+                .into_response());
+        }
+        Err(BoundedContentLengthError::Invalid) => {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                "invalid or ambiguous offline command Content-Length",
+            )
+                .into_response());
+        }
+    };
+    use axum::body::HttpBody as _;
+    let exact_body_hint = req
+        .body()
+        .size_hint()
+        .exact()
+        .and_then(|bytes| usize::try_from(bytes).ok());
+    if declared_content_length
+        .zip(exact_body_hint)
+        .is_some_and(|(declared, hinted)| declared != hinted)
+    {
+        // Hyper's network body uses the validated Content-Length as its exact
+        // framing boundary. This additional check rejects custom/internal Tower
+        // bodies with a contradictory exact hint before admission or polling.
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            "offline command Content-Length does not match the request body framing",
+        )
+            .into_response());
+    }
+    if app.offline_commands.is_none() {
+        return Ok(Error::AppServiceUnavailable {
+            code: "offline_service_unavailable",
+            message: "Offline operation signing is not configured on this Torii node.".to_owned(),
+        }
+        .into_response());
+    }
+    let body_permit = match app.proof_body_inflight.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return Ok(Error::AppServiceUnavailable {
+                code: "offline_command_body_admission_saturated",
+                message: "Offline command body admission is saturated; retry later.".to_owned(),
+            }
+            .into_response());
+        }
+    };
+    // A canonical Content-Length is an exact transport bound. Chunked or otherwise
+    // lengthless requests reserve the complete route working set before their first
+    // body frame is polled.
+    let charged_body_bytes = declared_content_length.unwrap_or(policy.max_body_bytes);
+    let Some(working_set_parts) = policy.working_set_parts(charged_body_bytes) else {
+        return Ok(Error::AppServiceUnavailable {
+            code: "offline_command_admission_configuration_invalid",
+            message: "Offline command body admission cannot represent the configured route limit."
+                .to_owned(),
+        }
+        .into_response());
+    };
+    let memory_permit = match app
+        .offline_command_memory_inflight
+        .try_acquire_parts(working_set_parts)
+    {
+        Some(permit) => permit,
+        None => {
+            return Ok(Error::AppServiceUnavailable {
+                code: "offline_command_memory_admission_saturated",
+                message: "Offline command memory admission is saturated; retry later.".to_owned(),
+            }
+            .into_response());
+        }
+    };
+    let mut req = match collect_offline_command_body_with_deadline(
+        req,
+        policy.max_body_bytes,
+        app.proof_limits.body_read_timeout,
+    )
+    .await
+    {
+        Ok(req) => req,
+        Err(response) => return Ok(response),
+    };
+    let actual_body_bytes = req
+        .body()
+        .size_hint()
+        .exact()
+        .and_then(|bytes| usize::try_from(bytes).ok());
+    if declared_content_length.is_some_and(|declared| Some(declared) != actual_body_bytes) {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            "offline command Content-Length does not match the received body",
+        )
+            .into_response());
+    }
+    let lease = OfflineCommandBodyAdmissionLease::new(body_permit, memory_permit);
+    req.extensions_mut().insert(lease.clone());
+    let response = next.run(req).await;
+    drop(lease);
+    Ok(response)
+}
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct OfflineCommandBodyAdmissionLease {
+    _permits: Arc<OfflineCommandBodyAdmissionPermits>,
+}
+#[cfg(feature = "app_api")]
+struct OfflineCommandBodyAdmissionPermits {
+    _body: tokio::sync::OwnedSemaphorePermit,
+    _memory: tokio::sync::OwnedSemaphorePermit,
+}
+#[cfg(feature = "app_api")]
+impl OfflineCommandBodyAdmissionLease {
+    fn new(
+        body: tokio::sync::OwnedSemaphorePermit,
+        memory: tokio::sync::OwnedSemaphorePermit,
+    ) -> Self {
+        Self {
+            _permits: Arc::new(OfflineCommandBodyAdmissionPermits {
+                _body: body,
+                _memory: memory,
+            }),
+        }
+    }
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -14562,6 +15071,13 @@ fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitio
 fn resolve_tx_history_allowed_asset_definition_id(
     app: &AppState,
 ) -> Result<Option<AssetDefinitionId>, Error> {
+    if app.tx_history_access_policy.startup_error.is_some() {
+        return Err(Error::AppServiceUnavailable {
+            code: "tx_history_configuration_invalid",
+            message: "transaction history is unavailable because its runtime configuration is invalid"
+                .to_owned(),
+        });
+    }
     app.tx_history_access_policy
         .allowed_asset_definition_id
         .as_deref()
@@ -19342,37 +19858,20 @@ fn status_offline_snapshot(
     }
 }
 #[cfg(feature = "telemetry")]
-async fn handler_status_segment(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    accept: Option<utils::extractors::ExtractAccept>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    view: routing::StatusView,
-) -> Result<Response, Error> {
-    let nexus = app.state.nexus_snapshot();
-    let nexus_routing_policy = nexus.routing_policy.clone();
-    let offline = status_offline_snapshot(&app);
-    // Allowlist bypass
-    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
-        let authoritative_block_height = u64::try_from(app.state.committed_height())
-            .expect("committed height must fit the canonical u64 wire field");
-        return routing::handle_status(
-            &app.telemetry,
-            accept.map(|e| e.0),
-            view,
-            nexus_routing_policy,
-            authoritative_block_height,
-            offline,
-        )
-        .await;
+async fn check_status_access(
+    app: &AppState,
+    headers: &axum::http::HeaderMap,
+    remote: std::net::IpAddr,
+    route_hint: &'static str,
+) -> Result<(), Error> {
+    if limits::is_allowed_by_cidr(headers, Some(remote), &app.api_rate_limit_bypass_nets) {
+        return Ok(());
     }
-    // Token gate
-    validate_api_token(app.as_ref(), &headers)?;
-    // Conditional rate limiting based on load/fees
+    validate_api_token(app, headers)?;
     let key = rate_limit_key(
-        &headers,
-        Some(remote.ip()),
-        "status",
+        headers,
+        Some(remote),
+        route_hint,
         app.api_token_enforced(),
     );
     let enforce =
@@ -19382,35 +19881,42 @@ async fn handler_status_segment(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let authoritative_block_height = u64::try_from(app.state.committed_height())
-        .expect("committed height must fit the canonical u64 wire field");
-    routing::handle_status(
-        &app.telemetry,
-        accept.map(|e| e.0),
-        view,
-        nexus_routing_policy,
-        authoritative_block_height,
-        offline,
-    )
-    .await
+    Ok(())
 }
 #[cfg(feature = "telemetry")]
 async fn handler_status_blocks(
-    state: State<SharedAppState>,
+    State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    accept: Option<utils::extractors::ExtractAccept>,
-    remote: axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
-    handler_status_segment(state, headers, accept, remote, routing::StatusView::Blocks).await
+    check_status_access(
+        app.as_ref(),
+        &headers,
+        remote.ip(),
+        route_catalog::diagnostic::STATUS_BLOCKS.stable_route_id(),
+    )
+    .await?;
+    let authoritative_block_height = u64::try_from(app.state.committed_height())
+        .expect("committed height must fit the canonical u64 wire field");
+    routing::handle_status_blocks(&app.telemetry, authoritative_block_height)
 }
 #[cfg(feature = "telemetry")]
 async fn handler_status_peers(
-    state: State<SharedAppState>,
+    State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    accept: Option<utils::extractors::ExtractAccept>,
-    remote: axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
-    handler_status_segment(state, headers, accept, remote, routing::StatusView::Peers).await
+    check_status_access(
+        app.as_ref(),
+        &headers,
+        remote.ip(),
+        route_catalog::diagnostic::STATUS_PEERS.stable_route_id(),
+    )
+    .await?;
+    let online_peer_count = app.online_peers.with_snapshot(|peers| {
+        u64::try_from(peers.len()).expect("online peer count must fit the canonical u64 wire field")
+    });
+    routing::handle_status_peers(&app.telemetry, online_peer_count)
 }
 #[cfg(feature = "telemetry")]
 async fn handler_status_root(
@@ -19418,43 +19924,22 @@ async fn handler_status_root(
     headers: axum::http::HeaderMap,
     accept: Option<utils::extractors::ExtractAccept>,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<Response, Error> {
+    check_status_access(
+        app.as_ref(),
+        &headers,
+        remote.ip(),
+        route_catalog::diagnostic::STATUS.stable_route_id(),
+    )
+    .await?;
     let nexus = app.state.nexus_snapshot();
     let nexus_routing_policy = nexus.routing_policy.clone();
     let offline = status_offline_snapshot(&app);
-    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
-        let authoritative_block_height = u64::try_from(app.state.committed_height())
-            .expect("committed height must fit the canonical u64 wire field");
-        return routing::handle_status(
-            &app.telemetry,
-            accept.map(|e| e.0),
-            routing::StatusView::Full,
-            nexus_routing_policy,
-            authoritative_block_height,
-            offline,
-        )
-        .await;
-    }
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote.ip()),
-        "status",
-        app.api_token_enforced(),
-    );
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    if enforce && !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
     let authoritative_block_height = u64::try_from(app.state.committed_height())
         .expect("committed height must fit the canonical u64 wire field");
     routing::handle_status(
         &app.telemetry,
         accept.map(|e| e.0),
-        routing::StatusView::Full,
         nexus_routing_policy,
         authoritative_block_height,
         offline,
@@ -43550,6 +44035,13 @@ fn tx_history_viewer_from_headers(
     app: &SharedAppState,
     headers: &HeaderMap,
 ) -> Result<TxHistoryViewerContext, AxResponse> {
+    if app.tx_history_access_policy.startup_error.is_some() {
+        return Err(tx_history_reject(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "tx_history_configuration_invalid",
+            "transaction history is unavailable because its runtime configuration is invalid",
+        ));
+    }
     let Some(jwt) = app.tx_history_access_policy.jwt.as_ref() else {
         return Err(tx_history_reject(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -48487,12 +48979,15 @@ impl Torii {
     }
     #[allow(clippy::unused_self)]
     fn add_operator_auth_routes(&self, builder: &mut RouterBuilder) {
+        let app_state = builder.state().clone();
         mount_catalog_route_rows!(
             builder, operator_authentication;
             REGISTRATION_OPTIONS => operator_credential_post(operator_auth::handle_operator_register_options);
             REGISTRATION_VERIFY => operator_credential_post(operator_auth::handle_operator_register_verify);
             LOGIN_OPTIONS => operator_credential_post(operator_auth::handle_operator_login_options);
             LOGIN_VERIFY => operator_credential_post(operator_auth::handle_operator_login_verify);
+            CREDENTIALS => operator_get(operator_auth::handle_operator_credentials, app_state);
+            CREDENTIAL_DELETE => operator_delete(operator_auth::handle_operator_credential_delete, app_state);
         );
     }
     #[cfg(feature = "profiling")]
@@ -51239,13 +51734,18 @@ impl Torii {
             Some(service)
         });
         #[cfg(feature = "app_api")]
-        let tx_history_access_policy =
-            Arc::new(if let Some(tx_history) = config.tx_history.as_ref() {
+        let tx_history_access_policy = Arc::new(if let Some(tx_history) = config.tx_history.as_ref() {
+            let result = {
                 let nexus = state.nexus_snapshot();
                 load_tx_history_access_policy(Some(tx_history), &nexus.dataspace_catalog)
-            } else {
-                TxHistoryAccessPolicy::default()
-            });
+            };
+            match result {
+                Ok(policy) => policy,
+                Err(error) => TxHistoryAccessPolicy::with_startup_error(error),
+            }
+        } else {
+            TxHistoryAccessPolicy::default()
+        });
         #[cfg(feature = "app_api")]
         let public_dataspace_upstreams = Arc::new(if emergency_fast {
             BTreeMap::new()
@@ -51799,8 +52299,25 @@ impl Torii {
         let query_ingress_inflight = Arc::new(tokio::sync::Semaphore::new(
             query_memory.ingress_slots.get(),
         ));
-        let query_fanout_inflight = QueryWeightedMemoryPool::new(query_memory.fanout_pool_bytes)
+        let query_fanout_inflight = ByteWeightedMemoryPool::new(query_memory.fanout_pool_bytes)
             .expect("validated Torii query memory pool must fit weighted semaphore geometry");
+        #[cfg(feature = "app_api")]
+        let offline_command_memory_inflight = ByteWeightedMemoryPool::new(
+            offline_command_memory_pool_bytes(torii_proxy_max_response_bytes)
+                .expect("validated offline command body limits must fit the platform address space"),
+        )
+        .expect("offline command memory pool must fit weighted semaphore geometry");
+        #[cfg(feature = "app_api")]
+        assert!(
+            offline_command_memory_inflight.can_reserve_parts(
+                OfflineCommandBodyPolicy::redeem(torii_proxy_max_response_bytes)
+                    .working_set_parts(
+                        offline_redeem_body_limit(torii_proxy_max_response_bytes),
+                    )
+                    .expect("validated offline redeem working set must fit u64"),
+            ),
+            "offline command memory pool must admit one maximum-size redemption"
+        );
         let query_fanout_working_set_bytes = query_memory.fanout_working_set_bytes.min(
             usize::try_from(query_fanout_inflight.capacity_bytes())
                 .expect("weighted Torii query pool capacity must fit usize"),
@@ -51899,6 +52416,8 @@ impl Torii {
             proof_rate_limiter: self.proof_rate_limiter.clone(),
             proof_egress_limiter: self.proof_egress_limiter.clone(),
             proof_body_inflight,
+            #[cfg(feature = "app_api")]
+            offline_command_memory_inflight,
             soracloud_public_rate_limiter: self.soracloud_public_rate_limiter.clone(),
             soracloud_mutation_rate_limiter: self.soracloud_mutation_rate_limiter.clone(),
             soracloud_mutation_inflight,
@@ -52405,6 +52924,9 @@ impl Torii {
         shutdown_signal: ShutdownSignal,
     ) -> core::result::Result<(), Report<Error>> {
         let emergency_fast = self.kura.emergency_fast_startup_enabled();
+        #[cfg(feature = "app_api")]
+        ensure_tx_history_access_policy_ready(self.tx_history_access_policy.as_ref())
+            .map_err(Report::new)?;
         #[cfg(feature = "app_api")]
         if let Some(code) = self.sorafs_moderation_startup_error {
             return Err(Report::new(Error::SorafsModerationStartup { code }));
@@ -53986,6 +54508,12 @@ pub enum Error {
         /// Stable payload-free startup failure code.
         code: &'static str,
     },
+    /// Transaction-history runtime configuration failed during startup: {reason}
+    #[cfg(feature = "app_api")]
+    TxHistoryStartup {
+        /// Operator-facing configuration failure reason.
+        reason: String,
+    },
     /// Failed to serialize response payload for `{context}`: {source}
     SerializationFailure {
         /// Logical context for the serialization failure.
@@ -54427,6 +54955,14 @@ impl Error {
                     "SoraFS evidence-viewer runtime failed to start",
                 )
             }
+            #[cfg(feature = "app_api")]
+            Self::TxHistoryStartup { reason } => {
+                iroha_logger::error!(%reason, "transaction-history runtime failed to start");
+                ErrorEnvelope::new(
+                    "tx_history_startup_error",
+                    "transaction-history runtime failed to start",
+                )
+            }
             Self::SerializationFailure { context, source } => {
                 iroha_logger::error!(
                     %context,
@@ -54528,6 +55064,8 @@ impl Error {
             SorafsModerationStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
             #[cfg(feature = "app_api")]
             SorafsEvidenceViewerStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            #[cfg(feature = "app_api")]
+            TxHistoryStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
             LaneLifecycle { .. } => StatusCode::BAD_REQUEST,
             Config(_) => StatusCode::NOT_FOUND,
             SerializationFailure { .. } => StatusCode::INTERNAL_SERVER_ERROR,

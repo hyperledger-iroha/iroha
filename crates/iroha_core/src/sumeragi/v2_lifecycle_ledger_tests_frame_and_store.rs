@@ -895,7 +895,9 @@ fn all_sign_broadcast_continuations_roundtrip_with_canonical_wire_shapes() {
         let mut signed = unsigned.clone();
         signed.signature = vec![signature];
         super::super::replay_authority::exact_timeout_sign_broadcast_fixture(
-            context(), unsigned, signed,
+            context(),
+            unsigned,
+            signed,
         )
     };
     let [parent_case, _] = exact_timeout_pair(0, 0x71);
@@ -1324,13 +1326,8 @@ fn ordinary_successor_preserves_terminal_validate_no_successor_record_bytes() {
     tombstone.continuation =
         PersistedDurableContinuationV1::from_schema(DurableContinuation::AdvancedNoSuccessor);
     let tombstone_bytes = tombstone.encode();
-    let current = LifecycleLedgerV1::new(
-        context(),
-        1,
-        vec![tombstone.clone()],
-        BTreeMap::new(),
-    )
-    .expect("terminal Validate/no-successor ledger");
+    let current = LifecycleLedgerV1::new(context(), 1, vec![tombstone.clone()], BTreeMap::new())
+        .expect("terminal Validate/no-successor ledger");
     let successor = LifecycleLedgerV1::new(
         context(),
         2,
@@ -1366,13 +1363,8 @@ fn ordinary_successor_rejects_terminal_validate_rewrite_without_touching_frame()
     tombstone.continuation =
         PersistedDurableContinuationV1::from_schema(DurableContinuation::AdvancedNoSuccessor);
     let tombstone_bytes = tombstone.encode();
-    let current = LifecycleLedgerV1::new(
-        context(),
-        1,
-        vec![tombstone],
-        BTreeMap::new(),
-    )
-    .expect("terminal Validate/no-successor ledger");
+    let current = LifecycleLedgerV1::new(context(), 1, vec![tombstone], BTreeMap::new())
+        .expect("terminal Validate/no-successor ledger");
     let (rewritten_validate, apply) = validate_apply_pair();
     let rewritten = LifecycleLedgerV1::new(
         context(),
@@ -1453,6 +1445,8 @@ fn durable_repair_receipt_reloads_the_current_store_frame() {
     let frame = encode_frame(&ledger, store.max_frame_bytes).expect("encode receipt frame");
     let receipt = DurableWalVoteLedgerRepairReceipt {
         store_path: store.path.clone(),
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        store_directory_identity: store.directory.identity,
         context: context(),
         parent_key: serve.key().expect("Serve key"),
         child_key: producer.key().expect("producer key"),
@@ -1490,6 +1484,246 @@ fn store_discards_regular_temp_residue_and_rejects_nonregular_temp_paths() {
         store.persist(&empty),
         Err(LifecycleLedgerError::InvalidFrame(_))
     ));
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[test]
+fn lifecycle_store_rejects_symlinked_ancestry_and_bound_directory_replacement() {
+    use std::os::unix::fs::symlink;
+
+    let parent = tempfile::tempdir().expect("lifecycle storage parent");
+    let direct = parent.path().join("direct");
+    fs::create_dir(&direct).expect("create direct lifecycle root");
+    let alias = parent.path().join("alias");
+    symlink(&direct, &alias).expect("create lifecycle root symlink");
+    assert!(matches!(
+        LifecycleLedgerStoreV1::open(&alias, context()),
+        Err(LifecycleLedgerError::InvalidFrame(_))
+    ));
+
+    let bound = parent.path().join("bound");
+    let detached = parent.path().join("detached");
+    let (store, empty) =
+        LifecycleLedgerStoreV1::open(&bound, context()).expect("bind direct lifecycle root");
+    store
+        .persist_exact_successor(&empty, &empty)
+        .expect("materialize bound empty ledger");
+    let detached_frame = fs::read(bound.join(LEDGER_FILE)).expect("read bound ledger frame");
+    fs::rename(&bound, &detached).expect("detach bound lifecycle directory");
+    fs::create_dir(&bound).expect("install replacement lifecycle directory");
+    let sentinel = bound.join("sentinel");
+    fs::write(&sentinel, b"replacement must remain untouched").expect("write replacement sentinel");
+
+    let successor = LifecycleLedgerV1::new(
+        context(),
+        1,
+        vec![unrelated_timeout_record(1)],
+        BTreeMap::new(),
+    )
+    .expect("construct successor after directory replacement");
+    assert!(matches!(
+        store.persist_exact_successor(&empty, &successor),
+        Err(LifecycleLedgerError::InvalidFrame(_)) | Err(LifecycleLedgerError::Io(_))
+    ));
+    assert_eq!(
+        fs::read(detached.join(LEDGER_FILE)).expect("reread detached ledger"),
+        detached_frame
+    );
+    assert_eq!(
+        fs::read(&sentinel).expect("reread replacement sentinel"),
+        b"replacement must remain untouched"
+    );
+    assert!(!bound.join(LEDGER_FILE).exists());
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[test]
+fn lifecycle_store_rejects_direct_leaf_substitutions_without_following_them() {
+    use std::os::unix::fs::symlink;
+
+    let symlink_root = tempfile::tempdir().expect("symlink lifecycle root");
+    let symlink_sentinel = symlink_root.path().join("sentinel");
+    fs::write(&symlink_sentinel, b"symlink sentinel").expect("write symlink sentinel");
+    symlink(&symlink_sentinel, symlink_root.path().join(LEDGER_FILE))
+        .expect("substitute ledger symlink");
+    assert!(matches!(
+        LifecycleLedgerStoreV1::open(symlink_root.path(), context()),
+        Err(LifecycleLedgerError::InvalidFrame(_))
+    ));
+    assert_eq!(
+        fs::read(&symlink_sentinel).expect("reread symlink sentinel"),
+        b"symlink sentinel"
+    );
+
+    let hardlink_root = tempfile::tempdir().expect("hardlink lifecycle root");
+    let hardlink_sentinel = hardlink_root.path().join("sentinel");
+    fs::write(&hardlink_sentinel, b"hardlink sentinel").expect("write hardlink sentinel");
+    fs::hard_link(&hardlink_sentinel, hardlink_root.path().join(LEDGER_FILE))
+        .expect("substitute ledger hardlink");
+    assert!(matches!(
+        LifecycleLedgerStoreV1::open(hardlink_root.path(), context()),
+        Err(LifecycleLedgerError::InvalidFrame(_))
+    ));
+    assert_eq!(
+        fs::read(&hardlink_sentinel).expect("reread hardlink sentinel"),
+        b"hardlink sentinel"
+    );
+
+    let fifo_root = tempfile::tempdir().expect("FIFO lifecycle root");
+    let fifo = fifo_root.path().join(LEDGER_FILE);
+    let status = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("invoke mkfifo for lifecycle ledger regression");
+    assert!(status.success(), "mkfifo must create the ledger fixture");
+    assert!(matches!(
+        LifecycleLedgerStoreV1::open(fifo_root.path(), context()),
+        Err(LifecycleLedgerError::InvalidFrame(_))
+    ));
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[test]
+fn lifecycle_store_rejects_hardlinked_temporary_without_mutating_sentinel() {
+    let root = tempfile::tempdir().expect("hardlinked temporary lifecycle root");
+    let (store, empty) =
+        LifecycleLedgerStoreV1::open(root.path(), context()).expect("open lifecycle store");
+    let sentinel = root.path().join("sentinel");
+    fs::write(&sentinel, b"temporary sentinel").expect("write temporary sentinel");
+    let temporary = root.path().join(LEDGER_TEMPORARY_FILE);
+    fs::hard_link(&sentinel, &temporary).expect("substitute hardlinked temporary");
+
+    assert!(matches!(
+        store.persist(&empty),
+        Err(LifecycleLedgerError::InvalidFrame(_))
+    ));
+    assert_eq!(
+        fs::read(&sentinel).expect("reread temporary sentinel"),
+        b"temporary sentinel"
+    );
+    assert!(temporary.exists(), "foreign hardlink must not be unlinked");
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[test]
+fn lifecycle_exact_successor_is_one_atomic_compare_and_swap() {
+    let root = tempfile::tempdir().expect("concurrent lifecycle root");
+    let (first_store, first_empty) =
+        LifecycleLedgerStoreV1::open(root.path(), context()).expect("open first lifecycle store");
+    let (second_store, second_empty) =
+        LifecycleLedgerStoreV1::open(root.path(), context()).expect("open second lifecycle store");
+    assert_eq!(first_empty, second_empty);
+    let first_successor = LifecycleLedgerV1::new(
+        context(),
+        1,
+        vec![unrelated_timeout_record(1)],
+        BTreeMap::new(),
+    )
+    .expect("construct first concurrent successor");
+    let second_successor = LifecycleLedgerV1::new(
+        context(),
+        1,
+        vec![exact_lifecycle_record(
+            LifecycleStageKind::SignTimeoutVote,
+            5,
+            distinct_owner(12, 1),
+            1,
+            None,
+            DurableContinuation::None,
+        )],
+        BTreeMap::new(),
+    )
+    .expect("construct second concurrent successor");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let (first_result, second_result) = std::thread::scope(|scope| {
+        let first_barrier = barrier.clone();
+        let first_writer_store = first_store.clone();
+        let first_current = first_empty.clone();
+        let first_candidate = first_successor.clone();
+        let first = scope.spawn(move || {
+            first_barrier.wait();
+            first_writer_store.persist_exact_successor(&first_current, &first_candidate)
+        });
+        let second_barrier = barrier.clone();
+        let second_writer_store = second_store.clone();
+        let second_current = second_empty.clone();
+        let second_candidate = second_successor.clone();
+        let second = scope.spawn(move || {
+            second_barrier.wait();
+            second_writer_store.persist_exact_successor(&second_current, &second_candidate)
+        });
+        (
+            first.join().expect("first lifecycle writer joined"),
+            second.join().expect("second lifecycle writer joined"),
+        )
+    });
+    assert_eq!(
+        usize::from(first_result.is_ok()) + usize::from(second_result.is_ok()),
+        1,
+        "exactly one writer may replace the same predecessor"
+    );
+    let loaded = first_store
+        .load()
+        .expect("load winning lifecycle successor");
+    assert!(loaded == first_successor || loaded == second_successor);
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[test]
+fn sidecar_publication_is_atomic_noreplace_across_store_handles() {
+    const MAX_TEST_REGISTRATION_BYTES: u64 = 1024 * 1024;
+
+    let root = tempfile::tempdir().expect("concurrent sidecar root");
+    let (first_store, _) =
+        LifecycleLedgerStoreV1::open(root.path(), context()).expect("open first sidecar store");
+    let (second_store, _) =
+        LifecycleLedgerStoreV1::open(root.path(), context()).expect("open second sidecar store");
+    let first = b"first registration".to_vec();
+    let second = b"second registration".to_vec();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let (first_result, second_result) = std::thread::scope(|scope| {
+        let first_barrier = barrier.clone();
+        let first_writer_store = first_store.clone();
+        let first_bytes = first.clone();
+        let first_writer = scope.spawn(move || {
+            first_barrier.wait();
+            first_writer_store.publish_validate_sidecar_registration_bytes(
+                &first_bytes,
+                MAX_TEST_REGISTRATION_BYTES,
+            )
+        });
+        let second_barrier = barrier.clone();
+        let second_writer_store = second_store.clone();
+        let second_bytes = second.clone();
+        let second_writer = scope.spawn(move || {
+            second_barrier.wait();
+            second_writer_store.publish_validate_sidecar_registration_bytes(
+                &second_bytes,
+                MAX_TEST_REGISTRATION_BYTES,
+            )
+        });
+        (
+            first_writer.join().expect("first sidecar writer joined"),
+            second_writer.join().expect("second sidecar writer joined"),
+        )
+    });
+    let first_result = first_result.expect("first sidecar writer completed");
+    let second_result = second_result.expect("second sidecar writer completed");
+    assert_eq!(
+        usize::from(first_result.is_none()) + usize::from(second_result.is_none()),
+        1,
+        "exactly one registration must win no-replace publication"
+    );
+    let winner = first_store
+        .load_validate_sidecar_registration_bytes(MAX_TEST_REGISTRATION_BYTES)
+        .expect("read winning sidecar registration")
+        .expect("winning sidecar registration is present");
+    assert!(winner == first || winner == second);
+    assert_eq!(
+        first_result.or(second_result),
+        Some(winner),
+        "the losing writer must observe the exact incumbent bytes"
+    );
 }
 #[test]
 fn malformed_owner_and_producer_debt_are_rejected() {

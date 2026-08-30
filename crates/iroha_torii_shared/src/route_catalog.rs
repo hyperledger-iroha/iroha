@@ -1424,6 +1424,26 @@ pub mod operator_authentication {
         .with_projections(RouteProjections::OPENAPI)
         .with_cors_options(true)
     }
+    const fn credential_management(
+        stable_route_id: &'static str,
+        method: HttpMethod,
+        path: &'static str,
+        effect: RouteEffect,
+    ) -> RouteDescriptor {
+        RouteDescriptor::new(
+            stable_route_id,
+            method,
+            path,
+            ApiSurface::Operator,
+            Listener::Torii,
+            effect,
+            AdmissionPolicy::Operator,
+        )
+        .with_authentication(AuthenticationPolicy::OperatorSignature)
+        .with_projections(RouteProjections::OPENAPI)
+        .with_implicit_head(matches!(method, HttpMethod::Get))
+        .with_cors_options(true)
+    }
     /// Start operator `WebAuthn` credential registration.
     pub const REGISTRATION_OPTIONS: RouteDescriptor = credential_exchange(
         "operator.authentication.registration_options",
@@ -1444,12 +1464,28 @@ pub mod operator_authentication {
         "operator.authentication.login_verify",
         "/v1/operator/auth/login/verify",
     );
-    /// Complete operator credential-exchange route family.
+    /// List enrolled operator `WebAuthn` credentials without exposing verification keys.
+    pub const CREDENTIALS: RouteDescriptor = credential_management(
+        "operator.authentication.credentials",
+        HttpMethod::Get,
+        "/v1/operator/auth/credentials",
+        RouteEffect::ReadOnly,
+    );
+    /// Delete one operator `WebAuthn` credential and revoke outstanding auth state.
+    pub const CREDENTIAL_DELETE: RouteDescriptor = credential_management(
+        "operator.authentication.credential_delete",
+        HttpMethod::Delete,
+        "/v1/operator/auth/credentials/{credential_id}",
+        RouteEffect::Mutation,
+    );
+    /// Complete operator authentication route family.
     pub const ROUTES: &[RouteDescriptor] = &[
         REGISTRATION_OPTIONS,
         REGISTRATION_VERIFY,
         LOGIN_OPTIONS,
         LOGIN_VERIFY,
+        CREDENTIALS,
+        CREDENTIAL_DELETE,
     ];
 }
 /// Core node information and operator configuration descriptors.

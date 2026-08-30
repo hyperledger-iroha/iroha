@@ -33,26 +33,32 @@ func TestCatalogueIsClosedAndIndependentlyKeyed(t *testing.T) {
 
 func TestCatalogueUsesTheClosedWireDomainAndCodecInventory(t *testing.T) {
 	expected := map[string]struct {
-		domain uint32
-		codec  byte
+		domain  uint32
+		backend byte
+		codec   byte
 	}{
-		"ethereum-mainnet": {EthereumDomain, EVMAddress20Codec},
-		"bsc-mainnet":      {BSCDomain, EVMAddress20Codec},
-		"tron-mainnet":     {TRONDomain, TRONAddress21Codec},
-		"ton-mainnet":      {TONDomain, TONAccount36Codec},
+		"ethereum-mainnet": {EthereumDomain, EVMBackendTag, EVMAddress20Codec},
+		"bsc-mainnet":      {BSCDomain, EVMBackendTag, EVMAddress20Codec},
+		"tron-mainnet":     {TRONDomain, TRONBackendTag, TRONAddress21Codec},
+		"ton-mainnet":      {TONDomain, TONBackendTag, TONAccount36Codec},
+	}
+	if EVMBackendTag != 0 || TRONBackendTag != 1 || TONBackendTag != 2 {
+		t.Fatal("final-V1 destination backend tags drifted")
 	}
 	for _, cfg := range All() {
 		wire, ok := expected[cfg.Lane]
 		if !ok {
 			t.Fatalf("unexpected final-V1 lane %q", cfg.Lane)
 		}
-		if cfg.TargetDomain != wire.domain || cfg.RecipientCodec != wire.codec {
+		if cfg.TargetDomain != wire.domain || cfg.BackendTag != wire.backend || cfg.RecipientCodec != wire.codec {
 			t.Fatalf(
-				"profile %q wire identity drifted: domain=%d codec=%d, want domain=%d codec=%d",
+				"profile %q wire identity drifted: domain=%d backend=%d codec=%d, want domain=%d backend=%d codec=%d",
 				cfg.ID,
 				cfg.TargetDomain,
+				cfg.BackendTag,
 				cfg.RecipientCodec,
 				wire.domain,
+				wire.backend,
 				wire.codec,
 			)
 		}

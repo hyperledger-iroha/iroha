@@ -75,6 +75,7 @@ pub fn kagemusha_v4_release_lifecycle_state_key(
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(tag = "reason", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
 pub enum KagemushaV4ReleaseLifecycleReasonV1 {
     /// The signed four-validator post-canary liveness closure could not be obtained.
     LivenessClosureFailed,
@@ -600,6 +601,7 @@ impl KagemushaV4ReleaseDeactivatedV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(tag = "phase", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
 pub enum KagemushaV4ReleaseLifecyclePhaseV1 {
     /// Release is installed for canary execution but public issuance is disabled.
     Staged,

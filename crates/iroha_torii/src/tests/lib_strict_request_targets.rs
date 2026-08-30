@@ -6,7 +6,7 @@ use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode, header},
-    routing::get,
+    routing::{delete, get},
 };
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
@@ -57,6 +57,21 @@ fn offline_operation_test_router(counter: Arc<AtomicUsize>) -> Router {
         .route(
             route_catalog::offline::OPERATION.path(),
             get(move || {
+                let counter = Arc::clone(&counter);
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        )
+        .fallback(|| async { StatusCode::NOT_FOUND })
+        .layer(axum::middleware::from_fn(enforce_strict_request_target))
+}
+fn operator_credential_test_router(counter: Arc<AtomicUsize>) -> Router {
+    Router::new()
+        .route(
+            route_catalog::operator_authentication::CREDENTIAL_DELETE.path(),
+            delete(move || {
                 let counter = Arc::clone(&counter);
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
@@ -227,6 +242,46 @@ async fn offline_operation_id_rejects_percent_encoded_alias_before_handler_execu
         .oneshot(
             Request::builder()
                 .uri(format!("/v1/offline/operations/{canonical_id}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn operator_credential_id_rejects_percent_encoded_alias_before_handler_execution() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let router = operator_credential_test_router(Arc::clone(&counter));
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/operator/auth/credentials/%41Q")
+                .header(header::ACCEPT, "application/json")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect response")
+        .to_bytes();
+    let envelope: ErrorEnvelope = norito::json::from_slice(&body).expect("typed JSON error");
+    assert_eq!(envelope.code(), "request_path_invalid");
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/operator/auth/credentials/AQ")
                 .body(Body::empty())
                 .expect("request"),
         )

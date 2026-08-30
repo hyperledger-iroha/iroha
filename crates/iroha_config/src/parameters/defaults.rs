@@ -2176,8 +2176,10 @@ pub mod torii {
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024); // 8 MiB
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
+    /// This includes SCCP submissions and Kagemusha top-up/redemption commands.
     pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
     /// Absolute deadline for reading one admitted proof-bearing request body.
+    /// This includes SCCP submissions and Kagemusha top-up/redemption commands.
     pub const PROOF_BODY_READ_TIMEOUT_MS: u64 = 15_000;
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
     pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(8 * 1024 * 1024); // 8 MiB/s
@@ -2289,11 +2291,6 @@ pub mod torii {
             None
         }
     }
-    /// RAM-LFE runtime defaults (disabled unless explicitly configured).
-    pub mod ram_lfe {
-        /// Master enable switch for in-process RAM-LFE runtime wiring.
-        pub const ENABLED: bool = false;
-    }
     /// Transaction-history visibility policy defaults.
     pub mod tx_history {
         /// Maximum bytes accepted from the mandatory-alias policy file.
@@ -2359,8 +2356,18 @@ pub mod torii {
         pub const BURST: Option<u32> = Some(10);
         /// Per-kind capacity for expiry-bound challenges, sessions, and lockout identities.
         pub const EPHEMERAL_STATE_CAPACITY: usize = 4_096;
+        /// Maximum accepted per-kind ephemeral-state capacity.
+        pub const MAX_EPHEMERAL_STATE_CAPACITY: usize = 65_536;
         /// Maximum number of persisted operator WebAuthn credentials.
         pub const CREDENTIAL_CAPACITY: usize = 64;
+        /// Maximum accepted persisted credential capacity.
+        pub const MAX_CREDENTIAL_CAPACITY: usize = 1_024;
+        /// Maximum number of configured first-credential bootstrap tokens.
+        pub const MAX_BOOTSTRAP_TOKENS: usize = 16;
+        /// Minimum byte length of a first-credential bootstrap token.
+        pub const BOOTSTRAP_TOKEN_MIN_BYTES: usize = 32;
+        /// Maximum byte length of a first-credential bootstrap token.
+        pub const BOOTSTRAP_TOKEN_MAX_BYTES: usize = 256;
         /// Failures before applying a temporary lockout.
         pub const LOCKOUT_FAILURES: u32 = 5;
         /// Sliding window for lockout failure counts (seconds).
@@ -2461,16 +2468,20 @@ pub mod torii {
     }
     /// Enable the push bridge (FCM/APNS). Disabled by default.
     pub const PUSH_ENABLED: bool = false;
-    /// Optional steady-state rate (requests per minute) for push notifications. None disables.
-    pub const PUSH_RATE_PER_MINUTE: Option<u32> = Some(60);
-    /// Optional burst tokens for push notifications.
-    pub const PUSH_BURST: Option<u32> = Some(30);
+    /// Enable push-notification rate limiting.
+    pub const PUSH_RATE_LIMIT_ENABLED: bool = true;
+    /// Steady-state rate (requests per minute) for push notifications.
+    pub const PUSH_RATE_PER_MINUTE: NonZeroU32 = nonzero!(60_u32);
+    /// Burst tokens for push notifications.
+    pub const PUSH_BURST: NonZeroU32 = nonzero!(30_u32);
     /// HTTP connect timeout (milliseconds) for push delivery.
     pub const PUSH_CONNECT_TIMEOUT_MS: u64 = 5_000;
     /// HTTP request timeout (milliseconds) for push delivery.
     pub const PUSH_REQUEST_TIMEOUT_MS: u64 = 10_000;
     /// Maximum topics recorded per registered device.
-    pub const PUSH_MAX_TOPICS_PER_DEVICE: usize = 32;
+    pub const PUSH_MAX_TOPICS_PER_DEVICE: NonZeroUsize = nonzero!(32_usize);
+    /// First-release hard ceiling for topics recorded per registered device.
+    pub const PUSH_MAX_TOPICS_PER_DEVICE_V1: usize = 256;
     /// Default APNs environment for provider-token delivery.
     pub const PUSH_APNS_ENVIRONMENT: &str = "sandbox";
     /// Base directory for Torii persistence (attachments, webhooks, DA queues).

@@ -14,10 +14,10 @@ omission never means `None`. Signed messages and their canonical signature-paylo
 reject unknown JSON fields, and shortened pre-release binary layouts fail typed decode rather than
 being padded with implicit defaults.
 
-The retained authenticated `QcVote` and `Qc` JSON objects likewise always carry
-their nullable `highest_qc` slot, using `null` for `None`; those objects and
-`QcAggregate` reject unknown keys. Their Norito encoding is unchanged, but a
-shortened layout which omits the slot is not accepted.
+The authenticated revision-4 `Vote` and `QuorumCertificate` objects are the
+only global vote and certificate DTOs. A certificate carries a strictly
+increasing exact signer vector rather than a bitmap and must contain exactly
+the frozen height context's `2f + 1` validators.
 
 The live `BlockMessage` wire enum contains only canonical `V2` messages, the independent lane-local
 message family, and authenticated Kura replica adverts. Its variants use the contiguous

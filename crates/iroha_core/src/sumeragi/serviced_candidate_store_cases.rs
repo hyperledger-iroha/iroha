@@ -8,6 +8,19 @@ mod tests {
     use tempfile::TempDir;
     const OWNER_A: [u8; 32] = [0xA1; 32];
     const OWNER_B: [u8; 32] = [0xB2; 32];
+    fn safety_wal_identity(
+        context: &wire::HeightContext,
+        network_id: [u8; 32],
+        key_hash: [u8; 32],
+    ) -> super::super::v2_core::WalFileIdentity {
+        super::super::v2_core::WalFileIdentity::new(
+            wire::PROTOCOL_VERSION,
+            network_id,
+            super::super::v2_core::ContextId::new(*context.id().0.as_ref()),
+            context.height,
+            key_hash,
+        )
+    }
     fn context() -> wire::HeightContext {
         context_with_roster_len(4)
     }
@@ -424,11 +437,7 @@ mod tests {
         let seed_wal = seed.path().join("wal").join("00000000000000000007.wal");
         let seed_safety = super::super::safety_wal::SafetyWal::open(
             &seed_wal,
-            wire::PROTOCOL_VERSION,
-            NETWORK,
-            super::super::v2_core::ContextId::new(*context.id().0.as_ref()),
-            context.height,
-            KEY,
+            safety_wal_identity(&context, NETWORK, KEY),
         )
         .expect("open seed safety WAL");
         let seed_authority = seed_safety
@@ -452,11 +461,7 @@ mod tests {
         let target_wal = target_parent.join("00000000000000000007.wal");
         let target_safety = super::super::safety_wal::SafetyWal::open(
             &target_wal,
-            wire::PROTOCOL_VERSION,
-            NETWORK,
-            super::super::v2_core::ContextId::new(*context.id().0.as_ref()),
-            context.height,
-            KEY,
+            safety_wal_identity(&context, NETWORK, KEY),
         )
         .expect("open target safety WAL");
         let target_authority = target_safety
@@ -573,11 +578,7 @@ mod tests {
         let wal_path = parent.join("00000000000000000007.wal");
         let wal = super::super::safety_wal::SafetyWal::open(
             &wal_path,
-            wire::PROTOCOL_VERSION,
-            [0x61; 32],
-            super::super::v2_core::ContextId::new(*context.id().0.as_ref()),
-            context.height,
-            [0x62; 32],
+            safety_wal_identity(&context, [0x61; 32], [0x62; 32]),
         )
         .expect("open leader-wire safety WAL");
         let storage = wal

@@ -6,12 +6,11 @@
 use super::{
     BscNativeSourceError, BscNativeSourceProofV1, EthereumNativeSourceErrorV1,
     EthereumNativeSourceProofV1, H256, SccpPayloadV1, TonNativeSourceError, TonNativeSourceProofV1,
-    TronNativeSourceError, TronNativeSourceProofV1, bsc_native_anchor_block_number,
-    canonical_sccp_payload_bytes, payload_hash, sccp_lane_id_hash_v1,
-    sccp_lane_source_event_digest_v1, sccp_message_id, sccp_message_source_domain,
-    sccp_message_target_domain, sccp_source_identity_hash_v1, verify_bsc_native_source,
-    verify_ethereum_native_source_proof_v1, verify_sccp_payload_structure,
-    verify_ton_native_source, verify_tron_native_source,
+    TronNativeSourceError, TronNativeSourceProofV1, canonical_sccp_payload_bytes, payload_hash,
+    sccp_lane_id_hash_v1, sccp_lane_source_event_digest_v1, sccp_message_id,
+    sccp_message_source_domain, sccp_message_target_domain, sccp_source_identity_hash_v1,
+    verify_bsc_native_source, verify_ethereum_native_source_proof_v1,
+    verify_sccp_payload_structure, verify_ton_native_source, verify_tron_native_source,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
@@ -501,7 +500,7 @@ pub fn encode_sccp_native_source_proof_envelope_v1(
     envelope: &SccpNativeSourceProofEnvelopeV1,
 ) -> Result<Vec<u8>, SccpNativeAdmissionErrorV1> {
     validate_source_envelope_shape(envelope)?;
-    let encoded = norito::to_bytes(envelope)
+    let encoded = norito::encode_canonical(envelope)
         .map_err(|_| SccpNativeAdmissionErrorV1::InvalidNoritoEncoding)?;
     check_encoded_size(&encoded)?;
     Ok(encoded)
@@ -561,8 +560,8 @@ pub fn encode_sccp_native_inbound_message_proof_v1(
     proof: &SccpNativeInboundMessageProofV1,
 ) -> Result<Vec<u8>, SccpNativeAdmissionErrorV1> {
     validate_inbound_statement(proof)?;
-    let encoded =
-        norito::to_bytes(proof).map_err(|_| SccpNativeAdmissionErrorV1::InvalidNoritoEncoding)?;
+    let encoded = norito::encode_canonical(proof)
+        .map_err(|_| SccpNativeAdmissionErrorV1::InvalidNoritoEncoding)?;
     check_encoded_size(&encoded)?;
     Ok(encoded)
 }
@@ -757,13 +756,6 @@ fn verify_bsc_native_admission_v1(
     context: &GovernedNativeAdmissionContextV1<'_>,
     native: &BscNativeSourceProofV1,
 ) -> Result<VerifiedNativeFinalityV1, SccpNativeAdmissionErrorV1> {
-    if bsc_native_anchor_block_number(&native.finality.anchor)
-        .map_err(BscNativeSourceError::Finality)
-        .map_err(SccpNativeAdmissionErrorV1::Bsc)?
-        != context.trust_anchor.checkpoint_height
-    {
-        return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
-    }
     let proof = context.proof;
     let canonical_payload = canonical_sccp_payload_bytes(&proof.payload)
         .map_err(|_| SccpNativeAdmissionErrorV1::InvalidPayload)?;
@@ -777,6 +769,9 @@ fn verify_bsc_native_admission_v1(
         &canonical_payload,
     )
     .map_err(SccpNativeAdmissionErrorV1::Bsc)?;
+    if validated.finality.anchor_block_number != context.trust_anchor.checkpoint_height {
+        return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
+    }
     if validated.source_identity_hash != proof.source.source_identity_hash
         || validated.lane_hash != context.lane_hash
         || validated.finality.anchor_hash != proof.source.trust_anchor.anchor_hash
@@ -1215,6 +1210,45 @@ mod tests {
         assert_eq!(
             decode_bridge_native_protocol_proof_v1(&zero_route),
             Err(SccpNativeAdmissionErrorV1::HashRoleCollision)
+        );
+    }
+    #[test]
+    fn canonical_binary_helpers_ignore_ambient_norito_layout() {
+        let (proof, _, _) = inbound_fixture();
+        let canonical_proof = norito::encode_canonical(&proof).expect("canonical inbound proof");
+        let canonical_envelope =
+            norito::encode_canonical(&proof.source).expect("canonical source envelope");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let alternate_proof = norito::to_bytes(&proof).expect("alternate-layout inbound proof");
+        let alternate_envelope =
+            norito::to_bytes(&proof.source).expect("alternate-layout source envelope");
+        assert_ne!(alternate_proof, canonical_proof);
+        assert_ne!(alternate_envelope, canonical_envelope);
+        assert_eq!(
+            encode_sccp_native_inbound_message_proof_v1(&proof),
+            Ok(canonical_proof.clone())
+        );
+        assert_eq!(
+            encode_sccp_native_source_proof_envelope_v1(&proof.source),
+            Ok(canonical_envelope.clone())
+        );
+        assert_eq!(
+            decode_sccp_native_inbound_message_proof_v1(&canonical_proof),
+            Ok(proof.clone())
+        );
+        assert_eq!(
+            decode_sccp_native_source_proof_envelope_v1(&canonical_envelope),
+            Ok(proof.source.clone())
+        );
+        assert_eq!(
+            decode_sccp_native_inbound_message_proof_v1(&alternate_proof),
+            Err(SccpNativeAdmissionErrorV1::InvalidNoritoEncoding)
+        );
+        assert_eq!(
+            decode_sccp_native_source_proof_envelope_v1(&alternate_envelope),
+            Err(SccpNativeAdmissionErrorV1::InvalidNoritoEncoding)
         );
     }
     #[test]

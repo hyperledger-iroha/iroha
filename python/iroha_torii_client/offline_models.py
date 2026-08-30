@@ -54,22 +54,57 @@ class OfflineSpendableNoteJson(TypedDict):
     amount: OfflineScaledAmountJson
 
 
-class _OfflineAuthorizationJsonOptional(TypedDict, total=False):
-    app_attest_evidence_sha256: Optional[List[int]]
-    app_attest_evidence: Optional[List[int]]
+# Norito JSON retains the signature newtype's one-element tuple wrapper around
+# its fixed 64-byte raw P-256 scalar pair.
+OfflineDeviceSignatureJson = List[List[int]]
 
 
-class OfflineAuthorizationJson(_OfflineAuthorizationJsonOptional):
+class OfflineAndroidKeyMintAssertionJson(TypedDict):
+    """Canonical raw low-S P-256 assertion produced by Android KeyMint."""
+
+    signature: OfflineDeviceSignatureJson
+
+
+class OfflineIosAppAttestAssertionJson(TypedDict):
+    """Canonical App Attest assertion payload produced by iOS."""
+
+    authenticator_data: List[int]
+    signature: OfflineDeviceSignatureJson
+
+
+class OfflineAndroidKeyMintHardwareAssertionVariantJson(TypedDict):
+    """Tagged Android KeyMint hardware assertion."""
+
+    platform: Literal["android_key_mint"]
+    assertion: OfflineAndroidKeyMintAssertionJson
+
+
+class OfflineIosAppAttestHardwareAssertionVariantJson(TypedDict):
+    """Tagged iOS App Attest hardware assertion."""
+
+    platform: Literal["ios_app_attest"]
+    assertion: OfflineIosAppAttestAssertionJson
+
+
+OfflineHardwareAssertionJson = Union[
+    OfflineAndroidKeyMintHardwareAssertionVariantJson,
+    OfflineIosAppAttestHardwareAssertionVariantJson,
+]
+
+
+class OfflineAuthorizationJson(TypedDict):
     """Self-contained device authorization embedded in an offline command."""
 
     authority: str
     device_id: str
+    asset_definition_id: str
     operation_id: List[int]
     issued_at_ms: int
     expires_at_ms: int
     nonce: List[int]
     payload_digest: List[int]
-    signature: str
+    registration_hash: List[int]
+    hardware_assertion: OfflineHardwareAssertionJson
 
 
 class OfflineVerifierKeyIdJson(TypedDict):
@@ -238,14 +273,11 @@ class OfflineBranchClaimJson(TypedDict):
     transition_tags: str
 
 
-class _OfflineTaggedUnitJsonOptional(TypedDict, total=False):
-    value: None
-
-
-class OfflineSpendBranchJson(_OfflineTaggedUnitJsonOptional):
+class OfflineSpendBranchJson(TypedDict):
     """Recipient or sender-change output role."""
 
     branch: Literal["recipient", "change"]
+    value: None
 
 
 class KagemushaArtifactBindingV4Json(TypedDict):
@@ -318,18 +350,52 @@ class OfflineRecursiveSpendStatementJson(_OfflineRecursiveSpendStatementJsonOpti
     verifier_key_id: OfflineVerifierKeyIdJson
 
 
+class OfflineRecursiveOperationVectorV4Json(TypedDict):
+    """Exact 1,080-limb ABI-21 operation row carried by every bundle."""
+
+    limbs: List[int]
+
+
+class OfflineRecursiveStateBoundaryV5Json(TypedDict):
+    """Exact selector-free recursive state crossing the Pasta field boundary."""
+
+    layout_version: Literal[5]
+    state_limbs: List[int]
+
+
+class OfflinePastaCycleProofEnvelopeV4Json(TypedDict):
+    """Authenticated ABI-21/V4 Eq/Ep proof-pair envelope."""
+
+    version: Literal[4]
+    proof_backend: str
+    transcript_profile: str
+    step_eq_circuit_id: str
+    step_ep_circuit_id: str
+    artifact_generation: str
+    manifest_sha256: List[int]
+    step_eq_parameter_generation: str
+    step_ep_parameter_generation: str
+    step_eq_circuit_params_sha256: List[int]
+    step_ep_circuit_params_sha256: List[int]
+    step_eq_verifier_key_sha256: List[int]
+    step_ep_verifier_key_sha256: List[int]
+    state_boundary: OfflineRecursiveStateBoundaryV5Json
+    proof: OfflineProofBoxJson
+
+
 class OfflineRecursiveSpendProofJson(TypedDict):
     """Recursive proof and its exact verifier/public-statement bindings."""
 
     verifier_key_id: OfflineVerifierKeyIdJson
     public_statement_digest: List[int]
-    proof: OfflineProofBoxJson
+    proof_envelope: OfflinePastaCycleProofEnvelopeV4Json
 
 
 class OfflineRecursiveSpendBundleJson(TypedDict):
     """Scale-carrying recursive state submitted for redemption."""
 
     statement: OfflineRecursiveSpendStatementJson
+    operation: OfflineRecursiveOperationVectorV4Json
     recursive_proof: OfflineRecursiveSpendProofJson
 
 

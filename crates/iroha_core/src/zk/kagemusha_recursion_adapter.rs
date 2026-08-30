@@ -3058,6 +3058,13 @@ impl KagemushaPastaCycleProofPairV4 {
     ) -> Result<Self, String> {
         let maximum = usize::try_from(max_pair_bytes)
             .map_err(|_| "Kagemusha V4 pair bound does not fit usize".to_owned())?;
+        let absolute_maximum = usize::try_from(
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
+        )
+        .map_err(|_| "Kagemusha V4 absolute pair bound does not fit usize".to_owned())?;
+        if maximum == 0 || maximum > absolute_maximum {
+            return Err("Kagemusha V4 authenticated pair bound is invalid".to_owned());
+        }
         if bytes.is_empty() || bytes.len() > maximum {
             return Err("Kagemusha V4 opaque proof payload length is invalid".to_owned());
         }

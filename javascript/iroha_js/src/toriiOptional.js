@@ -26,8 +26,6 @@ export {
 } from "./kagemushaOffline.js";
 
 export {
-  normalizeBridgeMessageSubmitPayload,
-  normalizeBridgeProofSubmitPayload,
   normalizeSccpCapabilities,
   normalizeSccpMessageBundle,
   normalizeSccpProofRequest,
@@ -35,7 +33,6 @@ export {
   normalizeSccpRegistry,
   normalizeSccpRouteGovernanceAction,
   normalizeSccpSoraOutboundMaterial,
-  parseSccpBridgeSubmitResponseJson,
   parseSccpJsonObject,
 } from "./sccp.js";
 

@@ -805,6 +805,7 @@ pub use kagemusha_release_verifier::{
 /// platform checks; the hashes provide stable replay keys and compact audit anchors.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct OfflineDeviceAttestationRegistration {
     /// Registration format marker.
     pub version: u16,
@@ -3539,6 +3540,39 @@ impl KagemushaTopUpFinalityProofV2 {
         }
         Ok(())
     }
+
+    /// Validate the terminal Torii result against one finalized top-up anchor.
+    ///
+    /// This keeps the opaque model boundary intact while checking the complete
+    /// operation, transaction, height, network, and compact-anchor binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when either object is malformed or
+    /// any terminal binding disagrees.
+    pub fn validate_terminal_binding(
+        &self,
+        expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+        expected_operation_id: [u8; 32],
+        expected_transaction_hash: [u8; 32],
+        expected_height: u64,
+    ) -> Result<(), KagemushaValidationError> {
+        self.validate_structure()?;
+        expected_anchor.validate_public_binding()?;
+        let expected_anchor_ref = expected_anchor.compact_ref()?;
+        if expected_operation_id != expected_anchor.topup_operation_id
+            || expected_transaction_hash != expected_anchor.finalized_tx_hash
+            || expected_height != expected_anchor.finalized_height
+            || expected_height != self.commit_qc.height_context.height
+            || self.commit_qc.height_context.network_id != expected_anchor.network_id
+            || self.anchor != expected_anchor_ref
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.terminal_binding",
+            });
+        }
+        Ok(())
+    }
 }
 impl KagemushaTopUpFinalityRosterWindowV2 {
     /// Validate the ordered unit-power roster and activation window without proof-of-possession pairings.
@@ -4538,6 +4572,20 @@ mod kagemusha_v4_artifact_contract_tests {
     }
     #[test]
     fn topup_shield_reserves_the_complete_recursive_lifecycle() {
+        assert_eq!(
+            KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2,
+            u32::from(KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2)
+                + KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+        );
+        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2, 72);
+        assert_eq!(KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2, 65_463);
+        let last_insertable_leaf = KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2 - 1;
+        assert_eq!(
+            last_insertable_leaf + 1 + KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2,
+            KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 - 1,
+            "the complete future-output budget must leave one in-range empty frontier leaf"
+        );
+
         let backend: iroha_schema::Ident = KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.into();
         let mut proof = ProofAttachment::new_ref(
             backend.clone(),
@@ -4548,7 +4596,7 @@ mod kagemusha_v4_artifact_contract_tests {
         let mut evidence = KagemushaTopUpShieldEvidenceV2 {
             initial_root: digest(b"top-up initial root"),
             finalized_root: digest(b"top-up finalized root"),
-            leaf_index: KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2 - 1,
+            leaf_index: last_insertable_leaf,
             proof,
         };
         evidence
@@ -6056,6 +6104,13 @@ impl KagemushaRecursiveSpendRedemptionIntentV4 {
             || actual_lineage_roots != expected_lineage_roots
             || self.parent_proof_step_count == 0
             || self.parent_proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
+            || (self.change_output.is_some()
+                && self.parent_proof_step_count >= KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2)
+            || (self.change_output.is_some()
+                && self
+                    .parent_branch_claims
+                    .iter()
+                    .any(|claim| claim.path.depth >= KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2))
             || self.parent_peer_hop_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
             || self.public_amount.scale != self.input_note.amount.scale
             || self.unshield_public_inputs_digest == [0; 32]

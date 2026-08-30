@@ -881,8 +881,8 @@ kagemusha_sdk_android_forwarders! {
         rho bytes, diversifier bytes, leaf_index int, flattened_siblings bytes,
         directions bytes, root bytes, shield_verifier_commitment bytes, artifact_binding bytes
     } -> JniObjectArray = java_native_kagemusha_prepare_top_up_v4;
-    nativeProjectTopUpRequestOperationIdV4 { request bytes } -> JniByteArray = java_native_kagemusha_project_top_up_request_operation_id_v4;
-    nativeProjectRedeemRequestOperationIdV4 { request bytes } -> JniByteArray = java_native_kagemusha_project_redeem_request_operation_id_v4;
+    nativeProjectTopUpRequestIdentityV4 { request bytes } -> JniObjectArray = java_native_kagemusha_project_top_up_request_identity_v4;
+    nativeProjectRedeemRequestIdentityV4 { request bytes } -> JniObjectArray = java_native_kagemusha_project_redeem_request_identity_v4;
     nativeProjectOperationReferenceV4 { reference bytes } -> JniObjectArray = java_native_kagemusha_project_operation_reference_v4;
     nativeProjectOperationStatusV4 { status bytes } -> JniObjectArray = java_native_kagemusha_project_operation_status_v4;
     nativeBranchClaimsConflictV2 { left bytes, right bytes } -> JniBoolean = java_native_kagemusha_branch_claims_conflict_v2;

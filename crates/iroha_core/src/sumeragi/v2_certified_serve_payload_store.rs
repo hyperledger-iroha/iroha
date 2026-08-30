@@ -20,7 +20,8 @@ use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
+    ffi::{OsStr, OsString},
+    fs::{self, File},
     io::{ErrorKind, Read, Write},
     mem::size_of,
     path::{Path, PathBuf},
@@ -907,6 +908,12 @@ pub(crate) enum CertifiedServePayloadStoreError {
     /// The retained store directory was replaced by a symlink or non-directory.
     #[error("Certified-Serve payload store target is not the retained directory: {}", .0.display())]
     InvalidStoreDirectory(PathBuf),
+    /// This platform cannot provide the descriptor-relative storage contract.
+    #[error("descriptor-relative Certified-Serve payload storage is unsupported at {}", .0.display())]
+    UnsupportedStorageBinding(PathBuf),
+    /// A supposedly fresh publication collided with an existing canonical leaf.
+    #[error("Certified-Serve payload destination already exists: {}", .0.display())]
+    PublicationConflict(PathBuf),
     /// A framed payload is malformed, non-canonical, or corrupt.
     #[error("invalid Certified-Serve payload frame {}: {reason}", path.display())]
     InvalidFrame {
@@ -1058,11 +1065,709 @@ impl PersistPayloadError {
         }
     }
 }
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CertifiedServeStorageIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+impl CertifiedServeStorageIdentity {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt as _;
+
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+
+    fn from_stat(stat: &rustix::fs::Stat) -> Self {
+        Self {
+            device: stat.st_dev as u64,
+            inode: stat.st_ino as u64,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct BoundCertifiedServePayloadLeaf {
+    name: OsString,
+    length: u64,
+    frame_hash: Option<Hash>,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    identity: CertifiedServeStorageIdentity,
+}
+
+/// Descriptor-relative exclusive owner of the exact payload directory.
+#[derive(Debug)]
+struct BoundCertifiedServePayloadDirectory {
+    expected_path: PathBuf,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    canonical_path: PathBuf,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    directory: File,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    identity: CertifiedServeStorageIdentity,
+}
+
+impl BoundCertifiedServePayloadDirectory {
+    fn open_or_create(path: &Path) -> Result<Self, CertifiedServePayloadStoreError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            ensure_durable_directory(path)?;
+            let lexical = fs::symlink_metadata(path)
+                .map_err(|source| io_error("inspect store directory", path, source))?;
+            let canonical_path = fs::canonicalize(path)
+                .map_err(|source| io_error("canonicalize store directory", path, source))?;
+            let directory = File::from(
+                rustix::fs::open(
+                    path,
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::DIRECTORY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+                .map_err(std::io::Error::from)
+                .map_err(|source| io_error("open store directory", path, source))?,
+            );
+            let opened = directory
+                .metadata()
+                .map_err(|source| io_error("inspect opened store directory", path, source))?;
+            let identity = CertifiedServeStorageIdentity::from_metadata(&opened);
+            if lexical.file_type().is_symlink()
+                || !lexical.is_dir()
+                || !opened.is_dir()
+                || lexical.uid() != rustix::process::geteuid().as_raw()
+                || opened.uid() != rustix::process::geteuid().as_raw()
+                || lexical.mode() & 0o022 != 0
+                || opened.mode() & 0o022 != 0
+                || CertifiedServeStorageIdentity::from_metadata(&lexical) != identity
+            {
+                return Err(CertifiedServePayloadStoreError::InvalidStoreDirectory(
+                    path.to_path_buf(),
+                ));
+            }
+            rustix::fs::flock(
+                &directory,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive,
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|source| io_error("lock store directory", path, source))?;
+            let bound = Self {
+                expected_path: path.to_path_buf(),
+                canonical_path,
+                directory,
+                identity,
+            };
+            bound.verify_linked()?;
+            Ok(bound)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            Err(CertifiedServePayloadStoreError::UnsupportedStorageBinding(
+                path.to_path_buf(),
+            ))
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn verify_linked(&self) -> Result<(), CertifiedServePayloadStoreError> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let lexical = fs::symlink_metadata(&self.expected_path).map_err(|source| {
+            io_error(
+                "inspect linked store directory",
+                &self.expected_path,
+                source,
+            )
+        })?;
+        let canonical = fs::canonicalize(&self.expected_path).map_err(|source| {
+            io_error(
+                "canonicalize linked store directory",
+                &self.expected_path,
+                source,
+            )
+        })?;
+        let retained = self.directory.metadata().map_err(|source| {
+            io_error(
+                "inspect retained store directory",
+                &self.expected_path,
+                source,
+            )
+        })?;
+        if lexical.file_type().is_symlink()
+            || !lexical.is_dir()
+            || !retained.is_dir()
+            || lexical.uid() != rustix::process::geteuid().as_raw()
+            || retained.uid() != rustix::process::geteuid().as_raw()
+            || lexical.mode() & 0o022 != 0
+            || retained.mode() & 0o022 != 0
+            || canonical != self.canonical_path
+            || CertifiedServeStorageIdentity::from_metadata(&lexical) != self.identity
+            || CertifiedServeStorageIdentity::from_metadata(&retained) != self.identity
+        {
+            return Err(CertifiedServePayloadStoreError::InvalidStoreDirectory(
+                self.expected_path.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn is_linked(&self) -> bool {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.verify_linked().is_ok()
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            false
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn fresh_handle(&self) -> Result<File, CertifiedServePayloadStoreError> {
+        self.verify_linked()?;
+        let directory = File::from(
+            rustix::fs::openat(
+                &self.directory,
+                ".",
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|source| {
+                io_error(
+                    "reopen retained store directory",
+                    &self.expected_path,
+                    source,
+                )
+            })?,
+        );
+        let metadata = directory.metadata().map_err(|source| {
+            io_error(
+                "inspect reopened store directory",
+                &self.expected_path,
+                source,
+            )
+        })?;
+        if !metadata.is_dir()
+            || CertifiedServeStorageIdentity::from_metadata(&metadata) != self.identity
+        {
+            return Err(CertifiedServePayloadStoreError::InvalidStoreDirectory(
+                self.expected_path.clone(),
+            ));
+        }
+        self.verify_linked()?;
+        Ok(directory)
+    }
+
+    fn inventory(
+        &self,
+        capacity: usize,
+    ) -> Result<Vec<BoundCertifiedServePayloadLeaf>, CertifiedServePayloadStoreError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+
+            let directory = self.fresh_handle()?;
+            let entries = rustix::fs::Dir::read_from(&directory)
+                .map_err(std::io::Error::from)
+                .map_err(|source| io_error("read store directory", &self.expected_path, source))?;
+            let mut leaves = Vec::new();
+            for entry in entries {
+                let entry = entry.map_err(std::io::Error::from).map_err(|source| {
+                    io_error("read store directory entry", &self.expected_path, source)
+                })?;
+                let name = OsStr::from_bytes(entry.file_name().to_bytes());
+                if matches!(name.as_bytes(), b"." | b"..") {
+                    continue;
+                }
+                if leaves.len() >= capacity {
+                    return Err(CertifiedServePayloadStoreError::DirectoryCapacityExceeded {
+                        capacity,
+                    });
+                }
+                let name = name.to_os_string();
+                let path = self.expected_path.join(&name);
+                let stat =
+                    rustix::fs::statat(&directory, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                        .map_err(std::io::Error::from)
+                        .map_err(|source| io_error("inspect store entry", &path, source))?;
+                if rustix::fs::FileType::from_raw_mode(stat.st_mode)
+                    != rustix::fs::FileType::RegularFile
+                    || stat.st_nlink as u64 != 1
+                    || stat.st_uid != rustix::process::geteuid().as_raw()
+                    || stat.st_size < 0
+                {
+                    return Err(CertifiedServePayloadStoreError::NonRegularEntry(path));
+                }
+                leaves.push(BoundCertifiedServePayloadLeaf {
+                    name,
+                    length: u64::try_from(stat.st_size).map_err(|_| {
+                        CertifiedServePayloadStoreError::NonRegularEntry(path.clone())
+                    })?,
+                    frame_hash: None,
+                    identity: CertifiedServeStorageIdentity::from_stat(&stat),
+                });
+            }
+            self.verify_linked()?;
+            Ok(leaves)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = capacity;
+            Err(CertifiedServePayloadStoreError::UnsupportedStorageBinding(
+                self.expected_path.clone(),
+            ))
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn inspect_leaf(
+        &self,
+        name: &OsStr,
+        maximum: u64,
+    ) -> Result<Option<BoundCertifiedServePayloadLeaf>, CertifiedServePayloadStoreError> {
+        let path = self.expected_path.join(name);
+        let stat = match rustix::fs::statat(
+            &self.directory,
+            name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(stat) => stat,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => {
+                return Err(io_error(
+                    "inspect store leaf",
+                    &path,
+                    std::io::Error::from(error),
+                ));
+            }
+        };
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
+            || stat.st_nlink as u64 != 1
+            || stat.st_uid != rustix::process::geteuid().as_raw()
+            || stat.st_size < 0
+        {
+            return Err(CertifiedServePayloadStoreError::NonRegularEntry(path));
+        }
+        let length = u64::try_from(stat.st_size)
+            .map_err(|_| CertifiedServePayloadStoreError::NonRegularEntry(path.clone()))?;
+        if length > maximum {
+            return Err(CertifiedServePayloadStoreError::EntryTooLarge {
+                actual: length,
+                bound: maximum,
+            });
+        }
+        Ok(Some(BoundCertifiedServePayloadLeaf {
+            name: name.to_os_string(),
+            length,
+            frame_hash: None,
+            identity: CertifiedServeStorageIdentity::from_stat(&stat),
+        }))
+    }
+
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    fn inspect_leaf(
+        &self,
+        _name: &OsStr,
+        _maximum: u64,
+    ) -> Result<Option<BoundCertifiedServePayloadLeaf>, CertifiedServePayloadStoreError> {
+        Err(CertifiedServePayloadStoreError::UnsupportedStorageBinding(
+            self.expected_path.clone(),
+        ))
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn verify_open_leaf(
+        &self,
+        file: &File,
+        expected: &BoundCertifiedServePayloadLeaf,
+    ) -> Result<(), CertifiedServePayloadStoreError> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let path = self.expected_path.join(&expected.name);
+        let opened = file
+            .metadata()
+            .map_err(|source| io_error("inspect opened store leaf", &path, source))?;
+        let linked = self
+            .inspect_leaf(&expected.name, expected.length)?
+            .ok_or_else(|| CertifiedServePayloadStoreError::NonRegularEntry(path.clone()))?;
+        if !opened.is_file()
+            || opened.nlink() != 1
+            || opened.uid() != rustix::process::geteuid().as_raw()
+            || opened.len() != expected.length
+            || CertifiedServeStorageIdentity::from_metadata(&opened) != expected.identity
+            || linked.identity != expected.identity
+            || linked.length != expected.length
+        {
+            return Err(CertifiedServePayloadStoreError::NonRegularEntry(path));
+        }
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn open_leaf(
+        &self,
+        expected: &BoundCertifiedServePayloadLeaf,
+    ) -> Result<File, CertifiedServePayloadStoreError> {
+        let path = self.expected_path.join(&expected.name);
+        let current = self
+            .inspect_leaf(&expected.name, expected.length)?
+            .ok_or_else(|| CertifiedServePayloadStoreError::NonRegularEntry(path.clone()))?;
+        if current.identity != expected.identity || current.length != expected.length {
+            return Err(CertifiedServePayloadStoreError::NonRegularEntry(path));
+        }
+        let file = File::from(
+            rustix::fs::openat(
+                &self.directory,
+                &expected.name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC
+                    | rustix::fs::OFlags::NONBLOCK,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|source| io_error("open store leaf", &path, source))?,
+        );
+        self.verify_open_leaf(&file, expected)?;
+        self.verify_linked()?;
+        Ok(file)
+    }
+
+    fn read_leaf(
+        &self,
+        leaf: &BoundCertifiedServePayloadLeaf,
+        maximum: u64,
+    ) -> Result<Vec<u8>, CertifiedServePayloadStoreError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            if leaf.length > maximum {
+                return Err(CertifiedServePayloadStoreError::EntryTooLarge {
+                    actual: leaf.length,
+                    bound: maximum,
+                });
+            }
+            let path = self.expected_path.join(&leaf.name);
+            let mut file = self.open_leaf(leaf)?;
+            let mut bytes = Vec::with_capacity(usize::try_from(leaf.length).unwrap_or(0));
+            Read::by_ref(&mut file)
+                .take(maximum.saturating_add(1))
+                .read_to_end(&mut bytes)
+                .map_err(|source| io_error("read store leaf", &path, source))?;
+            let actual = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            if actual != leaf.length || actual > maximum {
+                return Err(CertifiedServePayloadStoreError::EntryTooLarge {
+                    actual,
+                    bound: maximum,
+                });
+            }
+            self.verify_open_leaf(&file, leaf)?;
+            self.verify_linked()?;
+            Ok(bytes)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (leaf, maximum);
+            Err(CertifiedServePayloadStoreError::UnsupportedStorageBinding(
+                self.expected_path.clone(),
+            ))
+        }
+    }
+
+    fn remove_leaf(
+        &self,
+        leaf: &BoundCertifiedServePayloadLeaf,
+    ) -> Result<(), CertifiedServePayloadStoreError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            let path = self.expected_path.join(&leaf.name);
+            let file = self.open_leaf(leaf)?;
+            self.verify_open_leaf(&file, leaf)?;
+            rustix::fs::unlinkat(&self.directory, &leaf.name, rustix::fs::AtFlags::empty())
+                .map_err(std::io::Error::from)
+                .map_err(|source| io_error("remove store leaf", &path, source))?;
+            self.verify_linked()?;
+            Ok(())
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = leaf;
+            Err(CertifiedServePayloadStoreError::UnsupportedStorageBinding(
+                self.expected_path.clone(),
+            ))
+        }
+    }
+
+    fn remove_named_if_present(
+        &self,
+        name: &OsStr,
+        maximum: u64,
+    ) -> Result<bool, CertifiedServePayloadStoreError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            let Some(leaf) = self.inspect_leaf(name, maximum)? else {
+                return Ok(false);
+            };
+            self.remove_leaf(&leaf)?;
+            Ok(true)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (name, maximum);
+            Err(CertifiedServePayloadStoreError::UnsupportedStorageBinding(
+                self.expected_path.clone(),
+            ))
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn create_synced_temporary(
+        &self,
+        name: &OsStr,
+        bytes: &[u8],
+        maximum: u64,
+    ) -> Result<(File, BoundCertifiedServePayloadLeaf), CertifiedServePayloadStoreError> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let length = u64::try_from(bytes.len()).map_err(|_| {
+            CertifiedServePayloadStoreError::InvalidGeometry(
+                "payload frame length is not representable",
+            )
+        })?;
+        if length == 0 || length > maximum {
+            return Err(CertifiedServePayloadStoreError::EntryTooLarge {
+                actual: length,
+                bound: maximum,
+            });
+        }
+        let path = self.expected_path.join(name);
+        let mut file = File::from(
+            rustix::fs::openat(
+                &self.directory,
+                name,
+                rustix::fs::OFlags::RDWR
+                    | rustix::fs::OFlags::CREATE
+                    | rustix::fs::OFlags::EXCL
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC
+                    | rustix::fs::OFlags::NONBLOCK,
+                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|source| io_error("create store temporary", &path, source))?,
+        );
+        let created = file
+            .metadata()
+            .map_err(|source| io_error("inspect created store temporary", &path, source))?;
+        let empty = BoundCertifiedServePayloadLeaf {
+            name: name.to_os_string(),
+            length: 0,
+            frame_hash: None,
+            identity: CertifiedServeStorageIdentity::from_metadata(&created),
+        };
+        if !created.is_file()
+            || created.nlink() != 1
+            || created.uid() != rustix::process::geteuid().as_raw()
+        {
+            return Err(CertifiedServePayloadStoreError::NonRegularEntry(path));
+        }
+        self.verify_open_leaf(&file, &empty)?;
+        file.write_all(bytes)
+            .and_then(|()| file.flush())
+            .and_then(|()| file.sync_all())
+            .map_err(|source| io_error("synchronise store temporary", &path, source))?;
+        let leaf = BoundCertifiedServePayloadLeaf {
+            length,
+            frame_hash: Some(Hash::new(bytes)),
+            ..empty
+        };
+        self.verify_open_leaf(&file, &leaf)?;
+        Ok((file, leaf))
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn unlink_if_identity(&self, name: &OsStr, identity: CertifiedServeStorageIdentity) {
+        if self
+            .inspect_leaf(name, u64::MAX)
+            .is_ok_and(|leaf| leaf.is_some_and(|leaf| leaf.identity == identity))
+        {
+            let _ = rustix::fs::unlinkat(&self.directory, name, rustix::fs::AtFlags::empty());
+            let _ = self.directory.sync_all();
+        }
+    }
+
+    fn publish(
+        &self,
+        temporary: &OsStr,
+        destination: &OsStr,
+        frame: &[u8],
+        maximum: u64,
+        expected_destination: Option<&BoundCertifiedServePayloadLeaf>,
+        fail_before_directory_sync: bool,
+    ) -> Result<(), PersistPayloadError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            if self
+                .remove_named_if_present(temporary, maximum)
+                .map_err(PersistPayloadError::Unpublished)?
+            {
+                self.sync().map_err(PersistPayloadError::Unpublished)?;
+            }
+            let destination_path = self.expected_path.join(destination);
+            let destination_leaf = self
+                .inspect_leaf(destination, maximum)
+                .map_err(PersistPayloadError::Unpublished)?;
+            let exact_incumbent = match (expected_destination, destination_leaf.as_ref()) {
+                (None, None) => true,
+                (Some(expected), Some(observed)) => {
+                    expected.name.as_os_str() == destination
+                        && expected.identity == observed.identity
+                        && expected.length == observed.length
+                }
+                _ => false,
+            };
+            if !exact_incumbent {
+                let error = if destination_leaf.is_some() {
+                    CertifiedServePayloadStoreError::PublicationConflict(destination_path)
+                } else {
+                    CertifiedServePayloadStoreError::UnknownPayload
+                };
+                return Err(PersistPayloadError::Unpublished(error));
+            }
+            let (file, leaf) = self
+                .create_synced_temporary(temporary, frame, maximum)
+                .map_err(PersistPayloadError::Unpublished)?;
+            let rename = if expected_destination.is_some() {
+                rustix::fs::renameat(&self.directory, temporary, &self.directory, destination)
+                    .map_err(std::io::Error::from)
+            } else {
+                rename_certified_serve_leaf_noreplace(&self.directory, temporary, destination)
+            };
+            if let Err(source) = rename {
+                self.unlink_if_identity(temporary, leaf.identity);
+                return Err(PersistPayloadError::Unpublished(io_error(
+                    "publish store leaf",
+                    &destination_path,
+                    source,
+                )));
+            }
+            let published = BoundCertifiedServePayloadLeaf {
+                name: destination.to_os_string(),
+                ..leaf
+            };
+            self.verify_open_leaf(&file, &published)
+                .map_err(PersistPayloadError::PublishedButUnsynchronized)?;
+            if fail_before_directory_sync {
+                return Err(PersistPayloadError::PublishedButUnsynchronized(io_error(
+                    "synchronise directory after published file",
+                    &self.expected_path,
+                    std::io::Error::other("injected post-rename directory sync failure"),
+                )));
+            }
+            self.sync()
+                .map_err(PersistPayloadError::PublishedButUnsynchronized)?;
+            self.verify_open_leaf(&file, &published)
+                .map_err(PersistPayloadError::PublishedButUnsynchronized)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (
+                temporary,
+                destination,
+                frame,
+                maximum,
+                expected_destination,
+                fail_before_directory_sync,
+            );
+            Err(PersistPayloadError::Unpublished(
+                CertifiedServePayloadStoreError::UnsupportedStorageBinding(
+                    self.expected_path.clone(),
+                ),
+            ))
+        }
+    }
+
+    fn sync(&self) -> Result<(), CertifiedServePayloadStoreError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.verify_linked()?;
+            self.directory.sync_all().map_err(|source| {
+                io_error("synchronise store directory", &self.expected_path, source)
+            })?;
+            self.verify_linked()
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            Err(CertifiedServePayloadStoreError::UnsupportedStorageBinding(
+                self.expected_path.clone(),
+            ))
+        }
+    }
+}
+
+#[cfg(all(
+    unix,
+    not(target_os = "espidf"),
+    any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    )
+))]
+fn rename_certified_serve_leaf_noreplace(
+    directory: &File,
+    source: &OsStr,
+    destination: &OsStr,
+) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        directory,
+        source,
+        directory,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+}
+
+#[cfg(all(
+    unix,
+    not(target_os = "espidf"),
+    not(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    ))
+))]
+fn rename_certified_serve_leaf_noreplace(
+    _directory: &File,
+    _source: &OsStr,
+    _destination: &OsStr,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        ErrorKind::Unsupported,
+        "atomic no-replace Certified-Serve publication is unavailable",
+    ))
+}
+
 /// Crash-safe owner of all exact Certified-Serve payload files for one height.
 #[derive(Debug)]
 pub(crate) struct CertifiedServePayloadStoreV1 {
     identity: Arc<CertifiedServePayloadStoreInstanceIdentityMarker>,
     directory: PathBuf,
+    bound_directory: Option<BoundCertifiedServePayloadDirectory>,
     context: wire::HeightContext,
     max_entries: usize,
     max_entry_bytes: u64,
@@ -1091,6 +1796,14 @@ impl CertifiedServePayloadStoreV1 {
             return Err(CertifiedServePayloadStoreError::EmergencyFastReadOnly);
         }
         Ok(())
+    }
+
+    fn bound_directory(
+        &self,
+    ) -> Result<&BoundCertifiedServePayloadDirectory, CertifiedServePayloadStoreError> {
+        self.bound_directory.as_ref().ok_or_else(|| {
+            CertifiedServePayloadStoreError::UnsupportedStorageBinding(self.directory.clone())
+        })
     }
 
     /// Project a comparison-only seal before moving this exact store.
@@ -1140,7 +1853,13 @@ impl CertifiedServePayloadStoreV1 {
         root: &Path,
         context: &wire::HeightContext,
     ) -> bool {
-        &self.context == context && self.directory == root.join(STORE_DIRECTORY)
+        &self.context == context
+            && self.directory == root.join(STORE_DIRECTORY)
+            && (self.emergency_read_only
+                || self
+                    .bound_directory
+                    .as_ref()
+                    .is_some_and(BoundCertifiedServePayloadDirectory::is_linked))
     }
     /// Open one immutable height store and return its move-only recovery cut.
     ///
@@ -1172,6 +1891,7 @@ impl CertifiedServePayloadStoreV1 {
         let store = Self {
             identity: Arc::new(CertifiedServePayloadStoreInstanceIdentityMarker),
             directory: root.join(STORE_DIRECTORY),
+            bound_directory: None,
             context: context.clone(),
             max_entries: MAX_CERTIFIED_SERVE_PAYLOADS_PER_HEIGHT,
             max_entry_bytes: derive_max_entry_bytes(context)?,
@@ -1201,11 +1921,12 @@ impl CertifiedServePayloadStoreV1 {
         CertifiedServePayloadStoreError,
     > {
         let directory = root.join(STORE_DIRECTORY);
-        ensure_durable_directory(&directory)?;
+        let bound_directory = BoundCertifiedServePayloadDirectory::open_or_create(&directory)?;
         Ok((
             Self {
                 identity: Arc::new(CertifiedServePayloadStoreInstanceIdentityMarker),
                 directory,
+                bound_directory: Some(bound_directory),
                 context: context.clone(),
                 max_entries: MAX_CERTIFIED_SERVE_PAYLOADS_PER_HEIGHT,
                 max_entry_bytes: derive_max_entry_bytes(context)?,
@@ -1238,10 +1959,11 @@ impl CertifiedServePayloadStoreV1 {
             })?;
         let max_entry_bytes = derive_max_entry_bytes(context)?;
         let directory = root.join(STORE_DIRECTORY);
-        ensure_durable_directory(&directory)?;
+        let bound_directory = BoundCertifiedServePayloadDirectory::open_or_create(&directory)?;
         let mut store = Self {
             identity: Arc::new(CertifiedServePayloadStoreInstanceIdentityMarker),
             directory,
+            bound_directory: Some(bound_directory),
             context: context.clone(),
             max_entries,
             max_entry_bytes,
@@ -1257,35 +1979,14 @@ impl CertifiedServePayloadStoreV1 {
                     "directory traversal capacity overflowed",
                 ))?;
         let mut payloads = BTreeMap::new();
-        let mut traversed = 0_usize;
         let mut removed_temporary = false;
-        let entries = fs::read_dir(&store.directory)
-            .map_err(|source| io_error("read directory", &store.directory, source))?;
-        for entry in entries {
-            let entry = entry
-                .map_err(|source| io_error("read directory entry", &store.directory, source))?;
-            traversed = traversed.checked_add(1).ok_or(
-                CertifiedServePayloadStoreError::DirectoryCapacityExceeded {
-                    capacity: traversal_capacity,
-                },
-            )?;
-            if traversed > traversal_capacity {
-                return Err(CertifiedServePayloadStoreError::DirectoryCapacityExceeded {
-                    capacity: traversal_capacity,
-                });
-            }
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)
-                .map_err(|source| io_error("inspect entry", &path, source))?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(CertifiedServePayloadStoreError::NonRegularEntry(path));
-            }
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        for leaf in store.bound_directory()?.inventory(traversal_capacity)? {
+            let path = store.directory.join(&leaf.name);
+            let Some(name) = leaf.name.to_str() else {
                 return Err(CertifiedServePayloadStoreError::UnexpectedEntry(path));
             };
             if has_canonical_hash_name(name, TEMPORARY_FILE_SUFFIX) {
-                fs::remove_file(&path)
-                    .map_err(|source| io_error("discard interrupted file", &path, source))?;
+                store.bound_directory()?.remove_leaf(&leaf)?;
                 removed_temporary = true;
                 continue;
             }
@@ -1297,7 +1998,7 @@ impl CertifiedServePayloadStoreV1 {
                     capacity: max_entries,
                 });
             }
-            let payload = store.load_path(&path, metadata.len())?;
+            let payload = store.load_leaf(&leaf)?;
             if store.path_for(payload.id()) != path {
                 return Err(CertifiedServePayloadStoreError::RequestHashFilenameMismatch(path));
             }
@@ -1306,7 +2007,7 @@ impl CertifiedServePayloadStoreV1 {
             }
         }
         if removed_temporary {
-            sync_directory(&store.directory)?;
+            store.bound_directory()?.sync()?;
         }
         store.indexed.extend(payloads.keys().copied());
         let recovery = CertifiedServePayloadRecoveryCut {
@@ -1482,7 +2183,7 @@ impl CertifiedServePayloadStoreV1 {
             state: PersistedCertifiedServePayloadStateV1::Pending,
         };
         let receipt = admission_receipt(&payload, local_retainer);
-        self.persist_payload(&payload)
+        self.persist_payload(&payload, None)
             .map_err(PersistPayloadError::into_retention_error)?;
         self.indexed.insert(id);
         Ok(DurableCertifiedServeAdmissionPublication {
@@ -1516,12 +2217,13 @@ impl CertifiedServePayloadStoreV1 {
     ) -> Result<(), CertifiedServePayloadStoreError> {
         self.ensure_mutable()?;
         let mut ids = BTreeSet::new();
+        let mut leaves = BTreeMap::new();
         for receipt in receipts {
             let id = receipt.id();
             if !ids.insert(id) || !self.indexed.contains(&id) {
                 return Err(CertifiedServePayloadStoreError::PendingRollbackMismatch);
             }
-            let payload = self.load_id(id)?;
+            let (payload, leaf) = self.load_id_with_leaf(id)?;
             if !matches!(
                 payload.state,
                 PersistedCertifiedServePayloadStateV1::Pending
@@ -1530,14 +2232,17 @@ impl CertifiedServePayloadStoreV1 {
             {
                 return Err(CertifiedServePayloadStoreError::PendingRollbackMismatch);
             }
+            leaves.insert(id, leaf);
         }
         for id in &ids {
-            let path = self.path_for(*id);
-            fs::remove_file(&path)
-                .map_err(|source| io_error("roll back pending publication", &path, source))?;
+            self.bound_directory()?.remove_leaf(
+                leaves
+                    .get(id)
+                    .expect("validated rollback id owns one exact bound leaf"),
+            )?;
         }
         if !ids.is_empty() {
-            sync_directory(&self.directory)?;
+            self.bound_directory()?.sync()?;
             for id in ids {
                 let removed = self.indexed.remove(&id);
                 debug_assert!(removed, "validated pending publication remained indexed");
@@ -1580,13 +2285,22 @@ impl CertifiedServePayloadStoreV1 {
         }) {
             return Err(CertifiedServePayloadStoreError::OrphanTerminalPayload);
         }
+        let mut leaves = BTreeMap::new();
         for id in &orphans {
-            let path = self.path_for(*id);
-            fs::remove_file(&path)
-                .map_err(|source| io_error("prune orphaned publication", &path, source))?;
+            let (payload, leaf) = self.load_id_with_leaf(*id)?;
+            if !matches!(
+                payload.state,
+                PersistedCertifiedServePayloadStateV1::Pending
+            ) {
+                return Err(CertifiedServePayloadStoreError::OrphanTerminalPayload);
+            }
+            leaves.insert(*id, leaf);
+        }
+        for leaf in leaves.values() {
+            self.bound_directory()?.remove_leaf(leaf)?;
         }
         if !orphans.is_empty() {
-            sync_directory(&self.directory)?;
+            self.bound_directory()?.sync()?;
             for id in orphans {
                 let removed = self.indexed.remove(&id);
                 debug_assert!(removed, "authenticated orphan remained indexed");
@@ -1601,42 +2315,15 @@ impl CertifiedServePayloadStoreV1 {
         BTreeMap<CertifiedServePayloadId, PersistedCertifiedServePayloadV1>,
         CertifiedServePayloadStoreError,
     > {
-        let directory_metadata = fs::symlink_metadata(&self.directory)
-            .map_err(|source| io_error("inspect directory", &self.directory, source))?;
-        if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
-            return Err(CertifiedServePayloadStoreError::InvalidStoreDirectory(
-                self.directory.clone(),
-            ));
-        }
         let traversal_capacity = self.max_entries.checked_mul(2).ok_or(
             CertifiedServePayloadStoreError::InvalidGeometry(
                 "directory traversal capacity overflowed",
             ),
         )?;
-        let entries = fs::read_dir(&self.directory)
-            .map_err(|source| io_error("read directory", &self.directory, source))?;
         let mut payloads = BTreeMap::new();
-        let mut traversed = 0_usize;
-        for entry in entries {
-            let entry = entry
-                .map_err(|source| io_error("read directory entry", &self.directory, source))?;
-            traversed = traversed.checked_add(1).ok_or(
-                CertifiedServePayloadStoreError::DirectoryCapacityExceeded {
-                    capacity: traversal_capacity,
-                },
-            )?;
-            if traversed > traversal_capacity {
-                return Err(CertifiedServePayloadStoreError::DirectoryCapacityExceeded {
-                    capacity: traversal_capacity,
-                });
-            }
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)
-                .map_err(|source| io_error("inspect entry", &path, source))?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(CertifiedServePayloadStoreError::NonRegularEntry(path));
-            }
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        for leaf in self.bound_directory()?.inventory(traversal_capacity)? {
+            let path = self.directory.join(&leaf.name);
+            let Some(name) = leaf.name.to_str() else {
                 return Err(CertifiedServePayloadStoreError::UnexpectedEntry(path));
             };
             if !has_canonical_hash_name(name, FILE_SUFFIX) {
@@ -1647,7 +2334,7 @@ impl CertifiedServePayloadStoreV1 {
                     capacity: self.max_entries,
                 });
             }
-            let payload = self.load_path(&path, metadata.len())?;
+            let payload = self.load_leaf(&leaf)?;
             if self.path_for(payload.id()) != path {
                 return Err(CertifiedServePayloadStoreError::RequestHashFilenameMismatch(path));
             }
@@ -1879,8 +2566,8 @@ impl CertifiedServePayloadStoreV1 {
                 CertifiedServePayloadStoreError::UnknownPayload,
             ));
         }
-        let mut payload = self
-            .load_id(id)
+        let (mut payload, incumbent) = self
+            .load_id_with_leaf(id)
             .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
         if payload.request != *authenticated_request {
             return Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
@@ -1923,7 +2610,7 @@ impl CertifiedServePayloadStoreV1 {
         payload.state = completed;
         let receipt = completed_receipt(&payload)
             .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
-        self.persist_payload(&payload)
+        self.persist_payload(&payload, Some(&incumbent))
             .map_err(PersistPayloadError::into_terminal_error)?;
         Ok(receipt)
     }
@@ -1956,8 +2643,8 @@ impl CertifiedServePayloadStoreV1 {
                 CertifiedServePayloadStoreError::UnknownPayload,
             ));
         }
-        let mut payload = self
-            .load_id(id)
+        let (mut payload, incumbent) = self
+            .load_id_with_leaf(id)
             .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
         let negative = PersistedCertifiedServePayloadStateV1::Negative { outcome };
         match &payload.state {
@@ -1978,7 +2665,7 @@ impl CertifiedServePayloadStoreV1 {
         payload.state = negative;
         let receipt = negative_receipt(&payload)
             .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
-        self.persist_payload(&payload)
+        self.persist_payload(&payload, Some(&incumbent))
             .map_err(PersistPayloadError::into_terminal_error)?;
         Ok(receipt)
     }
@@ -2225,52 +2912,62 @@ impl CertifiedServePayloadStoreV1 {
         &self,
         id: CertifiedServePayloadId,
     ) -> Result<PersistedCertifiedServePayloadV1, CertifiedServePayloadStoreError> {
-        let path = self.path_for(id);
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|source| io_error("inspect indexed file", &path, source))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(CertifiedServePayloadStoreError::NonRegularEntry(path));
-        }
-        let payload = self.load_path(&path, metadata.len())?;
+        self.load_id_with_leaf(id).map(|(payload, _)| payload)
+    }
+    fn load_id_with_leaf(
+        &self,
+        id: CertifiedServePayloadId,
+    ) -> Result<
+        (
+            PersistedCertifiedServePayloadV1,
+            BoundCertifiedServePayloadLeaf,
+        ),
+        CertifiedServePayloadStoreError,
+    > {
+        let name = self.file_name_for(id);
+        let path = self.directory.join(&name);
+        let leaf = self
+            .bound_directory()?
+            .inspect_leaf(&name, self.max_entry_bytes)?
+            .ok_or_else(|| CertifiedServePayloadStoreError::NonRegularEntry(path.clone()))?;
+        let (payload, leaf) = self.load_leaf_with_bound(&leaf)?;
         if payload.id() != id {
             return Err(CertifiedServePayloadStoreError::RequestHashFilenameMismatch(path));
         }
-        Ok(payload)
+        Ok((payload, leaf))
     }
-    fn load_path(
+    fn load_leaf(
         &self,
-        path: &Path,
-        metadata_len: u64,
+        leaf: &BoundCertifiedServePayloadLeaf,
     ) -> Result<PersistedCertifiedServePayloadV1, CertifiedServePayloadStoreError> {
-        if metadata_len > self.max_entry_bytes {
-            return Err(CertifiedServePayloadStoreError::EntryTooLarge {
-                actual: metadata_len,
-                bound: self.max_entry_bytes,
-            });
-        }
-        let read_limit = self.max_entry_bytes.checked_add(1).ok_or(
-            CertifiedServePayloadStoreError::InvalidGeometry("file read bound overflowed"),
-        )?;
-        let mut bytes = Vec::new();
-        File::open(path)
-            .map_err(|source| io_error("open file", path, source))?
-            .take(read_limit)
-            .read_to_end(&mut bytes)
-            .map_err(|source| io_error("read file", path, source))?;
-        let actual = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        if actual > self.max_entry_bytes {
-            return Err(CertifiedServePayloadStoreError::EntryTooLarge {
-                actual,
-                bound: self.max_entry_bytes,
-            });
-        }
-        let payload = decode_frame(&bytes, self.max_entry_bytes, path)?;
-        self.validate_recovered_payload(&payload, path)?;
-        Ok(payload)
+        self.load_leaf_with_bound(leaf).map(|(payload, _)| payload)
+    }
+    fn load_leaf_with_bound(
+        &self,
+        leaf: &BoundCertifiedServePayloadLeaf,
+    ) -> Result<
+        (
+            PersistedCertifiedServePayloadV1,
+            BoundCertifiedServePayloadLeaf,
+        ),
+        CertifiedServePayloadStoreError,
+    > {
+        let path = self.directory.join(&leaf.name);
+        let bytes = self
+            .bound_directory()?
+            .read_leaf(leaf, self.max_entry_bytes)?;
+        let payload = decode_frame(&bytes, self.max_entry_bytes, &path)?;
+        self.validate_recovered_payload(&payload, &path)?;
+        let exact_leaf = BoundCertifiedServePayloadLeaf {
+            frame_hash: Some(Hash::new(&bytes)),
+            ..leaf.clone()
+        };
+        Ok((payload, exact_leaf))
     }
     fn persist_payload(
         &mut self,
         payload: &PersistedCertifiedServePayloadV1,
+        expected_destination: Option<&BoundCertifiedServePayloadLeaf>,
     ) -> Result<(), PersistPayloadError> {
         self.ensure_mutable()
             .map_err(PersistPayloadError::Unpublished)?;
@@ -2279,53 +2976,20 @@ impl CertifiedServePayloadStoreV1 {
             .map_err(PersistPayloadError::Unpublished)?;
         let (frame, _) = encode_frame(payload, self.max_entry_bytes)
             .map_err(PersistPayloadError::Unpublished)?;
-        let temporary = self.temporary_path(payload.id());
-        match fs::symlink_metadata(&temporary) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-                return Err(PersistPayloadError::Unpublished(
-                    CertifiedServePayloadStoreError::NonRegularEntry(temporary),
-                ));
-            }
-            Ok(_) => {
-                fs::remove_file(&temporary)
-                    .map_err(|source| io_error("discard interrupted file", &temporary, source))
-                    .map_err(PersistPayloadError::Unpublished)?;
-                sync_directory(&self.directory).map_err(PersistPayloadError::Unpublished)?;
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(PersistPayloadError::Unpublished(io_error(
-                    "inspect temporary file",
-                    &temporary,
-                    source,
-                )));
-            }
-        }
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)
-            .map_err(|source| io_error("create temporary file", &temporary, source))
-            .map_err(PersistPayloadError::Unpublished)?;
-        file.write_all(&frame)
-            .and_then(|()| file.flush())
-            .and_then(|()| file.sync_all())
-            .map_err(|source| io_error("synchronise temporary file", &temporary, source))
-            .map_err(PersistPayloadError::Unpublished)?;
-        drop(file);
-        fs::rename(&temporary, &path)
-            .map_err(|source| io_error("publish file", &path, source))
-            .map_err(PersistPayloadError::Unpublished)?;
         #[cfg(test)]
-        if std::mem::take(&mut self.fail_next_publish_directory_sync) {
-            return Err(PersistPayloadError::PublishedButUnsynchronized(io_error(
-                "synchronise directory after published file",
-                &self.directory,
-                std::io::Error::other("injected post-rename directory sync failure"),
-            )));
-        }
-        sync_directory(&self.directory).map_err(PersistPayloadError::PublishedButUnsynchronized)?;
-        Ok(())
+        let fail_before_directory_sync = std::mem::take(&mut self.fail_next_publish_directory_sync);
+        #[cfg(not(test))]
+        let fail_before_directory_sync = false;
+        self.bound_directory()
+            .map_err(PersistPayloadError::Unpublished)?
+            .publish(
+                &self.temporary_file_name_for(payload.id()),
+                &self.file_name_for(payload.id()),
+                &frame,
+                self.max_entry_bytes,
+                expected_destination,
+                fail_before_directory_sync,
+            )
     }
     /// Inject one admission publication failure after rename and before the
     /// final directory fsync.
@@ -2334,18 +2998,21 @@ impl CertifiedServePayloadStoreV1 {
         self.fail_next_publish_directory_sync = true;
     }
     fn path_for(&self, id: CertifiedServePayloadId) -> PathBuf {
-        self.directory.join(format!(
-            "{}{}",
-            hex::encode(id.request_hash().as_ref()),
-            FILE_SUFFIX
-        ))
+        self.directory.join(self.file_name_for(id))
+    }
+    fn file_name_for(&self, id: CertifiedServePayloadId) -> OsString {
+        format!("{}{}", hex::encode(id.request_hash().as_ref()), FILE_SUFFIX).into()
     }
     fn temporary_path(&self, id: CertifiedServePayloadId) -> PathBuf {
-        self.directory.join(format!(
+        self.directory.join(self.temporary_file_name_for(id))
+    }
+    fn temporary_file_name_for(&self, id: CertifiedServePayloadId) -> OsString {
+        format!(
             "{}{}",
             hex::encode(id.request_hash().as_ref()),
             TEMPORARY_FILE_SUFFIX
-        ))
+        )
+        .into()
     }
 }
 fn admission_receipt(
@@ -2961,8 +3628,16 @@ mod tests {
             .expect("open first payload-store instance");
         let first = store.instance_identity();
         assert!(first.same_instance(&store.instance_identity()));
+        assert!(matches!(
+            CertifiedServePayloadStoreV1::open(temporary.path(), &context),
+            Err(CertifiedServePayloadStoreError::Io {
+                operation: "lock store directory",
+                ..
+            })
+        ));
+        drop(store);
         let (reopened, _) = CertifiedServePayloadStoreV1::open(temporary.path(), &context)
-            .expect("reopen the same payload-store path independently");
+            .expect("reopen the released payload-store path");
         assert!(
             !first.same_instance(&reopened.instance_identity()),
             "path and context equality cannot substitute for exact Serve-store ownership"
@@ -3250,10 +3925,9 @@ mod tests {
     }
     #[cfg(feature = "bls")]
     #[test]
-    fn authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner() {
+    fn authenticated_cut_has_one_exclusive_store_owner() {
         let temporary = TempDir::new().expect("temporary exact-census payload store");
         let (verified, keys) = verified_bls_context_and_keys();
-        let request = bls_request(&verified, &keys, true);
         let (first_owner, recovery) =
             CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
                 .expect("open first exact-census payload owner");
@@ -3263,22 +3937,21 @@ mod tests {
             .authenticate(&verified, &keys[0], &body_store)
             .expect("authenticate the original empty payload census");
         assert!(authenticated.is_empty());
-        let (mut second_owner, second_recovery) =
-            CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
-                .expect("open second payload owner at the same directory");
-        assert!(second_recovery.is_empty());
-        let _ = second_owner
-            .persist_pending_with_verified_retention(&verified, &keys[0], &request)
-            .expect("publish a valid payload behind the first owner's index");
         assert!(matches!(
-            first_owner.validate_authenticated_cut(&authenticated),
-            Err(CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch)
+            CertifiedServePayloadStoreV1::open(temporary.path(), verified.context()),
+            Err(CertifiedServePayloadStoreError::Io {
+                operation: "lock store directory",
+                ..
+            })
         ));
+        first_owner
+            .validate_authenticated_cut(&authenticated)
+            .expect("exclusive ownership preserves the authenticated census");
     }
     #[cfg(unix)]
     #[test]
-    fn authenticated_cut_rejects_store_directory_symlink_replacement() {
-        let temporary = TempDir::new().expect("temporary symlink-drift payload store");
+    fn authenticated_cut_rejects_store_directory_inode_replacement() {
+        let temporary = TempDir::new().expect("temporary inode-drift payload store");
         let (context, _) = context_and_keys();
         let (owner, authenticated) = CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
             temporary.path(),
@@ -3287,14 +3960,97 @@ mod tests {
         .expect("open retained payload directory");
         let canonical = temporary.path().join(STORE_DIRECTORY);
         let displaced = temporary.path().join("displaced-payload-store");
-        let replacement = temporary.path().join("replacement-payload-store");
         fs::rename(&canonical, &displaced).expect("displace retained payload directory");
-        fs::create_dir(&replacement).expect("create redirected payload directory");
-        std::os::unix::fs::symlink(&replacement, &canonical)
-            .expect("replace retained payload directory with a symlink");
+        fs::create_dir(&canonical).expect("replace retained payload directory inode");
         assert!(matches!(
             owner.validate_authenticated_cut(&authenticated),
             Err(CertifiedServePayloadStoreError::InvalidStoreDirectory(path)) if path == canonical
+        ));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn opening_rejects_a_store_directory_symlink() {
+        let root = TempDir::new().expect("symlinked payload-store root");
+        let target = TempDir::new().expect("payload-store symlink target");
+        let (context, _) = context_and_keys();
+        let directory = root.path().join(STORE_DIRECTORY);
+        std::os::unix::fs::symlink(target.path(), &directory)
+            .expect("substitute payload-store directory symlink");
+        assert!(matches!(
+            CertifiedServePayloadStoreV1::open(root.path(), &context),
+            Err(CertifiedServePayloadStoreError::NonRegularEntry(path)) if path == directory
+        ));
+    }
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn opening_rejects_symlink_hardlink_and_fifo_payload_leaves() {
+        let (context, keys) = context_and_keys();
+        let (request, _) = request_and_response(&context, &keys[0], 0, b"unsafe-leaf".to_vec());
+        let id = CertifiedServePayloadId::from_request(request.request());
+
+        let symlink_root = TempDir::new().expect("symlink payload root");
+        let symlink_directory = symlink_root.path().join(STORE_DIRECTORY);
+        ensure_durable_directory(&symlink_directory).expect("create symlink payload directory");
+        let symlink_sentinel = symlink_root.path().join("symlink-sentinel");
+        fs::write(&symlink_sentinel, b"symlink sentinel").expect("write symlink sentinel");
+        std::os::unix::fs::symlink(
+            &symlink_sentinel,
+            symlink_directory.join(format!(
+                "{}{}",
+                hex::encode(id.request_hash().as_ref()),
+                FILE_SUFFIX
+            )),
+        )
+        .expect("substitute payload symlink");
+        assert!(matches!(
+            CertifiedServePayloadStoreV1::open(symlink_root.path(), &context),
+            Err(CertifiedServePayloadStoreError::NonRegularEntry(_))
+        ));
+        assert_eq!(
+            fs::read(&symlink_sentinel).expect("reread symlink sentinel"),
+            b"symlink sentinel"
+        );
+
+        let hardlink_root = TempDir::new().expect("hardlink payload root");
+        let hardlink_directory = hardlink_root.path().join(STORE_DIRECTORY);
+        ensure_durable_directory(&hardlink_directory).expect("create hardlink payload directory");
+        let hardlink_sentinel = hardlink_root.path().join("hardlink-sentinel");
+        fs::write(&hardlink_sentinel, b"hardlink sentinel").expect("write hardlink sentinel");
+        fs::hard_link(
+            &hardlink_sentinel,
+            hardlink_directory.join(format!(
+                "{}{}",
+                hex::encode(id.request_hash().as_ref()),
+                TEMPORARY_FILE_SUFFIX
+            )),
+        )
+        .expect("substitute payload temporary hardlink");
+        assert!(matches!(
+            CertifiedServePayloadStoreV1::open(hardlink_root.path(), &context),
+            Err(CertifiedServePayloadStoreError::NonRegularEntry(_))
+        ));
+        assert_eq!(
+            fs::read(&hardlink_sentinel).expect("reread hardlink sentinel"),
+            b"hardlink sentinel"
+        );
+
+        let fifo_root = TempDir::new().expect("FIFO payload root");
+        let fifo_directory = fifo_root.path().join(STORE_DIRECTORY);
+        ensure_durable_directory(&fifo_directory).expect("create FIFO payload directory");
+        let fifo = fifo_directory.join(format!(
+            "{}{}",
+            hex::encode(id.request_hash().as_ref()),
+            FILE_SUFFIX
+        ));
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .expect("create payload FIFO");
+        assert!(matches!(
+            CertifiedServePayloadStoreV1::open(fifo_root.path(), &context),
+            Err(CertifiedServePayloadStoreError::NonRegularEntry(path)) if path == fifo
         ));
     }
     #[cfg(feature = "bls")]

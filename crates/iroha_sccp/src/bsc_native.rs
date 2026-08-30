@@ -344,6 +344,8 @@ pub struct BscNativeSourceProofV1 {
 pub struct ValidatedBscNativeFinalityV1 {
     /// Governed anchor hash.
     pub anchor_hash: H256,
+    /// Execution block number authenticated by the governed anchor.
+    pub anchor_block_number: u64,
     /// Finalized target block number.
     pub block_number: u64,
     /// Finalized target block hash.
@@ -1358,17 +1360,6 @@ fn anchor_state(
         params,
     ))
 }
-/// Return the canonical execution block number of a valid governed Parlia anchor.
-///
-/// # Errors
-///
-/// Returns a finality error when the anchor header is malformed or non-canonical.
-pub fn bsc_native_anchor_block_number(
-    anchor: &BscNativeParliaAnchorV1,
-) -> Result<u64, BscNativeFinalityError> {
-    let header = parse_header(&anchor.header_rlp)?;
-    Ok(header.number)
-}
 // Seed table and generator used by Go 1's `math/rand.NewSource`. Parlia's
 // out-of-turn delay is consensus-visible and therefore cannot be replaced by
 // Rust's RNG or by a statistically equivalent shuffle.
@@ -1907,6 +1898,7 @@ fn verify_bsc_native_finality_counted(
     let target_index = usize::from(proof.target_header_index);
     work.secp256k1_recoveries = work.secp256k1_recoveries.saturating_add(1);
     let (mut state, anchor_hash, params) = anchor_state(&proof.anchor)?;
+    let anchor_block_number = state.number;
     if anchor_hash != expected_anchor_hash {
         return Err(BscNativeFinalityError::AnchorHashMismatch);
     }
@@ -1948,6 +1940,7 @@ fn verify_bsc_native_finality_counted(
             }
             return Ok(ValidatedBscNativeFinalityV1 {
                 anchor_hash,
+                anchor_block_number,
                 block_number,
                 block_hash,
                 state_root,
@@ -3341,6 +3334,7 @@ mod tests {
             fixture.anchor_hash,
         )
         .unwrap();
+        assert_eq!(result.anchor_block_number, 1_001);
         assert_eq!(result.block_number, 1_002);
         assert_eq!(result.block_hash, fixture.header1_hash);
         assert_eq!(result.resulting_finalized_number, 1_002);
