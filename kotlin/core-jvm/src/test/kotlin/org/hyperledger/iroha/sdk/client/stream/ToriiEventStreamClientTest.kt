@@ -4,6 +4,9 @@ import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.security.KeyPairGenerator
+import java.security.Signature
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
@@ -18,11 +21,142 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
+import org.hyperledger.iroha.sdk.client.LocalSigningContext
+import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 
 class ToriiEventStreamClientTest {
+    @Test
+    fun canonicalSigningBindsTheExactFinalStreamUri() {
+        var recorded: TransportRequest? = null
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val networkId = TestNetworkIds.canonical()
+        val timestampMs = 1_700_000_000_000L
+        val nonce = "contract-stream-1"
+        val client = ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("https://example.com/api"))
+            .setTransportExecutor(object : TransportExecutor {
+                override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+                    recorded = request
+                    return okSse()
+                }
+            })
+            .canonicalRequestAuth(
+                LocalSigningContext(networkId),
+                ToriiCanonicalRequestAuth(
+                    "alice@universal",
+                    keyPair.private,
+                    timestampMs,
+                    nonce,
+                ),
+            )
+            .build()
+        val options = ToriiEventStreamOptions.builder()
+            .putQueryParameter("kind", "applied")
+            .putQueryParameter("cursor", "opaque cursor")
+            .build()
+
+        client.openSseStream(
+            "/v1/contracts/events/sse?z=last",
+            options,
+            noopListener(),
+        ).completion().get(1, TimeUnit.SECONDS)
+
+        val request = assertNotNull(recorded)
+        assertEquals(
+            "https://example.com/api/v1/contracts/events/sse?z=last&kind=applied&cursor=opaque+cursor",
+            request.uri.toString(),
+        )
+        assertEquals(
+            listOf("alice@universal"),
+            request.headers[CanonicalRequestSigner.HEADER_ACCOUNT],
+        )
+        assertEquals(
+            listOf(timestampMs.toString()),
+            request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS],
+        )
+        assertEquals(listOf(nonce), request.headers[CanonicalRequestSigner.HEADER_NONCE])
+        val encodedSignature = assertNotNull(
+            request.headers[CanonicalRequestSigner.HEADER_SIGNATURE]?.single(),
+        )
+        val verifier = Signature.getInstance("Ed25519")
+        verifier.initVerify(keyPair.public)
+        verifier.update(
+            CanonicalRequestSigner.canonicalRequestSignatureMessage(
+                networkId,
+                "GET",
+                request.uri,
+                null,
+                timestampMs,
+                nonce,
+            ),
+        )
+        assertTrue(verifier.verify(Base64.getDecoder().decode(encodedSignature)))
+    }
+
+    @Test
+    fun contractStreamRemainsAnonymousWithoutSigningConfiguration() {
+        var recorded: TransportRequest? = null
+        val client = ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("https://example.com"))
+            .setTransportExecutor(object : TransportExecutor {
+                override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+                    recorded = request
+                    return okSse()
+                }
+            })
+            .build()
+
+        client.openSseStream(
+            "/v1/contracts/events/sse",
+            ToriiEventStreamOptions.defaultOptions(),
+            noopListener(),
+        ).completion().get(1, TimeUnit.SECONDS)
+
+        val headers = assertNotNull(recorded).headers
+        assertFalse(headers.containsKey(CanonicalRequestSigner.HEADER_ACCOUNT))
+        assertFalse(headers.containsKey(CanonicalRequestSigner.HEADER_SIGNATURE))
+        assertFalse(headers.containsKey(CanonicalRequestSigner.HEADER_TIMESTAMP_MS))
+        assertFalse(headers.containsKey(CanonicalRequestSigner.HEADER_NONCE))
+    }
+
+    @Test
+    fun rejectsPrecomputedOrPartialCanonicalHeadersBeforeDispatch() {
+        var dispatches = 0
+        val transport = object : TransportExecutor {
+            override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+                dispatches++
+                return okSse()
+            }
+        }
+        val defaultHeaderClient = ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("https://example.com"))
+            .setTransportExecutor(transport)
+            .putDefaultHeader("x-iroha-signature", "precomputed")
+            .build()
+        val optionHeaderClient = ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("https://example.com"))
+            .setTransportExecutor(transport)
+            .build()
+
+        for ((client, options) in listOf(
+            defaultHeaderClient to ToriiEventStreamOptions.defaultOptions(),
+            optionHeaderClient to ToriiEventStreamOptions.builder()
+                .putHeader("X-IROHA-ACCOUNT", "alice@universal")
+                .build(),
+        )) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                client.openSseStream("/v1/contracts/events/sse", options, noopListener())
+            }
+            assertContains(error.message.orEmpty(), "canonicalRequestAuth")
+        }
+        assertEquals(0, dispatches)
+    }
+
     @Test
     fun rejectsCaseVariantAndRepeatedLastEventIdBeforeCanonicalDispatch() {
         var dispatches = 0

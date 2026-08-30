@@ -48,6 +48,8 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
 };
 
+pub(crate) use iroha_data_model::governance::types::PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1;
+
 use super::{
     draw::{body_committee_size, derive_attempt_body_plan_v1},
     timed_ovn::TimedOvnParliamentReducerBindingV1,
@@ -88,6 +90,8 @@ pub enum ParliamentReducerErrorV1 {
     AttemptNotActive,
     /// The canonical framed attempt state exceeds or cannot satisfy the hard V1 byte bound.
     AttemptStateSizeLimitExceeded,
+    /// The attempt names a Parliament policy version other than the sole first-release version.
+    UnsupportedPolicyVersion,
     /// The requested risk tier is below the already accepted tier.
     RiskDowngrade,
     /// Repeating the current risk tier is a replay, not an escalation.
@@ -207,6 +211,8 @@ pub enum ParliamentReducerErrorV1 {
     CertificateBindingMismatch,
     /// Supersession was reported without an actual compare-and-set head change.
     ExpectedHeadUnchanged,
+    /// The reported superseding head is malformed or names another governed subject.
+    InvalidSupersedingHead,
 }
 
 impl fmt::Display for ParliamentReducerErrorV1 {
@@ -217,6 +223,9 @@ impl fmt::Display for ParliamentReducerErrorV1 {
             Self::AttemptNotActive => f.write_str("governance attempt is not active"),
             Self::AttemptStateSizeLimitExceeded => {
                 f.write_str("Parliament attempt state exceeds the V1 encoded-size limit")
+            }
+            Self::UnsupportedPolicyVersion => {
+                f.write_str("unsupported Parliament governance policy version")
             }
             Self::RiskDowngrade => f.write_str("governance risk may only escalate"),
             Self::RiskEscalationReplay => f.write_str("risk escalation replays the current tier"),
@@ -348,6 +357,9 @@ impl fmt::Display for ParliamentReducerErrorV1 {
             Self::ExpectedHeadUnchanged => {
                 f.write_str("supersession requires a changed compare-and-set head")
             }
+            Self::InvalidSupersedingHead => {
+                f.write_str("superseding head is invalid for the governed subject")
+            }
         }
     }
 }
@@ -396,9 +408,6 @@ pub struct RequiredParliamentBodyV1 {
     /// Decision protocol required for the body.
     pub decision_mode: ParliamentDecisionModeV1,
 }
-
-/// The one consensus policy version implemented by first-release Parliament.
-pub(crate) const PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1: u64 = 1;
 
 const SCCP_ROUTE_GOVERNANCE_REQUIRED_BODIES_V1: &[ParliamentBody] = &[
     ParliamentBody::RulesCommittee,
@@ -1022,8 +1031,15 @@ fn expected_head_is_valid(expected_head: GovernanceExpectedHeadV1) -> bool {
     match expected_head {
         GovernanceExpectedHeadV1::Absent(head) => !root_is_zero(&head.subject_id),
         GovernanceExpectedHeadV1::Present(head) => {
-            !root_is_zero(&head.subject_id) && !root_is_zero(&head.head_root)
+            !root_is_zero(&head.subject_id) && head.version != 0 && !root_is_zero(&head.head_root)
         }
+    }
+}
+
+fn expected_head_subject(expected_head: GovernanceExpectedHeadV1) -> [u8; 32] {
+    match expected_head {
+        GovernanceExpectedHeadV1::Absent(head) => head.subject_id,
+        GovernanceExpectedHeadV1::Present(head) => head.subject_id,
     }
 }
 
@@ -1390,9 +1406,12 @@ fn required_pipeline_is_canonical(required: &[RequiredParliamentBodyV1]) -> bool
         if previous_stage.is_some_and(|previous| previous >= stage) {
             return false;
         }
-        if entry.body == ParliamentBody::PolicyJury
-            && entry.decision_mode != ParliamentDecisionModeV1::HiddenBindingBallot
-        {
+        let expected_mode = if entry.body == ParliamentBody::PolicyJury {
+            ParliamentDecisionModeV1::HiddenBindingBallot
+        } else {
+            ParliamentDecisionModeV1::PublicFinding
+        };
+        if entry.decision_mode != expected_mode {
             return false;
         }
         previous_stage = Some(stage);
@@ -1418,8 +1437,8 @@ impl ParliamentAttemptStateV1 {
     /// Policy Jury, and omit the dynamically required Confirmation Jury.
     ///
     /// # Errors
-    /// Returns an error for zero immutable bindings, a noninitial attempt, or a
-    /// noncanonical required-body pipeline.
+    /// Returns an error for zero immutable bindings, an unsupported policy
+    /// version, a noninitial attempt, or a noncanonical required-body pipeline.
     pub fn try_new(
         attempt: GovernanceAttemptV1,
         policy_version: u64,
@@ -1485,11 +1504,13 @@ impl ParliamentAttemptStateV1 {
             .as_bytes()
             .iter()
             .all(|byte| *byte == 0)
-            || policy_version == 0
             || root_is_zero(&effect_preimage_hash)
             || !expected_head_is_valid(expected_head)
         {
             return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
+        }
+        if policy_version != PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1 {
+            return Err(ParliamentReducerErrorV1::UnsupportedPolicyVersion);
         }
         if sortition_pulse_delay_blocks == 0 {
             return Err(ParliamentReducerErrorV1::InvalidSortitionPulseSchedule);
@@ -2278,9 +2299,9 @@ impl ParliamentAttemptStateV1 {
 /// complete, sequence-ordered attempt history.
 ///
 /// # Errors
-/// Returns an error when the first attempt does not start at zero, a successor
-/// does not inherit its predecessor's exact terminal count, proposals are
-/// mixed, or any attempt exceeds the V1 cumulative ceiling.
+/// Returns an error when attempt sequences are not exactly contiguous from
+/// zero, a successor does not inherit its predecessor's exact terminal count,
+/// proposals are mixed, or any attempt exceeds the V1 cumulative ceiling.
 pub(crate) fn validate_parliament_randomness_redraw_lineage_v1<I, A>(
     attempts: I,
 ) -> Result<(), ParliamentReducerErrorV1>
@@ -2296,6 +2317,7 @@ where
     let first = first.borrow();
     let proposal_content_id = first.proposal_content_id();
     let mut expected_prefix = 0;
+    let mut expected_sequence = 0;
     for attempt in attempts {
         let attempt = attempt.borrow();
         if attempt.proposal_content_id() != proposal_content_id
@@ -2303,12 +2325,18 @@ where
         {
             return Err(ParliamentReducerErrorV1::RandomnessRedrawLineageMismatch);
         }
+        if attempt.attempt.sequence != expected_sequence {
+            return Err(ParliamentReducerErrorV1::RetrySequenceMismatch);
+        }
         if attempt.attempt.sequence > 0
             && attempt.randomness_redraws_before_attempt >= MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
         {
             return Err(ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded);
         }
         expected_prefix = attempt.randomness_redraws_used_v1()?;
+        expected_sequence = expected_sequence
+            .checked_add(1)
+            .ok_or(ParliamentReducerErrorV1::RetrySequenceMismatch)?;
     }
     Ok(())
 }

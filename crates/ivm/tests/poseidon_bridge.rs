@@ -1,25 +1,4 @@
-//! Ensure the Poseidon compression used by Merkle gadgets equals the internal
-//! `poseidon2` permutation for a single level (both child orderings).
-#[test]
-fn poseidon_merkle_level_matches_internal() {
-    let samples: &[(u64, u64)] = &[
-        (0, 0),
-        (1, 2),
-        (5, 7),
-        (u64::MAX, 123456789),
-        (0xDEAD_BEEF_DEAD_BEEF, 0x0123_4567_89AB_CDEF),
-    ];
-    for &(leaf, sib) in samples {
-        // Depth=1, index LSB=0 => acc is left child
-        let r0 = ivm::halo2::verify_merkle_path_depth(leaf, 0, &[sib; 32], 1);
-        let e0 = ivm::poseidon2(leaf, sib);
-        assert_eq!(r0, e0, "poseidon(left, right) mismatch");
-        // Depth=1, index LSB=1 => acc is right child
-        let r1 = ivm::halo2::verify_merkle_path_depth(leaf, 1, &[sib; 32], 1);
-        let e1 = ivm::poseidon2(sib, leaf);
-        assert_eq!(r1, e1, "poseidon(right, left) mismatch");
-    }
-}
+//! Cross-check the IVM Poseidon adapters against the canonical proof-backend bridge.
 #[test]
 fn bridge_matches_internal_poseidon2() {
     let mut vectors = Vec::new();

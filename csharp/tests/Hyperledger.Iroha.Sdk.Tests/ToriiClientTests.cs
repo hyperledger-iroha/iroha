@@ -152,6 +152,66 @@ public sealed partial class ToriiClientTests
         Assert.Contains("Torii health response body must be valid UTF-8", error.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("/v1/health")]
+    [InlineData("/v1/version")]
+    [InlineData("/v1/explorer/health")]
+    [InlineData("/.well-known/sorafs/manifest")]
+    [InlineData("/v1/sorafs/cid/bafyroot")]
+    [InlineData("/sorafs/cid/bafyroot/assets/index.html")]
+    public async Task CanonicalCredentialsDoNotSignExplicitlyAnonymousPublicRoutes(string path)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    CanonicalAccountId,
+                    CanonicalPrivateKeySeed),
+            });
+
+        using var response = await client.SendAsync(
+            HttpMethod.Get,
+            path,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(path, handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.False(handler.LastRequest.Headers.Contains("X-Iroha-Account"));
+        Assert.False(handler.LastRequest.Headers.Contains("X-Iroha-Signature"));
+    }
+
+    [Theory]
+    [InlineData("/v1/explorer/accounts")]
+    [InlineData("/v1/contracts/state")]
+    [InlineData("/v1/events/sse")]
+    [InlineData("/v1/explorer/metrics")]
+    public async Task CanonicalCredentialsSignVisibilitySensitiveReadRoutes(string path)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    CanonicalAccountId,
+                    CanonicalPrivateKeySeed),
+            });
+
+        using var response = await client.SendAsync(
+            HttpMethod.Get,
+            path,
+            query: "cursor=cHJldg&limit=10",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal($"{path}?cursor=cHJldg&limit=10", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Account"));
+        Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Signature"));
+    }
+
     [Fact]
     public async Task GetMetricsAsyncReturnsTextResponse()
     {
@@ -3410,6 +3470,172 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
+    public void ExplorerHistoryCursorMetadataUsesCanonicalWireOrderAndConsistency()
+    {
+        var pagination = new ToriiExplorerHistoryCursorMeta
+        {
+            Limit = 25,
+            SnapshotHeight = 42,
+            SnapshotHash = ExplorerBlockHashHex,
+            NextCursor = "bmV4dA",
+            HasMore = true,
+        };
+
+        var json = JsonSerializer.Serialize(pagination);
+        Assert.Equal(
+            $$"""{"limit":25,"snapshot_height":42,"snapshot_hash":"{{ExplorerBlockHashHex}}","next_cursor":"bmV4dA","has_more":true}""",
+            json);
+
+        var roundTrip = Assert.IsType<ToriiExplorerHistoryCursorMeta>(
+            JsonSerializer.Deserialize<ToriiExplorerHistoryCursorMeta>(json));
+        Assert.Equal((uint)25, roundTrip.Limit);
+        Assert.Equal((ulong)42, roundTrip.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, roundTrip.SnapshotHash);
+        Assert.Equal("bmV4dA", roundTrip.NextCursor);
+        Assert.True(roundTrip.HasMore);
+    }
+
+    [Fact]
+    public void ExplorerHistoryCursorMetadataAcceptsEmptyChainSnapshot()
+    {
+        const string json =
+            """{"limit":20,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false}""";
+
+        var pagination = Assert.IsType<ToriiExplorerHistoryCursorMeta>(
+            JsonSerializer.Deserialize<ToriiExplorerHistoryCursorMeta>(json));
+
+        Assert.Equal((uint)20, pagination.Limit);
+        Assert.Equal((ulong)0, pagination.SnapshotHeight);
+        Assert.Null(pagination.SnapshotHash);
+        Assert.Null(pagination.NextCursor);
+        Assert.False(pagination.HasMore);
+    }
+
+    [Theory]
+    [InlineData(0UL, true)]
+    [InlineData(42UL, false)]
+    public void ExplorerHistoryCursorMetadataWriteRejectsInconsistentSnapshotAnchor(
+        ulong snapshotHeight,
+        bool includeSnapshotHash)
+    {
+        var pagination = new ToriiExplorerHistoryCursorMeta
+        {
+            Limit = 25,
+            SnapshotHeight = snapshotHeight,
+            SnapshotHash = includeSnapshotHash ? ExplorerBlockHashHex : null,
+            NextCursor = null,
+            HasMore = false,
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(pagination));
+
+        Assert.Contains("snapshot_hash", error.Message);
+        Assert.Contains("snapshot_height", error.Message);
+    }
+
+    [Fact]
+    public void ExplorerHistoryCursorMetadataWriteRejectsInconsistentContinuationFlag()
+    {
+        var pagination = new ToriiExplorerHistoryCursorMeta
+        {
+            Limit = 25,
+            SnapshotHeight = 42,
+            SnapshotHash = ExplorerBlockHashHex,
+            NextCursor = "bmV4dA",
+            HasMore = false,
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(pagination));
+
+        Assert.Contains("has_more", error.Message);
+        Assert.Contains("next_cursor", error.Message);
+    }
+
+    [Fact]
+    public void ExplorerHistoryCursorMetadataWriteRejectsContinuationForEmptySnapshot()
+    {
+        var pagination = new ToriiExplorerHistoryCursorMeta
+        {
+            Limit = 25,
+            SnapshotHeight = 0,
+            SnapshotHash = null,
+            NextCursor = "bmV4dA",
+            HasMore = true,
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(pagination));
+
+        Assert.Contains("next_cursor", error.Message);
+        Assert.Contains("snapshot_height", error.Message);
+    }
+
+    [Fact]
+    public void ExplorerHistoryPageWriteRejectsMoreItemsThanLimit()
+    {
+        var block = new ToriiExplorerBlock
+        {
+            Hash = ExplorerBlockHashHex,
+            Height = 42,
+            CreatedAt = "2026-03-29T00:00:00Z",
+            PreviousBlockHash = ExplorerPreviousBlockHashHex,
+            TransactionsHash = ExplorerTransactionsHashHex,
+            TransactionsRejected = 0,
+            TransactionsTotal = 1,
+        };
+        var page = new ToriiExplorerBlocksPage
+        {
+            Pagination = new ToriiExplorerHistoryCursorMeta
+            {
+                Limit = 1,
+                SnapshotHeight = 42,
+                SnapshotHash = ExplorerBlockHashHex,
+                NextCursor = null,
+                HasMore = false,
+            },
+            Items = new[] { block, block with { Height = 41 } },
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(page));
+
+        Assert.Contains("items", error.Message);
+        Assert.Contains("pagination.limit", error.Message);
+    }
+
+    [Fact]
+    public void ExplorerHistoryPageWriteRejectsItemsForEmptySnapshot()
+    {
+        var page = new ToriiExplorerBlocksPage
+        {
+            Pagination = new ToriiExplorerHistoryCursorMeta
+            {
+                Limit = 20,
+                SnapshotHeight = 0,
+                SnapshotHash = null,
+                NextCursor = null,
+                HasMore = false,
+            },
+            Items = new[]
+            {
+                new ToriiExplorerBlock
+                {
+                    Hash = ExplorerBlockHashHex,
+                    Height = 1,
+                    CreatedAt = "2026-03-29T00:00:00Z",
+                    PreviousBlockHash = null,
+                    TransactionsHash = ExplorerTransactionsHashHex,
+                    TransactionsRejected = 0,
+                    TransactionsTotal = 1,
+                },
+            },
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(page));
+
+        Assert.Contains("items", error.Message);
+        Assert.Contains("pagination.snapshot_height", error.Message);
+    }
+
+    [Fact]
     public void ToriiJsonNodesSnapshotInitAndAccessValues()
     {
         static JsonObject NewNode() => new()
@@ -4159,13 +4385,19 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public async Task GetExplorerBlocksAsyncAddsPaginationAndDeserializesPage()
+    public async Task GetExplorerBlocksAsyncAddsCursorAndDeserializesSnapshotPage()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 2, "per_page": 5, "total_pages": 3, "total_items": 12 },
+                  "pagination": {
+                    "limit": 5,
+                    "snapshot_height": 42,
+                    "snapshot_hash": "{{ExplorerBlockHashHex}}",
+                    "next_cursor": "bmV4dA",
+                    "has_more": true
+                  },
                   "items": [
                     {
                       "hash": "{{ExplorerBlockHashHex}}",
@@ -4182,16 +4414,70 @@ public sealed partial class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var page = await client.GetExplorerBlocksAsync(new ToriiExplorerPaginationQuery { Page = 2, PerPage = 5 }, cancellationToken: TestContext.Current.CancellationToken);
+        var page = await client.GetExplorerBlocksAsync(new ToriiExplorerCursorQuery
+        {
+            Cursor = "cHJldg",
+            Limit = 5,
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal((ulong)2, page.Pagination.Page);
-        Assert.Equal((ulong)5, page.Pagination.PerPage);
-        Assert.Equal((ulong)3, page.Pagination.TotalPages);
-        Assert.Equal((ulong)12, page.Pagination.TotalItems);
+        Assert.Equal((uint)5, page.Pagination.Limit);
+        Assert.Equal((ulong)42, page.Pagination.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, page.Pagination.SnapshotHash);
+        Assert.Equal("bmV4dA", page.Pagination.NextCursor);
+        Assert.True(page.Pagination.HasMore);
         Assert.Single(page.Items);
         Assert.Equal(ExplorerBlockHashHex, page.Items[0].Hash);
         Assert.Equal((ulong)42, page.Items[0].Height);
-        Assert.Equal("/v1/explorer/blocks?page=2&per_page=5", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/blocks?cursor=cHJldg&limit=5", handler.LastRequest!.RequestUri!.PathAndQuery);
+    }
+
+    public static IEnumerable<object[]> ExplorerHistoryOperations()
+    {
+        yield return new object[] { "blocks" };
+        yield return new object[] { "transactions" };
+        yield return new object[] { "transactions-latest" };
+        yield return new object[] { "instructions" };
+        yield return new object[] { "instructions-latest" };
+    }
+
+    [Theory]
+    [MemberData(nameof(ExplorerHistoryOperations))]
+    public async Task ExplorerHistoryQueriesRejectNoncanonicalCursorBeforeDispatch(string operation)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("invalid Explorer history cursor reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            InvokeExplorerHistoryQueryAsync(
+                client,
+                operation,
+                "bmV4dA==",
+                10,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("base64url", error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
+    [MemberData(nameof(ExplorerHistoryOperations))]
+    public async Task ExplorerHistoryQueriesRejectOutOfRangeLimitBeforeDispatch(string operation)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("invalid Explorer history limit reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            InvokeExplorerHistoryQueryAsync(
+                client,
+                operation,
+                "bmV4dA",
+                101,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("between 1 and 100", error.Message);
+        Assert.Null(handler.LastRequest);
     }
 
     [Fact]
@@ -4834,7 +5120,13 @@ public sealed partial class ToriiClientTests
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 1, "per_page": 20, "total_pages": 2, "total_items": 21 },
+                  "pagination": {
+                    "limit": 20,
+                    "snapshot_height": 5,
+                    "snapshot_hash": "{{ExplorerBlockHashHex}}",
+                    "next_cursor": "bmV4dA",
+                    "has_more": true
+                  },
                   "items": [
                     {
                       "authority": "{{ExplorerTransactionAuthorityAccountId}}",
@@ -4852,20 +5144,24 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var page = await client.GetExplorerTransactionsAsync(new ToriiExplorerTransactionsQuery
         {
-            Page = 1,
-            PerPage = 20,
+            Cursor = "cHJldg",
+            Limit = 20,
             Authority = ExplorerTransactionAuthorityAccountId,
             Block = 5,
             Status = ToriiExplorerTransactionStatusFilter.Committed,
             AssetId = "rose#wonderland.paynet",
         }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal((ulong)21, page.Pagination.TotalItems);
+        Assert.Equal((uint)20, page.Pagination.Limit);
+        Assert.Equal((ulong)5, page.Pagination.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, page.Pagination.SnapshotHash);
+        Assert.Equal("bmV4dA", page.Pagination.NextCursor);
+        Assert.True(page.Pagination.HasMore);
         Assert.Single(page.Items);
         Assert.Equal(ToriiTransactionHashHex, page.Items[0].Hash);
         Assert.Equal("Committed", page.Items[0].Status);
         Assert.Equal(
-            $"page=1&per_page=20&authority={Uri.EscapeDataString(ExplorerTransactionAuthorityAccountId)}&block=5&status=committed&asset_id=rose%23wonderland.paynet",
+            $"cursor=cHJldg&limit=20&authority={Uri.EscapeDataString(ExplorerTransactionAuthorityAccountId)}&block=5&status=committed&asset_id=rose%23wonderland.paynet",
             handler.LastRequest!.RequestUri!.Query.TrimStart('?'));
     }
 
@@ -4877,6 +5173,13 @@ public sealed partial class ToriiClientTests
             Content = new StringContent($$"""
                 {
                   "sampled_at": "2026-03-29T07:00:00Z",
+                  "pagination": {
+                    "limit": 3,
+                    "snapshot_height": 9,
+                    "snapshot_hash": "{{ExplorerBlockHashHex}}",
+                    "next_cursor": null,
+                    "has_more": false
+                  },
                   "items": [
                     {
                       "authority": "{{ExplorerTransactionAuthorityAccountId}}",
@@ -4894,14 +5197,17 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var response = await client.GetExplorerLatestTransactionsAsync(new ToriiExplorerTransactionsQuery
         {
-            PerPage = 3,
+            Limit = 3,
             Status = ToriiExplorerTransactionStatusFilter.Committed,
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("2026-03-29T07:00:00Z", response.SampledAt);
+        Assert.Equal((ulong)9, response.Pagination.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, response.Pagination.SnapshotHash);
+        Assert.False(response.Pagination.HasMore);
         Assert.Single(response.Items);
         Assert.Equal(ToriiTransactionHashHex, response.Items[0].Hash);
-        Assert.Equal("/v1/explorer/transactions/latest?per_page=3&status=committed", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/transactions/latest?limit=3&status=committed", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -5326,7 +5632,13 @@ public sealed partial class ToriiClientTests
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 3, "per_page": 10, "total_pages": 5, "total_items": 48 },
+                  "pagination": {
+                    "limit": 10,
+                    "snapshot_height": 12,
+                    "snapshot_hash": "{{ExplorerBlockHashHex}}",
+                    "next_cursor": "bmV4dA",
+                    "has_more": true
+                  },
                   "items": [
                     {
                       "authority": "{{ExplorerInstructionAuthorityAccountId}}",
@@ -5354,8 +5666,8 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var page = await client.GetExplorerInstructionsAsync(new ToriiExplorerInstructionsQuery
         {
-            Page = 3,
-            PerPage = 10,
+            Cursor = "cHJldg",
+            Limit = 10,
             Authority = ExplorerInstructionAuthorityAccountId,
             Account = ExplorerInstructionAccountId,
             TransactionHash = "tx-ins",
@@ -5365,12 +5677,15 @@ public sealed partial class ToriiClientTests
             AssetId = "rose#wonderland.paynet",
         }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal((ulong)48, page.Pagination.TotalItems);
+        Assert.Equal((uint)10, page.Pagination.Limit);
+        Assert.Equal((ulong)12, page.Pagination.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, page.Pagination.SnapshotHash);
+        Assert.True(page.Pagination.HasMore);
         Assert.Single(page.Items);
         Assert.Equal("Transfer", page.Items[0].Kind);
         Assert.Equal(ToriiTransactionHashHex, page.Items[0].TransactionHash);
         Assert.Equal(
-            $"page=3&per_page=10&authority={Uri.EscapeDataString(ExplorerInstructionAuthorityAccountId)}&account={Uri.EscapeDataString(ExplorerInstructionAccountId)}&transaction_hash=tx-ins&transaction_status=committed&block=12&kind=transfer&asset_id=rose%23wonderland.paynet",
+            $"cursor=cHJldg&limit=10&authority={Uri.EscapeDataString(ExplorerInstructionAuthorityAccountId)}&account={Uri.EscapeDataString(ExplorerInstructionAccountId)}&transaction_hash=tx-ins&transaction_status=committed&block=12&kind=transfer&asset_id=rose%23wonderland.paynet",
             handler.LastRequest!.RequestUri!.Query.TrimStart('?'));
     }
 
@@ -5382,6 +5697,13 @@ public sealed partial class ToriiClientTests
             Content = new StringContent($$"""
                 {
                   "sampled_at": "2026-03-29T08:00:00Z",
+                  "pagination": {
+                    "limit": 4,
+                    "snapshot_height": 14,
+                    "snapshot_hash": "{{ExplorerBlockHashHex}}",
+                    "next_cursor": null,
+                    "has_more": false
+                  },
                   "items": [
                     {
                       "authority": "{{ExplorerInstructionAuthorityAccountId}}",
@@ -5409,14 +5731,17 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var response = await client.GetExplorerLatestInstructionsAsync(new ToriiExplorerInstructionsQuery
         {
-            PerPage = 4,
+            Limit = 4,
             TransactionStatus = ToriiExplorerTransactionStatusFilter.Committed,
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("2026-03-29T08:00:00Z", response.SampledAt);
+        Assert.Equal((ulong)14, response.Pagination.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, response.Pagination.SnapshotHash);
+        Assert.False(response.Pagination.HasMore);
         Assert.Single(response.Items);
         Assert.Equal(ToriiTransactionHashHex, response.Items[0].TransactionHash);
-        Assert.Equal("/v1/explorer/instructions/latest?per_page=4&transaction_status=committed", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/instructions/latest?limit=4&transaction_status=committed", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -5433,12 +5758,13 @@ public sealed partial class ToriiClientTests
             Assert.Same(original, Assert.Single(secondAccess));
         }
 
-        var pagination = new ToriiExplorerPaginationMeta
+        var pagination = new ToriiExplorerHistoryCursorMeta
         {
-            Page = 1,
-            PerPage = 10,
-            TotalPages = 1,
-            TotalItems = 1,
+            Limit = 10,
+            SnapshotHeight = 42,
+            SnapshotHash = ExplorerBlockHashHex,
+            NextCursor = null,
+            HasMore = false,
         };
         var block = new ToriiExplorerBlock
         {
@@ -5485,6 +5811,7 @@ public sealed partial class ToriiClientTests
         var latestTransactions = new ToriiExplorerLatestTransactionsResponse
         {
             SampledAt = "2026-03-29T07:00:00Z",
+            Pagination = pagination,
             Items = latestTransactionItems,
         };
 
@@ -5535,6 +5862,7 @@ public sealed partial class ToriiClientTests
         var latestInstructions = new ToriiExplorerLatestInstructionsResponse
         {
             SampledAt = "2026-03-29T08:00:00Z",
+            Pagination = pagination,
             Items = latestInstructionItems,
         };
 
@@ -6009,26 +6337,30 @@ public sealed partial class ToriiClientTests
 
     public static IEnumerable<object[]> InvalidRawExplorerPagePayloads()
     {
-        yield return new object[] { "blocks-page", "pagination", MissingExplorerField, "must not be null" };
-        yield return new object[] { "blocks-page", "pagination.page", 0, "positive" };
-        yield return new object[] { "blocks-page", "pagination.per_page", 0, "positive" };
-        yield return new object[] { "blocks-page", "items", MissingExplorerField, "must not be null" };
+        yield return new object[] { "blocks-page", "pagination", MissingExplorerField, "must be present" };
+        yield return new object[] { "blocks-page", "pagination.limit", 0, "between 1 and 100" };
+        yield return new object[] { "blocks-page", "pagination.snapshot_hash", ExplorerBlockHashHex[..63] + "A", "lowercase 32-byte hex string" };
+        yield return new object[] { "blocks-page", "pagination.page", 1, "not supported" };
+        yield return new object[] { "blocks-page", "items", MissingExplorerField, "must be present" };
         yield return new object[] { "blocks-page", "items[0].hash", "block-abc", "32-byte hex string" };
         yield return new object[] { "blocks-page", "items[0].created_at", MissingExplorerField, "must not be null" };
         yield return new object[] { "blocks-page", "items[0].height", MissingExplorerField, "must not be null" };
         yield return new object[] { "blocks-page", "items[0].transactions_total", MissingExplorerField, "must not be null" };
-        yield return new object[] { "transactions-page", "pagination", MissingExplorerField, "must not be null" };
-        yield return new object[] { "transactions-page", "pagination.page", 0, "positive" };
-        yield return new object[] { "transactions-page", "pagination.per_page", 0, "positive" };
-        yield return new object[] { "transactions-page", "items", MissingExplorerField, "must not be null" };
+        yield return new object[] { "transactions-page", "pagination", MissingExplorerField, "must be present" };
+        yield return new object[] { "transactions-page", "pagination.limit", 101, "between 1 and 100" };
+        yield return new object[] { "transactions-page", "pagination.has_more", false, "exactly when next_cursor" };
+        yield return new object[] { "transactions-page", "pagination.total_items", 1, "not supported" };
+        yield return new object[] { "transactions-page", "items", MissingExplorerField, "must be present" };
         yield return new object[] { "transactions-page", "items[0].authority", "merchant@sora", "canonical I105" };
         yield return new object[] { "transactions-page", "items[0].authority", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "canonical I105" };
         yield return new object[] { "transactions-page", "items[0].authority", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ", "canonical I105" };
         yield return new object[] { "transactions-page", "items[0].hash", "tx-abc", "32-byte hex string" };
         yield return new object[] { "transactions-page", "items[0].block", MissingExplorerField, "must not be null" };
         yield return new object[] { "transactions-page", "items[0].created_at", MissingExplorerField, "must not be null" };
-        yield return new object[] { "transactions-latest", "sampled_at", MissingExplorerField, "must not be null" };
-        yield return new object[] { "transactions-latest", "items", MissingExplorerField, "must not be null" };
+        yield return new object[] { "transactions-latest", "sampled_at", MissingExplorerField, "must be present" };
+        yield return new object[] { "transactions-latest", "pagination", MissingExplorerField, "must be present" };
+        yield return new object[] { "transactions-latest", "pagination.snapshot_height", 0, "null exactly when snapshot_height is zero" };
+        yield return new object[] { "transactions-latest", "items", MissingExplorerField, "must be present" };
         yield return new object[] { "transactions-latest", "items[0].authority", "merchant@sora", "canonical I105" };
         yield return new object[] { "transactions-latest", "items[0].created_at", MissingExplorerField, "must not be null" };
         yield return new object[] { "transactions-latest", "items[0].status", "Committed\u0001", "control characters" };
@@ -6039,10 +6371,11 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "transaction-detail", "nonce", "9", "unsigned integer" };
         yield return new object[] { "transaction-detail", "rejection_reason.encoded", "0X01", "exact hex string" };
         yield return new object[] { "transaction-detail", "time_to_live.ms", "5000", "unsigned integer" };
-        yield return new object[] { "instructions-page", "pagination", MissingExplorerField, "must not be null" };
-        yield return new object[] { "instructions-page", "pagination.page", 0, "positive" };
-        yield return new object[] { "instructions-page", "pagination.per_page", 0, "positive" };
-        yield return new object[] { "instructions-page", "items", MissingExplorerField, "must not be null" };
+        yield return new object[] { "instructions-page", "pagination", MissingExplorerField, "must be present" };
+        yield return new object[] { "instructions-page", "pagination.next_cursor", "bmV4dA==", "base64url" };
+        yield return new object[] { "instructions-page", "pagination.snapshot_hash", null!, "null exactly when snapshot_height is zero" };
+        yield return new object[] { "instructions-page", "pagination.per_page", 10, "not supported" };
+        yield return new object[] { "instructions-page", "items", MissingExplorerField, "must be present" };
         yield return new object[] { "instructions-page", "items[0].authority", "merchant@sora", "canonical I105" };
         yield return new object[] { "instructions-page", "items[0].authority", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "canonical I105" };
         yield return new object[] { "instructions-page", "items[0].authority", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ", "canonical I105" };
@@ -6050,8 +6383,10 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "instructions-page", "items[0].created_at", MissingExplorerField, "must not be null" };
         yield return new object[] { "instructions-page", "items[0].box", MissingExplorerField, "must not be null" };
         yield return new object[] { "instructions-page", "items[0].index", MissingExplorerField, "must not be null" };
-        yield return new object[] { "instructions-latest", "sampled_at", MissingExplorerField, "must not be null" };
-        yield return new object[] { "instructions-latest", "items", MissingExplorerField, "must not be null" };
+        yield return new object[] { "instructions-latest", "sampled_at", MissingExplorerField, "must be present" };
+        yield return new object[] { "instructions-latest", "pagination", MissingExplorerField, "must be present" };
+        yield return new object[] { "instructions-latest", "pagination.snapshot_height", MissingExplorerField, "must be present" };
+        yield return new object[] { "instructions-latest", "items", MissingExplorerField, "must be present" };
         yield return new object[] { "instructions-latest", "items[0].authority", "merchant@sora", "canonical I105" };
         yield return new object[] { "instructions-latest", "items[0].created_at", MissingExplorerField, "must not be null" };
         yield return new object[] { "instructions-latest", "items[0].box.encoded", "0X22", "exact hex string" };
@@ -6077,8 +6412,9 @@ public sealed partial class ToriiClientTests
 
     public static IEnumerable<object?[]> InvalidDirectExplorerWrapperMetadata()
     {
-        yield return new object?[] { "pagination", "Page", (ulong)0 };
-        yield return new object?[] { "pagination", "PerPage", (ulong)0 };
+        yield return new object?[] { "history-pagination", "Limit", (uint)0 };
+        yield return new object?[] { "history-pagination", "Limit", (uint)101 };
+        yield return new object?[] { "history-pagination", "SnapshotHash", ExplorerBlockHashHex[..63] + "A" };
         yield return new object?[] { "latest-transactions", "SampledAt", "" };
         yield return new object?[] { "latest-transactions", "SampledAt", " 2026-03-29T04:00:00Z" };
         yield return new object?[] { "latest-transactions", "SampledAt", "2026-03-29T04:00:00Z\u0001" };
@@ -19359,6 +19695,49 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
+    private static Task InvokeExplorerHistoryQueryAsync(
+        ToriiClient client,
+        string operation,
+        string? cursor,
+        uint? limit,
+        CancellationToken cancellationToken)
+    {
+        return operation switch
+        {
+            "blocks" => client.GetExplorerBlocksAsync(new ToriiExplorerCursorQuery
+            {
+                Cursor = cursor,
+                Limit = limit,
+            }, cancellationToken),
+            "transactions" => client.GetExplorerTransactionsAsync(new ToriiExplorerTransactionsQuery
+            {
+                Cursor = cursor,
+                Limit = limit,
+            }, cancellationToken),
+            "transactions-latest" => client.GetExplorerLatestTransactionsAsync(
+                new ToriiExplorerTransactionsQuery
+                {
+                    Cursor = cursor,
+                    Limit = limit,
+                }, cancellationToken),
+            "instructions" => client.GetExplorerInstructionsAsync(new ToriiExplorerInstructionsQuery
+            {
+                Cursor = cursor,
+                Limit = limit,
+            }, cancellationToken),
+            "instructions-latest" => client.GetExplorerLatestInstructionsAsync(
+                new ToriiExplorerInstructionsQuery
+                {
+                    Cursor = cursor,
+                    Limit = limit,
+                }, cancellationToken),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(operation),
+                operation,
+                "Unknown Explorer history operation."),
+        };
+    }
+
     private static Task InvokeExplorerInventoryResponseOperationAsync(
         ToriiClient client,
         string operation)
@@ -21273,28 +21652,32 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         object? constructed = (operation, propertyName) switch
         {
-            ("pagination", "Page") => new ToriiExplorerPaginationMeta
+            ("history-pagination", "Limit") => new ToriiExplorerHistoryCursorMeta
             {
-                Page = RequiredUInt64Value(value),
-                PerPage = 10,
-                TotalPages = 3,
-                TotalItems = 25,
+                Limit = RequiredUInt32Value(value),
+                SnapshotHeight = 42,
+                SnapshotHash = ExplorerBlockHashHex,
+                NextCursor = null,
+                HasMore = false,
             },
-            ("pagination", "PerPage") => new ToriiExplorerPaginationMeta
+            ("history-pagination", "SnapshotHash") => new ToriiExplorerHistoryCursorMeta
             {
-                Page = 1,
-                PerPage = RequiredUInt64Value(value),
-                TotalPages = 3,
-                TotalItems = 25,
+                Limit = 10,
+                SnapshotHeight = 42,
+                SnapshotHash = RequiredStringValue(value),
+                NextCursor = null,
+                HasMore = false,
             },
             ("latest-transactions", "SampledAt") => new ToriiExplorerLatestTransactionsResponse
             {
                 SampledAt = RequiredStringValue(value),
+                Pagination = ValidExplorerHistoryCursorMeta(),
                 Items = new[] { ValidExplorerTransaction() },
             },
             ("latest-instructions", "SampledAt") => new ToriiExplorerLatestInstructionsResponse
             {
                 SampledAt = RequiredStringValue(value),
+                Pagination = ValidExplorerHistoryCursorMeta(),
                 Items = new[] { ValidExplorerInstruction() },
             },
             _ => throw new ArgumentOutOfRangeException(
@@ -21303,6 +21686,18 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 "Unknown explorer wrapper direct metadata field."),
         };
         GC.KeepAlive(constructed);
+    }
+
+    private static ToriiExplorerHistoryCursorMeta ValidExplorerHistoryCursorMeta()
+    {
+        return new ToriiExplorerHistoryCursorMeta
+        {
+            Limit = 20,
+            SnapshotHeight = 42,
+            SnapshotHash = ExplorerBlockHashHex,
+            NextCursor = null,
+            HasMore = false,
+        };
     }
 
     private static void SetExplorerDirectoryInventoryDirectMetadata(
@@ -26134,11 +26529,29 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         switch (field)
         {
+            case "pagination.limit":
+                ((JsonObject)root["pagination"]!)["limit"] = JsonValueForExplorer(value);
+                break;
+            case "pagination.snapshot_height":
+                ((JsonObject)root["pagination"]!)["snapshot_height"] = JsonValueForExplorer(value);
+                break;
+            case "pagination.snapshot_hash":
+                ((JsonObject)root["pagination"]!)["snapshot_hash"] = JsonValueForExplorer(value);
+                break;
+            case "pagination.next_cursor":
+                ((JsonObject)root["pagination"]!)["next_cursor"] = JsonValueForExplorer(value);
+                break;
+            case "pagination.has_more":
+                ((JsonObject)root["pagination"]!)["has_more"] = JsonValueForExplorer(value);
+                break;
             case "pagination.page":
                 ((JsonObject)root["pagination"]!)["page"] = JsonValueForExplorer(value);
                 break;
             case "pagination.per_page":
                 ((JsonObject)root["pagination"]!)["per_page"] = JsonValueForExplorer(value);
+                break;
+            case "pagination.total_items":
+                ((JsonObject)root["pagination"]!)["total_items"] = JsonValueForExplorer(value);
                 break;
             case "items":
                 root["items"] = JsonValueForExplorer(value);
@@ -26202,11 +26615,20 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         switch (field)
         {
-            case "pagination.page":
-                ((JsonObject)root["pagination"]!).Remove("page");
+            case "pagination.limit":
+                ((JsonObject)root["pagination"]!).Remove("limit");
                 break;
-            case "pagination.per_page":
-                ((JsonObject)root["pagination"]!).Remove("per_page");
+            case "pagination.snapshot_height":
+                ((JsonObject)root["pagination"]!).Remove("snapshot_height");
+                break;
+            case "pagination.snapshot_hash":
+                ((JsonObject)root["pagination"]!).Remove("snapshot_hash");
+                break;
+            case "pagination.next_cursor":
+                ((JsonObject)root["pagination"]!).Remove("next_cursor");
+                break;
+            case "pagination.has_more":
+                ((JsonObject)root["pagination"]!).Remove("has_more");
                 break;
             case "pagination":
                 root.Remove("pagination");
@@ -26368,10 +26790,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             ["pagination"] = new JsonObject
             {
-                ["page"] = 1,
-                ["per_page"] = 20,
-                ["total_pages"] = 1,
-                ["total_items"] = 1,
+                ["limit"] = 20,
+                ["snapshot_height"] = 42,
+                ["snapshot_hash"] = ExplorerBlockHashHex,
+                ["next_cursor"] = "bmV4dA",
+                ["has_more"] = true,
             },
             ["items"] = new JsonArray(item),
         };
@@ -26382,6 +26805,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new JsonObject
         {
             ["sampled_at"] = "2026-03-29T08:00:00Z",
+            ["pagination"] = new JsonObject
+            {
+                ["limit"] = 20,
+                ["snapshot_height"] = 42,
+                ["snapshot_hash"] = ExplorerBlockHashHex,
+                ["next_cursor"] = "bmV4dA",
+                ["has_more"] = true,
+            },
             ["items"] = new JsonArray(item),
         };
     }

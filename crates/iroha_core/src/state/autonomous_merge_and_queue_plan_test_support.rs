@@ -490,6 +490,7 @@ fn autonomous_merge_commit_authorization_fixture(
         seed_expired_axt_replay,
         seed_due_start_effect,
         None,
+        false,
     )
 }
 fn autonomous_merge_transfer_commit_authorization_fixture() -> (State, MergeLedgerEntry, SignedBlock)
@@ -498,6 +499,7 @@ fn autonomous_merge_transfer_commit_authorization_fixture() -> (State, MergeLedg
         false,
         false,
         Some(QueuePlanTransferFixture::Single),
+        false,
     );
     (state, entry, carrier)
 }
@@ -512,7 +514,13 @@ fn autonomous_merge_batch_transfer_commit_authorization_fixture(
         "batch fixture requires batch settlement semantics"
     );
     let (state, entry, carrier, _) =
-        autonomous_merge_commit_authorization_fixture_inner(false, false, Some(mode));
+        autonomous_merge_commit_authorization_fixture_inner(false, false, Some(mode), false);
+    (state, entry, carrier)
+}
+fn autonomous_sealed_reveal_merge_commit_authorization_fixture()
+-> (State, MergeLedgerEntry, SignedBlock) {
+    let (state, entry, carrier, _) =
+        autonomous_merge_commit_authorization_fixture_inner(false, false, None, true);
     (state, entry, carrier)
 }
 #[derive(Clone, Copy)]
@@ -652,6 +660,7 @@ fn autonomous_merge_commit_authorization_fixture_inner(
     seed_expired_axt_replay: bool,
     seed_due_start_effect: bool,
     transfer_fixture: Option<QueuePlanTransferFixture>,
+    wrap_in_sealed_reveal: bool,
 ) -> (
     State,
     MergeLedgerEntry,
@@ -705,6 +714,27 @@ fn autonomous_merge_commit_authorization_fixture_inner(
     let entrypoint = match transfer_fixture {
         Some(fixture) => queue_plan_transfer_entrypoint_for_state_test(&state, tag, fixture),
         None => queue_plan_entrypoint_for_state_test(&state, tag),
+    };
+    let entrypoint = if wrap_in_sealed_reveal {
+        let TransactionEntrypoint::External(signed) = entrypoint else {
+            panic!("fixture can only seal an external signed transaction")
+        };
+        let salt = [0xD7; 32];
+        let reveal_deadline_height = carrier_height.saturating_add(32);
+        let commitment =
+            iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+                state.network_id_ref(),
+                &signed,
+                salt,
+                reveal_deadline_height,
+            );
+        TransactionEntrypoint::SealedReveal(
+            iroha_data_model::transaction::signed::SealedTransactionReveal::new(
+                commitment, signed, salt,
+            ),
+        )
+    } else {
+        entrypoint
     };
     let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
         LaneId::SINGLE,

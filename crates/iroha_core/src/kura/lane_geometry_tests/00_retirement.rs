@@ -2241,6 +2241,7 @@ fn install_merge_applied_retirement_work(
         autonomous_epoch: epoch,
         autonomous_payload_hash: payload.payload_hash,
         entrypoint_hashes: payload.entrypoint_hashes.clone(),
+        authenticated_signed_replay_aliases: vec![None; payload.entrypoints.len()],
         entrypoints: payload.entrypoints.clone(),
         reservation_keys: payload
             .reservation_keys

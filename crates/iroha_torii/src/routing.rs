@@ -1023,6 +1023,13 @@ fn query_projection_archive_from_hot_cache(
         }
     }
 }
+#[cfg(all(feature = "app_api", test))]
+/// Return the cached archive sharing `archive`'s immutable snapshot key.
+pub(crate) fn query_projection_archive_from_hot_cache_for_tests(
+    archive: &QueryProjectionShardArchive,
+) -> Option<QueryProjectionShardArchive> {
+    query_projection_archive_from_hot_cache(&query_projection_archive_cache_key(archive))
+}
 pub(crate) fn cache_query_projection_archive_for_query(archive: QueryProjectionShardArchive) {
     match QUERY_PROJECTION_ARCHIVE_CACHE.write() {
         Ok(mut cache) => {
@@ -34242,6 +34249,7 @@ struct ContractActivityProjection {
     authority: Option<String>,
     timestamp_ms: Option<u64>,
     entrypoint_hash: String,
+    block_height: u64,
     result_ok: bool,
     contract_address: String,
     contract_alias: Option<String>,
@@ -34975,7 +34983,7 @@ fn contract_activity_projections_for_height_range(
                             result,
                             merge_inclusion: None,
                         };
-                        contract_activity_projection_from_tx(&tx)
+                        contract_activity_projection_from_tx(height, &tx)
                     },
                 ),
         );
@@ -35983,6 +35991,7 @@ fn collect_contract_activity_page(
     params: &ContractActivityGetParams,
     pagination: EffectivePagination,
     fetch_cap: Option<u64>,
+    is_visible: impl Fn(&ContractActivityProjection) -> bool,
 ) -> (Vec<ContractActivityProjection>, usize) {
     let offset_usize = if pagination.offset > usize::MAX as u64 {
         usize::MAX
@@ -36000,7 +36009,9 @@ fn collect_contract_activity_page(
     let mut items = Vec::new();
     let mut additional_after_fill: usize = 0;
     let mut visit = |projection: &ContractActivityProjection| {
-        if !contract_activity_matches(projection, params) {
+        // Keep restricted records out of caller-controlled filters, offsets,
+        // counts, and response projection.
+        if !is_visible(projection) || !contract_activity_matches(projection, params) {
             return false;
         }
         matched = matched.saturating_add(1);
@@ -36198,6 +36209,7 @@ fn collect_contract_event_page(
     params: &ContractEventGetParams,
     pagination: EffectivePagination,
     fetch_cap: Option<u64>,
+    is_visible: impl Fn(&ContractEventProjection) -> bool,
 ) -> (Vec<ContractEventProjection>, usize) {
     let offset_usize = if pagination.offset > usize::MAX as u64 {
         usize::MAX
@@ -36215,7 +36227,10 @@ fn collect_contract_event_page(
     let mut items = Vec::new();
     let mut additional_after_fill = 0usize;
     let mut visit = |projection: &ContractEventProjection| {
-        if !contract_event_matches(projection, params) {
+        // Authorization must run before caller-controlled filtering, offsets,
+        // counts, and response projection. Otherwise a restricted event can
+        // influence pagination metadata even when its row is later hidden.
+        if !is_visible(projection) || !contract_event_matches(projection, params) {
             return false;
         }
         matched = matched.saturating_add(1);
@@ -37105,6 +37120,42 @@ fn validate_tx_filter_adapter_for_endpoint(
     }
     validate_rec(expr, 0, telemetry, endpoint)
 }
+
+#[derive(Clone, Copy)]
+enum TxFilterTypedValue<'a> {
+    TimestampMs(Option<i128>),
+    EntrypointHash(
+        &'a iroha_crypto::HashOf<
+            iroha_data_model::transaction::signed::TransactionEntrypoint,
+        >,
+    ),
+    ResultOk(bool),
+}
+
+impl TxFilterTypedValue<'_> {
+    fn equals_json(self, expected: &norito::json::Value) -> bool {
+        match self {
+            Self::TimestampMs(actual) => actual
+                .zip(json_number_to_i128(expected))
+                .is_some_and(|(actual, expected)| actual == expected),
+            Self::EntrypointHash(actual) => expected
+                .as_str()
+                .and_then(|value| value.parse().ok())
+                .is_some_and(|expected| actual == &expected),
+            Self::ResultOk(actual) => expected
+                .as_bool()
+                .is_some_and(|expected| actual == expected),
+        }
+    }
+}
+
+fn json_number_to_i128(value: &norito::json::Value) -> Option<i128> {
+    value
+        .as_u64()
+        .map(i128::from)
+        .or_else(|| value.as_i64().map(i128::from))
+}
+
 fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransaction) -> bool {
     use FilterExpr as F;
     // Precompute commonly used fields
@@ -37121,7 +37172,6 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
         }
         _ => None,
     };
-    let _entry_hash_str = format!("{}", tx.entrypoint_hash());
     let entry_hash_typed = tx.entrypoint_hash().clone();
     // Keep result_ok semantics consistent with projection: if External entrypoint
     // carries an empty instruction list, treat it as ok for app-facing filters,
@@ -37144,22 +37194,19 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
             tx.result().as_ref().is_ok()
         }
     };
-    // String fallback is retained for timestamp only.
+    // String fallback is retained for entrypoint variants whose timestamp is
+    // exposed by `tx_field_value` but is not available through `ts_ms_opt`.
     let ts_fallback = tx_field_value(tx, "timestamp_ms");
-    let _entry_fallback = tx_field_value(tx, "entrypoint_hash");
     let asset_ids_cache: OnceLock<Vec<iroha_data_model::asset::AssetId>> = OnceLock::new();
     let asset_ids_for_tx = || asset_ids_cache.get_or_init(|| tx_collect_asset_ids(tx));
-    fn num_to_i128(v: &norito::json::Value) -> Option<i128> {
-        if let Some(u) = v.as_u64() {
-            Some(u as i128)
-        } else if let Some(i) = v.as_i64() {
-            Some(i as i128)
-        } else {
-            None
-        }
-    }
     let ts_val =
         || ts_ms_opt.or_else(|| ts_fallback.as_deref().and_then(|s| s.parse::<i128>().ok()));
+    let typed_field_value = |field: &str| match field {
+        "timestamp_ms" => Some(TxFilterTypedValue::TimestampMs(ts_val())),
+        "entrypoint_hash" => Some(TxFilterTypedValue::EntrypointHash(&entry_hash_typed)),
+        "result_ok" => Some(TxFilterTypedValue::ResultOk(result_ok)),
+        _ => None,
+    };
     let metadata_map = match tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             Some(signed.metadata())
@@ -37183,8 +37230,10 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 };
                 return meta.get() == expected.get();
             }
+            if let Some(actual) = typed_field_value(f.0.as_str()) {
+                return actual.equals_json(v);
+            }
             match f.0.as_str() {
-                "result_ok" => v.as_bool().map_or(false, |b| result_ok == b),
                 "authority" => {
                     if torii_debug_match_enabled() {
                         eprintln!(
@@ -37212,27 +37261,6 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                     .and_then(parse_tx_asset_selector)
                     .map(|selector| tx_asset_matches_selector(asset_ids_for_tx(), &selector))
                     .unwrap_or(false),
-                "entrypoint_hash" => v
-                    .as_str()
-                    .and_then(|s| {
-                        s.parse::<iroha_crypto::HashOf<
-                            iroha_data_model::transaction::signed::TransactionEntrypoint,
-                        >>()
-                        .ok()
-                    })
-                    .map_or(false, |h| h == entry_hash_typed),
-                "timestamp_ms" => {
-                    ts_ms_opt
-                        .zip(num_to_i128(v))
-                        .map(|(a, b)| a == b)
-                        .unwrap_or(false)
-                        || ts_fallback
-                            .as_deref()
-                            .and_then(|s| s.parse::<i128>().ok())
-                            .zip(num_to_i128(v))
-                            .map(|(a, b)| a == b)
-                            .unwrap_or(false)
-                }
                 _ => tx_field_value(tx, &f.0).as_deref() == v.as_str(),
             }
         }
@@ -37249,8 +37277,10 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 };
                 return meta_val.get() != expected.get();
             }
+            if let Some(actual) = typed_field_value(f.0.as_str()) {
+                return !actual.equals_json(v);
+            }
             match f.0.as_str() {
-                "result_ok" => v.as_bool().map_or(false, |b| result_ok != b),
                 "authority" => {
                     if let (Some(acc), Some(s)) = (authority_typed.as_ref(), v.as_str()) {
                         iroha_data_model::account::AccountId::parse_encoded(s)
@@ -37264,40 +37294,22 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                     .and_then(parse_tx_asset_selector)
                     .map(|selector| !tx_asset_matches_selector(asset_ids_for_tx(), &selector))
                     .unwrap_or(false),
-                // For app-facing queries, treat NE(entrypoint_hash) as a no-op filter
-                // to avoid surprising interactions with on-chain hashing nuances. In
-                // practice, callers pair NE with a timestamp bound which still
-                // narrows to the intended set.
-                "entrypoint_hash" => true,
-                "timestamp_ms" => {
-                    // Treat typed OR fallback difference as sufficient for NE
-                    ts_ms_opt
-                        .zip(num_to_i128(v))
-                        .map(|(a, b)| a != b)
-                        .unwrap_or(false)
-                        || ts_fallback
-                            .as_deref()
-                            .and_then(|s| s.parse::<i128>().ok())
-                            .zip(num_to_i128(v))
-                            .map(|(a, b)| a != b)
-                            .unwrap_or(false)
-                }
                 _ => tx_field_value(tx, &f.0).as_deref() != v.as_str(),
             }
         }
-        F::Lt(f, v) => match (f.0.as_str(), ts_val(), num_to_i128(v)) {
+        F::Lt(f, v) => match (f.0.as_str(), ts_val(), json_number_to_i128(v)) {
             ("timestamp_ms", Some(a), Some(b)) => a < b,
             _ => false,
         },
-        F::Lte(f, v) => match (f.0.as_str(), ts_val(), num_to_i128(v)) {
+        F::Lte(f, v) => match (f.0.as_str(), ts_val(), json_number_to_i128(v)) {
             ("timestamp_ms", Some(a), Some(b)) => a <= b,
             _ => false,
         },
-        F::Gt(f, v) => match (f.0.as_str(), ts_val(), num_to_i128(v)) {
+        F::Gt(f, v) => match (f.0.as_str(), ts_val(), json_number_to_i128(v)) {
             ("timestamp_ms", Some(a), Some(b)) => a > b,
             _ => false,
         },
-        F::Gte(f, v) => match (f.0.as_str(), ts_val(), num_to_i128(v)) {
+        F::Gte(f, v) => match (f.0.as_str(), ts_val(), json_number_to_i128(v)) {
             ("timestamp_ms", Some(a), Some(b)) => a >= b,
             _ => false,
         },
@@ -37323,17 +37335,10 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 }
                 return false;
             }
+            if let Some(actual) = typed_field_value(f.0.as_str()) {
+                return list.iter().any(|expected| actual.equals_json(expected));
+            }
             match f.0.as_str() {
-                "entrypoint_hash" => list
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .filter_map(|s| {
-                        s.parse::<iroha_crypto::HashOf<
-                            iroha_data_model::transaction::signed::TransactionEntrypoint,
-                        >>()
-                        .ok()
-                    })
-                    .any(|h| h == entry_hash_typed),
                 "authority" => {
                     if let Some(acc) = authority_typed.as_ref() {
                         list.iter()
@@ -37379,17 +37384,10 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 }
                 return true;
             }
+            if let Some(actual) = typed_field_value(f.0.as_str()) {
+                return !list.iter().any(|expected| actual.equals_json(expected));
+            }
             match f.0.as_str() {
-                "entrypoint_hash" => list
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .filter_map(|s| {
-                        s.parse::<iroha_crypto::HashOf<
-                            iroha_data_model::transaction::signed::TransactionEntrypoint,
-                        >>()
-                        .ok()
-                    })
-                    .all(|h| h != entry_hash_typed),
                 "authority" => {
                     if let Some(acc) = authority_typed.as_ref() {
                         list.iter()
@@ -37601,6 +37599,7 @@ fn tx_to_query_row(tx: &iroha_data_model::query::CommittedTransaction) -> norito
     row
 }
 fn contract_activity_projection_from_tx(
+    height: usize,
     tx: &iroha_data_model::query::CommittedTransaction,
 ) -> Option<ContractActivityProjection> {
     let base = project_tx(tx, &None);
@@ -37610,6 +37609,7 @@ fn contract_activity_projection_from_tx(
         authority: base.authority,
         timestamp_ms: base.timestamp_ms,
         entrypoint_hash: base.entrypoint_hash,
+        block_height: height as u64,
         result_ok: base.result_ok,
         contract_address,
         contract_alias: tx_metadata_string(tx, "contract_alias"),
@@ -39246,6 +39246,7 @@ pub async fn handle_v1_transactions_history_get(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_contracts_activity_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     crate::NoritoQuery(params): crate::NoritoQuery<ContractActivityGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
@@ -39274,8 +39275,19 @@ pub async fn handle_v1_contracts_activity_get(
                 .map(|value| value.min(pagination.cap))
         };
         let offset = pagination.offset;
-        let (items, matched) =
-            collect_contract_activity_page(index.as_ref(), &params, pagination, fetch_cap);
+        let (items, matched) = collect_contract_activity_page(
+            index.as_ref(),
+            &params,
+            pagination,
+            fetch_cap,
+            |projection| {
+                contract_activity_projection_is_visible(
+                    state.as_ref(),
+                    &visibility,
+                    projection,
+                )
+            },
+        );
         page_result_from_counted_items(items, matched, offset, count_mode)
     };
     #[cfg(feature = "telemetry")]
@@ -39311,6 +39323,7 @@ pub async fn handle_v1_contracts_activity_get(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_contracts_events_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     crate::NoritoQuery(params): crate::NoritoQuery<ContractEventGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
@@ -39335,8 +39348,19 @@ pub async fn handle_v1_contracts_events_get(
                 .map(|value| value.min(pagination.cap))
         };
         let offset = pagination.offset;
-        let (items, matched) =
-            collect_contract_event_page(index.as_ref(), &params, pagination, fetch_cap);
+        let (items, matched) = collect_contract_event_page(
+            index.as_ref(),
+            &params,
+            pagination,
+            fetch_cap,
+            |projection| {
+                contract_event_projection_is_visible(
+                    state.as_ref(),
+                    &visibility,
+                    projection,
+                )
+            },
+        );
         page_result_from_counted_items(items, matched, offset, count_mode)
     };
     #[cfg(feature = "telemetry")]
@@ -40787,6 +40811,34 @@ mod tx_query_filter_tests {
         let expr = crate::filter::FilterExpr::And(vec![gte, lte]);
         assert!(filter_tx(&expr, &tx));
     }
+    routing_test! { sync filter_timestamp_membership_uses_numeric_values
+        let (a, kp) = account_with_key();
+        let timestamp_ms = 1_710_000_000_000_u64;
+        let tx = make_external_tx(&a, &kp, timestamp_ms, None, true);
+        let matching_values = vec![norito::json::Value::from(timestamp_ms)];
+        let other_values = vec![norito::json::Value::from(timestamp_ms + 1)];
+        let matching_in = crate::filter::FilterExpr::In(
+            crate::filter::FieldPath("timestamp_ms".into()),
+            matching_values.clone(),
+        );
+        let matching_nin = crate::filter::FilterExpr::Nin(
+            crate::filter::FieldPath("timestamp_ms".into()),
+            matching_values,
+        );
+        let other_in = crate::filter::FilterExpr::In(
+            crate::filter::FieldPath("timestamp_ms".into()),
+            other_values.clone(),
+        );
+        let other_nin = crate::filter::FilterExpr::Nin(
+            crate::filter::FieldPath("timestamp_ms".into()),
+            other_values,
+        );
+
+        assert!(filter_tx(&matching_in, &tx));
+        assert!(!filter_tx(&matching_nin, &tx));
+        assert!(!filter_tx(&other_in, &tx));
+        assert!(filter_tx(&other_nin, &tx));
+    }
     routing_test! { sync filter_entrypoint_hash_in_matches_only_target
         let (a, kp) = account_with_key();
         let h_match: GenericHashOf<dm::TransactionEntrypoint> =
@@ -40802,6 +40854,64 @@ mod tx_query_filter_tests {
         );
         assert!(filter_tx(&expr, &tx_ok));
         assert!(!filter_tx(&expr, &tx_no));
+    }
+    routing_test! { sync filter_entrypoint_hash_ne_is_exact_eq_negation
+        let (a, kp) = account_with_key();
+        let target_hash: GenericHashOf<dm::TransactionEntrypoint> =
+            GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH]));
+        let other_hash: GenericHashOf<dm::TransactionEntrypoint> =
+            GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x88; Hash::LENGTH]));
+        let matching_tx = make_external_tx(&a, &kp, 1710, Some(target_hash), true);
+        let other_tx = make_external_tx(&a, &kp, 1710, Some(other_hash), true);
+        let expected = norito::json::Value::from(target_hash.to_string());
+        let eq = crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("entrypoint_hash".into()),
+            expected.clone(),
+        );
+        let ne = crate::filter::FilterExpr::Ne(
+            crate::filter::FieldPath("entrypoint_hash".into()),
+            expected,
+        );
+
+        for tx in [&matching_tx, &other_tx] {
+            assert_eq!(filter_tx(&ne, tx), !filter_tx(&eq, tx));
+        }
+        assert!(!filter_tx(&ne, &matching_tx));
+        assert!(filter_tx(&ne, &other_tx));
+    }
+    routing_test! { sync filter_result_ok_membership_uses_boolean_values
+        let (a, kp) = account_with_key();
+        let tx_true = make_external_tx_with_instructions(
+            &a,
+            &kp,
+            100,
+            vec![dm::Log::new(dm::Level::INFO, "ok".to_owned()).into()],
+        );
+        let mut tx_false = make_external_tx_with_instructions(
+            &a,
+            &kp,
+            101,
+            vec![dm::Log::new(dm::Level::INFO, "rejected".to_owned()).into()],
+        );
+        tx_false.result = dm::TransactionResult::new(Err(
+            dm::TransactionRejectionReason::Validation(dm::ValidationFail::InternalError(
+                "rejected".into(),
+            )),
+        ));
+        let true_values = vec![norito::json::Value::Bool(true)];
+        let in_true = crate::filter::FilterExpr::In(
+            crate::filter::FieldPath("result_ok".into()),
+            true_values.clone(),
+        );
+        let nin_true = crate::filter::FilterExpr::Nin(
+            crate::filter::FieldPath("result_ok".into()),
+            true_values,
+        );
+
+        assert!(filter_tx(&in_true, &tx_true));
+        assert!(!filter_tx(&nin_true, &tx_true));
+        assert!(!filter_tx(&in_true, &tx_false));
+        assert!(filter_tx(&nin_true, &tx_false));
     }
     routing_test! { sync filter_result_ok_eq_matches
         // NOTE: For app-facing filters on transactions, empty-instruction Externals are
@@ -43544,15 +43654,16 @@ pub fn handle_v1_contracts_events_sse(
     ))
 }
 
-fn contract_event_projection_is_visible(
+fn committed_entrypoint_is_visible(
     state: &CoreState,
     visibility: &DataspaceReadVisibility,
-    projection: &ContractEventProjection,
+    block_height: u64,
+    entrypoint_hash: &str,
 ) -> bool {
     if visibility.can_read_all() {
         return true;
     }
-    let Ok(height) = usize::try_from(projection.block_height) else {
+    let Ok(height) = usize::try_from(block_height) else {
         return false;
     };
     let Some(height) = NonZeroUsize::new(height) else {
@@ -43561,10 +43672,34 @@ fn contract_event_projection_is_visible(
     let Some(block) = state.block_by_height(height) else {
         return false;
     };
-    let Ok(entrypoint_hash) = projection.tx_hash_hex.parse::<HashOf<TransactionEntrypoint>>() else {
+    let Ok(entrypoint_hash) = entrypoint_hash.parse::<HashOf<TransactionEntrypoint>>() else {
         return false;
     };
     visibility.allows_external_entrypoint_hash(&block, entrypoint_hash)
+}
+fn contract_activity_projection_is_visible(
+    state: &CoreState,
+    visibility: &DataspaceReadVisibility,
+    projection: &ContractActivityProjection,
+) -> bool {
+    committed_entrypoint_is_visible(
+        state,
+        visibility,
+        projection.block_height,
+        &projection.entrypoint_hash,
+    )
+}
+fn contract_event_projection_is_visible(
+    state: &CoreState,
+    visibility: &DataspaceReadVisibility,
+    projection: &ContractEventProjection,
+) -> bool {
+    committed_entrypoint_is_visible(
+        state,
+        visibility,
+        projection.block_height,
+        &projection.tx_hash_hex,
+    )
 }
 /// GET /v1/events/sse – Server-Sent Events stream of JSON events.
 ///
@@ -44434,9 +44569,7 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
         GovernanceEvent::ParliamentCertificateIssued(payload) => {
             proposal_id = Some(payload.proposal_content_id.to_hex());
         }
-        GovernanceEvent::CouncilPersisted(_)
-        | GovernanceEvent::ParliamentSelected(_)
-        | GovernanceEvent::ParliamentBodyTransitioned(_)
+        GovernanceEvent::ParliamentBodyTransitioned(_)
         | GovernanceEvent::ParliamentBallotTransitioned(_)
         | GovernanceEvent::ParliamentConcentrationWarning(_)
         | GovernanceEvent::ThresholdKeyLifecycleApplied(_) => {}
@@ -44480,9 +44613,7 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
             referendum_id = Some(payload.referendum_id.clone());
             unlocks_updated = true;
         }
-        GovernanceEvent::CitizenRegistered(_)
-        | GovernanceEvent::CitizenRevoked(_)
-        | GovernanceEvent::CitizenServiceRecorded(_) => {}
+        GovernanceEvent::CitizenRegistered(_) | GovernanceEvent::CitizenRevoked(_) => {}
     }
     if unlocks_updated {
         updates.push(governance_stream_payload("UnlockStatsUpdated", None));
@@ -50209,6 +50340,7 @@ struct SwapAnalytics {
 struct TraderActivityItem {
     module_key: String,
     module_label: String,
+    contract_address: String,
     timestamp_ms: Option<u64>,
     action: String,
     exposure: String,
@@ -50251,6 +50383,7 @@ fn trader_module_contract_key(module: &str) -> &'static str {
         _ => "unknown",
     }
 }
+#[cfg(test)]
 fn trader_module_alias_candidates(module: &str) -> &'static [&'static str] {
     match module {
         "swaps" => &["dlmm_router::dlmm.universal"],
@@ -50780,6 +50913,7 @@ fn uranai_history_timestamp_in_range(
 fn collect_uranai_market_history_points(
     index: &ContractEventIndex,
     params: &UranaiMarketHistoryParams,
+    is_visible: impl Fn(&ContractEventProjection) -> bool,
 ) -> (Vec<Value>, bool, Option<String>, Option<String>) {
     let market_id = params.market_id.trim();
     let mut replay = UranaiDpmReplayState::new(market_id);
@@ -50790,6 +50924,9 @@ fn collect_uranai_market_history_points(
         .items
         .iter()
         .enumerate()
+        // Scope the replay input before contract/market filters and before any
+        // derived counters or projections can observe it.
+        .filter(|(_position, projection)| is_visible(projection))
         .filter(|(_position, projection)| uranai_projection_contract_matches(projection, params))
         .filter(|(_position, projection)| uranai_replay_action(&projection.event_kind).is_some())
         .collect::<Vec<_>>();
@@ -50873,9 +51010,10 @@ fn uranai_market_history_rollup_to_json_value(
     params: &UranaiMarketHistoryParams,
     pagination: EffectivePagination,
     count_mode: AppCountMode,
+    is_visible: impl Fn(&ContractEventProjection) -> bool,
 ) -> Value {
     let (points, incomplete_replay, contract_address, contract_alias) =
-        collect_uranai_market_history_points(index, params);
+        collect_uranai_market_history_points(index, params, is_visible);
     let page =
         collect_page_linear_for_mode(points, params.offset, pagination.limit, None, count_mode);
     let mut top = Map::new();
@@ -51107,6 +51245,7 @@ fn call_contract_view_value(
 }
 fn load_swap_fill_rollup(
     state: Arc<CoreState>,
+    visibility: &DataspaceReadVisibility,
     params: &ContractRollupSwapsFillsParams,
 ) -> Result<SwapFillRollup> {
     let telemetry = MaybeTelemetry::disabled();
@@ -51131,6 +51270,42 @@ fn load_swap_fill_rollup(
     )?;
     let contract_address = prepared.contract_address.clone();
     let contract_alias = prepared.contract_alias.clone();
+    let contract_address_literal = contract_address.to_string();
+    let index = contract_event_index_snapshot(state.as_ref())?;
+    let mut swap_events: Vec<ContractEventProjection> = index
+        .items
+        .iter()
+        .rev()
+        // Scope the source sequence before applying the caller's authority,
+        // contract, module, and event-kind selectors.
+        .filter(|projection| {
+            contract_event_projection_is_visible(state.as_ref(), visibility, projection)
+        })
+        .filter(|projection| {
+            projection.result_ok
+                && projection.authority.as_deref() == Some(authority.as_str())
+                && projection.contract_address == contract_address_literal
+                && projection.module == "swaps"
+                && matches!(
+                    projection.event_kind.as_str(),
+                    "swap_executed" | "route_swap"
+                )
+        })
+        .cloned()
+        .collect();
+    if swap_events.is_empty() {
+        return Ok(SwapFillRollup {
+            authority,
+            contract_address: String::new(),
+            contract_alias: None,
+            base_asset_id: String::new(),
+            quote_asset_id: String::new(),
+            history_head: 0,
+            scanned: 0,
+            total: 0,
+            items: Vec::new(),
+        });
+    }
     let gas_limit = DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT;
     let assets_value = call_contract_view_value(
         Arc::clone(&state),
@@ -51151,7 +51326,7 @@ fn load_swap_fill_rollup(
         None,
         gas_limit,
     )?;
-    let history_head = parse_contract_view_int(&history_head_value)
+    let source_history_head = parse_contract_view_int(&history_head_value)
         .and_then(|raw| u64::try_from(raw).ok())
         .ok_or_else(|| {
             conversion_error("swap_history_head returned an unexpected value".to_owned())
@@ -51162,7 +51337,7 @@ fn load_swap_fill_rollup(
         .clamp(1, MAX_TRADER_SWAP_SCAN_LIMIT) as usize;
     let mut records = Vec::new();
     let mut scanned = 0usize;
-    let mut cursor = history_head;
+    let mut cursor = source_history_head;
     while cursor > 0 && scanned < scan_limit {
         let record_value = call_contract_view_value(
             Arc::clone(&state),
@@ -51178,50 +51353,21 @@ fn load_swap_fill_rollup(
         )?;
         scanned = scanned.saturating_add(1);
         let record = parse_swap_history_record(cursor, &record_value)?;
-        if record.trader == authority {
-            records.push(record);
-        }
+        records.push(record);
         cursor = cursor.saturating_sub(1);
     }
-    let index = contract_event_index_snapshot(state.as_ref())?;
-    let mut swap_events: Vec<ContractEventProjection> = index
-        .items
+    // A history record without an exactly visible committed event has no
+    // trustworthy dataspace scope and is omitted.
+    let stitched = stitch_visible_swap_fill_records(records, &mut swap_events);
+    let history_head = stitched
         .iter()
-        .rev()
-        .filter(|projection| {
-            projection.result_ok
-                && projection.authority.as_deref() == Some(authority.as_str())
-                && projection.contract_address == contract_address.to_string()
-                && projection.module == "swaps"
-                && matches!(
-                    projection.event_kind.as_str(),
-                    "swap_executed" | "route_swap"
-                )
-        })
-        .cloned()
-        .collect();
-    let mut stitched = Vec::with_capacity(records.len());
-    for mut record in records {
-        let matched_index = swap_events.iter().position(|projection| {
-            let Some(Value::Object(object)) = projection.payload.as_ref() else {
-                return false;
-            };
-            object_lookup_i64(&object, &["amount_in", "amount"]) == Some(record.amount_in)
-                && object_lookup_i64(&object, &["min_out"]) == Some(record.min_out)
-                && object_lookup_i64(&object, &["input_is_base"]) == Some(record.input_is_base)
-        });
-        let matched = matched_index.map(|index| swap_events.remove(index));
-        if let Some(event) =
-            matched.or_else(|| (!swap_events.is_empty()).then(|| swap_events.remove(0)))
-        {
-            record.timestamp_ms = event.timestamp_ms;
-            record.execution_hash = Some(event.tx_hash_hex);
-        }
-        stitched.push(record);
-    }
+        .map(|record| record.record_id)
+        .max()
+        .unwrap_or_default();
+    let scanned = stitched.len();
     Ok(SwapFillRollup {
         authority,
-        contract_address: contract_address.to_string(),
+        contract_address: contract_address_literal,
         contract_alias: contract_alias.map(|value| value.to_string()),
         base_asset_id,
         quote_asset_id,
@@ -51230,6 +51376,43 @@ fn load_swap_fill_rollup(
         total: stitched.len(),
         items: stitched,
     })
+}
+fn swap_fill_record_matches_projection(
+    record: &SwapFillRollupItem,
+    projection: &ContractEventProjection,
+) -> bool {
+    let Some(Value::Object(object)) = projection.payload.as_ref() else {
+        return false;
+    };
+    if let Some(projected_record_id) =
+        object_lookup_i64(object, &["record_id", "recordId"]).and_then(|raw| u64::try_from(raw).ok())
+        && projected_record_id != record.record_id
+    {
+        return false;
+    }
+    projection.authority.as_deref() == Some(record.trader.as_str())
+        && object_lookup_i64(object, &["amount_in", "amount"]) == Some(record.amount_in)
+        && object_lookup_i64(object, &["min_out"]) == Some(record.min_out)
+        && object_lookup_i64(object, &["input_is_base"]) == Some(record.input_is_base)
+        && object_lookup_i64(object, &["amount_out"])
+            .is_none_or(|amount_out| amount_out == record.amount_out)
+}
+fn stitch_visible_swap_fill_records(
+    records: Vec<SwapFillRollupItem>,
+    visible_events: &mut Vec<ContractEventProjection>,
+) -> Vec<SwapFillRollupItem> {
+    records
+        .into_iter()
+        .filter_map(|mut record| {
+            let matched_index = visible_events
+                .iter()
+                .position(|projection| swap_fill_record_matches_projection(&record, projection))?;
+            let event = visible_events.remove(matched_index);
+            record.timestamp_ms = event.timestamp_ms;
+            record.execution_hash = Some(event.tx_hash_hex);
+            Some(record)
+        })
+        .collect()
 }
 fn swap_fill_rollup_to_json_value(
     rollup: &SwapFillRollup,
@@ -51275,21 +51458,25 @@ fn swap_fill_rollup_to_json_value(
     let mut top = Map::new();
     top.insert("ok".into(), Value::Bool(true));
     top.insert("authority".into(), Value::from(rollup.authority.clone()));
-    top.insert(
-        "contract_address".into(),
-        Value::from(rollup.contract_address.clone()),
-    );
+    if !rollup.contract_address.is_empty() {
+        top.insert(
+            "contract_address".into(),
+            Value::from(rollup.contract_address.clone()),
+        );
+    }
     if let Some(alias) = rollup.contract_alias.as_ref() {
         top.insert("contract_alias".into(), Value::from(alias.clone()));
     }
-    top.insert(
-        "base_asset_id".into(),
-        Value::from(rollup.base_asset_id.clone()),
-    );
-    top.insert(
-        "quote_asset_id".into(),
-        Value::from(rollup.quote_asset_id.clone()),
-    );
+    if !rollup.base_asset_id.is_empty() && !rollup.quote_asset_id.is_empty() {
+        top.insert(
+            "base_asset_id".into(),
+            Value::from(rollup.base_asset_id.clone()),
+        );
+        top.insert(
+            "quote_asset_id".into(),
+            Value::from(rollup.quote_asset_id.clone()),
+        );
+    }
     top.insert("history_head".into(), Value::from(rollup.history_head));
     top.insert("scanned".into(), Value::from(rollup.scanned as u64));
     top.insert("total".into(), Value::from(rollup.total as u64));
@@ -51775,6 +51962,7 @@ fn trader_activity_item_from_projection(
     TraderActivityItem {
         module_key: projection.module.clone(),
         module_label: trader_module_label(&projection.module).to_owned(),
+        contract_address: projection.contract_address.clone(),
         timestamp_ms: projection.timestamp_ms,
         action,
         exposure,
@@ -51786,6 +51974,7 @@ fn collect_trader_activity_page(
     index: &ContractEventIndex,
     params: &ContractEventGetParams,
     pagination: EffectivePagination,
+    is_visible: impl Fn(&ContractEventProjection) -> bool,
 ) -> (Vec<ContractEventProjection>, usize) {
     let offset_usize = usize::try_from(pagination.offset).unwrap_or(usize::MAX);
     let limit_usize = pagination
@@ -51795,7 +51984,8 @@ fn collect_trader_activity_page(
     let mut matched = 0usize;
     let mut items = Vec::new();
     let mut visit = |projection: &ContractEventProjection| {
-        if !trader_module_is_supported(&projection.module)
+        if !is_visible(projection)
+            || !trader_module_is_supported(&projection.module)
             || !contract_event_matches(projection, params)
         {
             return;
@@ -51889,19 +52079,7 @@ fn module_card_json(
     );
     Value::Object(object)
 }
-fn resolve_trader_module_contract_address(state: &CoreState, module: &str) -> Option<String> {
-    trader_module_alias_candidates(module)
-        .iter()
-        .find_map(|alias_literal| {
-            let alias =
-                iroha_data_model::smart_contract::ContractAlias::from_str(alias_literal).ok()?;
-            prepare_contract_call_by_alias(state, &alias, current_time_millis())
-                .ok()
-                .map(|prepared| prepared.contract_address.to_string())
-        })
-}
 fn build_trader_account_modules_json(
-    state: &CoreState,
     fills: &SwapFillRollup,
     analytics: &SwapAnalytics,
     activities: &[TraderActivityItem],
@@ -51911,12 +52089,34 @@ fn build_trader_account_modules_json(
     TRADER_MODULE_ORDER
         .iter()
         .map(|module| {
-            let contract_address = resolve_trader_module_contract_address(state, module);
             let latest = activities.iter().find(|item| item.module_key == *module);
+            let contract_address = latest
+                .map(|item| item.contract_address.clone())
+                .or_else(|| {
+                    (*module == "swaps" && !fills.items.is_empty())
+                        .then(|| fills.contract_address.clone())
+                });
             if *module == "swaps" {
+                let Some(contract_address) = contract_address else {
+                    return module_card_json(
+                        "swaps",
+                        None,
+                        "missing",
+                        "Unavailable",
+                        "No visible swaps".to_owned(),
+                        "No visible deployment or swap activity is available for this authority."
+                            .to_owned(),
+                        "Missing".to_owned(),
+                        [
+                            ("Contract", "Unavailable".to_owned()),
+                            ("Last Action", "-".to_owned()),
+                            ("Last Seen", "-".to_owned()),
+                        ],
+                    );
+                };
                 return module_card_json(
                     "swaps",
-                    contract_address,
+                    Some(contract_address),
                     if fills.items.is_empty() { "watch" } else { "live" },
                     if fills.items.is_empty() {
                         "Awaiting flow"
@@ -51972,10 +52172,10 @@ fn build_trader_account_modules_json(
                     module,
                     None,
                     "missing",
-                    "Not deployed",
+                    "Unavailable",
                     "Not available here".to_owned(),
                     format!(
-                        "{} is not deployed in this environment yet.",
+                        "No visible deployment or activity is available for {}.",
                         trader_module_contract_key(module)
                     ),
                     "Missing".to_owned(),
@@ -52020,10 +52220,11 @@ fn build_trader_account_modules_json(
 }
 pub async fn handle_v1_contracts_rollups_swaps_fills_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     crate::NoritoQuery(params): crate::NoritoQuery<ContractRollupSwapsFillsParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    let rollup = load_swap_fill_rollup(state, &params)?;
+    let rollup = load_swap_fill_rollup(state, &visibility, &params)?;
     Ok(infallible_pretty_json_response(
         &swap_fill_rollup_to_json_value(&rollup, params.limit, params.offset),
         "{}",
@@ -52031,11 +52232,13 @@ pub async fn handle_v1_contracts_rollups_swaps_fills_get(
 }
 pub async fn handle_v1_contracts_rollups_swaps_candles_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     crate::NoritoQuery(params): crate::NoritoQuery<ContractRollupSwapsCandlesParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let fills = load_swap_fill_rollup(
         state,
+        &visibility,
         &ContractRollupSwapsFillsParams {
             limit: None,
             offset: 0,
@@ -52131,6 +52334,7 @@ pub async fn handle_v1_contracts_rollups_swaps_candles_get(
 }
 pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     crate::NoritoQuery(params): crate::NoritoQuery<UranaiMarketHistoryParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
@@ -52159,12 +52363,20 @@ pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
             &params,
             pagination,
             count_mode,
+            |projection| {
+                contract_event_projection_is_visible(
+                    state.as_ref(),
+                    &visibility,
+                    projection,
+                )
+            },
         ),
         "{}",
     ))
 }
 pub async fn handle_v1_contracts_rollups_trader_activity_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     crate::NoritoQuery(params): crate::NoritoQuery<ContractEventGetParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
@@ -52180,7 +52392,14 @@ pub async fn handle_v1_contracts_rollups_trader_activity_get(
         ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY,
     );
     let index = contract_event_index_snapshot(state.as_ref())?;
-    let (items, total) = collect_trader_activity_page(index.as_ref(), &params, pagination);
+    let (items, total) = collect_trader_activity_page(
+        index.as_ref(),
+        &params,
+        pagination,
+        |projection| {
+            contract_event_projection_is_visible(state.as_ref(), &visibility, projection)
+        },
+    );
     let page = page_result_from_counted_items(items, total, params.offset, count_mode);
     let activity_items = page
         .items
@@ -52198,11 +52417,13 @@ pub async fn handle_v1_contracts_rollups_trader_activity_get(
 }
 pub async fn handle_v1_contracts_rollups_trader_account_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     crate::NoritoQuery(params): crate::NoritoQuery<TraderRollupAccountParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let fills = load_swap_fill_rollup(
         Arc::clone(&state),
+        &visibility,
         &ContractRollupSwapsFillsParams {
             limit: None,
             offset: 0,
@@ -52238,8 +52459,14 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
         ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACCOUNT,
     )?;
     let index = contract_event_index_snapshot(state.as_ref())?;
-    let (activity_projections, _) =
-        collect_trader_activity_page(index.as_ref(), &activity_params, pagination);
+    let (activity_projections, _) = collect_trader_activity_page(
+        index.as_ref(),
+        &activity_params,
+        pagination,
+        |projection| {
+            contract_event_projection_is_visible(state.as_ref(), &visibility, projection)
+        },
+    );
     let activity_items = activity_projections
         .iter()
         .map(trader_activity_item_from_projection)
@@ -52247,20 +52474,21 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
     let mut top = Map::new();
     top.insert("ok".into(), Value::Bool(true));
     top.insert("authority".into(), Value::from(fills.authority.clone()));
-    top.insert(
-        "assets".into(),
-        crate::json_object(vec![
-            crate::json_entry("baseAssetId", fills.base_asset_id.clone()),
-            crate::json_entry("quoteAssetId", fills.quote_asset_id.clone()),
-        ]),
-    );
+    if !fills.base_asset_id.is_empty() && !fills.quote_asset_id.is_empty() {
+        top.insert(
+            "assets".into(),
+            crate::json_object(vec![
+                crate::json_entry("baseAssetId", fills.base_asset_id.clone()),
+                crate::json_entry("quoteAssetId", fills.quote_asset_id.clone()),
+            ]),
+        );
+    }
     top.insert("historyHead".into(), Value::from(fills.history_head));
     top.insert("fillCount".into(), Value::from(fills.items.len() as u64));
     top.insert("metrics".into(), swap_analytics_to_json_value(&analytics));
     top.insert(
         "modules".into(),
         Value::Array(build_trader_account_modules_json(
-            state.as_ref(),
             &fills,
             &analytics,
             &activity_items,
@@ -52270,6 +52498,7 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
 }
 async fn handle_v1_contracts_rollups_module_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     crate::NoritoQuery(mut params): crate::NoritoQuery<ContractEventGetParams>,
     module: &'static str,
     endpoint: &'static str,
@@ -52281,7 +52510,14 @@ async fn handle_v1_contracts_rollups_module_get(
     let pagination = enforce_app_pagination(params.limit, params.offset, cap, endpoint)?;
     let count_mode = app_count_mode(params.count_mode.as_deref(), endpoint);
     let index = contract_event_index_snapshot(state.as_ref())?;
-    let (items, total) = collect_trader_activity_page(index.as_ref(), &params, pagination);
+    let (items, total) = collect_trader_activity_page(
+        index.as_ref(),
+        &params,
+        pagination,
+        |projection| {
+            contract_event_projection_is_visible(state.as_ref(), &visibility, projection)
+        },
+    );
     let page = page_result_from_counted_items(items, total, params.offset, count_mode);
     let activity_items = page
         .items
@@ -52309,11 +52545,13 @@ async fn handle_v1_contracts_rollups_module_get(
 }
 pub async fn handle_v1_contracts_rollups_intents_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     query: crate::NoritoQuery<ContractEventGetParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     handle_v1_contracts_rollups_module_get(
         state,
+        visibility,
         query,
         "intents",
         ENDPOINT_CONTRACTS_ROLLUPS_INTENTS,
@@ -52323,11 +52561,13 @@ pub async fn handle_v1_contracts_rollups_intents_get(
 }
 pub async fn handle_v1_contracts_rollups_vault_positions_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     query: crate::NoritoQuery<ContractEventGetParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     handle_v1_contracts_rollups_module_get(
         state,
+        visibility,
         query,
         "vaults",
         ENDPOINT_CONTRACTS_ROLLUPS_VAULT_POSITIONS,
@@ -52337,11 +52577,13 @@ pub async fn handle_v1_contracts_rollups_vault_positions_get(
 }
 pub async fn handle_v1_contracts_rollups_operators_status_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     query: crate::NoritoQuery<ContractEventGetParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     handle_v1_contracts_rollups_module_get(
         state,
+        visibility,
         query,
         "operators",
         ENDPOINT_CONTRACTS_ROLLUPS_OPERATORS_STATUS,
@@ -52351,11 +52593,13 @@ pub async fn handle_v1_contracts_rollups_operators_status_get(
 }
 pub async fn handle_v1_contracts_rollups_margin_health_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     query: crate::NoritoQuery<ContractEventGetParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     handle_v1_contracts_rollups_module_get(
         state,
+        visibility,
         query,
         "margin",
         ENDPOINT_CONTRACTS_ROLLUPS_MARGIN_HEALTH,
@@ -52365,11 +52609,13 @@ pub async fn handle_v1_contracts_rollups_margin_health_get(
 }
 pub async fn handle_v1_contracts_rollups_rwa_lots_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     query: crate::NoritoQuery<ContractEventGetParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     handle_v1_contracts_rollups_module_get(
         state,
+        visibility,
         query,
         "rwa",
         ENDPOINT_CONTRACTS_ROLLUPS_RWA_LOTS,
@@ -52379,11 +52625,13 @@ pub async fn handle_v1_contracts_rollups_rwa_lots_get(
 }
 pub async fn handle_v1_contracts_rollups_dlmm_hooks_get(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     query: crate::NoritoQuery<ContractEventGetParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     handle_v1_contracts_rollups_module_get(
         state,
+        visibility,
         query,
         "dlmmHooks",
         ENDPOINT_CONTRACTS_ROLLUPS_DLMM_HOOKS,
@@ -52483,6 +52731,7 @@ mod tx_projection_display_tests {
             authority: Some(account.to_string()),
             timestamp_ms: Some(456),
             entrypoint_hash: "feedface".into(),
+            block_height: 9,
             result_ok: true,
             contract_address: "irohac1router".into(),
             contract_alias: Some("dlmm_router".into()),
@@ -52519,6 +52768,7 @@ mod tx_projection_display_tests {
                 authority: Some(alice.to_string()),
                 timestamp_ms: Some(100),
                 entrypoint_hash: "hash-1".into(),
+                block_height: 1,
                 result_ok: true,
                 contract_address: "router-a".into(),
                 contract_alias: Some("dlmm_router".into()),
@@ -52530,6 +52780,7 @@ mod tx_projection_display_tests {
                 authority: Some(alice.to_string()),
                 timestamp_ms: Some(200),
                 entrypoint_hash: "hash-2".into(),
+                block_height: 2,
                 result_ok: false,
                 contract_address: "router-a".into(),
                 contract_alias: Some("dlmm_router".into()),
@@ -52541,6 +52792,7 @@ mod tx_projection_display_tests {
                 authority: Some(bob.to_string()),
                 timestamp_ms: Some(300),
                 entrypoint_hash: "hash-3".into(),
+                block_height: 3,
                 result_ok: true,
                 contract_address: "router-b".into(),
                 contract_alias: Some("other_router".into()),
@@ -52552,6 +52804,7 @@ mod tx_projection_display_tests {
                 authority: Some(alice.to_string()),
                 timestamp_ms: Some(400),
                 entrypoint_hash: "hash-4".into(),
+                block_height: 4,
                 result_ok: true,
                 contract_address: "router-a".into(),
                 contract_alias: Some("dlmm_router".into()),
@@ -52617,10 +52870,36 @@ mod tx_projection_display_tests {
                 cap: 100,
             },
             None,
+            |_| true,
         );
         assert_eq!(total, 2);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].entrypoint_hash, "hash-1");
+    }
+    routing_test! { sync contract_activity_visibility_precedes_filters_offsets_and_counts
+        let index = sample_contract_activity_index();
+        let params = ContractActivityGetParams {
+            contract_entrypoint: Some("route_swap".into()),
+            result_ok: Some(true),
+            ..Default::default()
+        };
+        let (items, total) = collect_contract_activity_page(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(1),
+                offset: 1,
+                cap: 100,
+            },
+            None,
+            |projection| projection.entrypoint_hash != "hash-3",
+        );
+        assert_eq!(total, 2, "hidden activity must not influence exact counts");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].entrypoint_hash, "hash-1",
+            "offsets must be applied within the visible activity sequence"
+        );
     }
     routing_test! { sync contract_event_projection_json_preserves_generic_fields
         let account: AccountId = ALICE_ID.clone();
@@ -52790,10 +53069,36 @@ mod tx_projection_display_tests {
                 cap: 100,
             },
             None,
+            |_| true,
         );
         assert_eq!(total, 3);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].tx_hash_hex, "hash-3");
+    }
+    routing_test! { sync contract_event_visibility_precedes_filters_offsets_and_counts
+        let index = sample_contract_event_index();
+        let params = ContractEventGetParams {
+            participant: Some(ALICE_ID.to_string()),
+            result_ok: Some(true),
+            ..Default::default()
+        };
+        let (items, total) = collect_contract_event_page(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(1),
+                offset: 1,
+                cap: 100,
+            },
+            None,
+            |projection| projection.tx_hash_hex != "hash-3",
+        );
+        assert_eq!(total, 2, "hidden events must not influence exact counts");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].tx_hash_hex, "hash-1",
+            "offsets must be applied within the visible event sequence"
+        );
     }
     routing_test! { sync uranai_event_payload_normalization_redacts_private_proofs
         assert_eq!(
@@ -52940,6 +53245,7 @@ mod tx_projection_display_tests {
                 cap: 100,
             },
             AppCountMode::Exact,
+            |_| true,
         );
         assert_eq!(json["ok"].as_bool(), Some(true));
         assert_eq!(json["marketId"].as_str(), Some("mkt-1"));
@@ -52958,6 +53264,35 @@ mod tx_projection_display_tests {
             json["items"][0]["outcomes"][1]["label"].as_str(),
             Some("No")
         );
+    }
+    routing_test! { sync uranai_rollup_visibility_precedes_replay_counts_and_projection
+        let index = sample_uranai_history_index();
+        let params = UranaiMarketHistoryParams {
+            market_id: "mkt-1".into(),
+            limit: Some(10),
+            offset: 0,
+            contract_address: None,
+            contract_alias: None,
+            since_timestamp_ms: None,
+            until_timestamp_ms: None,
+            count_mode: Some("exact".into()),
+        };
+        let json = uranai_market_history_rollup_to_json_value(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(10),
+                offset: 0,
+                cap: 100,
+            },
+            AppCountMode::Exact,
+            |projection| !matches!(projection.tx_hash_hex.as_str(), "hash-2" | "hash-4"),
+        );
+        assert_eq!(json["total"].as_u64(), Some(1));
+        assert_eq!(json["items"].as_array().map(Vec::len), Some(1));
+        assert_eq!(json["items"][0]["side"].as_str(), Some("private_buy"));
+        assert_eq!(json["items"][0]["tradeCount"].as_u64(), Some(1));
+        assert_eq!(json["items"][0]["volumeXorTotal"].as_u64(), Some(80));
     }
     routing_test! { sync uranai_market_history_rollup_replays_in_block_order
         let mut index = ContractEventIndex::default();
@@ -53013,6 +53348,7 @@ mod tx_projection_display_tests {
                 cap: 100,
             },
             AppCountMode::Exact,
+            |_| true,
         );
         assert_eq!(json["incompleteReplay"].as_bool(), Some(false));
         assert_eq!(json["items"].as_array().map(Vec::len), Some(2));
@@ -53068,6 +53404,7 @@ mod tx_projection_display_tests {
                 cap: 100,
             },
             AppCountMode::Exact,
+            |_| true,
         );
         assert_eq!(json["incompleteReplay"].as_bool(), Some(true));
         assert!(json["warning"].as_str().is_some());
@@ -53131,6 +53468,7 @@ mod tx_projection_display_tests {
                 cap: 100,
             },
             AppCountMode::Exact,
+            |_| true,
         );
         assert_eq!(json["incompleteReplay"].as_bool(), Some(true));
         assert!(json["warning"].as_str().is_some());
@@ -53188,6 +53526,45 @@ mod tx_projection_display_tests {
         assert_eq!(json["items"][0]["recordId"].as_u64(), Some(6));
         assert_eq!(json["items"][0]["executionHash"].as_str(), Some("hash-buy"));
     }
+    routing_test! { sync empty_visible_swap_scope_omits_contract_and_asset_projection
+        let mut rollup = sample_swap_fill_rollup();
+        rollup.contract_address.clear();
+        rollup.contract_alias = None;
+        rollup.base_asset_id.clear();
+        rollup.quote_asset_id.clear();
+        rollup.history_head = 0;
+        rollup.scanned = 0;
+        rollup.total = 0;
+        rollup.items.clear();
+        let json = swap_fill_rollup_to_json_value(&rollup, Some(10), 0);
+        assert!(json.get("contract_address").is_none());
+        assert!(json.get("contract_alias").is_none());
+        assert!(json.get("base_asset_id").is_none());
+        assert!(json.get("quote_asset_id").is_none());
+        assert_eq!(json["history_head"].as_u64(), Some(0));
+        assert_eq!(json["total"].as_u64(), Some(0));
+    }
+    routing_test! { sync swap_fill_stitching_omits_records_without_a_visible_committed_event
+        let rollup = sample_swap_fill_rollup();
+        let mut visible_events = vec![ContractEventProjection {
+            timestamp_ms: Some(1_000),
+            tx_hash_hex: "visible-buy".into(),
+            payload: Some(norito::json!({
+                "record_id": 6,
+                "amount_in": 50,
+                "amount_out": 100,
+                "min_out": 95,
+                "input_is_base": 1
+            })),
+            ..Default::default()
+        }];
+        let stitched =
+            stitch_visible_swap_fill_records(rollup.items.clone(), &mut visible_events);
+        assert_eq!(stitched.len(), 1);
+        assert_eq!(stitched[0].record_id, 6);
+        assert_eq!(stitched[0].execution_hash.as_deref(), Some("visible-buy"));
+        assert!(visible_events.is_empty());
+    }
     routing_test! { sync compute_swap_analytics_tracks_realized_and_open_inventory
         let rollup = sample_swap_fill_rollup();
         let analytics = compute_swap_analytics(&rollup.items);
@@ -53200,6 +53577,21 @@ mod tx_projection_display_tests {
         assert_eq!(analytics.win_rate, Some(1.0));
         let avg_cushion_ratio = analytics.avg_cushion_ratio.expect("avg cushion ratio");
         assert!((avg_cushion_ratio - 1.15).abs() < 1e-9);
+    }
+    routing_test! { sync trader_account_modules_do_not_project_unseen_contract_bindings
+        let mut rollup = sample_swap_fill_rollup();
+        rollup.contract_address.clear();
+        rollup.base_asset_id.clear();
+        rollup.quote_asset_id.clear();
+        rollup.items.clear();
+        let modules = build_trader_account_modules_json(
+            &rollup,
+            &SwapAnalytics::default(),
+            &[],
+        );
+        assert_eq!(modules.len(), TRADER_MODULE_ORDER.len());
+        assert!(modules.iter().all(|module| module["contractAddress"].is_null()));
+        assert_eq!(modules[0]["statusLabel"].as_str(), Some("Unavailable"));
     }
     routing_test! { sync trader_activity_page_ignores_unsupported_modules
         let mut index = sample_contract_event_index();
@@ -53239,10 +53631,32 @@ mod tx_projection_display_tests {
                 offset: 0,
                 cap: 100,
             },
+            |_| true,
         );
         assert_eq!(total, 2);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].tx_hash_hex, "hash-4");
+    }
+    routing_test! { sync trader_rollup_visibility_precedes_filters_offsets_and_counts
+        let index = sample_contract_event_index();
+        let params = ContractEventGetParams {
+            participant: Some(ALICE_ID.to_string()),
+            result_ok: Some(true),
+            ..Default::default()
+        };
+        let (items, total) = collect_trader_activity_page(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(1),
+                offset: 1,
+                cap: 100,
+            },
+            |projection| projection.tx_hash_hex != "hash-3",
+        );
+        assert_eq!(total, 2, "hidden events must not affect rollup counts");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].tx_hash_hex, "hash-1");
     }
 }
 fn parse_sort_spec(spec: &str) -> Vec<crate::filter::SortKey> {
@@ -62880,7 +63294,7 @@ fn transaction_detail_at_height(
         if !visibility.allows_external_entrypoint(block_ref, entrypoint_index) {
             continue;
         }
-        if entrypoint_hash == target {
+        if signed_transaction_carrier_matches_indexed_identity(&entrypoint_hash, &tx, &target) {
             return Ok(Some(crate::explorer::transaction_detail_dto_with_hash(
                 tx,
                 entrypoint_hash,
@@ -62911,7 +63325,7 @@ fn instruction_detail_at_height(
         if !visibility.allows_external_entrypoint(block_ref, entrypoint_index) {
             continue;
         }
-        if entrypoint_hash != target {
+        if !signed_transaction_carrier_matches_indexed_identity(&entrypoint_hash, &tx, &target) {
             continue;
         }
         let instruction = tx
@@ -70296,16 +70710,25 @@ pub mod block {
                     }
                 }
                 // This branch sends blocks
-                _ = interval.tick() => consumer.consume().await?,
+                _ = interval.tick() => {
+                    ensure_authorized(authorization_is_current)?;
+                    consumer.consume().await?;
+                }
                 _ = authorization_check.tick() => {
-                    if !authorization_is_current() {
-                        return Err(Error::AuthorizationRevoked);
-                    }
+                    ensure_authorized(authorization_is_current)?;
                 }
                 _ = heartbeat.tick() => {
                     consumer.stream.ping().await.map_err(block::Error::from)?;
                 }
             }
+        }
+    }
+
+    fn ensure_authorized(authorization_is_current: &impl Fn() -> bool) -> Result<()> {
+        if authorization_is_current() {
+            Ok(())
+        } else {
+            Err(Error::AuthorizationRevoked)
         }
     }
 
@@ -70318,6 +70741,15 @@ pub mod block {
             let (code, reason) = close_frame_for_error(&Error::AuthorizationRevoked);
             assert_eq!(code, crate::stream::CLOSE_POLICY_VIOLATION);
             assert_eq!(reason, "stream_authorization_revoked");
+        }
+
+        #[test]
+        fn block_delivery_rechecks_authorization_before_each_item() {
+            assert!(ensure_authorized(&|| true).is_ok());
+            assert!(matches!(
+                ensure_authorized(&|| false),
+                Err(Error::AuthorizationRevoked)
+            ));
         }
     }
 }

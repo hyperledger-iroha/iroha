@@ -982,13 +982,6 @@ pub mod governance {
         pub struct CanManageConfidentialParams;
     }
     permission! {
-        /// Allow recording citizen service discipline events.
-        pub struct CanRecordCitizenService {
-            /// Citizen account targeted by the record.
-            pub owner: AccountId,
-        }
-    }
-    permission! {
         /// Allow slashing governance bond locks for a referendum.
         pub struct CanSlashGovernanceLock {
             /// Canonical governance selector V1 identifying the referendum.

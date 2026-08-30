@@ -511,6 +511,42 @@ get fun `test funded bridge mint and direct wallet burn complete every replay bo
     expect(masterLeaves).toEqual(1);
 }
 
+get fun `test bridge rejects the jetton master as recipient before reserving mint state`() {
+    val deployer = testing.treasury("sccp-master-recipient");
+    val config = securityBridgeConfig();
+    val bridge = TairaXorSccpBridge.fromStorage(canonicalBridgeInitialStorage(config));
+    val master = TairaXorJettonMaster.fromStorage(
+        canonicalMasterInitialStorage(config, bridge.address),
+    );
+    expect(securityDeployBridge(bridge, deployer.address)).toHaveSuccessfulDeploy({
+        to: bridge.address,
+    });
+    expect(securityDeployMaster(master, deployer.address)).toHaveSuccessfulDeploy({
+        to: master.address,
+    });
+
+    val rejected = securityMint(bridge, deployer.address, master.address, 100);
+    expect(rejected).toHaveFailedTx<SccpFinalizeFromTaira>({
+        to: bridge.address,
+        exitCode: SccpErrors.InvalidPayload,
+    });
+    val (bridgeMints, bridgeBurns) = bridge.getSccpPendingCounts();
+    expect(bridgeMints).toEqual(0);
+    expect(bridgeBurns).toEqual(0);
+    expect(master.getSccpPendingMintCount()).toEqual(0);
+    expect(master.getJettonData().totalSupply).toEqual(0);
+    val (_, _, bridgeLeaves, _) = bridge.getSccpReplayState(
+        SCCP_REPLAY_TON_BRIDGE_INBOUND_MINT,
+        0,
+    );
+    val (_, _, masterLeaves, _) = master.getSccpReplayState(
+        SCCP_REPLAY_TON_MASTER_MINT,
+        0,
+    );
+    expect(bridgeLeaves).toEqual(0);
+    expect(masterLeaves).toEqual(0);
+}
+
 get fun `test stale bridge witness bounces before 0x31 and fresh 0x37 refunds once`() {
     val deployer = testing.treasury("sccp-refund-flow");
     val owner = testing.treasury("sccp-refund-owner");

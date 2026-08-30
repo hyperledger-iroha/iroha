@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "check_release_feature_graph.py"
+WORKFLOW = REPO / ".github" / "workflows" / "pr.yml"
 
 
 def load_checker():
@@ -30,3 +31,28 @@ def test_shipping_proof_consumers_keep_complete_parallel_engine() -> None:
     for package, required_features in checker.REQUIRED_FEATURES.items():
         graph = checker.feature_graph(REPO, package)
         assert all(feature in graph for feature in required_features)
+
+
+def test_release_package_inventory_matches_built_binaries() -> None:
+    checker = load_checker()
+    assert checker.DEFAULT_PACKAGES == (
+        "irohad",
+        "iroha_cli",
+        "iroha_genesis",
+        "iroha_kagami",
+        "ivm",
+    )
+
+
+def test_forbidden_feature_detection_rejects_core_test_surface() -> None:
+    checker = load_checker()
+    graph = 'iroha_core feature "iroha-core-tests"\n'
+    assert checker.forbidden_features_in_graph(graph) == (
+        'iroha_core feature "iroha-core-tests"',
+    )
+
+
+def test_pr_workflow_runs_release_feature_graph_guard() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "scripts/tests/release_feature_graph_test.py" in workflow
+    assert "python3 scripts/check_release_feature_graph.py" in workflow

@@ -7,6 +7,12 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Union
 
 import requests
+from iroha_torii_client.canonical_transport import (
+    CanonicalRequestHeaderPlan as _CanonicalRequestHeaderPlan,
+)
+from iroha_torii_client.canonical_transport import (
+    OperatorRequestHeaderPlan as _OperatorRequestHeaderPlan,
+)
 
 from .query import AggregateSpec, ensure_aggregate
 from .stream_events import EventCursor, SseEvent, SseStreamError
@@ -185,14 +191,42 @@ def create_torii_client_streaming_query_mixin(
                         final_headers.setdefault("Accept", "text/event-stream")
                         if should_resume and active_last_id:
                             final_headers["Last-Event-ID"] = active_last_id
-                        with self._session.get(
-                            url,
-                            params=params,
-                            headers=final_headers or None,
-                            stream=True,
-                            timeout=timeout,
-                            allow_redirects=allow_redirects,
-                        ) as response:
+                        if isinstance(
+                            attempt_headers,
+                            (_CanonicalRequestHeaderPlan, _OperatorRequestHeaderPlan),
+                        ):
+                            request_headers: Mapping[str, str]
+                            if isinstance(attempt_headers, _CanonicalRequestHeaderPlan):
+                                request_headers = _CanonicalRequestHeaderPlan(
+                                    final_headers,
+                                    attempt_headers.canonical_auth,
+                                    reject_ambient_auth=attempt_headers.reject_ambient_auth,
+                                )
+                            else:
+                                request_headers = _OperatorRequestHeaderPlan(
+                                    final_headers,
+                                    attempt_headers.context,
+                                )
+                            response_context = self._request(
+                                "GET",
+                                path,
+                                params=params,
+                                headers=request_headers,
+                                stream=True,
+                                timeout=timeout,
+                                allow_retry=False,
+                                allow_redirects=False,
+                            )
+                        else:
+                            response_context = self._session.get(
+                                url,
+                                params=params,
+                                headers=final_headers or None,
+                                stream=True,
+                                timeout=timeout,
+                                allow_redirects=allow_redirects,
+                            )
+                        with response_context as response:
                             if payload_free_errors:
                                 _expect_sorafs_reputation_status(
                                     response,

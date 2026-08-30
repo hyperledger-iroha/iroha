@@ -14,7 +14,7 @@ fn build_tlv_with_version(ty: PointerType, ver: u8, payload: &[u8]) -> Vec<u8> {
 #[test]
 fn validate_tlv_rejects_wrong_version() {
     // Prepare memory and preload a TLV with version != 1
-    let mut mem = Memory::new(0);
+    let mut mem = Memory::new();
     let payload = br#"{"k":"v"}"#;
     let tlv = build_tlv_with_version(PointerType::Json, 2, payload);
     mem.preload_input(0, &tlv).expect("preload input");

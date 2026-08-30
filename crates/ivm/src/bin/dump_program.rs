@@ -32,8 +32,10 @@ fn main() {
         .compile_source(src)
         .expect("compile");
     let parsed = ProgramMetadata::parse(&code).unwrap();
-    let mut memory = ivm::Memory::new((code.len() - parsed.header_len) as u64);
-    memory.load_code(&code[parsed.header_len..]);
+    let mut memory = ivm::Memory::new();
+    memory
+        .load_code(&code[parsed.header_len..])
+        .expect("validated program fits code region");
     let mut pc = (parsed.code_offset - parsed.header_len) as u64;
     while pc < memory.code_len() {
         let word = ivm::decode(&memory, pc).unwrap();

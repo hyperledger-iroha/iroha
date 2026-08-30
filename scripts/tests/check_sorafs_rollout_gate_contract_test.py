@@ -14600,7 +14600,6 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         "/v1/sorafs/pin",
         "/v1/sorafs/pin/register",
         "/v1/sorafs/pin/{digest_hex}",
-        "/v1/sorafs/storage/fetch",
         "/v1/sorafs/storage/token",
         "/v1/sorafs/storage/manifest/{manifest_id}",
         "/v1/sorafs/storage/plan/{manifest_id}",
@@ -14612,6 +14611,7 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
     )
     unsupported_routes = (
         "/v1/sorafs/storage/pin",
+        "/v1/sorafs/storage/fetch",
         "/v1/sorafs/storage/por-challenge",
         "/v1/sorafs/storage/por-proof",
         "/v1/sorafs/storage/por-verdict",

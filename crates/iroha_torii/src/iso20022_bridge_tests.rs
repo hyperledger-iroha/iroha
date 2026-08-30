@@ -8993,8 +8993,60 @@ fn rewrite_persisted_record(path: &Path, mutate: impl FnOnce(&mut norito::json::
     )
     .expect("write mutated JSON");
 }
+fn rewrite_persisted_audit_index(store: &TempDir, mutate: impl FnOnce(&mut norito::json::Map)) {
+    let path = store
+        .path()
+        .join(ISO_PERSISTED_AUDIT_DIR)
+        .join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+    let mut value = read_audit_index(store);
+    {
+        let object = value.as_object_mut().expect("audit index object");
+        mutate(object);
+        object.remove(ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD);
+        let digest = persisted_record_digest(&JsonValue::Object(object.clone()));
+        object.insert(
+            ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD.to_owned(),
+            JsonValue::from(digest.as_str()),
+        );
+        assert!(persisted_audit_index_digest_matches(object));
+    }
+    fs::write(
+        path,
+        norito::json::to_string_pretty(&value).expect("serialize mutated audit index"),
+    )
+    .expect("write mutated audit index");
+}
+fn rewrite_persisted_tombstone(
+    store: &TempDir,
+    message_id: &str,
+    mutate: impl FnOnce(&mut norito::json::Map),
+) {
+    let path = store
+        .path()
+        .join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR)
+        .join(message_filename(message_id));
+    let text = fs::read_to_string(&path).expect("persisted tombstone");
+    let mut value = norito::json::from_json::<JsonValue>(&text).expect("tombstone JSON");
+    {
+        let object = value.as_object_mut().expect("tombstone object");
+        mutate(object);
+        object.remove(ISO_PERSISTED_REPLAY_TOMBSTONE_DIGEST_FIELD);
+        let digest = persisted_record_digest(&JsonValue::Object(object.clone()));
+        object.insert(
+            ISO_PERSISTED_REPLAY_TOMBSTONE_DIGEST_FIELD.to_owned(),
+            JsonValue::from(digest.as_str()),
+        );
+    }
+    fs::write(
+        path,
+        norito::json::to_string_pretty(&value).expect("serialize mutated tombstone"),
+    )
+    .expect("write mutated tombstone");
+}
 #[test]
 fn persisted_record_reader_enforces_the_open_file_byte_limit() {
+    assert!(persisted_json_fits_cap("1234", 4));
+    assert!(!persisted_json_fits_cap("12345", 4));
     let cap = usize::try_from(ISO_PERSISTED_RECORD_MAX_BYTES).expect("record cap fits usize");
     let mut exact = NamedTempFile::new().expect("exact-size record");
     exact
@@ -9060,6 +9112,8 @@ fn lowering_store_capacity_preserves_every_unexpired_replay_identity() {
             runtime.mark_settled(message_id, SystemTime::now());
         }
     }
+    // A record rename can commit immediately before the derived audit index is
+    // rewritten. Exercise that valid-but-stale crash window explicitly.
     for (message_id, updated_at_ms) in [
         ("old", 1_000_u64),
         ("middle", 2_000),
@@ -9140,19 +9194,51 @@ fn assert_digest_correct_record_mutation_is_rejected(
         .join("messages")
         .join(message_filename(message_id));
     rewrite_persisted_record(&path, mutate);
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(
-        reloaded.message_status(message_id).is_none(),
-        "digest-correct malformed records must fail closed"
+    let error = runtime_config_error(
+        &config,
+        "digest-correct malformed ISO stores must stop startup",
     );
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+    assert!(
+        error
+            .to_string()
+            .contains("regenerate the first-release ISO store"),
+        "unexpected hard-cut error: {error:?}"
+    );
+}
+fn assert_digest_correct_audit_mutation_is_rejected(
+    case: &str,
+    mutate: impl FnOnce(&mut norito::json::Map),
+) {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        for message_id in ["audit-a", "audit-b"] {
+            assert!(runtime.check_and_record_inbound(
+                message_id,
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some(format!("{case}-{message_id}-biz")),
+                    None,
+                    format!("{case}-{message_id}-hash"),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+        }
+    }
+    rewrite_persisted_audit_index(&store, mutate);
+    let error = runtime_config_error(&config, "malformed ISO audit indexes must stop startup");
+    assert!(
+        error
+            .to_string()
+            .contains("is invalid or corrupt for schema V2"),
+        "unexpected hard-cut error for {case}: {error:?}"
     );
 }
 fn read_external_audit_index(export: &TempDir) -> JsonValue {
@@ -9523,7 +9609,7 @@ fn durable_store_exports_audit_index_matching_persisted_manifest() {
     ));
 }
 #[test]
-fn durable_store_audit_index_excludes_tampered_record_on_reload() {
+fn durable_store_audit_index_stops_startup_on_tampered_record() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
@@ -9568,43 +9654,13 @@ fn durable_store_audit_index_excludes_tampered_record_on_reload() {
     let original = fs::read_to_string(&tampered_path).expect("persisted JSON");
     assert!(original.contains("tx-tampered"));
     fs::write(&tampered_path, original.replace("tx-tampered", "tx-forged")).expect("tamper record");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(reloaded.message_status("audit-clean").is_some());
-    assert!(reloaded.message_status("audit-tampered").is_none());
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(1)
+    let error = runtime_config_error(&config, "tampered ISO records must stop startup");
+    assert!(
+        error
+            .to_string()
+            .contains("invalid or corrupt for schema V2"),
+        "unexpected hard-cut error: {error:?}"
     );
-    let entries = index_obj
-        .get("records")
-        .and_then(JsonValue::as_array)
-        .expect("audit records");
-    assert_eq!(entries.len(), 1);
-    assert_eq!(
-        entries[0]
-            .as_object()
-            .and_then(|obj| obj.get("message_id"))
-            .and_then(JsonValue::as_str),
-        Some("audit-clean")
-    );
-    assert!(reloaded.check_and_record_inbound(
-        "audit-replacement",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("audit-tampered-biz".to_owned()),
-            None,
-            "audit-replacement-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
 }
 #[test]
 fn durable_store_rejects_tampered_record_body() {
@@ -9636,34 +9692,26 @@ fn durable_store_rejects_tampered_record_body() {
         .join(message_filename("tamper-msg"));
     let original = fs::read_to_string(&path).expect("persisted JSON");
     assert!(original.contains("tx-original"));
-    fs::write(&path, original.replace("tx-original", "tx-forged")).expect("tamper record");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
+    let tampered = original.replace("tx-original", "tx-forged");
+    fs::write(&path, &tampered).expect("tamper record");
+    let audit_path = store
+        .path()
+        .join(ISO_PERSISTED_AUDIT_DIR)
+        .join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+    let audit_before = fs::read_to_string(&audit_path).expect("audit index");
+    let error = runtime_config_error(&config, "tampered ISO records must stop startup");
     assert!(
-        reloaded.message_status("tamper-msg").is_none(),
-        "tampered persisted records must not rebuild durable status"
+        error
+            .to_string()
+            .contains("invalid or corrupt for schema V2"),
+        "unexpected hard-cut error: {error:?}"
     );
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
+    assert_eq!(fs::read_to_string(path).expect("tampered record"), tampered);
     assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+        fs::read_to_string(audit_path).expect("audit index"),
+        audit_before,
+        "failed startup must not regenerate the derived audit index"
     );
-    assert!(reloaded.check_and_record_inbound(
-        "fresh-msg",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("tamper-biz".to_owned()),
-            None,
-            "fresh-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
 }
 #[test]
 fn durable_store_rejects_missing_record_digest() {
@@ -9701,12 +9749,12 @@ fn durable_store_rejects_missing_record_digest() {
         norito::json::to_string_pretty(&value).expect("serialize tampered JSON"),
     )
     .expect("write tampered JSON");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
+    let error = runtime_config_error(&config, "digest-free ISO records must stop startup");
     assert!(
-        reloaded.message_status("missing-digest-msg").is_none(),
-        "legacy or stripped records without a digest must fail closed"
+        error
+            .to_string()
+            .contains("invalid or corrupt for schema V2"),
+        "unexpected hard-cut error: {error:?}"
     );
 }
 #[test]
@@ -9748,12 +9796,12 @@ fn durable_store_rejects_malformed_record_digest() {
         norito::json::to_string_pretty(&value).expect("serialize tampered JSON"),
     )
     .expect("write tampered JSON");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
+    let error = runtime_config_error(&config, "malformed ISO record digests must stop startup");
     assert!(
-        reloaded.message_status("bad-digest-msg").is_none(),
-        "malformed record digests must not be accepted"
+        error
+            .to_string()
+            .contains("invalid or corrupt for schema V2"),
+        "unexpected hard-cut error: {error:?}"
     );
 }
 #[test]
@@ -9930,17 +9978,12 @@ fn durable_store_rejects_digest_correct_message_id_filename_drift() {
     let expected_path = messages_dir.join(message_filename("filename-drift"));
     let drifted_path = messages_dir.join(message_filename("filename-drift-forged"));
     fs::rename(&expected_path, &drifted_path).expect("rename persisted record");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(reloaded.message_status("filename-drift").is_none());
-    assert!(reloaded.message_status("filename-drift-forged").is_none());
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+    let error = runtime_config_error(&config, "drifted ISO record filenames must stop startup");
+    assert!(
+        error
+            .to_string()
+            .contains("does not match its embedded message identity"),
+        "unexpected hard-cut error: {error:?}"
     );
 }
 #[cfg(unix)]
@@ -9973,16 +10016,10 @@ fn durable_store_rejects_symlinked_record_on_reload() {
     let target_path = store.path().join("symlink-target.json");
     fs::rename(&expected_path, &target_path).expect("move persisted record");
     std::os::unix::fs::symlink(&target_path, &expected_path).expect("symlink persisted record");
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(reloaded.message_status("symlinked-record").is_none());
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+    let error = runtime_config_error(&config, "symlinked ISO records must stop startup");
+    assert!(
+        error.to_string().contains("is not a regular file"),
+        "unexpected hard-cut error: {error:?}"
     );
 }
 #[cfg(unix)]
@@ -10018,17 +10055,38 @@ fn durable_store_rejects_symlinked_messages_dir_on_reload() {
     .expect("symlink messages dir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
-    let reloaded = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(reloaded.message_status("symlinked-messages-dir").is_none());
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+    let error = runtime_config_error(&config, "symlinked ISO message stores must stop startup");
+    assert!(
+        error.to_string().contains("is not a real directory"),
+        "unexpected hard-cut error: {error:?}"
     );
+}
+#[cfg(unix)]
+#[test]
+fn durable_store_rejects_non_real_replay_tombstone_directories() {
+    for kind in ["file", "symlink"] {
+        let store = TempDir::new().expect("store tempdir");
+        let tombstones = store.path().join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR);
+        let _target = if kind == "symlink" {
+            let target = TempDir::new().expect("target tempdir");
+            std::os::unix::fs::symlink(target.path(), &tombstones)
+                .expect("symlink tombstone directory");
+            Some(target)
+        } else {
+            fs::write(&tombstones, b"not a directory").expect("tombstone directory blocker");
+            None
+        };
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let error = runtime_config_error(
+            &config,
+            "non-real ISO replay tombstone stores must stop startup",
+        );
+        assert!(
+            error.to_string().contains("is not a real directory"),
+            "unexpected hard-cut error for {kind}: {error:?}"
+        );
+    }
 }
 #[cfg(unix)]
 #[test]
@@ -10039,36 +10097,18 @@ fn durable_store_refuses_symlinked_messages_dir_on_persist() {
         .expect("symlink messages dir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
-    let runtime = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(runtime.check_and_record_inbound(
-        "symlinked-persist-dir",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("symlinked-persist-dir-biz".to_owned()),
-            None,
-            "symlinked-persist-dir-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
-    assert!(runtime.message_status("symlinked-persist-dir").is_some());
+    let error = runtime_config_error(&config, "symlinked ISO message stores must stop startup");
     assert!(
-        !target
-            .path()
-            .join(message_filename("symlinked-persist-dir"))
-            .exists(),
-        "persist_message must not follow a symlinked messages directory"
+        error.to_string().contains("is not a real directory"),
+        "unexpected hard-cut error: {error:?}"
     );
-    let index_value = read_audit_index(&store);
-    let index_obj = index_value.as_object().expect("audit index object");
-    assert!(persisted_audit_index_digest_matches(index_obj));
-    assert_eq!(
-        index_obj.get("record_count").and_then(JsonValue::as_u64),
-        Some(0)
+    assert!(
+        target
+            .path()
+            .read_dir()
+            .expect("target directory")
+            .next()
+            .is_none()
     );
 }
 #[cfg(unix)]
@@ -10080,33 +10120,18 @@ fn durable_store_refuses_symlinked_audit_dir_on_persist() {
         .expect("symlink audit dir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
-    let runtime = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(runtime.check_and_record_inbound(
-        "symlinked-audit-dir",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("symlinked-audit-dir-biz".to_owned()),
-            None,
-            "symlinked-audit-dir-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
+    let error = runtime_config_error(&config, "symlinked ISO audit stores must stop startup");
     assert!(
-        store
-            .path()
-            .join("messages")
-            .join(message_filename("symlinked-audit-dir"))
-            .exists(),
-        "record persistence should still use the real messages directory"
+        error.to_string().contains("is not a real directory"),
+        "unexpected hard-cut error: {error:?}"
     );
     assert!(
-        !target.path().join(ISO_PERSISTED_AUDIT_INDEX_FILE).exists(),
-        "persist_audit_index must not follow a symlinked audit directory"
+        target
+            .path()
+            .read_dir()
+            .expect("target directory")
+            .next()
+            .is_none()
     );
 }
 #[cfg(unix)]
@@ -11462,6 +11487,44 @@ fn lifecycle_roles_reject_cross_party_updates() {
         lifecycle_parties.admitting_participant_id,
         "counterparty-bank"
     );
+    for (label, malformed) in [
+        (
+            "missing From",
+            parse_message(
+                "pacs.002",
+                b"AppHdr/To/FIId/FinInstnId/BICFI=DEUTDEFF\nBizMsgIdr=status-missing-from\nOrgnlMsgId=owned-payment\nTxSts=ACSC",
+            )
+            .expect("missing-From lifecycle parses"),
+        ),
+        (
+            "missing To",
+            parse_message(
+                "pacs.002",
+                b"AppHdr/Fr/FIId/FinInstnId/BICFI=MARKDEFF\nBizMsgIdr=status-missing-to\nOrgnlMsgId=owned-payment\nTxSts=ACSC",
+            )
+            .expect("missing-To lifecycle parses"),
+        ),
+        (
+            "wrong To",
+            participant_message(
+                "pacs.002",
+                "MARKDEFF",
+                "MARKDEFF",
+                "BizMsgIdr=status-wrong-to\nOrgnlMsgId=owned-payment\nTxSts=ACSC",
+            ),
+        ),
+    ] {
+        assert_eq!(
+            runtime.authorize_lifecycle_submission(
+                counterparty.public_key(),
+                profile,
+                "pacs.002",
+                &malformed,
+            ),
+            Err(IsoAdmissionError::NotAuthorized),
+            "{label} must not be accepted",
+        );
+    }
     let downgraded_profile = runtime
         .resolve_profile(Some("swift-cbpr-plus"))
         .expect("built-in SWIFT profile");
@@ -11779,6 +11842,307 @@ fn legacy_iso_record_store_fails_fast_with_schema_incompatibility() {
         error
             .to_string()
             .contains("incompatible ISO bridge store record schema version 1")
+    );
+}
+
+#[test]
+fn conflicting_v2_replay_and_transaction_identities_stop_startup() {
+    let transaction_store = TempDir::new().expect("transaction store");
+    let mut transaction_config = sample_config();
+    transaction_config.store_dir = Some(transaction_store.path().to_path_buf());
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&transaction_config)
+            .expect("cfg")
+            .expect("enabled");
+        for message_id in ["tx-owner-a", "tx-owner-b"] {
+            assert!(runtime.check_and_record_inbound(
+                message_id,
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some(format!("{message_id}-biz")),
+                    None,
+                    format!("{message_id}-hash"),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+            runtime.mark_accepted(message_id, &format!("{message_id}-transaction"));
+        }
+    }
+    rewrite_persisted_record(
+        &transaction_store
+            .path()
+            .join("messages")
+            .join(message_filename("tx-owner-b")),
+        |object| {
+            object.insert(
+                "transaction_hash".to_owned(),
+                JsonValue::from("tx-owner-a-transaction"),
+            );
+        },
+    );
+    let error = runtime_config_error(
+        &transaction_config,
+        "conflicting ISO transaction identities must stop startup",
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("conflicting transaction identities"),
+        "unexpected transaction hard-cut error: {error:?}"
+    );
+
+    let replay_store = TempDir::new().expect("replay store");
+    let mut replay_config = sample_config();
+    replay_config.store_dir = Some(replay_store.path().to_path_buf());
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&replay_config)
+            .expect("cfg")
+            .expect("enabled");
+        for message_id in ["replay-owner-a", "replay-owner-b"] {
+            assert!(runtime.check_and_record_inbound(
+                message_id,
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some(format!("{message_id}-biz")),
+                    None,
+                    format!("{message_id}-hash"),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+        }
+    }
+    rewrite_persisted_record(
+        &replay_store
+            .path()
+            .join("messages")
+            .join(message_filename("replay-owner-b")),
+        |object| {
+            object
+                .get_mut("metadata")
+                .and_then(JsonValue::as_object_mut)
+                .expect("metadata object")
+                .insert(
+                    "payload_hash".to_owned(),
+                    JsonValue::from("replay-owner-a-hash"),
+                );
+        },
+    );
+    rewrite_persisted_tombstone(&replay_store, "replay-owner-b", |object| {
+        object.insert(
+            "payload_hash".to_owned(),
+            JsonValue::from("replay-owner-a-hash"),
+        );
+    });
+    let error = runtime_config_error(
+        &replay_config,
+        "conflicting ISO replay identities must stop startup",
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("conflicting immutable identities"),
+        "unexpected replay hard-cut error: {error:?}"
+    );
+}
+
+#[test]
+fn unversioned_or_malformed_iso_record_store_stops_startup() {
+    for (name, contents, expected) in [
+        (
+            "missing-version",
+            r#"{"message_id":"missing-version"}"#,
+            "does not advertise numeric schema version V2",
+        ),
+        (
+            "string-version",
+            r#"{"version":"2","message_id":"string-version"}"#,
+            "does not advertise numeric schema version V2",
+        ),
+        ("invalid-json", "{", "is not valid JSON"),
+        (
+            "incomplete-v2",
+            r#"{"version":2,"message_id":"incomplete-v2"}"#,
+            "is invalid or corrupt for schema V2",
+        ),
+    ] {
+        let store = TempDir::new().expect("tempdir");
+        let messages = store.path().join("messages");
+        fs::create_dir_all(&messages).expect("messages directory");
+        fs::write(messages.join(message_filename(name)), contents).expect("record fixture");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let error = runtime_config_error(&config, "malformed ISO stores must stop startup");
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected hard-cut error for {name}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn persisted_iso_records_regenerate_a_missing_v2_audit_index() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "audit-required",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("audit-required-biz".to_owned()),
+                None,
+                "audit-required-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+    }
+    fs::remove_file(
+        store
+            .path()
+            .join(ISO_PERSISTED_AUDIT_DIR)
+            .join(ISO_PERSISTED_AUDIT_INDEX_FILE),
+    )
+    .expect("remove audit index");
+    let reloaded = Iso20022BridgeRuntime::from_config(&config)
+        .expect("missing derived audit index is recoverable")
+        .expect("enabled");
+    assert!(reloaded.message_status("audit-required").is_some());
+    let regenerated = read_audit_index(&store);
+    let object = regenerated.as_object().expect("audit index object");
+    assert!(persisted_audit_index_digest_matches(object));
+    assert_eq!(
+        object.get("record_count").and_then(JsonValue::as_u64),
+        Some(1)
+    );
+}
+
+#[test]
+fn malformed_or_unversioned_iso_audit_index_stops_startup() {
+    for (name, contents, expected) in [
+        ("invalid-json", "{", "is not valid JSON"),
+        (
+            "missing-version",
+            r#"{"record_count":0,"records":[],"index_sha256":"00"}"#,
+            "does not advertise numeric schema version V2",
+        ),
+        (
+            "string-version",
+            r#"{"version":"2","record_count":0,"records":[],"index_sha256":"00"}"#,
+            "does not advertise numeric schema version V2",
+        ),
+        (
+            "legacy-version",
+            r#"{"version":1,"record_count":0,"records":[],"index_sha256":"00"}"#,
+            "incompatible ISO bridge audit index schema version 1",
+        ),
+        (
+            "invalid-current-schema",
+            r#"{"version":2,"record_count":0,"records":[],"index_sha256":"00"}"#,
+            "is invalid or corrupt for schema V2",
+        ),
+    ] {
+        let store = TempDir::new().expect("tempdir");
+        let audit_dir = store.path().join(ISO_PERSISTED_AUDIT_DIR);
+        fs::create_dir_all(&audit_dir).expect("audit directory");
+        fs::write(audit_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE), contents).expect("audit fixture");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let error = runtime_config_error(&config, "malformed ISO audit stores must stop startup");
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected hard-cut error for {name}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn digest_correct_malformed_iso_audit_entries_stop_startup() {
+    assert_digest_correct_audit_mutation_is_rejected("extra-root-field", |object| {
+        object.insert("unexpected".to_owned(), JsonValue::from("drift"));
+    });
+    assert_digest_correct_audit_mutation_is_rejected("missing-row-field", |object| {
+        let row = object
+            .get_mut("records")
+            .and_then(JsonValue::as_array_mut)
+            .and_then(|records| records.first_mut())
+            .and_then(JsonValue::as_object_mut)
+            .expect("audit row");
+        assert!(row.remove("profile_id").is_some());
+    });
+    assert_digest_correct_audit_mutation_is_rejected("unsorted-rows", |object| {
+        let records = object
+            .get_mut("records")
+            .and_then(JsonValue::as_array_mut)
+            .expect("audit rows");
+        records.swap(0, 1);
+    });
+    assert_digest_correct_audit_mutation_is_rejected("duplicate-row", |object| {
+        let records = object
+            .get_mut("records")
+            .and_then(JsonValue::as_array_mut)
+            .expect("audit rows");
+        records[1] = records[0].clone();
+    });
+    assert_digest_correct_audit_mutation_is_rejected("noncanonical-filename", |object| {
+        let row = object
+            .get_mut("records")
+            .and_then(JsonValue::as_array_mut)
+            .and_then(|records| records.first_mut())
+            .and_then(JsonValue::as_object_mut)
+            .expect("audit row");
+        row.insert("filename".to_owned(), JsonValue::from("forged.json"));
+    });
+}
+
+#[test]
+fn valid_but_stale_iso_audit_index_is_regenerated_after_validation() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    {
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "stale-audit",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("stale-audit-biz".to_owned()),
+                None,
+                "stale-audit-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+    }
+    rewrite_persisted_audit_index(&store, |object| {
+        object.insert("record_count".to_owned(), JsonValue::from(0_u64));
+        object.insert("records".to_owned(), JsonValue::Array(Vec::new()));
+    });
+    let reloaded = Iso20022BridgeRuntime::from_config(&config)
+        .expect("valid stale derived index is recoverable")
+        .expect("enabled");
+    assert!(reloaded.message_status("stale-audit").is_some());
+    let regenerated = read_audit_index(&store);
+    let object = regenerated.as_object().expect("audit index object");
+    assert!(persisted_audit_index_digest_matches(object));
+    assert_eq!(
+        object.get("record_count").and_then(JsonValue::as_u64),
+        Some(1)
     );
 }
 

@@ -218,9 +218,10 @@ def test_queue_plan_pending_membership_contract_accepts_current_production(
 ) -> None:
     module = load_checker()
     models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
-    assert validate_queue_plan_pending_membership_fixture(
+    errors = validate_queue_plan_pending_membership_fixture(
         tmp_path, module, models
-    ) == ()
+    )
+    assert errors == (), errors
 
 
 def test_queue_plan_pending_membership_contract_rejects_bound_drift(
@@ -257,6 +258,28 @@ def test_queue_plan_pending_membership_contract_rejects_roster_bound_drift(
     )
     assert any(
         "exact block/proposal admission consensus bound" in error for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_signed_alias_roster_bound_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once(
+        path,
+        "const MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS: usize = "
+        "MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK;",
+        "const MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS: usize = usize::MAX;",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "signed-alias reverse roster" in error
+        and "exact block/proposal admission consensus bound" in error
+        for error in errors
     ), errors
 
 
@@ -357,17 +380,189 @@ def test_queue_plan_pending_membership_contract_rejects_visible_native_prefix(
     path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE
     replace_once(
         path,
+        '    "queue_plan_pending_obligation_v1_",\n',
+        "",
+    )
+    replace_once(
+        path,
         '    "queue_plan_pending_route_member_v1_",\n',
+        "",
+    )
+    replace_once(
+        path,
+        '    "queue_plan_pending_signed_alias_member_v1_",\n',
+        "",
+    )
+    replace_once(
+        path,
+        '    "queue_plan_signed_alias_terminal_v1_",\n',
         "",
     )
     errors = validate_queue_plan_pending_membership_fixture(
         tmp_path, module, models
     )
     assert any(
+        "queue_plan_pending_obligation_v1_" in error
+        and "opaque system contract-state namespace" in error
+        for error in errors
+    ), errors
+    assert any(
         "queue_plan_pending_route_member_v1_" in error
         and "opaque system contract-state namespace" in error
         for error in errors
     ), errors
+    assert any(
+        "queue_plan_pending_signed_alias_member_v1_" in error
+        and "opaque system contract-state namespace" in error
+        for error in errors
+    ), errors
+    assert any(
+        "queue_plan_signed_alias_terminal_v1_" in error
+        and "opaque system contract-state namespace" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_state_prefix_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    for prefix in module.QUEUE_PLAN_PENDING_OPAQUE_PREFIXES:
+        replace_once(path, f'"{prefix}"', f'"drifted_{prefix}"')
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    for prefix in module.QUEUE_PLAN_PENDING_OPAQUE_PREFIXES:
+        assert any(
+            prefix in error and "one exact canonical declaration" in error
+            for error in errors
+        ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_inexact_signed_alias_reverse_owner(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once_after(
+        path,
+        "fn queue_plan_pending_signed_alias_members_from_storage(",
+        "if registry.binding_hash != marker.binding_hash {",
+        "if false {",
+    )
+    replace_once_after(
+        path,
+        "fn queue_plan_pending_signed_alias_members_from_storage(",
+        "if Self::queue_plan_pending_signed_alias_member_from_obligation(&obligation).as_ref()\n"
+        "                != Some(&marker)",
+        "if false",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "queue_plan_pending_signed_alias_members_from_storage" in error
+        and "registry.binding_hash != marker.binding_hash" in error
+        for error in errors
+    ), errors
+    assert any(
+        "queue_plan_pending_signed_alias_members_from_storage" in error
+        and "queue_plan_pending_signed_alias_member_from_obligation" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_direct_alias_evidence_conflation(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once_after(
+        path,
+        "fn queue_plan_binding_application_evidence_in_view(",
+        "QueuePlanBindingApplicationEvidence::AppliedDirect",
+        "QueuePlanBindingApplicationEvidence::Pending",
+    )
+    replace_once_after(
+        path,
+        "fn queue_plan_binding_application_evidence_in_view(",
+        "QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias",
+        "QueuePlanBindingApplicationEvidence::PendingStale",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    for evidence in (
+        "QueuePlanBindingApplicationEvidence::AppliedDirect",
+        "QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias",
+    ):
+        assert any(
+            "queue_plan_binding_application_evidence_in_view" in error
+            and evidence in error
+            for error in errors
+        ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_alias_terminal_prefix_write(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once_after(
+        path,
+        "fn resolve_queue_plan_pending_obligation_by_signed_alias_in_storage(",
+        "        let alias_key = Self::queue_plan_pending_signed_alias_member_marker_key(member)?;\n",
+        "        let alias_key = Self::queue_plan_pending_signed_alias_member_marker_key(member)?;\n"
+        "        storage.insert_queue_plan_marker(alias_key.clone(), Vec::new());\n",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "resolve_queue_plan_pending_obligation_by_signed_alias_in_storage mutates WSV "
+        "before completing all-route preflight" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_alias_decode_before_bound(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    for symbol, decode in (
+        (
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "norito::decode_from_bytes::<QueuePlanPendingSignedAliasMemberV1>(payload)",
+        ),
+        (
+            "decode_exact_queue_plan_signed_alias_terminal_marker",
+            "norito::decode_from_bytes::<QueuePlanSignedAliasTerminalV1>(payload)",
+        ),
+    ):
+        swap_ordered_once_after(
+            path,
+            f"fn {symbol}(",
+            "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
+            decode,
+        )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    for symbol in (
+        "decode_exact_queue_plan_pending_signed_alias_member_marker",
+        "decode_exact_queue_plan_signed_alias_terminal_marker",
+    ):
+        assert any(
+            f"ordered QueuePlan pending route-membership item {symbol}" in error
+            for error in errors
+        ), errors
 
 
 def assert_inflight_order_drift_rejected(
@@ -397,6 +592,10 @@ def assert_inflight_order_drift_rejected(
         (
             "queue_plan_pending_resolution_corrupt_route_counts_fail_without_partial_mutation",
             "failed whole-list resolution must restore the exact prior overlay",
+        ),
+        (
+            "queue_plan_signed_alias_terminal_evidence_is_exact_and_fail_closed",
+            "terminalization must remove the signed-first pending reverse index",
         ),
     ),
 )
@@ -584,18 +783,17 @@ def test_queue_plan_pending_membership_contract_preserves_historical_applied(
     module = load_checker()
     models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
     path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
-    replace_once(
+    replace_once_after(
         path,
-        "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)",
-        "None if committed => Ok(QueuePlanAdmissionApplicationState::PendingStale)",
+        "fn queue_plan_binding_application_evidence_in_view(",
+        "QueuePlanBindingApplicationEvidence::AppliedDirect",
+        "QueuePlanBindingApplicationEvidence::Absent",
     )
     errors = validate_queue_plan_pending_membership_fixture(
         tmp_path, module, models
     )
     assert any(
-        "queue_plan_registry_owner_application_state_in_view" in error
-        and "QueuePlanAdmissionApplicationState::Applied" in error
+        "queue_plan_binding_application_evidence_in_view" in error
+        and "QueuePlanBindingApplicationEvidence::AppliedDirect" in error
         for error in errors
     ), errors
-
-

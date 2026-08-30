@@ -30,6 +30,7 @@ use iroha_config_base::{
 };
 use iroha_data_model::{
     domain::DomainId,
+    governance::types::MAX_PARLIAMENT_BODY_TARGET_SEATS_V1,
     merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     soracloud::{
         SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1, SORA_INROU_MIN_CPU_MILLIS_V1,
@@ -2037,75 +2038,6 @@ impl SorafsTelemetryPolicy {
         }
     }
 }
-/// Citizen service discipline (user view).
-#[derive(Debug, ReadConfig, Clone)]
-pub struct CitizenServiceDiscipline {
-    /// Cooldown (blocks) enforced after a citizen accepts a seat.
-    #[config(
-        env = "GOV_CITIZEN_SEAT_COOLDOWN_BLOCKS",
-        default = "defaults::governance::citizen_service::SEAT_COOLDOWN_BLOCKS"
-    )]
-    pub seat_cooldown_blocks: u64,
-    /// Maximum seats a single citizen may occupy in one epoch.
-    #[config(
-        env = "GOV_CITIZEN_MAX_SEATS_PER_EPOCH",
-        default = "defaults::governance::citizen_service::MAX_SEATS_PER_EPOCH"
-    )]
-    pub max_seats_per_epoch: u32,
-    /// Number of declines that do not trigger slashing per epoch.
-    #[config(
-        env = "GOV_CITIZEN_FREE_DECLINES_PER_EPOCH",
-        default = "defaults::governance::citizen_service::FREE_DECLINES_PER_EPOCH"
-    )]
-    pub free_declines_per_epoch: u32,
-    /// Slash percentage applied when declines exceed the free allowance (basis points).
-    #[config(
-        env = "GOV_CITIZEN_DECLINE_SLASH_BPS",
-        default = "defaults::governance::citizen_service::DECLINE_SLASH_BPS"
-    )]
-    pub decline_slash_bps: u16,
-    /// Slash percentage applied when a citizen fails to appear (basis points).
-    #[config(
-        env = "GOV_CITIZEN_NO_SHOW_SLASH_BPS",
-        default = "defaults::governance::citizen_service::NO_SHOW_SLASH_BPS"
-    )]
-    pub no_show_slash_bps: u16,
-    /// Slash percentage applied when misconduct is recorded (basis points).
-    #[config(
-        env = "GOV_CITIZEN_MISCONDUCT_SLASH_BPS",
-        default = "defaults::governance::citizen_service::MISCONDUCT_SLASH_BPS"
-    )]
-    pub misconduct_slash_bps: u16,
-    /// Optional bond multipliers keyed by governance role name.
-    #[config(default = "defaults::governance::citizen_service::role_bond_multipliers()")]
-    pub role_bond_multipliers: BTreeMap<String, u64>,
-}
-impl CitizenServiceDiscipline {
-    fn parse(self) -> actual::CitizenServiceDiscipline {
-        actual::CitizenServiceDiscipline {
-            seat_cooldown_blocks: self.seat_cooldown_blocks,
-            max_seats_per_epoch: self.max_seats_per_epoch,
-            free_declines_per_epoch: self.free_declines_per_epoch,
-            decline_slash_bps: self.decline_slash_bps,
-            no_show_slash_bps: self.no_show_slash_bps,
-            misconduct_slash_bps: self.misconduct_slash_bps,
-            role_bond_multipliers: self.role_bond_multipliers,
-        }
-    }
-}
-impl Default for CitizenServiceDiscipline {
-    fn default() -> Self {
-        Self {
-            seat_cooldown_blocks: defaults::governance::citizen_service::SEAT_COOLDOWN_BLOCKS,
-            max_seats_per_epoch: defaults::governance::citizen_service::MAX_SEATS_PER_EPOCH,
-            free_declines_per_epoch: defaults::governance::citizen_service::FREE_DECLINES_PER_EPOCH,
-            decline_slash_bps: defaults::governance::citizen_service::DECLINE_SLASH_BPS,
-            no_show_slash_bps: defaults::governance::citizen_service::NO_SHOW_SLASH_BPS,
-            misconduct_slash_bps: defaults::governance::citizen_service::MISCONDUCT_SLASH_BPS,
-            role_bond_multipliers: defaults::governance::citizen_service::role_bond_multipliers(),
-        }
-    }
-}
 /// Runtime-upgrade provenance enforcement modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
 #[strum(serialize_all = "snake_case")]
@@ -2383,9 +2315,6 @@ pub struct Governance {
     /// Runtime upgrade provenance enforcement policy.
     #[config(nested)]
     pub runtime_upgrade_provenance: RuntimeUpgradeProvenance,
-    /// Citizen service discipline knobs (cooldowns, slashing, seat caps).
-    #[config(nested)]
-    pub citizen_service: CitizenServiceDiscipline,
     /// Account supplying viral incentive payouts and sender bonuses.
     #[config(
         env = "GOV_VIRAL_INCENTIVE_POOL_ACCOUNT",
@@ -2473,10 +2402,10 @@ pub struct Governance {
     /// Trusted pre-genesis SoraFS provider→owner bindings (hex provider id → account id).
     #[config(default = "BTreeMap::new()")]
     pub sorafs_provider_owners: BTreeMap<String, String>,
-    /// Conviction step in blocks. duration/step increases conviction by 1.
+    /// Nonzero conviction step in blocks. duration/step increases conviction by 1.
     #[config(env = "GOV_CONVICTION_STEP_BLOCKS", default = "100")]
     pub conviction_step_blocks: u64,
-    /// Maximum conviction multiplier.
+    /// Nonzero maximum conviction multiplier.
     #[config(env = "GOV_MAX_CONVICTION", default = "6")]
     pub max_conviction: u64,
     /// Minimum enactment delay in blocks when scheduling a referendum.
@@ -2606,7 +2535,6 @@ impl Default for Governance {
             debug_trace_pipeline: defaults::governance::DEBUG_TRACE_PIPELINE,
             jdg_signature_schemes: defaults::governance::jdg_signature_schemes(),
             runtime_upgrade_provenance: RuntimeUpgradeProvenance::default(),
-            citizen_service: CitizenServiceDiscipline::default(),
             viral_incentive_pool_account: defaults::governance::viral_incentive_pool_account(),
             viral_escrow_account: defaults::governance::viral_escrow_account(),
             viral_reward_asset_id: defaults::governance::viral_reward_asset_id(),
@@ -2673,11 +2601,25 @@ impl Governance {
                     .as_deref(),
             )
             .expect("invalid Parliament TLE partial-release signer provider binding");
-        let citizen_service = self.citizen_service.parse();
-        citizen_service.assert_valid();
         assert!(
             self.min_enactment_delay > 0,
             "min_enactment_delay must be non-zero"
+        );
+        assert!(
+            self.conviction_step_blocks > 0,
+            "governance.conviction_step_blocks must be non-zero"
+        );
+        assert!(
+            self.max_conviction > 0,
+            "governance.max_conviction must be non-zero"
+        );
+        assert!(
+            self.approval_threshold_q_den > 0,
+            "governance.approval_threshold_q_den must be non-zero"
+        );
+        assert!(
+            self.approval_threshold_q_num <= self.approval_threshold_q_den,
+            "governance.approval_threshold_q_num must not exceed governance.approval_threshold_q_den"
         );
         assert!(
             self.parliament_sortition_pulse_delay_blocks > 0,
@@ -2690,6 +2632,12 @@ impl Governance {
         assert!(
             self.parliament_public_finding_phase_blocks > 0,
             "parliament_public_finding_phase_blocks must be non-zero"
+        );
+        let maximum_parliament_body_size = usize::try_from(MAX_PARLIAMENT_BODY_TARGET_SEATS_V1)
+            .expect("Parliament body target bound fits usize");
+        assert!(
+            self.parliament_alternate_size <= maximum_parliament_body_size,
+            "parliament_alternate_size must be within 0..={MAX_PARLIAMENT_BODY_TARGET_SEATS_V1}"
         );
         for (name, size) in [
             ("rules_committee_size", self.rules_committee_size),
@@ -2704,8 +2652,8 @@ impl Governance {
             ("fma_committee_size", self.fma_committee_size),
         ] {
             assert!(
-                (1..=1_000).contains(&size),
-                "{name} must be within 1..=1_000"
+                (1..=maximum_parliament_body_size).contains(&size),
+                "{name} must be within 1..={MAX_PARLIAMENT_BODY_TARGET_SEATS_V1}"
             );
         }
         for (name, size) in [
@@ -2713,8 +2661,8 @@ impl Governance {
             ("confirmation_jury_size", self.confirmation_jury_size),
         ] {
             assert!(
-                (2..=1_000).contains(&size),
-                "{name} must be within 2..=1_000 because hidden timed-OVN ballots require at least two seats"
+                (2..=maximum_parliament_body_size).contains(&size),
+                "{name} must be within 2..={MAX_PARLIAMENT_BODY_TARGET_SEATS_V1} because hidden timed-OVN ballots require at least two seats"
             );
         }
         let parliament_timed_ovn = self.parliament_timed_ovn.parse();
@@ -2802,7 +2750,6 @@ impl Governance {
             debug_trace_pipeline: self.debug_trace_pipeline,
             jdg_signature_schemes,
             runtime_upgrade_provenance,
-            citizen_service,
             viral_incentives,
             sorafs_pin_policy: self.sorafs_pin_policy.parse(),
             sorafs_pin_fee_asset_id: self
@@ -2956,6 +2903,63 @@ mod governance_tests {
             panic.is_err(),
             "zero enactment delay must fail before a proposal can become stranded"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "governance.approval_threshold_q_den must be non-zero")]
+    fn governance_approval_threshold_rejects_zero_denominator() {
+        Governance {
+            approval_threshold_q_den: 0,
+            ..Governance::default()
+        }
+        .parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "governance.approval_threshold_q_num must not exceed governance.approval_threshold_q_den"
+    )]
+    fn governance_approval_threshold_rejects_numerator_above_denominator() {
+        Governance {
+            approval_threshold_q_num: 3,
+            approval_threshold_q_den: 2,
+            ..Governance::default()
+        }
+        .parse();
+    }
+
+    #[test]
+    fn governance_approval_threshold_accepts_closed_unit_interval_boundaries() {
+        for (numerator, denominator) in [(0, 1), (1, 1)] {
+            let parsed = Governance {
+                approval_threshold_q_num: numerator,
+                approval_threshold_q_den: denominator,
+                ..Governance::default()
+            }
+            .parse();
+            assert_eq!(parsed.approval_threshold_q_num, numerator);
+            assert_eq!(parsed.approval_threshold_q_den, denominator);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "governance.conviction_step_blocks must be non-zero")]
+    fn governance_conviction_step_rejects_zero() {
+        Governance {
+            conviction_step_blocks: 0,
+            ..Governance::default()
+        }
+        .parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "governance.max_conviction must be non-zero")]
+    fn governance_max_conviction_rejects_zero() {
+        Governance {
+            max_conviction: 0,
+            ..Governance::default()
+        }
+        .parse();
     }
 
     #[test]
@@ -16291,13 +16295,7 @@ pub struct ToriiOperatorAuth {
     /// Explicit trusted proxy hosts allowed to assert forwarded client certificates.
     #[config(default = "defaults::torii::operator_auth::mtls_trusted_proxy_cidrs()")]
     pub mtls_trusted_proxy_cidrs: Vec<String>,
-    /// Token fallback mode (`disabled`, `bootstrap`, `always`).
-    #[config(default = "defaults::torii::operator_auth::TOKEN_FALLBACK.to_string()")]
-    pub token_fallback: String,
-    /// Token source (`operator`, `api`, `both`).
-    #[config(default = "defaults::torii::operator_auth::TOKEN_SOURCE.to_string()")]
-    pub token_source: String,
-    /// Token allow-list used for operator fallback (if enabled).
+    /// Operator-token allow-list used only to bootstrap the first credential.
     #[config(default = "defaults::torii::operator_auth::tokens()")]
     pub tokens: Vec<String>,
     /// Auth attempt rate (per minute). None disables.
@@ -16355,16 +16353,6 @@ pub struct ToriiOperatorWebAuthn {
 }
 impl ToriiOperatorAuth {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::ToriiOperatorAuth {
-        let token_fallback =
-            parse_operator_token_fallback(&self.token_fallback).unwrap_or_else(|message| {
-                emit_torii_config_error(emitter, message);
-                actual::OperatorTokenFallback::Disabled
-            });
-        let token_source =
-            parse_operator_token_source(&self.token_source).unwrap_or_else(|message| {
-                emit_torii_config_error(emitter, message);
-                actual::OperatorTokenSource::OperatorTokens
-            });
         let rate_per_minute = self
             .rate_per_minute
             .or(super::defaults::torii::operator_auth::RATE_PER_MIN)
@@ -16391,8 +16379,6 @@ impl ToriiOperatorAuth {
             enabled: self.enabled,
             require_mtls: self.require_mtls,
             mtls_trusted_proxy_cidrs: self.mtls_trusted_proxy_cidrs,
-            token_fallback,
-            token_source,
             tokens: self.tokens,
             rate_per_minute,
             burst,
@@ -16606,30 +16592,6 @@ mod torii_operator_webauthn_tests {
         assert!(emitter.into_result().is_err());
     }
 }
-fn parse_operator_token_fallback(
-    value: &str,
-) -> core::result::Result<actual::OperatorTokenFallback, String> {
-    match value {
-        "disabled" => Ok(actual::OperatorTokenFallback::Disabled),
-        "bootstrap" => Ok(actual::OperatorTokenFallback::Bootstrap),
-        "always" => Ok(actual::OperatorTokenFallback::Always),
-        other => Err(format!(
-            "invalid torii.operator_auth.token_fallback `{other}`; expected `disabled`, `bootstrap`, or `always`"
-        )),
-    }
-}
-fn parse_operator_token_source(
-    value: &str,
-) -> core::result::Result<actual::OperatorTokenSource, String> {
-    match value {
-        "operator" => Ok(actual::OperatorTokenSource::OperatorTokens),
-        "api" => Ok(actual::OperatorTokenSource::ApiTokens),
-        "both" => Ok(actual::OperatorTokenSource::Both),
-        other => Err(format!(
-            "invalid torii.operator_auth.token_source `{other}`; expected `operator`, `api`, or `both`"
-        )),
-    }
-}
 fn parse_attachment_sanitizer_mode(
     value: &str,
 ) -> core::result::Result<actual::AttachmentSanitizerMode, String> {
@@ -16658,20 +16620,9 @@ mod exact_torii_label_tests {
 
     #[test]
     fn operator_and_sanitizer_labels_reject_aliases_and_normalization() {
-        parse_operator_token_fallback("disabled").expect("canonical fallback");
-        parse_operator_token_source("operator").expect("canonical source");
         parse_attachment_sanitizer_mode("in_process").expect("canonical sanitizer");
         parse_operator_webauthn_algorithm("es256").expect("canonical algorithm");
 
-        for invalid in ["DISABLED", " disabled", "disabled "] {
-            assert!(
-                parse_operator_token_fallback(invalid).is_err(),
-                "{invalid:?}"
-            );
-        }
-        for invalid in ["API", " api", "api "] {
-            assert!(parse_operator_token_source(invalid).is_err(), "{invalid:?}");
-        }
         for invalid in ["inline", "inprocess", "external", "process", "IN_PROCESS"] {
             assert!(
                 parse_attachment_sanitizer_mode(invalid).is_err(),
@@ -16714,7 +16665,7 @@ pub struct ToriiHttpTransport {
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::transport::http::HEADER_READ_TIMEOUT_MS))"
     )]
     pub header_read_timeout_ms: DurationMs,
-    /// Maximum duration without socket write progress.
+    /// Maximum duration without socket write progress and graceful connection-drain deadline.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::transport::http::WRITE_TIMEOUT_MS))"
     )]
@@ -31769,13 +31720,13 @@ impl SorafsAdvertOverrides {
 #[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
 pub struct SorafsMeteringSmoothing {
     /// Enable EMA smoothing for GiB·hour counters.
-    #[config(default = "false")]
+    #[config(default = "true")]
     pub gib_hours_enabled: bool,
     /// Alpha used for GiB·hour EMA (values <= 0 disable smoothing).
     #[config(default = "0.2")]
     pub gib_hours_alpha: f64,
     /// Enable EMA smoothing for PoR success counters.
-    #[config(default = "false")]
+    #[config(default = "true")]
     pub por_success_enabled: bool,
     /// Alpha used for PoR success EMA (values <= 0 disable smoothing).
     #[config(default = "0.2")]
@@ -31784,9 +31735,9 @@ pub struct SorafsMeteringSmoothing {
 impl Default for SorafsMeteringSmoothing {
     fn default() -> Self {
         Self {
-            gib_hours_enabled: false,
+            gib_hours_enabled: true,
             gib_hours_alpha: 0.2,
-            por_success_enabled: false,
+            por_success_enabled: true,
             por_success_alpha: 0.2,
         }
     }

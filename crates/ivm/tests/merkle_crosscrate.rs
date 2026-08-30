@@ -26,7 +26,7 @@ fn merkle_root_matches_canonical_for_randomized_leaves() {
     };
     let mut leaves = vec![zero_hash; N];
     // Build a ByteMerkleTree and update a few pseudo-random leaves with pseudo-random bytes
-    let tree = ByteMerkleTree::new(N, CHUNK);
+    let tree = ByteMerkleTree::new(N, CHUNK).unwrap();
     let mut it = prng(0xDEADBEEFCAFEBABEu64);
     for _ in 0..32 {
         let idx = (it.next().unwrap() as usize) % N;
@@ -35,7 +35,7 @@ fn merkle_root_matches_canonical_for_randomized_leaves() {
         for b in &mut buf {
             *b = (it.next().unwrap() >> 56) as u8;
         }
-        tree.update_leaf(idx, &buf);
+        tree.update_leaf(idx, &buf).unwrap();
         // Mirror the leaf hash into the canonical vector
         let d = Sha256::digest(buf);
         let mut out = [0u8; 32];

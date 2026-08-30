@@ -154,9 +154,7 @@ expected_hash_file = "genesis.expected_hash"
 [torii.operator_auth]
 # enabled = false
 # require_mtls = false
-# token_fallback = "bootstrap"
-# token_source = "operator"
-# tokens = []
+# tokens = [] # Dedicated x-iroha-operator-token values accepted only before the first credential.
 # rate_per_minute = 30
 # burst = 10
 # lockout_failures = 5

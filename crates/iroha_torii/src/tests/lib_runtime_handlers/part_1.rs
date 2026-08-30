@@ -1691,7 +1691,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     let operator_auth = Arc::new(
         operator_auth::OperatorAuth::new(
             iroha_config::parameters::actual::ToriiOperatorAuth::default(),
-            api_tokens_set.clone(),
             defaults::torii::data_dir(),
             telemetry.clone(),
         )

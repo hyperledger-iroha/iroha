@@ -62,11 +62,14 @@ review, and genuine production evidence.
   `ExpireSorafsModerationChallenge`, `SubmitSorafsModerationReveal`, and
   `FinalizeSorafsModerationCase` implement the consensus-owned lifecycle. There
   is no direct-open instruction that can bypass intake or sortition.
-  Block time is the only phase clock. The sortition instruction explicitly
-  binds the latest committed parent hash after registration closes, rejects an
-  appellant finalizer even when that account also holds management permission,
-  and native execution rejects stale, zero, applicant-selected, or otherwise mismatched
-  anchors before recomputing the complete roster. Commit and reveal timestamps are
+  Block time is the only phase clock. Bounded start-of-block maintenance pins
+  the first committed block whose timestamp is strictly after registration
+  closes. The sortition instruction can execute only in a later block, verifies
+  that pinned hash against committed history, remains stable across QueuePlan
+  delay, and rejects an appellant finalizer even when that account also holds
+  management permission. Native execution rejects stale, zero,
+  applicant-selected, or otherwise mismatched anchors before recomputing the
+  complete roster. Commit and reveal timestamps are
   normalized to block time; canonical juror accounts are bound to transaction
   authority; policy revisions and case policy digests are race-checked; and
   every transition preflights counters and canonical state encoding before any

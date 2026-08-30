@@ -50,8 +50,8 @@ release qualified.
    optional Parliament pulse or mandatory NPoS pulse produced from the parent
    state is verified against the key session active at its own height, not the
    successor pointer visible after the block's transactions execute. The
-   retired consensus VRF commit/reveal protocol and restored compatibility
-   roster records are neither entropy sources nor fallbacks.
+   No alternate entropy source or detached roster record is accepted as a
+   fallback.
 4. The future pulse deterministically ranks primaries and alternates. Candidates
    accept or decline their own invitations under their transaction authority;
    `BeginInvitationAcceptance` is permissionless and carries only the election
@@ -70,7 +70,6 @@ release qualified.
    authenticated absence makes the immutable original-seat public-finding
    quorum mathematically unreachable, Core sets that body to `NoResult` and
    rejects the governance attempt.
-   No public compatibility-roster read exists.
    Every member of a frozen candidate snapshot retains its citizenship bond
    while its election is `AwaitingPulse`, `Drawing`, or
    `AcceptingInvitations`. `NoRoster` and superseded elections release unseated
@@ -464,6 +463,52 @@ council records likewise remain readable but are not consulted by the attempt
 reducer. The first-release public contract contains no proposal approval
 snapshot, equal Parliament stage ballot, caller-selected referendum window or
 mode, client finalization, or client enactment path.
+
+An exact 32-byte typed proposal fingerprint is reserved across this boundary in
+lower-, upper-, or mixed-case hexadecimal form, with or without an exact `0x`
+or `0X` prefix. Standalone ballot/state admission, typed-proposal admission, and
+snapshot restoration all reject such cross-subsystem aliases. Standalone
+closure emits `ReferendumDecided` with the original selector and exact tally;
+it never emits `ProposalApproved` or `ProposalRejected`, and the Torii
+governance stream therefore publishes only referendum/lock/tally updates for
+that decision.
+
+PLAIN admission accepts only direction `0` (Aye), `1` (Nay), or `2`
+(Abstain), and rejects a replacement before mutation if its exact quadratic
+category tally or total turnout would exceed `u128`. Both conviction parameters
+must be nonzero, and the retained voter-lock corpus is capped at 1,000 so the
+exact scan is consensus-bounded. Restore rechecks the same PLAIN record shape
+and loaded conviction policy before execution resumes without applying the
+integer tally domain to fractional ZK bonds. Minimum
+turnout includes abstentions, while the approval fraction is
+`Aye / (Aye + Nay)`; an empty decisive tally rejects. Threshold products use an
+exact 192-bit comparison rather than saturation. For standalone ZK voting,
+closure without a finalized tally durably records `Closed` and emits no
+decision; a later verified finalization emits that deferred
+`ReferendumDecided` exactly once, while finalization before closure leaves the
+decision to the one-shot close transition.
+
+`CastPlainBallot` and `CastZkBallot` must be the sole direct instruction in a
+signed transaction; contracts, triggers, IVM programs, and mixed instruction
+lists receive no ballot entrypoint binding. A penalized ballot still returns
+its normal transaction error. If the rejected overlay prevalidated a nonzero slash,
+the block rejection corridor replays that exact amount in a fresh state
+transaction before rejected-fee settlement, committing `LockSlashed` and
+`BallotRejected` while emitting no `BallotAccepted`. A later fee failure cannot
+roll that penalty back. Rejections for which no slash was applied persist no
+penalty. Rejected ZK verification attempts still consume the block's
+confidential operation, verifier-call, proof-byte, confidential-gas, and
+ordinary gas budgets. The same exactly-once block accounting applies to
+ordinary prepared overlays, trigger work, detached fallback, and early
+mixed-batch rejection. Same-block trigger lifecycle changes execute in
+canonical order, so a newly registered trigger can affect a later transaction
+and a failing trigger rolls that transaction and its trigger effects back
+atomically. Every sealed reveal commits its outer carrier; only a reveal
+authenticated against pre-carrier pending-commitment state also commits the
+exact enclosed signed replay alias. Autonomous merge persists that decision in
+its certified execution transcript, and recovery does not reclassify it from
+post-state. Public transaction lookups accept either committed identity and
+project the canonical outer carrier.
 
 # Outstanding release gates
 

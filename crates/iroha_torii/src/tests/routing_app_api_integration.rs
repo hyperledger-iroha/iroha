@@ -1937,9 +1937,8 @@ mod app_api_integration_tests {
     async fn asset_holders_query_aggregate_requires_capability_for_remote_projection_hydration() {
         use axum::{
             Router,
-            body::Bytes,
             extract::Path as AxumPath,
-            routing::{get, post},
+            routing::get,
         };
         use std::sync::atomic::{AtomicUsize, Ordering};
         let _guard = app_query_limits_guard();
@@ -1954,9 +1953,7 @@ mod app_api_integration_tests {
         let remote_origin = format!("http://{}", listener.local_addr().expect("listener addr"));
         let fixture = make_projection_provider_fixture(&remote_origin);
         let manifest_requests = Arc::new(AtomicUsize::new(0));
-        let fetch_requests = Arc::new(AtomicUsize::new(0));
         let mut manifest_responses = std::collections::HashMap::new();
-        let mut fetch_responses = std::collections::HashMap::new();
         for (index, (archive, manifest)) in published.iter().enumerate() {
             let (payload, plan, manifest_for_storage) =
                 query_projection_archive_storage_artifacts(archive)
@@ -1986,16 +1983,7 @@ mod app_api_integration_tests {
                     files: Vec::new(),
                 })
                 .expect("serialize manifest response");
-            let fetch_response =
-                norito::json::to_value(&crate::sorafs::api::StorageFetchResponseDto {
-                    manifest_id_hex: manifest_digest_hex.clone(),
-                    offset: 0,
-                    length: payload.len() as u64,
-                    data_b64: base64::engine::general_purpose::STANDARD.encode(payload),
-                })
-                .expect("serialize fetch response");
             manifest_responses.insert(manifest_digest_hex.clone(), manifest_response);
-            fetch_responses.insert(manifest_digest_hex.clone(), fetch_response);
             seed_projection_registry_manifest_for_test(
                 state.as_ref(),
                 manifest,
@@ -2003,8 +1991,7 @@ mod app_api_integration_tests {
                 index.wrapping_add(1) as u8,
             );
         }
-        let remote_router = Router::new()
-            .route(
+        let remote_router = Router::new().route(
                 "/v1/sorafs/storage/manifest/{manifest_id_hex}",
                 get({
                     let manifest_requests = Arc::clone(&manifest_requests);
@@ -2015,29 +2002,6 @@ mod app_api_integration_tests {
                         async move {
                             manifest_requests.fetch_add(1, Ordering::SeqCst);
                             let Some(response) = manifest_responses.get(&manifest_id_hex) else {
-                                return axum::http::StatusCode::NOT_FOUND.into_response();
-                            };
-                            crate::JsonBody(response.clone()).into_response()
-                        }
-                    }
-                }),
-            )
-            .route(
-                "/v1/sorafs/storage/fetch",
-                post({
-                    let fetch_requests = Arc::clone(&fetch_requests);
-                    let fetch_responses = fetch_responses.clone();
-                    move |body: Bytes| {
-                        let fetch_requests = Arc::clone(&fetch_requests);
-                        let fetch_responses = fetch_responses.clone();
-                        async move {
-                            fetch_requests.fetch_add(1, Ordering::SeqCst);
-                            let request = norito::json::from_slice::<
-                                crate::sorafs::api::StorageFetchRequestDto,
-                            >(&body)
-                            .expect("decode fetch request");
-                            let Some(response) = fetch_responses.get(&request.manifest_id_hex)
-                            else {
                                 return axum::http::StatusCode::NOT_FOUND.into_response();
                             };
                             crate::JsonBody(response.clone()).into_response()
@@ -2076,11 +2040,6 @@ mod app_api_integration_tests {
             1,
             "the first missing shard manifest may be verified before capability rejection",
         );
-        assert_eq!(
-            fetch_requests.load(Ordering::SeqCst),
-            0,
-            "the retired unsigned legacy payload route must not be called",
-        );
         let second_error = match invoke().await {
             Err(error) => error,
             Ok(_) => panic!("capability rejection must not create a projection cache entry"),
@@ -2096,11 +2055,6 @@ mod app_api_integration_tests {
             manifest_requests.load(Ordering::SeqCst),
             2,
             "a rejected remote payload must not populate the local cache",
-        );
-        assert_eq!(
-            fetch_requests.load(Ordering::SeqCst),
-            0,
-            "retries must remain fail-closed before legacy payload fetch",
         );
         remote_server.abort();
         clear_query_projection_archive_cache_for_tests();

@@ -38,7 +38,10 @@ exists, no bounce or refund path can undo the debit.
 The master enforces `totalSupply + mint_amount <= maxWrappedSupply` with a
 checked subtraction. The bridge rejects a single admission above the same
 immutable cap. Both expose the cap and breaker state for authenticated
-deployment readback.
+deployment readback. The governed Jetton master address is not a valid mint
+recipient: both SORA admission and the TON bridge reject it before custody,
+replay, pending-mint, or supply state changes, and the master repeats the check
+before its own replay boundary.
 
 Every replay boundary owns one SHA-256 256-shard, depth-248 sparse forest and
 mutates only its operation tag. A witness header is exactly 769 bits with zero

@@ -2445,13 +2445,6 @@ internal static class ToriiAccountFaucetMetadata
     }
 }
 
-public record class ToriiExplorerPaginationQuery
-{
-    public ulong? Page { get; init; }
-
-    public ulong? PerPage { get; init; }
-}
-
 public record class ToriiExplorerCursorQuery
 {
     public string? Cursor { get; init; }
@@ -2543,7 +2536,7 @@ public enum ToriiExplorerTransactionStatusFilter
     Rejected,
 }
 
-public sealed record class ToriiExplorerTransactionsQuery : ToriiExplorerPaginationQuery
+public sealed record class ToriiExplorerTransactionsQuery : ToriiExplorerCursorQuery
 {
     public string? Authority { get; init; }
 
@@ -2554,7 +2547,7 @@ public sealed record class ToriiExplorerTransactionsQuery : ToriiExplorerPaginat
     public string? AssetId { get; init; }
 }
 
-public sealed record class ToriiExplorerInstructionsQuery : ToriiExplorerPaginationQuery
+public sealed record class ToriiExplorerInstructionsQuery : ToriiExplorerCursorQuery
 {
     public string? Authority { get; init; }
 
@@ -2571,33 +2564,6 @@ public sealed record class ToriiExplorerInstructionsQuery : ToriiExplorerPaginat
     public string? AssetId { get; init; }
 }
 
-[JsonConverter(typeof(ToriiExplorerPaginationMetaJsonConverter))]
-public sealed record class ToriiExplorerPaginationMeta
-{
-    private ulong page;
-    private ulong perPage;
-
-    [JsonPropertyName("page")]
-    public ulong Page
-    {
-        get => page;
-        init => page = ToriiExplorerDirectMetadata.RequirePositive(value, nameof(Page));
-    }
-
-    [JsonPropertyName("per_page")]
-    public ulong PerPage
-    {
-        get => perPage;
-        init => perPage = ToriiExplorerDirectMetadata.RequirePositive(value, nameof(PerPage));
-    }
-
-    [JsonPropertyName("total_pages")]
-    public ulong TotalPages { get; init; }
-
-    [JsonPropertyName("total_items")]
-    public ulong TotalItems { get; init; }
-}
-
 [JsonConverter(typeof(ToriiExplorerCursorMetaJsonConverter))]
 public sealed record class ToriiExplorerCursorMeta
 {
@@ -2609,6 +2575,46 @@ public sealed record class ToriiExplorerCursorMeta
     {
         get => limit;
         init => limit = ToriiExplorerDirectMetadata.RequireExplorerCursorLimit(value, nameof(Limit));
+    }
+
+    [JsonPropertyName("next_cursor")]
+    public string? NextCursor
+    {
+        get => nextCursor;
+        init => nextCursor = ToriiExplorerDirectMetadata.RequireOptionalCanonicalExplorerCursor(
+            value,
+            nameof(NextCursor));
+    }
+
+    [JsonPropertyName("has_more")]
+    public bool HasMore { get; init; }
+}
+
+[JsonConverter(typeof(ToriiExplorerHistoryCursorMetaJsonConverter))]
+public sealed record class ToriiExplorerHistoryCursorMeta
+{
+    private uint limit;
+    private string? snapshotHash;
+    private string? nextCursor;
+
+    [JsonPropertyName("limit")]
+    public uint Limit
+    {
+        get => limit;
+        init => limit = ToriiExplorerDirectMetadata.RequireExplorerCursorLimit(value, nameof(Limit));
+    }
+
+    [JsonPropertyName("snapshot_height")]
+    public ulong SnapshotHeight { get; init; }
+
+    [JsonPropertyName("snapshot_hash")]
+    public string? SnapshotHash
+    {
+        get => snapshotHash;
+        init => snapshotHash = ToriiExplorerDirectMetadata.RequireOptionalExactSizedHex(
+            value,
+            nameof(SnapshotHash),
+            32);
     }
 
     [JsonPropertyName("next_cursor")]
@@ -3474,7 +3480,7 @@ public sealed record class ToriiExplorerBlocksPage
     private ToriiExplorerBlock[] items = Array.Empty<ToriiExplorerBlock>();
 
     [JsonPropertyName("pagination")]
-    public ToriiExplorerPaginationMeta Pagination { get; init; } = new();
+    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
 
     [JsonPropertyName("items")]
     public IReadOnlyList<ToriiExplorerBlock> Items
@@ -3647,7 +3653,7 @@ public sealed record class ToriiExplorerTransactionsPage
     private ToriiExplorerTransaction[] items = Array.Empty<ToriiExplorerTransaction>();
 
     [JsonPropertyName("pagination")]
-    public ToriiExplorerPaginationMeta Pagination { get; init; } = new();
+    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
 
     [JsonPropertyName("items")]
     public IReadOnlyList<ToriiExplorerTransaction> Items
@@ -3669,6 +3675,9 @@ public sealed record class ToriiExplorerLatestTransactionsResponse
         get => sampledAt;
         init => sampledAt = ToriiExplorerDirectMetadata.RequireExactNonEmptyText(value, nameof(SampledAt));
     }
+
+    [JsonPropertyName("pagination")]
+    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
 
     [JsonPropertyName("items")]
     public IReadOnlyList<ToriiExplorerTransaction> Items
@@ -4090,7 +4099,7 @@ public sealed record class ToriiExplorerInstructionsPage
     private ToriiExplorerInstruction[] items = Array.Empty<ToriiExplorerInstruction>();
 
     [JsonPropertyName("pagination")]
-    public ToriiExplorerPaginationMeta Pagination { get; init; } = new();
+    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
 
     [JsonPropertyName("items")]
     public IReadOnlyList<ToriiExplorerInstruction> Items
@@ -4112,6 +4121,9 @@ public sealed record class ToriiExplorerLatestInstructionsResponse
         get => sampledAt;
         init => sampledAt = ToriiExplorerDirectMetadata.RequireExactNonEmptyText(value, nameof(SampledAt));
     }
+
+    [JsonPropertyName("pagination")]
+    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
 
     [JsonPropertyName("items")]
     public IReadOnlyList<ToriiExplorerInstruction> Items

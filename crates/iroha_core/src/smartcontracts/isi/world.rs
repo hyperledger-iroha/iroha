@@ -57,8 +57,8 @@ pub mod isi {
         governance::{
             CanEnactGovernance, CanManageConfidentialParams, CanManageConsensusKeys,
             CanManageParliament, CanManageRuntimeUpgrades, CanManageVerifyingKeys,
-            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
-            CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
+            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRestituteGovernanceLock,
+            CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         },
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
@@ -177,10 +177,6 @@ pub mod isi {
             owner: AccountId,
             reason: GovernanceSlashReason,
         },
-        CitizenshipSlash {
-            owner: AccountId,
-            slash_bps: u16,
-        },
         CitizenshipRelease {
             owner: AccountId,
         },
@@ -262,8 +258,8 @@ pub mod isi {
     use super::*;
     use crate::{
         governance::timed_ovn::{
-            TIMED_OVN_BALLOT_RECORD_BYTES_V1, TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
-            TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
+            TIMED_OVN_BALLOT_RECORD_BYTES_V1, TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1,
+            timed_ovn_parameter_hash_v1,
         },
         smartcontracts::{
             code::fetch_bound_contract_record,
@@ -1206,27 +1202,6 @@ pub mod isi {
         }
         Ok(false)
     }
-    fn protected_contract_namespaces(
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> BTreeSet<String> {
-        let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") else {
-            return BTreeSet::new();
-        };
-        let id = iroha_data_model::parameter::CustomParameterId(name);
-        let params = state_transaction.world.parameters.get();
-        params
-            .custom()
-            .get(&id)
-            .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
-            .map(|namespaces| {
-                namespaces
-                    .into_iter()
-                    .map(|namespace| namespace.trim().to_owned())
-                    .filter(|namespace| !namespace.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
     fn ensure_contract_lifecycle_authority(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
@@ -2037,68 +2012,6 @@ pub mod isi {
         out.copy_from_slice(&digest[..32]);
         out
     }
-    fn reset_citizen_epoch(record: &mut crate::state::CitizenshipRecord, epoch: u64) {
-        if record.last_epoch_seen != epoch {
-            record.last_epoch_seen = epoch;
-            record.seats_in_epoch = 0;
-            record.declines_used = 0;
-        }
-    }
-    fn slash_citizenship_bond(
-        owner: &AccountId,
-        record: &mut crate::state::CitizenshipRecord,
-        slash_bps: u16,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<Quantity, Error> {
-        if slash_bps == 0 || record.amount.is_zero() {
-            return Ok(Quantity::zero());
-        }
-        let slash_amount = record
-            .amount
-            .try_mul_decimal(&Numeric::new(u32::from(slash_bps), 4))
-            .map_err(|_| Error::from(MathError::Overflow))?;
-        let def_id = state_transaction.gov.citizenship_asset_id.clone();
-        let escrow_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id.clone(),
-            state_transaction.gov.citizenship_escrow_account.clone(),
-        );
-        let receiver_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id,
-            state_transaction.gov.slash_receiver_account.clone(),
-        );
-        let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
-        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
-            slash_amount.as_numeric(),
-            spec,
-        )?;
-        let movement = VerifiedGovernanceNumericMovement::new(
-            VerifiedGovernanceNumericPurpose::CitizenshipSlash {
-                owner: owner.clone(),
-                slash_bps,
-            },
-            escrow_asset_id,
-            receiver_asset_id,
-            slash_amount.clone(),
-        );
-        crate::smartcontracts::isi::asset::isi::execute_verified_governance_numeric_movement(
-            state_transaction,
-            movement,
-        )?;
-        record.amount = record
-            .amount
-            .try_sub(&slash_amount)
-            .map_err(|_| Error::from(MathError::Overflow))?;
-        Ok(slash_amount)
-    }
-    fn required_citizenship_bond_for_role(
-        gov: &iroha_config::parameters::actual::Governance,
-        role: &str,
-    ) -> Quantity {
-        let multiplier = gov.citizen_service.bond_multiplier_for_role(role).max(1);
-        gov.citizenship_bond_amount
-            .try_mul_decimal(&Numeric::from(multiplier))
-            .expect("bounded governance bond multiplier must remain representable")
-    }
     fn lock_voting_bond(
         ballot_amount: &Quantity,
         previous_amount: Option<&Quantity>,
@@ -2218,6 +2131,28 @@ pub mod isi {
             state_transaction,
         )
     }
+    fn consume_signed_standalone_governance_ballot_v1(
+        instruction: InstructionBox,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if state_transaction.is_trigger_execution_active() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance ballots cannot execute from trigger bodies".into(),
+            )
+            .into());
+        }
+        // Ad-hoc instruction execution is retained for genesis tooling and
+        // focused unit tests. Every signed execution must consume the exact
+        // direct singleton installed from its canonical payload.
+        if state_transaction.current_tx_hash.is_none() {
+            return Ok(());
+        }
+        state_transaction
+            .consume_governance_ballot_entrypoint_v1(&instruction)
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(error.to_string().into()).into()
+            })
+    }
     fn ensure_exact_governance_permission(
         authority: &AccountId,
         required: &Permission,
@@ -2238,19 +2173,18 @@ pub mod isi {
         reason: GovernanceSlashReason,
         note: &'a str,
     }
-    fn governance_slash_percent(
+    fn prevalidate_governance_slash_percent(
         referendum_id: &str,
         owner: &AccountId,
         bps: u16,
         reason: GovernanceSlashReason,
-        note: &str,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<Option<Quantity>, Error> {
         let bps = bps.min(10_000);
         if bps == 0 {
             return Ok(None);
         }
-        let Some(mut locks) = state_transaction
+        let Some(locks) = state_transaction
             .world
             .governance_locks
             .get(referendum_id)
@@ -2258,7 +2192,7 @@ pub mod isi {
         else {
             return Ok(None);
         };
-        let Some(mut rec) = locks.locks.get(owner).cloned() else {
+        let Some(rec) = locks.locks.get(owner).cloned() else {
             return Ok(None);
         };
         let slash_amount = rec
@@ -2268,15 +2202,98 @@ pub mod isi {
         if slash_amount.is_zero() {
             return Ok(None);
         }
-        let request = GovernanceSlashRequest {
+        let custody = retained_governance_lock_custody(referendum_id, &rec, state_transaction)?;
+        if !custody.escrowed {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance lock has no escrowed balance to slash".into(),
+            ));
+        }
+        let escrow_asset_id = iroha_data_model::asset::AssetId::new(
+            custody.asset_definition_id.clone(),
+            custody.bond_escrow_account,
+        );
+        let receiver_asset_id = iroha_data_model::asset::AssetId::new(
+            custody.asset_definition_id,
+            custody.slash_receiver_account,
+        );
+        let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
+        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
+            slash_amount.as_numeric(),
+            spec,
+        )?;
+        let _ = rec
+            .amount
+            .try_sub(&slash_amount)
+            .map_err(|_| Error::from(MathError::Overflow))?;
+        let _ = rec
+            .slashed
+            .try_add(&slash_amount)
+            .map_err(|_| Error::from(MathError::Overflow))?;
+        if let Some(entry) = state_transaction
+            .world
+            .governance_slashes
+            .get(referendum_id)
+            .and_then(|ledger| ledger.slashes.get(owner))
+        {
+            let _ = entry
+                .total_slashed
+                .try_add(&slash_amount)
+                .map_err(|_| Error::from(MathError::Overflow))?;
+        }
+        let movement = VerifiedGovernanceNumericMovement::new(
+            VerifiedGovernanceNumericPurpose::LockSlash {
+                referendum_id: referendum_id.to_owned(),
+                owner: owner.clone(),
+                reason,
+            },
+            escrow_asset_id,
+            receiver_asset_id,
+            slash_amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::validate_verified_governance_numeric_movement(
+            state_transaction,
+            movement,
+        )?;
+        Ok(Some(slash_amount))
+    }
+    fn reject_governance_ballot_with_penalty(
+        referendum_id: &str,
+        owner: &AccountId,
+        slash_bps: u16,
+        slash_reason: GovernanceSlashReason,
+        slash_note: &str,
+        ballot_rejection_reason: &str,
+        rejection: Error,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let penalty_amount = prevalidate_governance_slash_percent(
             referendum_id,
             owner,
-            amount: slash_amount.clone(),
-            reason,
-            note,
-        };
-        apply_governance_slash(&request, &mut locks, &mut rec, state_transaction)?;
-        Ok(Some(slash_amount))
+            slash_bps,
+            slash_reason,
+            state_transaction,
+        )?;
+        if let Some(amount) = penalty_amount {
+            state_transaction.defer_governance_ballot_penalty_v1(
+                crate::state::DeferredGovernanceBallotPenaltyV1 {
+                    referendum_id: referendum_id.to_owned(),
+                    owner: owner.clone(),
+                    amount,
+                    slash_reason,
+                    slash_note: slash_note.to_owned(),
+                    ballot_rejection_reason: ballot_rejection_reason.to_owned(),
+                },
+            );
+        }
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                    referendum_id: referendum_id.to_owned(),
+                    reason: ballot_rejection_reason.to_owned(),
+                },
+            ),
+        ));
+        Err(rejection)
     }
     fn governance_slash_absolute(
         referendum_id: &str,
@@ -2318,6 +2335,29 @@ pub mod isi {
         };
         apply_governance_slash(&request, &mut locks, &mut rec, state_transaction)?;
         Ok(amount)
+    }
+    /// Commit one ballot penalty after the originating transaction overlay was rejected.
+    pub(crate) fn apply_deferred_governance_ballot_penalty_v1(
+        penalty: &crate::state::DeferredGovernanceBallotPenaltyV1,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        governance_slash_absolute(
+            &penalty.referendum_id,
+            &penalty.owner,
+            penalty.amount.clone(),
+            penalty.slash_reason,
+            &penalty.slash_note,
+            state_transaction,
+        )?;
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                    referendum_id: penalty.referendum_id.clone(),
+                    reason: penalty.ballot_rejection_reason.clone(),
+                },
+            ),
+        ));
+        Ok(())
     }
     fn apply_governance_slash(
         request: &GovernanceSlashRequest<'_>,
@@ -4031,6 +4071,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            consume_signed_standalone_governance_ballot_v1(
+                InstructionBox::from(self.clone()),
+                state_transaction,
+            )?;
             ensure_exact_governance_ballot_permission(
                 authority,
                 &self.election_id,
@@ -4376,90 +4420,60 @@ pub mod isi {
                 &state_transaction.zk,
             );
             if !verify_report.ok {
-                let _ = governance_slash_percent(
+                return reject_governance_ballot_with_penalty(
                     &self.election_id,
                     authority,
                     state_transaction.gov.slash_invalid_proof_bps,
                     GovernanceSlashReason::Misconduct,
                     "invalid_proof",
+                    "invalid proof",
+                    InstructionExecutionError::InvariantViolation("invalid proof".into()).into(),
                     state_transaction,
-                )?;
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: self.election_id.clone(),
-                            reason: "invalid proof".into(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "invalid proof".into(),
-                ));
+                );
             }
             let proof_verified = true;
             let inputs = match extract_vote_public_inputs(backend, &proof_bytes) {
                 Ok(inputs) => inputs,
                 Err(err) => {
-                    let _ = governance_slash_percent(
+                    return reject_governance_ballot_with_penalty(
                         &self.election_id,
                         authority,
                         state_transaction.gov.slash_invalid_proof_bps,
                         GovernanceSlashReason::Misconduct,
                         "invalid_proof_inputs",
+                        "invalid proof inputs",
+                        err,
                         state_transaction,
-                    )?;
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                referendum_id: self.election_id.clone(),
-                                reason: "invalid proof inputs".into(),
-                            },
-                        ),
-                    ));
-                    return Err(err);
+                    );
                 }
             };
             if let Err(err) =
                 validate_open_verify_envelope_metadata("ballot", backend, &inputs.envelope, &vk_rec)
             {
-                let _ = governance_slash_percent(
+                return reject_governance_ballot_with_penalty(
                     &self.election_id,
                     authority,
                     state_transaction.gov.slash_invalid_proof_bps,
                     GovernanceSlashReason::Misconduct,
                     "invalid_proof_inputs",
+                    "invalid proof inputs",
+                    err,
                     state_transaction,
-                )?;
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: self.election_id.clone(),
-                            reason: "invalid proof inputs".into(),
-                        },
-                    ),
-                ));
-                return Err(err);
+                );
             }
             let (commit_bytes, root_bytes) = match ballot_inputs_from_columns(&inputs.columns) {
                 Ok(v) => v,
                 Err(err) => {
-                    let _ = governance_slash_percent(
+                    return reject_governance_ballot_with_penalty(
                         &self.election_id,
                         authority,
                         state_transaction.gov.slash_invalid_proof_bps,
                         GovernanceSlashReason::Misconduct,
                         "invalid_proof_inputs",
+                        "invalid proof inputs",
+                        err,
                         state_transaction,
-                    )?;
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                referendum_id: self.election_id.clone(),
-                                reason: "invalid proof inputs".into(),
-                            },
-                        ),
-                    ));
-                    return Err(err);
+                    );
                 }
             };
             if let Some(root_hint) = root_hint_opt {
@@ -4478,25 +4492,19 @@ pub mod isi {
                 }
             }
             if root_bytes != st.eligible_root {
-                let _ = governance_slash_percent(
+                return reject_governance_ballot_with_penalty(
                     &self.election_id,
                     authority,
                     state_transaction.gov.slash_ineligible_proof_bps,
                     GovernanceSlashReason::IneligibleProof,
                     "ineligible_proof",
+                    "stale or unknown eligibility root",
+                    InstructionExecutionError::InvariantViolation(
+                        "stale or unknown eligibility root".into(),
+                    )
+                    .into(),
                     state_transaction,
-                )?;
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: self.election_id.clone(),
-                            reason: "stale or unknown eligibility root".into(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "stale or unknown eligibility root".into(),
-                ));
+                );
             }
             let nullifier = derive_ballot_nullifier(
                 &domain_tag,
@@ -4557,25 +4565,19 @@ pub mod isi {
                 }
             }
             if !st.ballot_nullifiers.insert(nullifier) {
-                let _ = governance_slash_percent(
+                return reject_governance_ballot_with_penalty(
                     &self.election_id,
                     authority,
                     state_transaction.gov.slash_double_vote_bps,
                     GovernanceSlashReason::DoubleVote,
                     "double_vote",
+                    "duplicate ballot nullifier",
+                    InstructionExecutionError::InvariantViolation(
+                        "duplicate ballot nullifier".into(),
+                    )
+                    .into(),
                     state_transaction,
-                )?;
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: self.election_id.clone(),
-                            reason: "duplicate ballot nullifier".into(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "duplicate ballot nullifier".into(),
-                ));
+                );
             }
             if proof_verified {
                 if let (Some(owner), Some(amount), Some(duration_blocks)) =
@@ -4793,6 +4795,22 @@ pub mod isi {
                 "owner must equal authority".into(),
             ));
         }
+        if ballot.direction > 2 {
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                        referendum_id: ballot.referendum_id.clone(),
+                        reason: "direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)".into(),
+                    },
+                ),
+            ));
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "plain governance ballot direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)"
+                        .into(),
+                ),
+            ));
+        }
         if typed_proposal_for_standalone_referendum(&ballot.referendum_id, state_transaction)?
             .is_some()
         {
@@ -4969,25 +4987,19 @@ pub mod isi {
         let new_expiry = now_h.saturating_add(ballot.duration_blocks);
         if let Some(prev) = locks.locks.get(authority) {
             if prev.direction != ballot.direction {
-                let _ = governance_slash_percent(
+                return reject_governance_ballot_with_penalty(
                     &rid,
                     authority,
                     state_transaction.gov.slash_double_vote_bps,
                     GovernanceSlashReason::DoubleVote,
                     "double_vote",
+                    "re-vote cannot change direction",
+                    InstructionExecutionError::InvariantViolation(
+                        "re-vote cannot change direction".into(),
+                    )
+                    .into(),
                     state_transaction,
-                )?;
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: rid.clone(),
-                            reason: "re-vote cannot change direction".into(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "re-vote cannot change direction".into(),
-                ));
+                );
             }
             if !prev.slashed.is_zero() {
                 state_transaction.world.emit_events(Some(
@@ -5098,6 +5110,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            consume_signed_standalone_governance_ballot_v1(
+                InstructionBox::from(self.clone()),
+                state_transaction,
+            )?;
             ensure_exact_governance_ballot_permission(
                 authority,
                 &self.referendum_id,
@@ -5111,6 +5127,13 @@ pub mod isi {
                 self.duration_blocks,
                 state_transaction.gov.conviction_step_blocks,
                 state_transaction.gov.max_conviction,
+            )?;
+            ensure_plain_tally_replacement_capacity_v1(
+                &self.referendum_id,
+                authority,
+                self.direction,
+                weight,
+                state_transaction,
             )?;
             let referendum = ensure_plain_referendum_open(&self, state_transaction)?;
             ensure_plain_ballot_lock_covers_window(&self, referendum, state_transaction)?;
@@ -7082,7 +7105,17 @@ pub mod isi {
                 .account(authority)
                 .map_err(Error::from)?;
             ensure_contract_lifecycle_authority(authority, state_transaction)?;
-            let protected = protected_contract_namespaces(state_transaction);
+            let protected = crate::smartcontracts::code::protected_contract_namespaces(
+                state_transaction.world.parameters.get(),
+            )
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid protected-contract namespace policy: {error}").into(),
+                )
+            })?
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
             if protected.contains("*")
                 || protected.contains(contract_address.as_str())
                 || contract_address
@@ -8927,18 +8960,13 @@ pub mod isi {
     fn canonical_parliament_eligible_candidates_v1(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Vec<AccountId> {
-        let current_height = state_transaction.block_height();
-        let required_bond =
-            required_citizenship_bond_for_role(&state_transaction.gov, "parliament").max(
-                required_citizenship_bond_for_role(&state_transaction.gov, "council"),
-            );
+        let required_bond = &state_transaction.gov.citizenship_bond_amount;
         let mut candidates = state_transaction
             .world
             .citizens
             .iter()
             .filter_map(|(account_id, record)| {
-                (record.amount >= required_bond && record.cooldown_until <= current_height)
-                    .then(|| account_id.clone())
+                (record.amount >= *required_bond).then(|| account_id.clone())
             })
             .collect::<Vec<_>>();
         candidates.sort_unstable();
@@ -9235,35 +9263,15 @@ pub mod isi {
         Ok(count)
     }
 
-    fn validate_parliament_transition_digest_bound_v1(
-        transition: &gov::ParliamentLifecycleTransitionV1,
+    fn validate_parliament_transition_static_v1(
+        instruction: &gov::SubmitParliamentLifecycleTransitionV1,
     ) -> Result<(), Error> {
-        match transition {
-            gov::ParliamentLifecycleTransitionV1::RegisterBallotParticipant(payload) => {
-                if payload.registration_record.len() != TIMED_OVN_REGISTRATION_RECORD_BYTES_V1 {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "Parliament timed-OVN registration has a noncanonical wire width".into(),
-                    ));
-                }
-            }
-            gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(payload) => {
-                parliament_timed_ovn_corpus_count_v1(payload.ballot_records.len())?;
-                if payload.ballot_records.len()
-                    > iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
-                    || payload
-                    .ballot_records
-                    .iter()
-                    .any(|record| record.len() != TIMED_OVN_BALLOT_RECORD_BYTES_V1)
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "Parliament timed-OVN ballot chunk is oversized or has a noncanonical wire width"
-                            .into(),
-                    ));
-                }
-            }
-            _ => {}
-        }
-        Ok(())
+        instruction.validate_static().map_err(|reason| {
+            InstructionExecutionError::InvariantViolation(
+                format!("Parliament transition is structurally invalid: {reason}").into(),
+            )
+            .into()
+        })
     }
 
     impl Execute for gov::SubmitParliamentLifecycleTransitionV1 {
@@ -9283,7 +9291,7 @@ pub mod isi {
             if parliament_transition_requires_manager_v1(transition_kind) {
                 require_parliament_manager(authority, state_transaction)?;
             }
-            validate_parliament_transition_digest_bound_v1(&self.transition)?;
+            validate_parliament_transition_static_v1(&self)?;
             let transition_digest = self.transition.digest_v1();
 
             let governance_attempt_id = self.governance_attempt_id;
@@ -10062,8 +10070,7 @@ pub mod isi {
             }
             let record = if let Some(mut record) = existing {
                 // A top-up (including a same-amount no-op) continues the
-                // original citizenship interval and must not erase service,
-                // cooldown, or discipline state.
+                // original citizenship interval.
                 record.amount = self.amount.clone();
                 record
             } else {
@@ -10100,9 +10107,7 @@ pub mod isi {
         owner: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        // Restored `council` and `parliament_bodies` rows are decode-only
-        // compatibility records. Only a canonical active attempt may retain a
-        // citizen's bond; historical caller-selected rosters must stay inert.
+        // Only canonical attempt-local reducer state may retain a citizen's bond.
         if state_transaction
             .world
             .parliament_attempts
@@ -10194,106 +10199,6 @@ pub mod isi {
             Ok(())
         }
     }
-    impl Execute for gov::RecordCitizenServiceOutcome {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if self.role.trim().is_empty() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("role must not be blank".into()),
-                ));
-            }
-            let required: Permission = CanRecordCitizenService {
-                owner: self.owner.clone(),
-            }
-            .into();
-            ensure_exact_governance_permission(
-                authority,
-                &required,
-                "CanRecordCitizenService",
-                state_transaction,
-            )?;
-            let Some(mut record) = state_transaction.world.citizens.get(&self.owner).cloned()
-            else {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "citizen not found for service record".into(),
-                ));
-            };
-            let required_bond =
-                required_citizenship_bond_for_role(&state_transaction.gov, &self.role);
-            if record.amount < required_bond {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "citizenship bond below role requirement".into(),
-                ));
-            }
-            let citizen_cfg = state_transaction.gov.citizen_service.clone();
-            let current_height = state_transaction._curr_block.height().get();
-            reset_citizen_epoch(&mut record, self.epoch);
-            let slashed = match self.event {
-                gov::CitizenServiceEvent::Decline => {
-                    let penalty = if record.declines_used >= citizen_cfg.free_declines_per_epoch {
-                        slash_citizenship_bond(
-                            &self.owner,
-                            &mut record,
-                            citizen_cfg.decline_slash_bps,
-                            state_transaction,
-                        )?
-                    } else {
-                        Quantity::zero()
-                    };
-                    record.declines_used = record.declines_used.saturating_add(1);
-                    let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
-                    record.cooldown_until = record.cooldown_until.max(cooldown);
-                    penalty
-                }
-                gov::CitizenServiceEvent::NoShow => {
-                    record.no_show_strikes = record.no_show_strikes.saturating_add(1);
-                    let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
-                    record.cooldown_until = record.cooldown_until.max(cooldown);
-                    slash_citizenship_bond(
-                        &self.owner,
-                        &mut record,
-                        citizen_cfg.no_show_slash_bps,
-                        state_transaction,
-                    )?
-                }
-                gov::CitizenServiceEvent::Misconduct => {
-                    record.misconduct_strikes = record.misconduct_strikes.saturating_add(1);
-                    let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
-                    record.cooldown_until = record.cooldown_until.max(cooldown);
-                    slash_citizenship_bond(
-                        &self.owner,
-                        &mut record,
-                        citizen_cfg.misconduct_slash_bps,
-                        state_transaction,
-                    )?
-                }
-            };
-            state_transaction
-                .world
-                .citizens
-                .insert(self.owner.clone(), record.clone());
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::CitizenServiceRecorded(
-                    iroha_data_model::events::data::governance::GovernanceCitizenServiceRecorded {
-                        owner: self.owner.clone(),
-                        epoch: self.epoch,
-                        role: self.role.clone(),
-                        event: self.event,
-                        slashed: slashed.clone(),
-                        cooldown_until: record.cooldown_until,
-                    },
-                ),
-            ));
-            #[cfg(feature = "telemetry")]
-            state_transaction
-                .telemetry
-                .record_citizen_service_event(self.event, &slashed);
-            Ok(())
-        }
-    }
     /// Convert a plain-governance bond to the fixed integer domain used by quadratic tallying.
     ///
     /// # Errors
@@ -10318,17 +10223,181 @@ pub mod isi {
     ///
     /// The conviction factor is evaluated in `u128` before it is capped so a
     /// `u64::MAX` duration cannot wrap at `1 + duration / step`.
-    fn plain_ballot_weight(
+    pub(crate) fn plain_ballot_weight(
         amount: &Quantity,
         duration_blocks: u64,
         conviction_step_blocks: u64,
         max_conviction: u64,
     ) -> Result<u128, Error> {
+        if conviction_step_blocks == 0 || max_conviction == 0 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "plain-governance conviction parameters must be non-zero".into(),
+            )
+            .into());
+        }
         let base = integer_sqrt_u128(quantity_to_voting_units(amount)?);
-        let step = conviction_step_blocks.max(1);
-        let factor = (u128::from(duration_blocks / step) + 1).min(u128::from(max_conviction));
+        let factor = (u128::from(duration_blocks / conviction_step_blocks) + 1)
+            .min(u128::from(max_conviction));
         base.checked_mul(factor)
             .ok_or_else(|| Error::from(MathError::Overflow))
+    }
+    /// Maximum retained ballots in one first-release standalone PLAIN referendum.
+    pub(crate) const MAX_STANDALONE_PLAIN_BALLOTS_V1: usize = 1_000;
+    fn ensure_plain_ballot_corpus_size_v1(ballot_count: usize) -> Result<(), Error> {
+        if ballot_count > MAX_STANDALONE_PLAIN_BALLOTS_V1 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "standalone PLAIN referendum ballot corpus exceeds the first-release limit of {MAX_STANDALONE_PLAIN_BALLOTS_V1}"
+                )
+                .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+    fn add_plain_tally_weight_v1(
+        tally: &mut [u128; 3],
+        direction: u8,
+        weight: u128,
+    ) -> Result<(), Error> {
+        let slot = tally.get_mut(usize::from(direction)).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "persisted plain-governance lock direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)"
+                    .into(),
+            )
+        })?;
+        *slot = slot.checked_add(weight).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "plain-governance category tally exceeds the exact u128 domain".into(),
+            )
+        })?;
+        Ok(())
+    }
+    fn checked_plain_tally_turnout_v1(tally: [u128; 3]) -> Result<u128, Error> {
+        tally[0]
+            .checked_add(tally[1])
+            .and_then(|value| value.checked_add(tally[2]))
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "plain-governance turnout exceeds the exact u128 domain".into(),
+                )
+                .into()
+            })
+    }
+    pub(crate) fn plain_governance_tally_v1(
+        locks: &crate::state::GovernanceLocksForReferendum,
+        excluded_owner: Option<&AccountId>,
+        minimum_expiry_height: Option<u64>,
+        conviction_step_blocks: u64,
+        max_conviction: u64,
+    ) -> Result<[u128; 3], Error> {
+        ensure_plain_ballot_corpus_size_v1(locks.locks.len())?;
+        let mut tally = [0_u128; 3];
+        for (owner, record) in &locks.locks {
+            if record.direction > 2 {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "persisted plain-governance lock direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)"
+                        .into(),
+                )
+                .into());
+            }
+            let weight = plain_ballot_weight(
+                &record.amount,
+                record.duration_blocks,
+                conviction_step_blocks,
+                max_conviction,
+            )?;
+            if excluded_owner.is_some_and(|excluded| excluded == owner)
+                || minimum_expiry_height.is_some_and(|minimum| record.expiry_height < minimum)
+            {
+                continue;
+            }
+            add_plain_tally_weight_v1(&mut tally, record.direction, weight)?;
+        }
+        checked_plain_tally_turnout_v1(tally)?;
+        Ok(tally)
+    }
+    fn ensure_plain_tally_replacement_capacity_v1(
+        referendum_id: &str,
+        authority: &AccountId,
+        direction: u8,
+        weight: u128,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let mut tally = state_transaction
+            .world
+            .governance_locks
+            .get(referendum_id)
+            .map_or(Ok([0_u128; 3]), |locks| {
+                let next_ballot_count = locks
+                    .locks
+                    .len()
+                    .checked_add(usize::from(!locks.locks.contains_key(authority)))
+                    .ok_or_else(|| Error::from(MathError::Overflow))?;
+                ensure_plain_ballot_corpus_size_v1(next_ballot_count)?;
+                plain_governance_tally_v1(
+                    locks,
+                    Some(authority),
+                    None,
+                    state_transaction.gov.conviction_step_blocks,
+                    state_transaction.gov.max_conviction,
+                )
+            })?;
+        add_plain_tally_weight_v1(&mut tally, direction, weight)?;
+        checked_plain_tally_turnout_v1(tally)?;
+        Ok(())
+    }
+    fn mul_u128_u64_wide_v1(value: u128, factor: u64) -> [u64; 3] {
+        let low_product = u128::from(value as u64) * u128::from(factor);
+        let high_product = u128::from((value >> 64) as u64) * u128::from(factor);
+        let middle = high_product + (low_product >> 64);
+        [(middle >> 64) as u64, middle as u64, low_product as u64]
+    }
+    pub(crate) fn standalone_referendum_decision_v1(
+        referendum_id: String,
+        approve: u128,
+        reject: u128,
+        abstain: u128,
+        approval_threshold_numerator: u64,
+        approval_threshold_denominator: u64,
+        minimum_turnout: u128,
+    ) -> Result<iroha_data_model::events::data::governance::GovernanceReferendumDecided, Error>
+    {
+        let turnout = approve
+            .checked_add(reject)
+            .and_then(|value| value.checked_add(abstain))
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "standalone referendum turnout exceeds the exact u128 domain".into(),
+                )
+            })?;
+        let decisive = approve.checked_add(reject).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "standalone referendum decisive tally exceeds the exact u128 domain".into(),
+            )
+        })?;
+        if approval_threshold_denominator == 0
+            || approval_threshold_numerator > approval_threshold_denominator
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "standalone referendum approval threshold must be within the closed unit interval with a nonzero denominator"
+                    .into(),
+            )
+            .into());
+        }
+        let approved = turnout >= minimum_turnout
+            && decisive != 0
+            && mul_u128_u64_wide_v1(approve, approval_threshold_denominator)
+                >= mul_u128_u64_wide_v1(decisive, approval_threshold_numerator);
+        Ok(
+            iroha_data_model::events::data::governance::GovernanceReferendumDecided {
+                referendum_id,
+                approve,
+                reject,
+                abstain,
+                approved,
+            },
+        )
     }
     fn integer_sqrt_u128(n: u128) -> u128 {
         if n == 0 {
@@ -14480,12 +14549,21 @@ pub mod isi {
         }
         if !iroha_sccp::sccp_destination_contract_supports_account_v1(authority) {
             return Err(invalid_bridge_proof(
-                "SCCP outbound sender controller is not supported by the V1 destination contracts",
+                "SCCP outbound sender controller is not supported by the V1 semantic circuit",
             ));
         }
         if transfer.recipient_codec != settlement.counterparty_account_codec {
             return Err(invalid_bridge_proof(
                 "SCCP outbound recipient codec does not match the exact external profile",
+            ));
+        }
+        if !iroha_sccp::sccp_destination_contract_accepts_recipient_v1(
+            &settlement.destination,
+            transfer.recipient_codec,
+            &transfer.recipient,
+        ) {
+            return Err(invalid_bridge_proof(
+                "SCCP outbound recipient cannot be executed by the governed V1 destination deployment",
             ));
         }
         if settlement.escrow_account_id == *authority {
@@ -16117,7 +16195,7 @@ pub mod isi {
                 .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "typed governance proposals cannot create legacy ZK elections".into(),
+                    "typed governance proposals cannot create standalone ZK elections".into(),
                 ));
             }
             let options = *self.options();
@@ -16239,7 +16317,7 @@ pub mod isi {
                 .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "typed governance proposals cannot use legacy ZK ballots".into(),
+                    "typed governance proposals cannot use standalone ZK ballots".into(),
                 ));
             }
             ensure_citizen_for_ballot(authority, &self.election_id, state_transaction)?;
@@ -16339,6 +16417,59 @@ pub mod isi {
             Ok(())
         }
     }
+    fn persist_finalized_standalone_election_v1(
+        election_id: String,
+        mut election: crate::state::ElectionState,
+        tally: &[u64],
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if election.finalized {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "election already finalized".into(),
+            ));
+        }
+        if tally.len() != election.tally.len() || tally.len() < 2 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "finalized election tally has the wrong width".into(),
+            ));
+        }
+        let late_decision = state_transaction
+            .world
+            .governance_referenda
+            .get(&election_id)
+            .filter(|referendum| {
+                referendum.mode == crate::state::GovernanceReferendumMode::Zk
+                    && referendum.status == crate::state::GovernanceReferendumStatus::Closed
+            })
+            .map(|_| {
+                standalone_referendum_decision_v1(
+                    election_id.clone(),
+                    u128::from(tally[0]),
+                    u128::from(tally[1]),
+                    tally.get(2).copied().map_or(0, u128::from),
+                    state_transaction.gov.approval_threshold_q_num,
+                    state_transaction.gov.approval_threshold_q_den,
+                    state_transaction.gov.min_turnout,
+                )
+            })
+            .transpose()?;
+        election.tally.clone_from_slice(tally);
+        election.finalized = true;
+        state_transaction
+            .world
+            .elections
+            .remove(election_id.clone());
+        state_transaction
+            .world
+            .elections
+            .insert(election_id, election);
+        if let Some(decision) = late_decision {
+            state_transaction
+                .world
+                .emit_events(Some(GovernanceEvent::ReferendumDecided(decision)));
+        }
+        Ok(())
+    }
     impl Execute for zk::FinalizeElection {
         fn execute(
             self,
@@ -16356,13 +16487,13 @@ pub mod isi {
                 .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "typed governance proposals cannot finalize legacy ZK elections".into(),
+                    "typed governance proposals cannot finalize standalone ZK elections".into(),
                 ));
             }
             let id = self.election_id().clone();
             let now_ms = u64::try_from(state_transaction._curr_block.creation_time().as_millis())
                 .unwrap_or(u64::MAX);
-            let (mut st, expected_tally_len) = {
+            let (st, expected_tally_len) = {
                 let st = state_transaction.world.elections.get(&id).ok_or_else(|| {
                     InstructionExecutionError::InvariantViolation("unknown election id".into())
                 })?;
@@ -16424,11 +16555,7 @@ pub mod isi {
                     "tally does not match proof".into(),
                 ));
             }
-            st.tally.clone_from(self.tally());
-            st.finalized = true;
-            state_transaction.world.elections.remove(id.clone());
-            state_transaction.world.elections.insert(id, st);
-            Ok(())
+            persist_finalized_standalone_election_v1(id, st, self.tally(), state_transaction)
         }
     }
     impl Execute for smart_contract_code::RegisterSmartContractCode {
@@ -20533,7 +20660,7 @@ pub mod isi {
                 ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
                 HsmBinding,
             },
-            events::data::{DataEvent, prelude::BridgeEvent},
+            events::data::{DataEvent, governance::GovernanceEvent, prelude::BridgeEvent},
             governance::types::{
                 BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
                 BodyElectionAttemptStatusV1, ContractAbiHash, ContractCodeHash,
@@ -20796,12 +20923,32 @@ pub mod isi {
                 .expect_err("an ordinary account must not create a Parliament attempt");
             assert!(format!("{unauthorized_create:?}").contains("CanManageParliament"));
 
+            let governance_attempt_id =
+                iroha_data_model::governance::types::GovernanceAttemptId::new([0x91; 32]);
+            let body = ParliamentBody::RulesCommittee;
+            let body_election_attempt_id =
+                BodyElectionAttemptId::derive_v1(governance_attempt_id, body, 0);
+            let request = SortitionRequestV1::try_new_canonical(
+                governance_attempt_id,
+                body_election_attempt_id,
+                body,
+                [0x92; 32],
+                1,
+                1,
+                1,
+                2,
+                BeaconSessionId::new([0x93; 32]),
+                None,
+            )
+            .expect("valid unknown-attempt sortition fixture");
             let instruction = gov::SubmitParliamentLifecycleTransitionV1 {
-                governance_attempt_id:
-                    iroha_data_model::governance::types::GovernanceAttemptId::new([0x91; 32]),
+                governance_attempt_id,
                 transition: gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
                     gov::ParliamentRegisterSortitionRequestV1 {
-                        requests: Vec::new(),
+                        requests: vec![gov::ParliamentSortitionRequestRegistrationV1 {
+                            sequence: 0,
+                            request,
+                        }],
                     },
                 ),
             };
@@ -20853,12 +21000,6 @@ pub mod isi {
                             owner: candidate,
                             amount: Quantity::zero(),
                             bonded_height: 0,
-                            seats_in_epoch: 0,
-                            last_epoch_seen: 0,
-                            cooldown_until: 0,
-                            declines_used: 0,
-                            no_show_strikes: 0,
-                            misconduct_strikes: 0,
                         },
                     );
                 }
@@ -21013,71 +21154,11 @@ pub mod isi {
         }
 
         #[test]
-        fn restored_legacy_rosters_do_not_retain_citizenship_bonds() {
-            blank_test_state_transaction!(state, block, state_transaction);
-            state_transaction.world.council.insert(
-                99,
-                crate::state::CouncilState {
-                    epoch: 99,
-                    members: vec![ALICE_ID.clone()],
-                    candidate_count: 1,
-                    ..crate::state::CouncilState::default()
-                },
-            );
-            state_transaction.world.parliament_bodies.insert(
-                99,
-                iroha_data_model::governance::types::ParliamentBodies {
-                    selection_epoch: 99,
-                    rosters: BTreeMap::from([(
-                        ParliamentBody::AgendaCouncil,
-                        iroha_data_model::governance::types::ParliamentRoster {
-                            body: ParliamentBody::AgendaCouncil,
-                            epoch: 99,
-                            members: vec![ALICE_ID.clone()],
-                            candidate_count: 1,
-                            ..iroha_data_model::governance::types::ParliamentRoster::default()
-                        },
-                    )]),
-                },
-            );
-
-            ensure_citizenship_bond_releasable(&ALICE_ID, &state_transaction)
-                .expect("decode-only legacy roster records must not retain a citizen bond");
-        }
-
-        #[test]
-        fn parliament_attempt_creation_ignores_legacy_rosters_and_defends_exact_json_bounds() {
+        fn parliament_attempt_creation_defends_retry_and_exact_json_bounds() {
             let state = blank_test_state();
             let header = first_test_block_header();
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
-            let legacy_council = crate::state::CouncilState {
-                epoch: 7,
-                members: vec![ALICE_ID.clone()],
-                candidate_count: 1,
-                ..crate::state::CouncilState::default()
-            };
-            let legacy_bodies = iroha_data_model::governance::types::ParliamentBodies {
-                selection_epoch: 7,
-                rosters: BTreeMap::from([(
-                    ParliamentBody::AgendaCouncil,
-                    iroha_data_model::governance::types::ParliamentRoster {
-                        body: ParliamentBody::AgendaCouncil,
-                        epoch: 7,
-                        members: vec![ALICE_ID.clone()],
-                        candidate_count: 1,
-                        ..iroha_data_model::governance::types::ParliamentRoster::default()
-                    },
-                )]),
-            };
-            state_transaction
-                .world
-                .council
-                .insert(7, legacy_council.clone());
-            state_transaction
-                .world
-                .parliament_bodies
-                .insert(7, legacy_bodies.clone());
             state_transaction.world.account_permissions.insert(
                 ALICE_ID.clone(),
                 BTreeSet::from([Permission::from(CanManageParliament)]),
@@ -21125,16 +21206,6 @@ pub mod isi {
                     .get(&attempt_id)
                     .is_some()
             );
-            assert_eq!(
-                state_transaction.world.council.get(&7),
-                Some(&legacy_council)
-            );
-            assert_eq!(
-                state_transaction.world.parliament_bodies.get(&7),
-                Some(&legacy_bodies),
-                "canonical attempt creation must neither consult nor rewrite compatibility rosters"
-            );
-
             let retry_limit_error = gov::CreateParliamentGovernanceAttemptV1 {
                 proposal: canonical,
                 attempt_sequence: MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 + 1,
@@ -21222,7 +21293,7 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("a 33-record timed-OVN chunk must fail before state lookup");
             assert!(
-                format!("{oversized_error:?}").contains("chunk is oversized"),
+                format!("{oversized_error:?}").contains("count or record-width bound"),
                 "unexpected oversized-chunk rejection: {oversized_error:?}"
             );
         }
@@ -23174,7 +23245,7 @@ pub mod isi {
         }
 
         #[test]
-        fn parliament_due_certificate_applies_contract_ownership_offer() {
+        fn parliament_due_certificate_completes_contract_ownership_transfer_to_account() {
             let state = blank_test_state();
             let block = new_dummy_block_at_height(
                 NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
@@ -23254,6 +23325,11 @@ pub mod isi {
                 )
             );
             assert_eq!(
+                lifecycle.parliament_delegation,
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            );
+            let offered_lifecycle = lifecycle.clone();
+            assert_eq!(
                 execution
                     .world
                     .governance_proposals
@@ -23274,6 +23350,173 @@ pub mod isi {
                 })
                 .expect("certified ownership event");
             assert_eq!(event.revision, 2);
+            assert_eq!(event.lifecycle, offered_lifecycle);
+
+            let stale = scode::AcceptContractOwnership {
+                contract_address: contract_address.clone(),
+                expected_revision: 1,
+            }
+            .execute(&BOB_ID, &mut execution)
+            .expect_err("stale account acceptance must fail closed");
+            assert!(
+                stale
+                    .to_string()
+                    .contains("stale contract lifecycle revision")
+            );
+            assert_eq!(
+                execution
+                    .world
+                    .contract_subject_bindings
+                    .get(&contract_address)
+                    .expect("stale acceptance preserves lifecycle binding")
+                    .lifecycle,
+                offered_lifecycle
+            );
+
+            scode::AcceptContractOwnership {
+                contract_address: contract_address.clone(),
+                expected_revision: 2,
+            }
+            .execute(&BOB_ID, &mut execution)
+            .expect("pending account completes Parliament ownership transfer");
+            let lifecycle = &execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("transferred lifecycle binding")
+                .lifecycle;
+            assert_eq!(
+                lifecycle.owner,
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(BOB_ID.clone())
+            );
+            assert_eq!(lifecycle.revision, 3);
+            assert!(lifecycle.pending_owner.is_none());
+            assert_eq!(
+                lifecycle.parliament_delegation,
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            );
+            let stale_replay = scode::AcceptContractOwnership {
+                contract_address,
+                expected_revision: 2,
+            }
+            .execute(&BOB_ID, &mut execution)
+            .expect_err("accepted ownership transfer cannot replay at the consumed revision");
+            assert!(
+                stale_replay
+                    .to_string()
+                    .contains("stale contract lifecycle revision")
+            );
+        }
+
+        #[test]
+        fn parliament_due_certificate_completes_contract_ownership_transfer_from_account() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(
+                NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+            );
+            let mut state_block = state.block(block.as_ref().header());
+            let (fixture, contract_address) = {
+                let mut seed = state_block.transaction();
+                Register::account(Account::new(ALICE_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed proposer and owner");
+                let contract_address = ContractAddress::derive(
+                    seed.network_id(),
+                    &ALICE_ID,
+                    84,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("derive governed contract address");
+                let contract_subject = contract_address.subject_id();
+                Register::account(Account::new(contract_subject.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed contract subject");
+                seed.world.contract_subject_bindings.insert(
+                    contract_address.clone(),
+                    crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                        &contract_address,
+                        ALICE_ID.clone(),
+                    ),
+                );
+                seed.world
+                    .contract_subject_addresses
+                    .insert(contract_subject, contract_address.clone());
+                scode::SetContractParliamentDelegation {
+                    contract_address: contract_address.clone(),
+                    expected_revision: 1,
+                    delegated: true,
+                }
+                .execute(&ALICE_ID, &mut seed)
+                .expect("account owner delegates lifecycle authority before transfer");
+                scode::OfferContractOwnership {
+                    contract_address: contract_address.clone(),
+                    expected_revision: 2,
+                    new_owner:
+                        iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament,
+                }
+                .execute(&ALICE_ID, &mut seed)
+                .expect("account owner offers ownership to Parliament");
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractLifecycleGovernance(
+                        ContractLifecycleGovernanceProposalV1 {
+                            contract_address: contract_address.clone(),
+                            expected_revision: 3,
+                            action: ContractLifecycleGovernanceActionV1::AcceptParliamentOwnership,
+                        },
+                    ),
+                );
+                seed.apply();
+                (fixture, contract_address)
+            };
+
+            let mut execution = state_block.transaction();
+            assert_eq!(
+                execute_due_parliament_certificate_v1(
+                    fixture.governance_attempt_id,
+                    &mut execution,
+                )
+                .expect("execute certified Parliament ownership acceptance"),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let lifecycle = &execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("Parliament-owned lifecycle binding")
+                .lifecycle;
+            assert_eq!(
+                lifecycle.owner,
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+            );
+            assert_eq!(lifecycle.revision, 4);
+            assert!(lifecycle.pending_owner.is_none());
+            assert_eq!(
+                lifecycle.parliament_delegation,
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            );
+            assert_eq!(
+                execution
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .expect("governed proposal")
+                    .status,
+                crate::state::GovernanceProposalStatus::Enacted
+            );
+            let event =
+                execution
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .find_map(|event| match event.as_ref() {
+                        DataEvent::SmartContract(SmartContractEvent::OwnershipTransferred(
+                            event,
+                        )) if event.contract_address == contract_address => Some(event),
+                        _ => None,
+                    })
+                    .expect("certified ownership-transfer event");
+            assert_eq!(event.revision, 4);
             assert_eq!(&event.lifecycle, lifecycle);
         }
 
@@ -26058,9 +26301,51 @@ pub mod isi {
                 manifest_provenance: None,
             });
             let proposal_id = kind.fingerprint();
-            let selector = format!("0X{}", hex::encode(proposal_id).to_ascii_uppercase());
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanProposeContractDeployment {
+                    contract_address,
+                })]),
+            );
+            macro_rules! assert_alias_rejected {
+                ($selector:expr) => {{
+                    let selector = $selector;
+                    let error = proposal.clone().expect_execute_err(
+                        &ALICE_ID,
+                        &mut state_transaction,
+                        "a pre-existing standalone alias must block typed proposal admission",
+                    );
+                    assert_err!(
+                        format!("{error:?}"),
+                        "canonical certificate-only Parliament record",
+                        "unexpected typed-proposal alias rejection for {selector:?}: {error:?}"
+                    );
+                    assert!(
+                        state_transaction
+                            .world
+                            .governance_proposals
+                            .get(&proposal_id)
+                            .is_none(),
+                        "rejected typed proposal {selector:?} must not be retained"
+                    );
+                }};
+            }
+            let lowercase = hex::encode(proposal_id);
+            let uppercase = lowercase.to_ascii_uppercase();
+            let mixed = lowercase
+                .chars()
+                .enumerate()
+                .map(|(index, character)| {
+                    if index % 2 == 0 {
+                        character.to_ascii_uppercase()
+                    } else {
+                        character
+                    }
+                })
+                .collect::<String>();
+
             state_transaction.world.governance_referenda.insert(
-                selector,
+                lowercase.clone(),
                 crate::state::GovernanceReferendumRecord {
                     h_start: 1,
                     h_end: 2,
@@ -26068,29 +26353,59 @@ pub mod isi {
                     mode: crate::state::GovernanceReferendumMode::Plain,
                 },
             );
-            state_transaction.world.account_permissions.insert(
-                ALICE_ID.clone(),
-                BTreeSet::from([Permission::from(CanProposeContractDeployment {
-                    contract_address,
-                })]),
+            assert_alias_rejected!(&lowercase);
+            state_transaction.world.governance_referenda.remove(lowercase.clone());
+
+            state_transaction.world.governance_locks.insert(
+                uppercase.clone(),
+                crate::state::GovernanceLocksForReferendum::default(),
             );
-            let error = proposal.expect_execute_err(
+            assert_alias_rejected!(&uppercase);
+            state_transaction.world.governance_locks.remove(uppercase.clone());
+
+            state_transaction.world.governance_slashes.insert(
+                mixed.clone(),
+                crate::state::GovernanceSlashLedger::default(),
+            );
+            assert_alias_rejected!(&mixed);
+            state_transaction.world.governance_slashes.remove(mixed);
+
+            let lower_prefixed = format!("0x{lowercase}");
+            state_transaction
+                .world
+                .elections
+                .insert(lower_prefixed.clone(), crate::state::ElectionState::default());
+            assert_alias_rejected!(&lower_prefixed);
+            state_transaction.world.elections.remove(lower_prefixed);
+
+            let upper_prefixed = format!("0X{uppercase}");
+            state_transaction.world.governance_referenda.insert(
+                upper_prefixed.clone(),
+                crate::state::GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 2,
+                    status: crate::state::GovernanceReferendumStatus::Proposed,
+                    mode: crate::state::GovernanceReferendumMode::Plain,
+                },
+            );
+            assert_alias_rejected!(&upper_prefixed);
+            state_transaction
+                .world
+                .governance_referenda
+                .remove(upper_prefixed);
+
+            proposal.expect_execute(
                 &ALICE_ID,
                 &mut state_transaction,
-                "a pre-existing standalone alias must block typed proposal admission",
-            );
-            assert_err!(
-                format!("{error:?}"),
-                "canonical certificate-only Parliament record",
-                "unexpected typed-proposal alias rejection: {error:?}"
+                "typed proposal admission succeeds after all standalone aliases are absent",
             );
             assert!(
                 state_transaction
                     .world
                     .governance_proposals
                     .get(&proposal_id)
-                    .is_none(),
-                "rejected typed proposal must not be retained"
+                    .is_some(),
+                "alias-free typed proposal must be retained"
             );
         });
         world_test!(standalone_plain_and_zk_ballots_reject_every_typed_proposal_selector_alias {
@@ -26371,6 +26686,219 @@ pub mod isi {
                 "the complete accepted corpus must never be pruned"
             );
         });
+        world_test!(standalone_referendum_decision_uses_exact_wide_decisive_arithmetic {
+            let rejected = super::standalone_referendum_decision_v1(
+                "wide-reject".to_owned(),
+                1_u128 << 127,
+                (1_u128 << 126) + 1,
+                0,
+                2,
+                3,
+                0,
+            )
+            .expect("wide exact comparison remains representable");
+            assert!(
+                !rejected.approved,
+                "saturating both products would have incorrectly approved this tally"
+            );
+            let approved = super::standalone_referendum_decision_v1(
+                "wide-approve".to_owned(),
+                1_u128 << 127,
+                1_u128 << 126,
+                0,
+                2,
+                3,
+                0,
+            )
+            .expect("wide equality comparison remains representable");
+            assert!(approved.approved);
+
+            let abstention_heavy = super::standalone_referendum_decision_v1(
+                "abstention-heavy".to_owned(),
+                2,
+                1,
+                100,
+                2,
+                3,
+                103,
+            )
+            .expect("small tally");
+            assert!(
+                abstention_heavy.approved,
+                "abstention counts toward turnout but not the decisive approval denominator"
+            );
+            let below_turnout = super::standalone_referendum_decision_v1(
+                "below-turnout".to_owned(),
+                2,
+                1,
+                100,
+                2,
+                3,
+                104,
+            )
+            .expect("small tally");
+            assert!(!below_turnout.approved);
+            let empty = super::standalone_referendum_decision_v1(
+                "empty".to_owned(),
+                0,
+                0,
+                0,
+                1,
+                2,
+                0,
+            )
+            .expect("empty tally is representable");
+            assert!(!empty.approved, "an empty decisive tally must fail closed");
+            assert!(
+                super::standalone_referendum_decision_v1(
+                    "invalid-threshold".to_owned(),
+                    1,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                )
+                .is_err(),
+                "zero-denominator runtime state must fail closed"
+            );
+        });
+        world_test!(plain_tally_accumulation_rejects_category_overflow {
+            let mut tally = [u128::MAX, 0, 0];
+            let error = super::add_plain_tally_weight_v1(&mut tally, 0, 1)
+                .expect_err("category overflow must reject");
+            assert_contains!(
+                error.to_string(),
+                "category tally exceeds the exact u128 domain"
+            );
+            assert_eq!(tally, [u128::MAX, 0, 0]);
+        });
+        world_test!(plain_ballot_resource_and_conviction_limits_fail_closed {
+            super::ensure_plain_ballot_corpus_size_v1(
+                super::MAX_STANDALONE_PLAIN_BALLOTS_V1,
+            )
+            .expect("the exact first-release corpus limit is accepted");
+            let error = super::ensure_plain_ballot_corpus_size_v1(
+                super::MAX_STANDALONE_PLAIN_BALLOTS_V1 + 1,
+            )
+            .expect_err("a larger PLAIN corpus must reject");
+            assert_contains!(error.to_string(), "ballot corpus exceeds");
+
+            let amount = Quantity::from(100_u64);
+            for (step, maximum) in [(0, 1), (1, 0)] {
+                let error = super::plain_ballot_weight(&amount, 100, step, maximum)
+                    .expect_err("zero conviction parameters must reject");
+                assert_contains!(error.to_string(), "conviction parameters must be non-zero");
+            }
+        });
+        world_test!(plain_ballot_rejects_invalid_direction_before_state_mutation {
+            second_height_transaction!(state, block, state_transaction);
+            let referendum_id = "election-1".to_owned();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: referendum_id.clone(),
+                })]),
+            );
+            let error = gov::CastPlainBallot {
+                referendum_id: referendum_id.clone(),
+                owner: ALICE_ID.clone(),
+                amount: Quantity::zero(),
+                duration_blocks: 0,
+                direction: 3,
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut state_transaction,
+                "out-of-domain PLAIN direction must reject",
+            );
+            assert_contains!(
+                format!("{error:?}"),
+                "plain governance ballot direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .governance_locks
+                    .get(&referendum_id)
+                    .is_none()
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .governance_referenda
+                    .get(&referendum_id)
+                    .is_none()
+            );
+        });
+        world_test!(late_zk_tally_emits_exact_referendum_decision_once {
+            second_height_transaction!(state, block, state_transaction);
+            let referendum_id = format!("0X{}", "aB".repeat(32));
+            state_transaction.gov.approval_threshold_q_num = 1;
+            state_transaction.gov.approval_threshold_q_den = 2;
+            state_transaction.gov.min_turnout = 0;
+            state_transaction.world.governance_referenda.insert(
+                referendum_id.clone(),
+                crate::state::GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 1,
+                    status: crate::state::GovernanceReferendumStatus::Closed,
+                    mode: crate::state::GovernanceReferendumMode::Zk,
+                },
+            );
+            let election = crate::state::ElectionState {
+                options: 3,
+                tally: vec![0; 3],
+                ..Default::default()
+            };
+            state_transaction
+                .world
+                .elections
+                .insert(referendum_id.clone(), election.clone());
+            state_transaction.world.take_external_events();
+
+            super::persist_finalized_standalone_election_v1(
+                referendum_id.clone(),
+                election,
+                &[2, 1, 7],
+                &mut state_transaction,
+            )
+            .expect("verified tally persisted after referendum closure");
+
+            let events = state_transaction.world.take_external_events();
+            assert_eq!(events.len(), 1, "late finalization emits one decision only");
+            let Some(DataEvent::Governance(GovernanceEvent::ReferendumDecided(decision))) =
+                events[0].as_data_event()
+            else {
+                panic!("late finalization emitted the wrong event: {:?}", events[0]);
+            };
+            assert_eq!(decision.referendum_id, referendum_id);
+            assert_eq!(decision.approve, 2);
+            assert_eq!(decision.reject, 1);
+            assert_eq!(decision.abstain, 7);
+            assert!(decision.approved);
+            let finalized = state_transaction
+                .world
+                .elections
+                .get(&referendum_id)
+                .cloned()
+                .expect("finalized election retained");
+            assert!(finalized.finalized);
+            assert_eq!(finalized.tally, vec![2, 1, 7]);
+
+            let replay = super::persist_finalized_standalone_election_v1(
+                referendum_id,
+                finalized,
+                &[2, 1, 7],
+                &mut state_transaction,
+            )
+            .expect_err("finalized election cannot replay");
+            assert_contains!(replay.to_string(), "election already finalized");
+            assert!(
+                state_transaction.world.take_external_events().is_empty(),
+                "replay rejection must not emit a second decision"
+            );
+        });
         world_test!(direct_plain_and_low_level_zk_ballots_require_exact_scoped_permission {
             second_height_transaction!(state, block, state_transaction);
             let wrong_target_permission: Permission = CanSubmitGovernanceBallot {
@@ -26538,17 +27066,6 @@ pub mod isi {
         });
         world_test!(scoped_governance_mutation_isis_reject_wrong_targets_without_state_changes {
             second_height_transaction!(state, block, state_transaction);
-            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
-            state_transaction
-                .gov
-                .citizen_service
-                .free_declines_per_epoch = u32::MAX;
-            let citizen =
-                crate::state::CitizenshipRecord::new(BOB_ID.clone(), Quantity::from(10_u64), 1);
-            state_transaction
-                .world
-                .citizens
-                .insert(BOB_ID.clone(), citizen.clone());
             let target_referendum = "target-referendum";
             let mut locks = crate::state::GovernanceLocksForReferendum::default();
             locks.locks.insert(
@@ -26568,9 +27085,6 @@ pub mod isi {
                 .governance_locks
                 .insert(target_referendum.to_owned(), locks);
             let wrong_target_permissions = BTreeSet::from([
-                Permission::from(CanRecordCitizenService {
-                    owner: ALICE_ID.clone(),
-                }),
                 Permission::from(CanSlashGovernanceLock {
                     referendum_id: "other-referendum".to_owned(),
                 }),
@@ -26582,12 +27096,6 @@ pub mod isi {
                 .world
                 .account_permissions
                 .insert(ALICE_ID.clone(), wrong_target_permissions);
-            let citizen_before = state_transaction
-                .world
-                .citizens
-                .get(&*BOB_ID)
-                .cloned()
-                .expect("seeded citizen");
             let lock_before = state_transaction
                 .world
                 .governance_locks
@@ -26595,14 +27103,6 @@ pub mod isi {
                 .and_then(|referendum| referendum.locks.get(&*BOB_ID))
                 .map(|record| (record.amount.clone(), record.slashed.clone()))
                 .expect("seeded governance lock");
-            let service_error = gov::RecordCitizenServiceOutcome {
-                owner: BOB_ID.clone(),
-                epoch: 2,
-                role: "observer".to_owned(),
-                event: gov::CitizenServiceEvent::Decline,
-            }
-            .expect_execute_err(&ALICE_ID, &mut state_transaction, "a service grant for another citizen must fail closed");
-            assert_err!(format!("{service_error:?}"), "exact CanRecordCitizenService target", "unexpected citizen-service target rejection: {service_error:?}");
             let slash_error = gov::SlashGovernanceLock {
                 referendum_id: target_referendum.to_owned(),
                 owner: BOB_ID.clone(),
@@ -26619,11 +27119,6 @@ pub mod isi {
             }
             .expect_execute_err(&ALICE_ID, &mut state_transaction, "a restitution grant for another referendum must fail closed");
             assert_contains!(format!("{restitution_error:?}"), "exact CanRestituteGovernanceLock target", "unexpected restitution target rejection: {restitution_error:?}");
-            assert_eq!(
-                state_transaction.world.citizens.get(&*BOB_ID),
-                Some(&citizen_before),
-                "wrong-target service recording must not mutate citizen state"
-            );
             let lock_after = state_transaction
                 .world
                 .governance_locks
@@ -28096,26 +28591,41 @@ pub mod isi {
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
             assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
         });
-        #[cfg(feature = "bls")]
         world_test!(record_sccp_message_rejects_unsupported_controllers_before_lock_or_outbox {
             sccp_recording_transaction!(state, block, stx);
-            let (settlement_asset, custody) = sccp_test_settlement_ids(&stx);
-            let custody_asset = AssetId::new(settlement_asset.clone(), custody);
-            let bls_key = KeyPair::try_from_seed(vec![0x74; 32], Algorithm::BlsNormal)
-                .expect("deterministic BLS SCCP authority fixture")
+            let (settlement_asset, _) = sccp_test_settlement_ids(&stx);
+            let ed25519_key = KeyPair::try_from_seed(vec![0x74; 32], Algorithm::Ed25519)
+                .expect("deterministic Ed25519 SCCP authority fixture")
                 .public_key()
                 .clone();
-            let unsupported_single = AccountId::new(bls_key.clone());
-            let unsupported_multisig = AccountId::new_multisig(
+            let secp256k1_key = KeyPair::try_from_seed(vec![0x75; 32], Algorithm::Secp256k1)
+                .expect("deterministic secp256k1 SCCP authority fixture")
+                .public_key()
+                .clone();
+            let unsupported_single = AccountId::new(secp256k1_key.clone());
+            let one_member_multisig = AccountId::new_multisig(
                 MultisigPolicy::new(
                     1,
-                    vec![MultisigMember::new(bls_key, 1).expect("BLS multisig member")],
+                    vec![MultisigMember::new(ed25519_key.clone(), 1)
+                        .expect("Ed25519 multisig member")],
                 )
-                .expect("valid one-member BLS policy"),
+                .expect("valid one-member Ed25519 policy"),
+            );
+            let mixed_multisig = AccountId::new_multisig(
+                MultisigPolicy::new(
+                    2,
+                    vec![
+                        MultisigMember::new(ed25519_key, 1).expect("Ed25519 multisig member"),
+                        MultisigMember::new(secp256k1_key, 1)
+                            .expect("secp256k1 multisig member"),
+                    ],
+                )
+                .expect("valid mixed-controller policy"),
             );
             for (index, (label, authority)) in [
-                ("single BLS", unsupported_single),
-                ("BLS multisig", unsupported_multisig),
+                ("single secp256k1", unsupported_single),
+                ("one-member Ed25519 multisig", one_member_multisig),
+                ("mixed Ed25519/secp256k1 multisig", mixed_multisig),
             ]
             .into_iter()
             .enumerate()
@@ -28125,8 +28635,7 @@ pub mod isi {
                 let sender_asset = AssetId::new(settlement_asset.clone(), authority.clone());
                 Mint::asset_quantity(100_u64, sender_asset.clone())
                     .expect_execute(&ALICE_ID, &mut stx, "fund unsupported SCCP authority fixture");
-                let sender_before = sccp_asset_balance(&stx, &sender_asset);
-                let custody_before = sccp_asset_balance(&stx, &custody_asset);
+                let before = sccp_outbound_mutation_snapshot(&stx, &authority);
                 let mut payload = sora_outbound_sccp_payload(
                     74 + u64::try_from(index).expect("small fixture index"),
                 );
@@ -28145,11 +28654,100 @@ pub mod isi {
                     canonical_test_sccp_payload_bytes(&payload),
                 )
                 .expect_execute_err(&authority, &mut stx, "unsupported controller must not create an unfinalizable lock");
-                assert_err!(format!("{error:?}"), "not supported by the V1 destination contracts", "unexpected {label} admission error: {error:?}");
-                assert_eq!(sccp_asset_balance(&stx, &sender_asset), sender_before);
-                assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
+                assert_err!(format!("{error:?}"), "not supported by the V1 semantic circuit", "unexpected {label} admission error: {error:?}");
+                assert_eq!(sccp_outbound_mutation_snapshot(&stx, &authority), before);
                 assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
             }
+        });
+        world_test!(record_sccp_message_rejects_ton_master_recipient_before_lock_or_outbox {
+            let (registry, route_key, observation) =
+                crate::state::ton_breaker_hydration_fixture_for_testing();
+            let mut wire = registry.to_wire();
+            wire.lanes[0].routes[0].activation =
+                iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional;
+            let route = wire.lanes[0].routes[0].clone();
+            let iroha_data_model::bridge::SccpDestinationDeploymentV1::Ton(deployment) =
+                route.destination
+            else {
+                unreachable!("TON breaker fixture must contain a TON destination")
+            };
+            let registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(wire)
+                .expect("active TON registry fixture");
+            let state = blank_test_state();
+            let header = BlockHeader::new(
+                NonZeroU64::new(8).expect("nonzero fixture height"),
+                None,
+                None,
+                None,
+                observation.masterchain.gen_utime_ms(),
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.sccp_registry = registry;
+            stx.world
+                .sccp_ton_breaker_observations
+                .insert(route_key, observation);
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let payload = iroha_sccp::SccpPayloadV1::Transfer(
+                iroha_sccp::TransferPayloadV1 {
+                    version: 1,
+                    source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                    dest_domain: iroha_sccp::SCCP_DOMAIN_TON,
+                    nonce: 76,
+                    route_revision: route.revision,
+                    asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                    asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    asset_id: route.asset_key.as_bytes().to_vec(),
+                    amount: 7,
+                    sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    sender: ALICE_ID
+                        .to_i105_for_discriminant(
+                            iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1,
+                        )
+                        .expect("canonical ALICE fixture")
+                        .into_bytes(),
+                    recipient_codec: iroha_sccp::SCCP_CODEC_TON_ACCOUNT36,
+                    recipient: iroha_sccp::canonical_sccp_ton_account36_bytes_v1(
+                        deployment.jetton_master_address,
+                    )
+                    .expect("fixture master has a canonical TON address")
+                    .to_vec(),
+                    route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    route_id: route.route_id.as_bytes().to_vec(),
+                },
+            );
+            let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
+            let context = iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
+                iroha_data_model::bridge::SccpLaneIdV1 {
+                    source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                    target: iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
+                },
+                route
+                    .destination_binding_hash()
+                    .expect("fixture TON destination binding"),
+                route
+                    .route_configuration_hash()
+                    .expect("fixture TON route configuration"),
+            )
+            .expect("fixture outbound TON context");
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                context,
+                payload_bytes,
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+            );
+            let before = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
+            let error = instruction.expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "the TON Jetton master cannot own its own derived wallet",
+            );
+            assert_err!(
+                format!("{error:?}"),
+                "recipient cannot be executed by the governed V1 destination deployment"
+            );
+            assert_eq!(sccp_outbound_mutation_snapshot(&stx, &ALICE_ID), before);
         });
         world_test!(record_sccp_message_rejects_insufficient_balance_without_partial_lock_or_outbox {
             sccp_recording_transaction!(state, block, stx);
@@ -32415,89 +33013,6 @@ seiyaku GovernanceLifecycle {
                 "grant account-target permission to holder",
             );
             let role_id: RoleId = "ACCOUNT_SCOPE_ADMIN".parse().expect("role id parses");
-            Register::role(Role::new(role_id.clone(), ALICE_ID.clone())).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register role",
-            );
-            Grant::role_permission(permission.clone(), role_id.clone()).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "grant account-target permission to role",
-            );
-            Grant::account_role(role_id.clone(), holder_id.clone()).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "grant role to holder",
-            );
-            assert!(
-                stx.world
-                    .account_permissions
-                    .get(&holder_id)
-                    .is_some_and(|perms| perms.contains(&permission)),
-                "holder should have permission before unregister"
-            );
-            let role = stx.world.roles.get(&role_id).expect("role should exist");
-            assert!(
-                role.permissions().any(|perm| perm == &permission),
-                "role should include permission before unregister"
-            );
-            Unregister::domain(domain_id).expect_execute(&ALICE_ID, &mut stx, "unregister domain");
-            assert!(
-                stx.world
-                    .account_permissions
-                    .get(&holder_id)
-                    .is_some_and(|perms| perms.contains(&permission)),
-                "holder permission should remain"
-            );
-            let role = stx.world.roles.get(&role_id).expect("role should exist");
-            assert!(
-                role.permissions().any(|perm| perm == &permission),
-                "role permission should remain"
-            );
-            assert!(
-                role.permission_epochs().contains_key(&permission),
-                "permission epochs should remain"
-            );
-        }
-        #[test]
-        fn unregister_domain_preserves_citizen_service_permissions_for_surviving_accounts_and_roles()
-         {
-            let state = blank_state();
-            let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
-            state_transaction!(state, block, state_block, stx);
-            bootstrap_alice_account(&mut stx);
-            Register::domain(Domain::new(domain_id.clone())).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register cleanup domain",
-            );
-            let (target_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&target_id)).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register account in cleanup domain",
-            );
-            let owner_domain: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id parses");
-            let (holder_id, _) = gen_account_in(&owner_domain);
-            Register::account(new_account_in_domain(&holder_id)).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register holder account",
-            );
-            let permission: Permission =
-                iroha_executor_data_model::permission::governance::CanRecordCitizenService {
-                    owner: target_id.clone(),
-                }
-                .into();
-            Grant::account_permission(permission.clone(), holder_id.clone()).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "grant account-target permission to holder",
-            );
-            let role_id: RoleId = "CITIZEN_SERVICE_ADMIN".parse().expect("role id parses");
             Register::role(Role::new(role_id.clone(), ALICE_ID.clone())).expect_execute(
                 &ALICE_ID,
                 &mut stx,
@@ -39290,6 +39805,53 @@ seiyaku GovernanceLifecycle {
                 Some(address_at_nonce_0)
             );
             assert!(stx.world.contract_instances.get(&address_at_nonce_1).is_none());
+        });
+        world_test!(commit_contract_deployment_rejects_malformed_protected_namespace_policy {
+            blank_test_state_transaction!(state, block, stx);
+            Register::account(Account::new(ALICE_ID.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed authority");
+            grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
+            let parameter = iroha_data_model::parameter::custom::CustomParameter::new(
+                iroha_data_model::parameter::custom::CustomParameterId(
+                    crate::smartcontracts::code::PROTECTED_CONTRACT_NAMESPACES_PARAMETER
+                        .parse()
+                        .expect("parameter id"),
+                ),
+                Json::new("apps"),
+            );
+            stx.world
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(parameter));
+            let contract_address = ContractAddress::derive(
+                stx.network_id(),
+                &ALICE_ID,
+                0,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("contract address");
+            let error = scode::CommitContractDeployment {
+                expected_deploy_nonce: 0,
+                contract_address: contract_address.clone(),
+                code_hash: Hash::new(b"malformed protected namespace policy"),
+                contract_alias: "apps::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "malformed policy must fail closed before deployment",
+            );
+            let message = smart_contract_error_message(
+                iroha_data_model::ValidationFail::InstructionFailed(error),
+            );
+            assert_contains!(
+                message,
+                "invalid protected-contract namespace policy",
+                "unexpected malformed-policy error: {message}"
+            );
+            assert!(stx.world.contract_instances.get(&contract_address).is_none());
         });
         world_test!(activate_contract_instance_requires_governance_for_protected_namespace {
             blank_test_state_transaction!(state, block, stx);

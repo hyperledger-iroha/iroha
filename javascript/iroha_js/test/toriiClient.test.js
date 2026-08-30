@@ -5560,46 +5560,6 @@ test("_iterateOffsetIterable enforces item-key whitelists", async () => {
   );
 });
 
-test("fetchSorafsPayloadRange normalizes request and response payloads", async () => {
-  let captured = null;
-  const manifestHex = "c".repeat(64);
-  const providerBytes = Buffer.alloc(32, 0xaa);
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: {
-        manifest_id_hex: manifestHex,
-        offset: 4,
-        length: 2,
-        data_b64: Buffer.from([9, 9]).toString("base64"),
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.fetchSorafsPayloadRange({
-    manifestIdHex: manifestHex,
-    offset: 4,
-    length: 2,
-    providerIdHex: providerBytes,
-  });
-  assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/storage/fetch`);
-  assert.ok(captured?.init?.headers?.["X-Iroha-Operator-Public-Key"]);
-  assert.ok(captured?.init?.headers?.["X-Iroha-Operator-Signature"]);
-  const body = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(body.manifest_id_hex, manifestHex);
-  assert.equal(body.offset, 4);
-  assert.equal(body.length, 2);
-  assert.equal(body.provider_id_hex, providerBytes.toString("hex"));
-  assert.deepEqual(result, {
-    manifest_id_hex: manifestHex,
-    offset: 4,
-    length: 2,
-    data_b64: Buffer.from([9, 9]).toString("base64"),
-  });
-});
-
 test("getSorafsStorageState returns typed fields", async () => {
   const snapshot = {
     bytes_used: 10,
@@ -5637,10 +5597,6 @@ test("SoraFS local storage diagnostics require operator signing context", async 
       throw new Error("fetch should not run without operator authentication");
     },
   });
-  await assert.rejects(
-    () => client.fetchSorafsPayloadRange({}),
-    /fetchSorafsPayloadRange requires ToriiClient options\.operatorSigningContext/,
-  );
   await assert.rejects(
     () => client.getSorafsStorageState(),
     /getSorafsStorageState requires ToriiClient options\.operatorSigningContext/,
@@ -14783,17 +14739,21 @@ test("getBlock returns null when Torii replies 404", async () => {
   assert.equal(block, null);
 });
 
-test("listBlocks encodes pagination parameters", async () => {
+test("listBlocks encodes snapshot cursor pagination", async () => {
+  const cursor = "Y3Vyc29y";
+  const nextCursor = "bmV4dA";
+  const snapshotHash = "ab".repeat(32);
   const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/explorer/blocks?page=2&per_page=5`);
+    assert.equal(url, `${BASE_URL}/v1/explorer/blocks?limit=5&cursor=${cursor}`);
     return createResponse({
       status: 200,
       jsonData: {
         pagination: {
-          page: 1,
-          per_page: 5,
-          total_pages: 2,
-          total_items: 8,
+          limit: 5,
+          snapshot_height: 8,
+          snapshot_hash: snapshotHash,
+          next_cursor: nextCursor,
+          has_more: true,
         },
         items: [
           {
@@ -14811,13 +14771,14 @@ test("listBlocks encodes pagination parameters", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listBlocks({ page: 2, perPage: 5 });
+  const result = await client.listBlocks({ cursor, limit: 5 });
   assert.deepEqual(result, {
     pagination: {
-      page: 1,
-      perPage: 5,
-      totalPages: 2,
-      totalItems: 8,
+      limit: 5,
+      snapshotHeight: 8,
+      snapshotHash,
+      nextCursor,
+      hasMore: true,
     },
     items: [
       {
@@ -14865,9 +14826,10 @@ test("listBlocks validates pagination bounds", async () => {
     /positive integer/,
   );
   await assert.rejects(
-    () => client.listBlocks({ page: -5 }),
-    /positive integer/,
+    () => client.listBlocks({ cursor: "padded==" }),
+    /canonical base64url without padding/,
   );
+  await assert.rejects(() => client.listBlocks({ limit: 101 }), /at most 100/);
 });
 
 test("listBlocks rejects non-object options", async () => {
@@ -14887,8 +14849,61 @@ test("listBlocks rejects unsupported option keys", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.listBlocks({ unexpected: true }),
-    /block list options contains unsupported fields: unexpected/,
+    () => client.listBlocks({ page: 2 }),
+    /block list options contains unsupported fields: page/,
+  );
+});
+
+test("listBlocks rejects retired totals and inconsistent snapshot metadata", async () => {
+  const responses = [
+    {
+      pagination: {
+        limit: 5,
+        snapshot_height: 8,
+        snapshot_hash: "ab".repeat(32),
+        next_cursor: null,
+        has_more: false,
+        total_items: 8,
+      },
+      items: [],
+    },
+    {
+      pagination: {
+        limit: 5,
+        snapshot_height: 0,
+        snapshot_hash: "ab".repeat(32),
+        next_cursor: null,
+        has_more: false,
+      },
+      items: [],
+    },
+    {
+      pagination: {
+        limit: 5,
+        snapshot_height: 8,
+        snapshot_hash: "ab".repeat(32),
+        next_cursor: null,
+        has_more: true,
+      },
+      items: [],
+    },
+  ];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: responses.shift(),
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  await assert.rejects(() => client.listBlocks(), /unknown field total_items/);
+  await assert.rejects(
+    () => client.listBlocks(),
+    /snapshot_hash must be null exactly when snapshot_height is zero/,
+  );
+  await assert.rejects(
+    () => client.listBlocks(),
+    /has_more must match next_cursor availability/,
   );
 });
 
@@ -15225,9 +15240,9 @@ test("listNfts hits nft endpoint", async () => {
 
 test("listExplorerNfts validates cursor pagination and encodes filters", async () => {
   const calls = [];
-  const fetchImpl = async (url) => {
+  const fetchImpl = async (url, init) => {
     const parsed = new URL(url);
-    calls.push(parsed);
+    calls.push({ parsed, init });
     return createResponse({
       status: 200,
       jsonData: {
@@ -15247,7 +15262,13 @@ test("listExplorerNfts validates cursor pagination and encodes filters", async (
     limit: 5,
   });
   assert.equal(calls.length, 1);
-  const parsed = calls[0];
+  const { parsed, init } = calls[0];
+  assert.equal(init.redirect, "error");
+  assert.equal(
+    init.headers["X-Iroha-Account"],
+    AccountAddress.parseEncoded(APPLICATION_CANONICAL_AUTH.accountId).address.canonicalHex(),
+  );
+  assert.ok(init.headers["X-Iroha-Signature"]);
   assert.equal(parsed.pathname, "/v1/explorer/nfts");
   assert.equal(parsed.searchParams.get("owned_by"), SAMPLE_ACCOUNT_ID);
   assert.equal(parsed.searchParams.get("domain"), "wonderland");
@@ -15266,6 +15287,29 @@ test("listExplorerNfts validates cursor pagination and encodes filters", async (
     ownedBy: SAMPLE_ACCOUNT_ID,
     metadata: { role: "demo" },
   });
+});
+
+test("dataspace-visible Explorer reads stay anonymous without a default signer", async () => {
+  let capturedInit;
+  const client = new ToriiClient(BASE_URL, {
+    canonicalRequestAuth: null,
+    fetchImpl: async (_url, init) => {
+      capturedInit = init;
+      return createResponse({
+        status: 200,
+        jsonData: {
+          pagination: { limit: 25, next_cursor: null, has_more: false },
+          items: [],
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  const page = await client.listExplorerNfts();
+  assert.deepEqual(page.items, []);
+  assert.equal(capturedInit.headers["X-Iroha-Account"], undefined);
+  assert.equal(capturedInit.headers["X-Iroha-Signature"], undefined);
 });
 
 test("world Explorer lists reject offset pagination and malformed cursor metadata", async () => {
@@ -16688,7 +16732,7 @@ test("listContractEvents encodes generic contract event filters", async () => {
             provenance: "derived",
             authority: FIXTURE_ALICE_ID,
             timestamp_ms: 123,
-            tx_hash_hex: "abc",
+            tx_hash_hex: "ab".repeat(32),
             block_height: 9,
             block_hash_hex: "deadbeef",
             result_ok: true,
@@ -17803,13 +17847,34 @@ test("ToriiClient enforces request timeout", async () => {
   );
 });
 
-test("streamEvents yields parsed SSE payloads", async () => {
+test("streamEvents signs the exact final path and query with the default identity", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(
       url,
       `${BASE_URL}/v1/events/sse?filter=${encodeURIComponent('{"Pipeline":{"Block":{}}}')}`,
     );
     assert.equal(init.headers["Last-Event-ID"], undefined);
+    assert.equal(init.redirect, "error");
+    assert.equal(
+      init.headers["X-Iroha-Account"],
+      AccountAddress.parseEncoded(
+        APPLICATION_CANONICAL_AUTH.accountId,
+      ).address.canonicalHex(),
+    );
+    const requestUrl = new URL(url);
+    const signatureMessage = canonicalRequestSignatureMessage({
+      networkId: VK_SIGNING_NETWORK_ID,
+      method: "GET",
+      path: requestUrl.pathname,
+      query: requestUrl.searchParams,
+      body: "",
+      timestampMs: Number(init.headers["X-Iroha-Timestamp-Ms"]),
+      nonce: init.headers["X-Iroha-Nonce"],
+    });
+    assert.deepEqual(
+      Buffer.from(init.headers["X-Iroha-Signature"], "base64"),
+      signEd25519(signatureMessage, APPLICATION_CANONICAL_AUTH.privateKey),
+    );
     return createSseResponse([
       "id: block-1\n",
       "event: pipeline.block\n",
@@ -17832,6 +17897,29 @@ test("streamEvents yields parsed SSE payloads", async () => {
   });
   const second = await iterator.next();
   assert.equal(second.done, true);
+});
+
+test("streamEvents stays anonymous when no default signer is configured", async () => {
+  let requestInit;
+  const client = new ToriiClient(BASE_URL, {
+    canonicalRequestAuth: null,
+    fetchImpl: async (_url, init) => {
+      requestInit = init;
+      return createSseResponse([
+        "event: pipeline.block\n",
+        'data: {"height":1}\n',
+        "\n",
+      ]);
+    },
+  });
+  const iterator = client.streamEvents();
+  assert.equal((await iterator.next()).done, false);
+  assert.equal((await iterator.next()).done, true);
+  assert.equal(requestInit.headers["X-Iroha-Account"], undefined);
+  assert.equal(requestInit.headers["X-Iroha-Signature"], undefined);
+  assert.equal(requestInit.headers["X-Iroha-Timestamp-Ms"], undefined);
+  assert.equal(requestInit.headers["X-Iroha-Nonce"], undefined);
+  assert.equal(requestInit.redirect, undefined);
 });
 
 test("streamEvents rejects unsupported production backend event filters before fetch", () => {
@@ -18073,7 +18161,11 @@ test("streamEvents retries SSE handshake using streaming profile", async () => {
       "\n",
     ]);
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, maxRetries: 0 });
+  const client = new ToriiClient(BASE_URL, {
+    canonicalRequestAuth: null,
+    fetchImpl,
+    maxRetries: 0,
+  });
   const iterator = client.streamEvents();
   const first = await iterator.next();
   assert.equal(first.done, false);
@@ -18081,11 +18173,12 @@ test("streamEvents retries SSE handshake using streaming profile", async () => {
   assert.equal(attempts, 2);
 });
 
-test("streamSumeragiStatus streams SSE without filters", async () => {
-  let requestHeaders;
+test("streamSumeragiStatus signs each one-shot SSE subscription", async () => {
+  const requests = [];
   const fetchImpl = async (url, init) => {
-    requestHeaders = init.headers;
+    requests.push(init);
     assert.equal(url, `${BASE_URL}/v1/sumeragi/status/sse`);
+    assert.equal(init.redirect, "error");
     return createSseResponse([
       "event: sumeragi.status\n",
       'data: {"view":2}\n',
@@ -18105,7 +18198,34 @@ test("streamSumeragiStatus streams SSE without filters", async () => {
   });
   const next = await iterator.next();
   assert.equal(next.done, true);
-  assert.equal(requestHeaders.Accept, "text/event-stream");
+  const secondIterator = client.streamSumeragiStatus();
+  await secondIterator.next();
+  await secondIterator.next();
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.headers.Accept, "text/event-stream");
+    assert.ok(request.headers["X-Iroha-Operator-Public-Key"]);
+    assert.ok(request.headers["X-Iroha-Operator-Signature"]);
+  }
+  assert.notEqual(
+    requests[0].headers["X-Iroha-Operator-Nonce"],
+    requests[1].headers["X-Iroha-Operator-Nonce"],
+  );
+});
+
+test("streamSumeragiStatus rejects a missing operator signer before fetch", () => {
+  let calls = 0;
+  const client = new SourceToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("fetch must not run");
+    },
+  });
+  assert.throws(
+    () => client.streamSumeragiStatus(),
+    /requires an immutable OperatorSigningContext/u,
+  );
+  assert.equal(calls, 0);
 });
 
 test("streamEvents rejects unsupported filter types", () => {
@@ -25529,6 +25649,90 @@ test("getGovernanceContract mirrors response handling", async () => {
   assert.equal(result.contract_address, "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw");
   assert.equal(result.dataspace, "universal");
   assert.equal(result.code_hash_hex, "1".repeat(64));
+});
+
+test("getGovernanceContract preserves u64 lifecycle tokens and rejects lossy wire values", async () => {
+  const contractAddress =
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+  const lifecycleWire = ({
+    revision = "18446744073709551615",
+    imposedAtHeight = "18446744073709551614",
+    expiresAtHeight = "18446744073709551615",
+  } = {}) => JSON.stringify({
+    found: true,
+    contract_address: contractAddress,
+    contract_subject_account: FIXTURE_ALICE_ID,
+    dataspace: "universal",
+    active: true,
+    lifecycle: {
+      version: 1,
+      origin: "direct",
+      origin_account: FIXTURE_ALICE_ID,
+      origin_proposal_content_id_hex: null,
+      origin_governance_attempt_id_hex: null,
+      owner: FIXTURE_ALICE_ID,
+      pending_owner: null,
+      parliament_delegated: false,
+      active_code_hash_hex: "1".repeat(64),
+      revision: "__REVISION__",
+      emergency_hold: {
+        incident_digest_hex: "4".repeat(64),
+        proposal_content_id_hex: "5".repeat(64),
+        governance_attempt_id_hex: "6".repeat(64),
+        reason: "containment",
+        imposed_at_height: "__IMPOSED__",
+        expires_at_height: "__EXPIRES__",
+      },
+    },
+    emergency_hold_active: true,
+    code_hash_hex: "1".repeat(64),
+    abi_hash_hex: "2".repeat(64),
+    public_entrypoints: ["ping"],
+  })
+    .replace('"__REVISION__"', revision)
+    .replace('"__IMPOSED__"', imposedAtHeight)
+    .replace('"__EXPIRES__"', expiresAtHeight);
+  const clientForWire = (body) => new ToriiClient(BASE_URL, {
+    fetchImpl: async () => new Response(body, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  const result = await clientForWire(lifecycleWire()).getGovernanceContract(
+    contractAddress,
+    canonicalReadOptions(),
+  );
+  assert.equal(result.lifecycle.revision, 18446744073709551615n);
+  assert.equal(result.lifecycle.emergency_hold.imposed_at_height, 18446744073709551614n);
+  assert.equal(result.lifecycle.emergency_hold.expires_at_height, 18446744073709551615n);
+
+  for (const token of ['"1"', "true", "1.5", "18446744073709551616"]) {
+    await assert.rejects(
+      () => clientForWire(lifecycleWire({ revision: token })).getGovernanceContract(
+        contractAddress,
+        canonicalReadOptions(),
+      ),
+      /integer|unsigned 64-bit|at most/u,
+      `revision token ${token}`,
+    );
+  }
+  const duplicate = lifecycleWire({ revision: "1" }).replace(
+    '"revision":1',
+    '"revision":1,"revision":2',
+  );
+  await assert.rejects(
+    () => clientForWire(duplicate).getGovernanceContract(
+      contractAddress,
+      canonicalReadOptions(),
+    ),
+    /duplicate object key/u,
+  );
+
+  const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  assert.match(declarations, /revision: ToriiU64;/u);
+  assert.match(declarations, /imposed_at_height: ToriiU64;/u);
+  assert.match(declarations, /expires_at_height: ToriiU64;/u);
 });
 
 test("getGovernanceContract rejects coercible, non-canonical, or unexpected fields", async () => {

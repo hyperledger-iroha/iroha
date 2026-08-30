@@ -2,8 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "../poseidon_bridge.rs"]
 mod poseidon_bridge;
-#[path = "../poseidon_circuit.rs"]
-mod poseidon_circuit;
 #[path = "../poseidon_cuda_parity.rs"]
 mod poseidon_cuda_parity;
 #[path = "../poseidon_simd.rs"]
@@ -50,12 +48,8 @@ mod registers_compact_helper;
 mod registers_merkle;
 #[path = "../schema_registry_roundtrip.rs"]
 mod schema_registry_roundtrip;
-#[path = "../sha256_circuit.rs"]
-mod sha256_circuit;
 #[path = "../sha256_parity.rs"]
 mod sha256_parity;
-#[path = "../sha3_circuit.rs"]
-mod sha3_circuit;
 #[path = "../shift_ops_regression.rs"]
 mod shift_ops_regression;
 #[path = "../shifts_edge.rs"]

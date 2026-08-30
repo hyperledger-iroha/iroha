@@ -1933,7 +1933,7 @@ pub mod sorafs {
         /// Enforce admission registry membership by default.
         pub const ENFORCE_ADMISSION: bool = true;
         /// Enforce advertised capabilities (e.g., chunk-range fetch) before serving data.
-        pub const ENFORCE_CAPABILITIES: bool = false;
+        pub const ENFORCE_CAPABILITIES: bool = true;
         /// Enable per-CID untrusted host routing.
         pub const UNTRUSTED_HOSTING_ENABLED: bool = false;
         /// Redirect browser path-gateway requests to the canonical CID host.
@@ -2349,11 +2349,7 @@ pub mod torii {
         pub fn mtls_trusted_proxy_cidrs() -> Vec<String> {
             vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()]
         }
-        /// Token fallback mode (`disabled`, `bootstrap`, `always`).
-        pub const TOKEN_FALLBACK: &str = "bootstrap";
-        /// Token source selection (`operator`, `api`, `both`).
-        pub const TOKEN_SOURCE: &str = "operator";
-        /// Token allow-list for operator fallback (empty => none).
+        /// Operator-token allow-list for first-credential bootstrap (empty => none).
         pub fn tokens() -> Vec<String> {
             Vec::new()
         }
@@ -2773,7 +2769,7 @@ pub mod torii {
             pub const MAX_CONNECTIONS_PER_IP: NonZeroUsize = nonzero!(64usize);
             /// Absolute deadline for reading one HTTP/1 request head.
             pub const HEADER_READ_TIMEOUT_MS: u64 = 10_000;
-            /// Maximum duration without socket write progress.
+            /// Maximum duration without socket write progress and graceful connection-drain deadline.
             pub const WRITE_TIMEOUT_MS: u64 = 30_000;
             /// Maximum number of HTTP/1 headers accepted in one request.
             pub const MAX_HEADERS: NonZeroUsize = nonzero!(100usize);
@@ -2782,7 +2778,7 @@ pub mod torii {
         }
         /// Norito-RPC transport defaults surfaced via `torii.transport.norito_rpc`.
         pub mod norito_rpc {
-            /// Enable Norito-RPC decoding by default so lab/devnet builds can exercise the transport.
+            /// Enable the production Norito-RPC transport by default.
             pub const ENABLED: bool = true;
             /// Require the forwarded client certificate header from a trusted ingress proxy.
             pub const REQUIRE_MTLS: bool = false;
@@ -4297,18 +4293,6 @@ pub mod governance {
         /// Conservative V1 ceiling: every fresh ballot requires a fresh DKG key.
         pub const MAX_FRESH_BALLOTS_PER_SESSION: u32 = 1;
     }
-    /// Default citizen service cooldown in blocks after accepting a seat.
-    pub const CITIZEN_SEAT_COOLDOWN_BLOCKS: u64 = 0;
-    /// Default maximum seats a single citizen may hold per epoch.
-    pub const CITIZEN_MAX_SEATS_PER_EPOCH: u32 = u32::MAX;
-    /// Default number of declines that do not trigger a slash per epoch.
-    pub const CITIZEN_FREE_DECLINES_PER_EPOCH: u32 = u32::MAX;
-    /// Slash applied when a citizen declines after exhausting the free budget (basis points).
-    pub const CITIZEN_DECLINE_SLASH_BPS: u16 = 0;
-    /// Slash applied when a citizen fails to appear for an assigned seat (basis points).
-    pub const CITIZEN_NO_SHOW_SLASH_BPS: u16 = 0;
-    /// Legacy service-outcome slash, disabled; misconduct uses ordinary adjudication.
-    pub const CITIZEN_MISCONDUCT_SLASH_BPS: u16 = 0;
     /// Default per-binding reward amount ("1" XOR).
     pub const VIRAL_FOLLOW_REWARD_AMOUNT: &str = "1";
     /// Default sender bonus amount ("0.1" XOR).
@@ -4354,31 +4338,6 @@ pub mod governance {
     /// Aggregate campaign cap across the promo window (0 = unlimited).
     pub fn viral_campaign_cap() -> Quantity {
         Quantity::zero()
-    }
-    /// Default citizen service discipline parameters.
-    pub mod citizen_service {
-        use crate::parameters::defaults::governance::{
-            CITIZEN_DECLINE_SLASH_BPS, CITIZEN_FREE_DECLINES_PER_EPOCH,
-            CITIZEN_MAX_SEATS_PER_EPOCH, CITIZEN_MISCONDUCT_SLASH_BPS, CITIZEN_NO_SHOW_SLASH_BPS,
-            CITIZEN_SEAT_COOLDOWN_BLOCKS,
-        };
-        use std::collections::BTreeMap;
-        /// Default service cooldown (blocks) after accepting a seat.
-        pub const SEAT_COOLDOWN_BLOCKS: u64 = CITIZEN_SEAT_COOLDOWN_BLOCKS;
-        /// Default maximum seats a citizen may hold per epoch.
-        pub const MAX_SEATS_PER_EPOCH: u32 = CITIZEN_MAX_SEATS_PER_EPOCH;
-        /// Default number of free declines per epoch.
-        pub const FREE_DECLINES_PER_EPOCH: u32 = CITIZEN_FREE_DECLINES_PER_EPOCH;
-        /// Slash percentage applied to declines beyond the free budget (basis points).
-        pub const DECLINE_SLASH_BPS: u16 = CITIZEN_DECLINE_SLASH_BPS;
-        /// Slash percentage applied to no-show events (basis points).
-        pub const NO_SHOW_SLASH_BPS: u16 = CITIZEN_NO_SHOW_SLASH_BPS;
-        /// Slash percentage applied to misconduct events (basis points).
-        pub const MISCONDUCT_SLASH_BPS: u16 = CITIZEN_MISCONDUCT_SLASH_BPS;
-        /// Default role bond multipliers (empty map = multiplier of 1 for all roles).
-        pub fn role_bond_multipliers() -> BTreeMap<String, u64> {
-            BTreeMap::new()
-        }
     }
     /// Default SoraFS pin policy constraints enforced by governance.
     pub mod sorafs_pin_policy {

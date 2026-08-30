@@ -2,15 +2,10 @@
 use crate::governance::sortition;
 use iroha_config::parameters::actual::Governance;
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
-use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    governance::types::{ParliamentBodies, ParliamentBody, ParliamentRoster},
-    isi::governance::CouncilDerivationKind,
-};
+use iroha_data_model::{NetworkId, account::AccountId, governance::types::ParliamentBody};
 use std::collections::{BTreeMap, BTreeSet};
 /// Bodies selected before a narrow Policy Jury result can trigger a fresh Confirmation Jury.
-pub const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
+const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
     ParliamentBody::RulesCommittee,
     ParliamentBody::AgendaCouncil,
     ParliamentBody::InterestPanel,
@@ -23,11 +18,25 @@ pub const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
 ];
 /// Deterministic simultaneous body assignment and its binding concentration cap.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParliamentDrawPlan {
+pub(crate) struct ParliamentDrawPlan {
     /// Rosters derived from the committed candidate snapshot and future pulse.
-    pub bodies: ParliamentBodies,
+    pub(crate) rosters: BTreeMap<ParliamentBody, ParliamentDrawRoster>,
     /// Smallest feasible maximum number of primary bodies assigned to one citizen.
-    pub assignment_cap: u32,
+    pub(crate) assignment_cap: u32,
+}
+/// One attempt-local roster derived from a committed candidate snapshot and future pulse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParliamentDrawRoster {
+    /// Body this roster belongs to.
+    pub(crate) body: ParliamentBody,
+    /// Finalized future-pulse height used for the draw.
+    pub(crate) pulse_height: u64,
+    /// Number of candidates in the committed snapshot.
+    pub(crate) candidate_count: u32,
+    /// Deterministically ordered primary members.
+    pub(crate) members: Vec<AccountId>,
+    /// Deterministically ordered alternates.
+    pub(crate) alternates: Vec<AccountId>,
 }
 fn scored_output(seed: &[u8; 64], input_domain: &[u8], account_id: &AccountId) -> [u8; 32] {
     let input = sortition::build_input(input_domain, seed, account_id);
@@ -44,7 +53,7 @@ fn scored_output(seed: &[u8; 64], input_domain: &[u8], account_id: &AccountId) -
 /// request in `bodies`; this function defensively deduplicates without using the
 /// caller's ordering as entropy.
 #[must_use]
-pub fn derive_attempt_body_plan_v1(
+pub(crate) fn derive_attempt_body_plan_v1(
     gov_cfg: &Governance,
     network_id: &NetworkId,
     pulse_height: u64,
@@ -58,22 +67,19 @@ pub fn derive_attempt_body_plan_v1(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let candidate_count = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
     derive_body_plan(
         gov_cfg,
         network_id,
         pulse_height,
         future_beacon,
         &candidates,
-        candidate_count,
-        CouncilDerivationKind::Sortition,
         bodies,
     )
 }
 
 /// Return the smallest feasible simultaneous assignment cap for `bodies`.
 #[must_use]
-pub fn smallest_feasible_assignment_cap(
+fn smallest_feasible_assignment_cap(
     gov_cfg: &Governance,
     candidate_count: usize,
     bodies: &[ParliamentBody],
@@ -95,10 +101,9 @@ fn derive_body_plan(
     epoch: u64,
     beacon: &[u8; 32],
     candidates: &[AccountId],
-    candidate_count: u32,
-    derived_by: CouncilDerivationKind,
     bodies: &[ParliamentBody],
 ) -> ParliamentDrawPlan {
+    let candidate_count = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
     let alternates_per_body = gov_cfg.parliament_alternate_size;
     let assignment_cap = smallest_feasible_assignment_cap(gov_cfg, candidates.len(), bodies);
     let mut rankings = BTreeMap::new();
@@ -168,21 +173,17 @@ fn derive_body_plan(
             .collect();
         rosters.insert(
             *body,
-            ParliamentRoster {
+            ParliamentDrawRoster {
                 body: *body,
-                epoch,
+                pulse_height: epoch,
                 members,
                 alternates,
                 candidate_count,
-                derived_by,
             },
         );
     }
     ParliamentDrawPlan {
-        bodies: ParliamentBodies {
-            selection_epoch: epoch,
-            rosters,
-        },
+        rosters,
         assignment_cap,
     }
 }
@@ -351,13 +352,11 @@ mod tests {
             19,
             &beacon,
             &accounts,
-            3,
-            CouncilDerivationKind::Sortition,
             &PRIMARY_PARLIAMENT_BODIES_V1,
         );
         assert_eq!(plan.assignment_cap, 6);
         let mut loads: BTreeMap<AccountId, u32> = BTreeMap::new();
-        for roster in plan.bodies.rosters.values() {
+        for roster in plan.rosters.values() {
             assert_eq!(roster.members.len(), 2);
             for member in &roster.members {
                 *loads.entry(member.clone()).or_default() += 1;
@@ -424,13 +423,10 @@ mod tests {
             20,
             &beacon,
             &accounts,
-            18,
-            CouncilDerivationKind::Sortition,
             &PRIMARY_PARLIAMENT_BODIES_V1,
         );
         assert_eq!(plan.assignment_cap, 1);
         let members: Vec<_> = plan
-            .bodies
             .rosters
             .values()
             .flat_map(|roster| roster.members.iter())

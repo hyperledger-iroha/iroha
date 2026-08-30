@@ -408,7 +408,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
     );
 }
 #[test]
-fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
+fn fee_enabled_single_transfer_with_active_data_trigger_uses_durable_state_fallback() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
@@ -555,6 +555,12 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
         snapshot
             .pipeline_execution
             .detached_fallback_fee_postprocessing_total,
+        0
+    );
+    assert_eq!(
+        snapshot
+            .pipeline_execution
+            .detached_fallback_durable_state_total,
         1
     );
     let assets = state_block.world.assets();
@@ -580,6 +586,302 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
         })
         .expect("payer account exists");
     assert_eq!(marker_value, Some(Json::from("triggered")));
+}
+#[test]
+fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
+    let chain_id = ChainId::from("same-block-data-trigger-atomicity");
+    let (payer_id, payer_keypair) = gen_account_in("wonderland");
+    let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+    let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let domain = Domain::new(domain_id.clone()).build(&payer_id);
+    let payer = Account::new(payer_id.clone()).build(&payer_id);
+    let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+    let asset_definition_id =
+        AssetDefinitionId::derive_from_components(domain_id, "rose".parse().expect("asset name"));
+    let asset_definition = AssetDefinition::numeric(
+        asset_definition_id.clone(),
+        "rose".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&payer_id);
+    let payer_asset = AssetId::of(asset_definition_id.clone(), payer_id.clone());
+    let recipient_asset = AssetId::of(asset_definition_id, recipient_id.clone());
+    let world = test_world_with_assets(
+        [domain],
+        [payer, recipient],
+        [asset_definition],
+        [
+            Asset::new(payer_asset.clone(), Quantity::from(5_u32)),
+            Asset::new(recipient_asset.clone(), Quantity::zero()),
+        ],
+        [],
+    );
+    let mut state = State::new_with_chain(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        chain_id,
+    );
+    install_test_lane_manifests(&state);
+    let mut pipeline = state.pipeline.clone();
+    pipeline.parallel_apply = true;
+    pipeline.parallel_overlay = true;
+    pipeline.workers = 2;
+    state.set_pipeline(pipeline);
+    let trigger_id: TriggerId = "same_block_failing_transfer_trigger".parse().unwrap();
+    let marker: Name = "same_block_trigger_marker".parse().unwrap();
+    let missing_domain =
+        DomainId::try_new("missing-trigger-domain", "universal").expect("missing domain id");
+    let trigger = Trigger::new(
+        trigger_id.clone(),
+        Action::new(
+            vec![
+                InstructionBox::from(SetKeyValue::account(
+                    payer_id.clone(),
+                    marker.clone(),
+                    Json::from(true),
+                )),
+                InstructionBox::from(Unregister::domain(missing_domain)),
+            ],
+            Repeats::Exactly(1),
+            payer_id.clone(),
+            DataEventFilter::Asset(AssetEventFilter::new().for_asset(payer_asset.clone())),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
+    );
+    let (max_clock_drift, tx_limits) = {
+        let state_view = state.world.view();
+        let params = state_view.parameters();
+        (params.sumeragi().max_clock_drift(), params.transaction())
+    };
+    let make_accepted = |creation_time_ms: u64, instructions: Vec<InstructionBox>| {
+        let mut builder = TransactionBuilder::new(
+            state.network_id,
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(Duration::from_millis(creation_time_ms));
+        accept_transaction_at_mock_time(
+            builder
+                .with_instructions(instructions)
+                .sign(payer_keypair.private_key()),
+            &state.network_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+            Duration::from_millis(10),
+        )
+        .expect("transaction passes stateless admission")
+    };
+    let register = make_accepted(
+        0,
+        vec![
+            Grant::account_permission(
+                iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                    authority: payer_id.clone(),
+                },
+                payer_id.clone(),
+            )
+            .into(),
+            Register::trigger(trigger).into(),
+        ],
+    );
+    let transfer = make_accepted(
+        1,
+        vec![Transfer::asset_quantity(payer_asset.clone(), 1_u32, recipient_id).into()],
+    );
+    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let (_leader_public, leader_private) = leader.into_parts();
+    let previous = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+        header.set_height(nonzero!(1_u64));
+    });
+    let previous: SignedBlock = previous.into();
+    let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+    let block = BlockBuilder::new_with_time_source(vec![register, transfer], block_time_source)
+        .chain(1, Some(&previous))
+        .sign(payer_keypair.private_key())
+        .unpack(|_| {});
+    let mut state_block = state.block(block.header);
+
+    let valid = block
+        .validate_and_record_transactions(&mut state_block)
+        .unpack(|_| {});
+    let results = valid
+        .as_ref()
+        .entrypoint_results()
+        .map(|(_, _, result)| result.0.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        results[0].is_ok(),
+        "trigger registration failed: {results:?}"
+    );
+    assert!(
+        results[1].is_err(),
+        "failing trigger must reject transfer: {results:?}"
+    );
+    let assets = state_block.world.assets();
+    assert_eq!(
+        assets.get(&payer_asset).expect("payer asset").0,
+        Quantity::from(5_u32)
+    );
+    assert_eq!(
+        assets.get(&recipient_asset).expect("recipient asset").0,
+        Quantity::zero()
+    );
+    let marker_value = state_block
+        .world
+        .map_account(&payer_id, |account| {
+            account.value().metadata().get(&marker).cloned()
+        })
+        .expect("payer account exists");
+    assert!(marker_value.is_none(), "rejected trigger effects leaked");
+    let action = state_block
+        .world
+        .triggers
+        .data_triggers()
+        .get(&trigger_id)
+        .expect("successful trigger registration persists");
+    assert_eq!(action.repeats, Repeats::Exactly(1));
+}
+#[test]
+fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
+    use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
+
+    for reject_nested_action in [false, true] {
+        let chain_id = ChainId::try_from(format!(
+            "prepared-execute-trigger-gas-{reject_nested_action}"
+        ))
+        .expect("canonical test chain id");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = World::with([domain], [account], []);
+        let mut state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain_id,
+        );
+        install_test_lane_manifests(&state);
+        let mut pipeline = state.pipeline.clone();
+        pipeline.parallel_apply = true;
+        pipeline.parallel_overlay = true;
+        pipeline.workers = 2;
+        state.set_pipeline(pipeline);
+
+        let trigger_id: TriggerId = format!("prepared_nested_gas_{reject_nested_action}")
+            .parse()
+            .expect("trigger id");
+        let marker: Name = "prepared_nested_gas_marker"
+            .parse()
+            .expect("metadata key");
+        let marker_instruction = InstructionBox::from(SetKeyValue::account(
+            authority.clone(),
+            marker.clone(),
+            Json::from(true),
+        ));
+        let mut nested_instructions = vec![marker_instruction.clone()];
+        if reject_nested_action {
+            nested_instructions.push(InstructionBox::from(Unregister::domain(
+                DomainId::try_new("missing-nested-trigger", "universal")
+                    .expect("missing domain id"),
+            )));
+        }
+        let expected_nested_gas = crate::gas::meter_instructions(&nested_instructions);
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                nested_instructions,
+                Repeats::Exactly(1),
+                authority.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
+        );
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let setup_block = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let setup_signed: SignedBlock = setup_block.clone().into();
+        {
+            let mut setup_state_block = state.block(setup_block.as_ref().header());
+            let mut setup_tx = setup_state_block.transaction();
+            Register::trigger(trigger)
+                .execute(&authority, &mut setup_tx)
+                .expect("register by-call trigger");
+            setup_tx.apply();
+            setup_state_block
+                .commit_world_overlay_for_testing()
+                .expect("commit trigger setup");
+        }
+
+        let execute_instruction = InstructionBox::from(ExecuteTrigger::new(trigger_id));
+        let expected_base_gas =
+            crate::gas::meter_instructions(core::slice::from_ref(&execute_instruction));
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let mut builder = TransactionBuilder::new(
+            state.network_id,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(Duration::from_millis(0));
+        let accepted = accept_transaction_at_mock_time(
+            builder
+                .with_instructions([execute_instruction])
+                .sign(keypair.private_key()),
+            &state.network_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+            Duration::from_millis(10),
+        )
+        .expect("ExecuteTrigger transaction passes stateless admission");
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let block = BlockBuilder::new_with_time_source(vec![accepted], block_time_source)
+            .chain(1, Some(&setup_signed))
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header);
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let result = valid
+            .as_ref()
+            .entrypoint_results()
+            .next()
+            .expect("one transaction result")
+            .2
+            .0
+            .clone();
+        assert_eq!(
+            result.is_err(),
+            reject_nested_action,
+            "unexpected ExecuteTrigger result: {result:?}"
+        );
+        assert_eq!(
+            state_block.gas_used_in_block,
+            expected_base_gas.saturating_add(expected_nested_gas),
+            "authored and nested trigger work must be block-accounted exactly once"
+        );
+        let marker_value = state_block
+            .world
+            .map_account(&authority, |account| {
+                account.value().metadata().get(&marker).cloned()
+            })
+            .expect("authority account exists");
+        assert_eq!(
+            marker_value.is_none(),
+            reject_nested_action,
+            "nested trigger effects must commit on success and roll back on rejection"
+        );
+    }
 }
 #[test]
 fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_missing() {
@@ -1736,9 +2038,7 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
             ))],
             Repeats::Indefinitely,
             payer_id.clone(),
-            DataEventFilter::Account(
-                AccountEventFilter::new().for_account(payer_id.clone()),
-            ),
+            DataEventFilter::Account(AccountEventFilter::new().for_account(payer_id.clone())),
         )
         .expect("trigger action fixture satisfies validation invariants"),
     );

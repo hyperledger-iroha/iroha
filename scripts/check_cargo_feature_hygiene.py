@@ -58,7 +58,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "application-model": ("governance", "json", "pqc", "bls", "gost", "sm"),
     },
     "iroha_core": {
-        "default": ("node",),
+        "default": ("node", "simd"),
         "runtime": ("json", "bls", "proofs-halo2"),
         "node": (
             "runtime",
@@ -67,7 +67,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "gost",
             "sm",
             "telemetry",
-            "simd",
             "zk-preverify",
         ),
         "proofs-halo2": ("zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"),
@@ -97,9 +96,28 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "proofs-halo2": ("zk-halo2", "zk-halo2-ipa"),
         "proofs-stark": ("zk-stark",),
         "proofs-full": ("proofs-halo2", "proofs-stark"),
+        "telemetry": (
+            "iroha_telemetry",
+            "iroha_core/telemetry",
+            "iroha_futures/telemetry",
+            "dep:prometheus",
+        ),
+        "gost": (
+            "iroha_config/gost",
+            "iroha_core/gost",
+            "iroha_crypto/gost",
+            "iroha_data_model/gost",
+        ),
+        "sm": (
+            "iroha_config/sm",
+            "iroha_core/sm",
+            "iroha_crypto/sm",
+            "iroha_data_model/sm",
+            "iroha_telemetry?/sm",
+        ),
     },
     "irohad": {
-        "default": ("daemon",),
+        "default": ("daemon", "iroha_core/simd"),
         "daemon": (
             "telemetry",
             "schema-endpoint",
@@ -113,6 +131,29 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "iroha_crypto/pqc",
             "iroha_data_model/json",
             "norito/node-codec",
+        ),
+        "telemetry": (
+            "iroha_telemetry",
+            "iroha_telemetry/event-exporter",
+            "iroha_core/telemetry",
+            "iroha_torii/telemetry",
+        ),
+        "expensive-telemetry": ("telemetry", "iroha_core/expensive-telemetry"),
+        "gost": (
+            "iroha_core/gost",
+            "iroha_crypto/gost",
+            "iroha_data_model/gost",
+            "iroha_config/gost",
+            "iroha_torii/gost",
+        ),
+        "sm": (
+            "iroha_core/sm",
+            "iroha_crypto/sm",
+            "iroha_data_model/sm",
+            "iroha_config/sm",
+            "iroha_genesis/sm",
+            "iroha_telemetry/sm",
+            "iroha_torii/sm",
         ),
     },
     "iroha_cli": {
@@ -128,12 +169,23 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "iroha": {
         "default": ("tls-rustls-native-roots", "gost", "sm"),
+        "gost": ("iroha_config/gost", "iroha_crypto/gost", "iroha_data_model/gost"),
+        "sm": ("iroha_config/sm", "iroha_crypto/sm", "iroha_data_model/sm"),
     },
     "iroha_config": {
         "default": ("gost", "sm"),
+        "gost": ("iroha_crypto/gost", "iroha_data_model/gost"),
+        "sm": ("iroha_crypto/sm", "iroha_data_model/sm"),
+        "sm-ffi-openssl": ("sm", "iroha_crypto/sm-ffi-openssl"),
     },
     "iroha_genesis": {
         "default": ("sm",),
+        "sm": ("iroha_config/sm", "iroha_crypto/sm", "iroha_data_model/sm"),
+        "sm-ffi-openssl": (
+            "sm",
+            "iroha_config/sm-ffi-openssl",
+            "iroha_crypto/sm-ffi-openssl",
+        ),
     },
     "iroha_telemetry": {
         "default": (),
@@ -147,6 +199,13 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "iroha_kagami": {
         "default": ("gost", "sm"),
+        "gost": ("iroha_config/gost", "iroha_crypto/gost", "iroha_data_model/gost"),
+        "sm": (
+            "iroha_config/sm",
+            "iroha_crypto/sm",
+            "iroha_data_model/sm",
+            "iroha_genesis/sm",
+        ),
     },
     "iroha_zkp_halo2": {
         "default": ("full", "parallel"),

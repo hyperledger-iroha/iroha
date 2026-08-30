@@ -10,6 +10,13 @@ view of that canonical mapping.
 - Applies to raw IVM bytecode, proved IVM execution, deployed `ContractCall`,
   and contract-call items inside `Executable::Batch`.
 - Native ISI gas metering is defined separately in `crates/iroha_core/src/gas.rs`.
+- Native prepared overlays add accountable executed gas to the cumulative
+  parent-block budget exactly once whether their state commits or rolls back;
+  sequential and parallel apply enforce the same limit. The deterministic
+  authored/base charge is reserved against the parent budget before any
+  prepared effect is applied. Nested trigger or host work is appended to that
+  retained total, never overwritten during fee settlement, and a configured
+  block cap cannot be exceeded by post-cap execution.
 - A transaction batch containing any contract call has one signature-bound gas
   limit. Native item costs and every contract invocation consume that common
   budget in canonical input order; the transaction settles gas once rather
@@ -26,6 +33,10 @@ view of that canonical mapping.
   block budget when it is configured, or the existing default trigger cap when
   block gas is unlimited. The cap applies to the batch as a whole, not once per
   contract-call item, and an item failure rolls back the trigger batch.
+- Live mixed-batch overlay-limit rejection is fee-exempt because its effects do
+  not commit, but all work attempted before the bound is detected remains
+  accountable to the parent block exactly once. Other rejected live execution
+  retains its ordinary fee lifecycle and the same exact gas total.
 - ISO 20022 opcodes are reserved in ABI v1 and do not carry gas entries yet.
 
 ## Heap governance
@@ -60,7 +71,7 @@ a limit cannot expand or replace consensus validity.
 ## Determinism and schedule hash
 
 The gas schedule is deterministic. Descriptor format 3, domain-separated as
-`iroha.ivm.gas-schedule.v3`, commits to:
+`iroha.ivm.gas-schedule.v4`, commits to:
 
 - the ordered opcode byte (`u8`) and cost (`u64`, little-endian) table;
 - every ordered, named host/numeric formula parameter;
@@ -275,11 +286,6 @@ is applied on top of these base values as noted above.
 | crypto | 0x81 | `SHA3BLOCK` | 50 |
 | crypto | 0x82 | `POSEIDON2` | 10 |
 | crypto | 0x83 | `POSEIDON6` | 10 |
-| crypto | 0x84 | `PUBKGEN` | 50 |
-| crypto | 0x85 | `VALCOM` | 50 |
-| crypto | 0x86 | `ECADD` | 20 |
-| crypto | 0x87 | `ECMUL_VAR` | 100 |
-| crypto | 0x8E | `PAIRING` | 500 |
 | crypto | 0x88 | `AESENC` | 30 |
 | crypto | 0x89 | `AESDEC` | 30 |
 | crypto | 0x8A | `BLAKE2S` | 40 |

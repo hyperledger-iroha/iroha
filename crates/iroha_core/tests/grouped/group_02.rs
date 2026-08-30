@@ -2,8 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "../gov_min_duration.rs"]
 mod gov_min_duration;
-#[path = "../gov_parliament_term_state.rs"]
-mod gov_parliament_term_state;
 #[path = "../gov_plain_ballot.rs"]
 mod gov_plain_ballot;
 #[path = "../gov_plain_conviction.rs"]

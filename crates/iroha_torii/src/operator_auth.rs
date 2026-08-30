@@ -15,8 +15,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ciborium::{de::from_reader, value::Value as CborValue};
 use dashmap::DashMap;
 use iroha_config::parameters::actual::{
-    OperatorAuthLockout, OperatorTokenFallback, OperatorTokenSource, OperatorWebAuthnAlgorithm,
-    OperatorWebAuthnConfig, ToriiOperatorAuth,
+    OperatorAuthLockout, OperatorWebAuthnAlgorithm, OperatorWebAuthnConfig, ToriiOperatorAuth,
 };
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
@@ -27,7 +26,6 @@ use std::{
     fs,
     io::Write as _,
     net::IpAddr,
-    num::NonZeroU32,
     path::{Path, PathBuf},
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -36,7 +34,6 @@ use url::Url;
 const HEADER_OPERATOR_SESSION: &str = "x-iroha-operator-session";
 const HEADER_OPERATOR_TOKEN: &str = "x-iroha-operator-token";
 const HEADER_MTLS_FORWARD: &str = "x-forwarded-client-cert";
-const HEADER_API_TOKEN: &str = "x-api-token";
 const CREDENTIALS_FILENAME: &str = "operator_webauthn.json";
 const CHALLENGE_BYTES: usize = 32;
 const SESSION_TOKEN_BYTES: usize = 32;
@@ -52,6 +49,13 @@ const FLAG_ATTESTED_CREDENTIAL_DATA: u8 = 0x40;
 #[derive(Clone, Debug)]
 pub struct AuthContext {
     key: String,
+    enrollment_authority: EnrollmentAuthority,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnrollmentAuthority {
+    None,
+    BootstrapToken,
+    Session,
 }
 #[derive(Debug, Clone)]
 pub struct OperatorAuthError {
@@ -417,10 +421,7 @@ pub struct OperatorAuth {
     enabled: bool,
     require_mtls: bool,
     mtls_trusted_proxy_nets: Vec<limits::IpNet>,
-    token_fallback: OperatorTokenFallback,
-    token_source: OperatorTokenSource,
-    operator_tokens: HashSet<String>,
-    api_tokens: Arc<HashSet<String>>,
+    bootstrap_tokens: HashSet<String>,
     webauthn: Option<WebAuthnPolicy>,
     credentials: Arc<RwLock<Vec<StoredCredential>>>,
     sessions: DashMap<String, SessionEntry>,
@@ -430,14 +431,9 @@ pub struct OperatorAuth {
     telemetry: MaybeTelemetry,
     credentials_path: PathBuf,
 }
-fn rate_per_minute_to_per_sec(rate: NonZeroU32) -> u32 {
-    let rate = rate.get();
-    rate.saturating_add(59) / 60
-}
 impl OperatorAuth {
     pub(crate) fn new(
         config: ToriiOperatorAuth,
-        api_tokens: Arc<HashSet<String>>,
         data_dir: PathBuf,
         telemetry: MaybeTelemetry,
     ) -> Result<Self, OperatorAuthInitError> {
@@ -455,23 +451,20 @@ impl OperatorAuth {
         } else {
             Vec::new()
         };
-        let operator_tokens = config
+        let bootstrap_tokens = config
             .tokens
             .into_iter()
             .map(|token| token.trim().to_string())
             .filter(|token| !token.is_empty())
             .collect();
-        let rate_per_sec = config.rate_per_minute.map(rate_per_minute_to_per_sec);
+        let rate_per_minute = config.rate_per_minute.map(std::num::NonZeroU32::get);
         let burst = config.burst.map(std::num::NonZeroU32::get);
-        let limiter = limits::RateLimiter::new(rate_per_sec, burst);
+        let limiter = limits::RateLimiter::new_per_minute(rate_per_minute, burst);
         Ok(Self {
             enabled: config.enabled,
             require_mtls: config.require_mtls,
             mtls_trusted_proxy_nets: limits::parse_cidrs(&config.mtls_trusted_proxy_cidrs),
-            token_fallback: config.token_fallback,
-            token_source: config.token_source,
-            operator_tokens,
-            api_tokens,
+            bootstrap_tokens,
             webauthn,
             credentials: Arc::new(RwLock::new(credentials)),
             sessions: DashMap::new(),
@@ -509,16 +502,6 @@ impl OperatorAuth {
     fn has_credentials(&self) -> Result<bool, OperatorAuthError> {
         Ok(!self.credentials_read()?.is_empty())
     }
-    fn token_allowed_for_operator(&self) -> bool {
-        matches!(self.token_fallback, OperatorTokenFallback::Always)
-    }
-    fn token_allowed_for_bootstrap(&self) -> Result<bool, OperatorAuthError> {
-        match self.token_fallback {
-            OperatorTokenFallback::Always => Ok(true),
-            OperatorTokenFallback::Bootstrap => Ok(!self.has_credentials()?),
-            OperatorTokenFallback::Disabled => Ok(false),
-        }
-    }
     async fn check_common(
         &self,
         headers: &HeaderMap,
@@ -541,7 +524,10 @@ impl OperatorAuth {
             self.record_event(action, "locked", err.metric_label());
             return Err(err);
         }
-        Ok(AuthContext { key })
+        Ok(AuthContext {
+            key,
+            enrollment_authority: EnrollmentAuthority::None,
+        })
     }
     pub(crate) async fn authorize_operator_endpoint(
         &self,
@@ -557,29 +543,9 @@ impl OperatorAuth {
                 self.record_success(&ctx, ACTION_GATE, "session");
                 return Ok(());
             }
-            if !self.token_allowed_for_operator() {
-                let err = OperatorAuthError::invalid_session();
-                self.record_failure(&ctx, ACTION_GATE, err.metric_label());
-                return Err(err);
-            }
-        }
-        if self.token_allowed_for_operator() {
-            match self.check_token(headers) {
-                TokenCheck::Valid(kind) => {
-                    self.record_success(&ctx, ACTION_GATE, kind.label());
-                    return Ok(());
-                }
-                TokenCheck::Missing => {
-                    let err = OperatorAuthError::missing_token();
-                    self.record_failure(&ctx, ACTION_GATE, err.metric_label());
-                    return Err(err);
-                }
-                TokenCheck::Invalid => {
-                    let err = OperatorAuthError::invalid_token();
-                    self.record_failure(&ctx, ACTION_GATE, err.metric_label());
-                    return Err(err);
-                }
-            }
+            let err = OperatorAuthError::invalid_session();
+            self.record_failure(&ctx, ACTION_GATE, err.metric_label());
+            return Err(err);
         }
         let err = OperatorAuthError::missing_session();
         self.record_failure(&ctx, ACTION_GATE, err.metric_label());
@@ -596,15 +562,19 @@ impl OperatorAuth {
             self.record_event(action, "denied", err.metric_label());
             return Err(err);
         }
-        let ctx = self.check_common(headers, remote_ip, action).await?;
+        let mut ctx = self.check_common(headers, remote_ip, action).await?;
         if let Some(session) = session_from_headers(headers) {
             if self.session_valid(session) {
+                ctx.enrollment_authority = EnrollmentAuthority::Session;
                 return Ok(ctx);
             }
         }
-        if self.token_allowed_for_bootstrap()? {
-            match self.check_token(headers) {
-                TokenCheck::Valid(_) => return Ok(ctx),
+        if !self.has_credentials()? {
+            match self.check_bootstrap_token(headers) {
+                TokenCheck::Valid => {
+                    ctx.enrollment_authority = EnrollmentAuthority::BootstrapToken;
+                    return Ok(ctx);
+                }
                 TokenCheck::Missing => {
                     let err = OperatorAuthError::missing_token();
                     self.record_failure(&ctx, action, err.metric_label());
@@ -771,9 +741,11 @@ impl OperatorAuth {
             sign_count: auth_data.sign_count,
             created_at_ms,
         };
-        let total = self.upsert_credential(credential).inspect_err(|err| {
-            self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-        })?;
+        let total = self
+            .upsert_credential(credential, ctx.enrollment_authority)
+            .inspect_err(|err| {
+                self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
+            })?;
         self.record_success(ctx, ACTION_REGISTER_VERIFY, "ok");
         Ok(RegistrationOutcome {
             credential_id: encode_b64url(&auth_data.credential_id),
@@ -948,8 +920,15 @@ impl OperatorAuth {
             credential_id: encode_b64url(credential_id),
         })
     }
-    fn upsert_credential(&self, credential: StoredCredential) -> Result<usize, OperatorAuthError> {
+    fn upsert_credential(
+        &self,
+        credential: StoredCredential,
+        authority: EnrollmentAuthority,
+    ) -> Result<usize, OperatorAuthError> {
         let mut credentials = self.credentials_write()?;
+        if authority == EnrollmentAuthority::BootstrapToken && !credentials.is_empty() {
+            return Err(OperatorAuthError::missing_session());
+        }
         let mut updated = credentials.clone();
         if let Some(pos) = updated.iter().position(|entry| entry.id == credential.id) {
             updated[pos] = credential;
@@ -979,44 +958,16 @@ impl OperatorAuth {
             None => Err(OperatorAuthError::challenge_invalid()),
         }
     }
-    fn check_token(&self, headers: &HeaderMap) -> TokenCheck {
-        match self.token_source {
-            OperatorTokenSource::OperatorTokens => operator_token(headers)
-                .map(|token| {
-                    if self.operator_tokens.contains(token) {
-                        TokenCheck::Valid(TokenKind::Operator)
-                    } else {
-                        TokenCheck::Invalid
-                    }
-                })
-                .unwrap_or(TokenCheck::Missing),
-            OperatorTokenSource::ApiTokens => api_token(headers)
-                .map(|token| {
-                    if self.api_tokens.contains(token) {
-                        TokenCheck::Valid(TokenKind::Api)
-                    } else {
-                        TokenCheck::Invalid
-                    }
-                })
-                .unwrap_or(TokenCheck::Missing),
-            OperatorTokenSource::Both => {
-                if let Some(token) = operator_token(headers) {
-                    if self.operator_tokens.contains(token) {
-                        return TokenCheck::Valid(TokenKind::Operator);
-                    }
-                    return TokenCheck::Invalid;
+    fn check_bootstrap_token(&self, headers: &HeaderMap) -> TokenCheck {
+        operator_token(headers)
+            .map(|token| {
+                if self.bootstrap_tokens.contains(token) {
+                    TokenCheck::Valid
+                } else {
+                    TokenCheck::Invalid
                 }
-                api_token(headers)
-                    .map(|token| {
-                        if self.api_tokens.contains(token) {
-                            TokenCheck::Valid(TokenKind::Api)
-                        } else {
-                            TokenCheck::Invalid
-                        }
-                    })
-                    .unwrap_or(TokenCheck::Missing)
-            }
-        }
+            })
+            .unwrap_or(TokenCheck::Missing)
     }
     fn record_event(&self, action: &'static str, result: &'static str, reason: &'static str) {
         self.telemetry.with_metrics(|telemetry| {
@@ -1111,22 +1062,9 @@ struct AuthDataAssertion {
     sign_count: u32,
 }
 enum TokenCheck {
-    Valid(TokenKind),
+    Valid,
     Missing,
     Invalid,
-}
-#[derive(Clone, Copy)]
-enum TokenKind {
-    Operator,
-    Api,
-}
-impl TokenKind {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Operator => "operator_token",
-            Self::Api => "api_token",
-        }
-    }
 }
 fn operator_credentials_path(base: &Path) -> PathBuf {
     base.join("operator_auth").join(CREDENTIALS_FILENAME)
@@ -1199,9 +1137,6 @@ fn session_from_headers(headers: &HeaderMap) -> Option<&str> {
 }
 fn operator_token(headers: &HeaderMap) -> Option<&str> {
     single_header_text(headers, HEADER_OPERATOR_TOKEN).filter(|value| !value.trim().is_empty())
-}
-fn api_token(headers: &HeaderMap) -> Option<&str> {
-    single_header_text(headers, HEADER_API_TOKEN).filter(|value| !value.trim().is_empty())
 }
 fn origin_allowed(origin: &str, allowed: &[Url]) -> bool {
     let Ok(parsed) = Url::parse(origin) else {
@@ -1334,11 +1269,7 @@ fn parse_registration_payload(
     let obj = payload.as_object().ok_or_else(|| {
         OperatorAuthError::invalid_payload("credential payload must be an object")
     })?;
-    let id = obj
-        .get("rawId")
-        .and_then(|value| value.as_str())
-        .or_else(|| obj.get("id").and_then(|value| value.as_str()))
-        .ok_or_else(|| OperatorAuthError::invalid_payload("credential id missing"))?;
+    let raw_id = parse_credential_id(obj)?;
     let response = obj
         .get("response")
         .and_then(|value| value.as_object())
@@ -1352,7 +1283,7 @@ fn parse_registration_payload(
         .and_then(|value| value.as_str())
         .ok_or_else(|| OperatorAuthError::invalid_payload("attestationObject missing"))?;
     Ok(RegistrationInput {
-        raw_id: decode_b64url("rawId", id)?,
+        raw_id,
         client_data_json: decode_b64url("clientDataJSON", client_data)?,
         attestation_object: decode_b64url("attestationObject", attestation)?,
     })
@@ -1363,11 +1294,7 @@ fn parse_assertion_payload(
     let obj = payload.as_object().ok_or_else(|| {
         OperatorAuthError::invalid_payload("credential payload must be an object")
     })?;
-    let id = obj
-        .get("rawId")
-        .and_then(|value| value.as_str())
-        .or_else(|| obj.get("id").and_then(|value| value.as_str()))
-        .ok_or_else(|| OperatorAuthError::invalid_payload("credential id missing"))?;
+    let raw_id = parse_credential_id(obj)?;
     let response = obj
         .get("response")
         .and_then(|value| value.as_object())
@@ -1385,11 +1312,29 @@ fn parse_assertion_payload(
         .and_then(|value| value.as_str())
         .ok_or_else(|| OperatorAuthError::invalid_payload("signature missing"))?;
     Ok(AssertionInput {
-        raw_id: decode_b64url("rawId", id)?,
+        raw_id,
         client_data_json: decode_b64url("clientDataJSON", client_data)?,
         authenticator_data: decode_b64url("authenticatorData", authenticator_data)?,
         signature: decode_b64url("signature", signature)?,
     })
+}
+fn parse_credential_id(object: &norito::json::Map) -> Result<Vec<u8>, OperatorAuthError> {
+    let raw_id = object
+        .get("rawId")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| OperatorAuthError::invalid_payload("credential rawId missing"))?;
+    let id = object
+        .get("id")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| OperatorAuthError::invalid_payload("credential id missing"))?;
+    let raw_id = decode_b64url("rawId", raw_id)?;
+    let id = decode_b64url("id", id)?;
+    if raw_id != id {
+        return Err(OperatorAuthError::invalid_payload(
+            "credential id and rawId must identify the same credential",
+        ));
+    }
+    Ok(raw_id)
 }
 fn parse_client_data(bytes: &[u8], expected_type: &str) -> Result<ClientData, OperatorAuthError> {
     let value: norito::json::Value = norito::json::from_slice(bytes)
@@ -1405,6 +1350,24 @@ fn parse_client_data(bytes: &[u8], expected_type: &str) -> Result<ClientData, Op
         return Err(OperatorAuthError::invalid_payload(format!(
             "clientDataJSON type must be {expected_type}"
         )));
+    }
+    match obj.get("crossOrigin") {
+        None | Some(norito::json::Value::Bool(false)) => {}
+        Some(norito::json::Value::Bool(true)) => {
+            return Err(OperatorAuthError::invalid_payload(
+                "cross-origin WebAuthn ceremonies are not allowed",
+            ));
+        }
+        Some(_) => {
+            return Err(OperatorAuthError::invalid_payload(
+                "clientDataJSON crossOrigin must be a boolean",
+            ));
+        }
+    }
+    if obj.contains_key("topOrigin") {
+        return Err(OperatorAuthError::invalid_payload(
+            "clientDataJSON topOrigin is not allowed",
+        ));
     }
     let challenge = obj
         .get("challenge")
@@ -1723,7 +1686,6 @@ mod tests {
         elliptic_curve::rand_core::OsRng,
     };
     use rand::rand_core::{TryCryptoRng, TryRngCore};
-    use std::{collections::HashSet, sync::Arc};
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -1771,8 +1733,6 @@ mod tests {
         }
     }
     fn base_operator_auth_config(
-        token_fallback: OperatorTokenFallback,
-        token_source: OperatorTokenSource,
         tokens: Vec<String>,
         lockout: OperatorAuthLockout,
         algorithms: Vec<OperatorWebAuthnAlgorithm>,
@@ -1782,8 +1742,6 @@ mod tests {
             require_mtls: false,
             mtls_trusted_proxy_cidrs:
                 iroha_config::parameters::defaults::torii::operator_auth::mtls_trusted_proxy_cidrs(),
-            token_fallback,
-            token_source,
             tokens,
             rate_per_minute: None,
             burst: None,
@@ -1791,18 +1749,9 @@ mod tests {
             webauthn: Some(base_webauthn_config(algorithms)),
         }
     }
-    fn build_operator_auth(
-        config: ToriiOperatorAuth,
-        api_tokens: HashSet<String>,
-        data_dir: &Path,
-    ) -> OperatorAuth {
-        OperatorAuth::new(
-            config,
-            Arc::new(api_tokens),
-            data_dir.to_path_buf(),
-            MaybeTelemetry::disabled(),
-        )
-        .expect("operator auth")
+    fn build_operator_auth(config: ToriiOperatorAuth, data_dir: &Path) -> OperatorAuth {
+        OperatorAuth::new(config, data_dir.to_path_buf(), MaybeTelemetry::disabled())
+            .expect("operator auth")
     }
     fn base_headers() -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -1826,11 +1775,53 @@ mod tests {
         assert!(!origin_allowed("https://example.com:444", &allowed));
     }
     #[test]
+    fn credential_id_requires_matching_id_and_raw_id() {
+        let encoded = encode_b64url(b"credential");
+        let payload = json_object(vec![
+            json_entry("id", encoded.clone()),
+            json_entry("rawId", encoded),
+        ]);
+        let object = payload.as_object().expect("credential object");
+        assert_eq!(
+            parse_credential_id(object).expect("matching identifiers"),
+            b"credential"
+        );
+
+        let mismatch = json_object(vec![
+            json_entry("id", encode_b64url(b"credential-a")),
+            json_entry("rawId", encode_b64url(b"credential-b")),
+        ]);
+        let error = parse_credential_id(mismatch.as_object().expect("credential object"))
+            .expect_err("mismatched identifiers must fail closed");
+        assert_eq!(error.code, "operator_webauthn_payload_invalid");
+
+        let missing_raw_id = json_object(vec![json_entry("id", encode_b64url(b"credential"))]);
+        assert!(
+            parse_credential_id(missing_raw_id.as_object().expect("credential object")).is_err()
+        );
+    }
+    #[test]
+    fn client_data_rejects_cross_origin_contexts() {
+        for extra in [
+            json_entry("crossOrigin", true),
+            json_entry("topOrigin", "https://embedder.example"),
+        ] {
+            let payload = json_object(vec![
+                json_entry("type", "webauthn.get"),
+                json_entry("challenge", "challenge"),
+                json_entry("origin", "https://example.com"),
+                extra,
+            ]);
+            let bytes = norito::json::to_vec(&payload).expect("clientDataJSON");
+            let error = parse_client_data(&bytes, "webauthn.get")
+                .expect_err("cross-origin context must fail closed");
+            assert_eq!(error.code, "operator_webauthn_payload_invalid");
+        }
+    }
+    #[test]
     fn credentials_lock_fails_closed_after_poison() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
-            OperatorTokenFallback::Always,
-            OperatorTokenSource::OperatorTokens,
             Vec::new(),
             OperatorAuthLockout {
                 failures: None,
@@ -1839,7 +1830,7 @@ mod tests {
             },
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let auth = build_operator_auth(config, tempdir.path());
         {
             let mut creds = auth.credentials_write().expect("credential lock");
             creds.push(StoredCredential {
@@ -1859,34 +1850,38 @@ mod tests {
             .expect_err("poisoned credential state must fail closed");
         assert_eq!(err.code, "operator_webauthn_state_unavailable");
     }
-    #[test]
-    fn rate_per_minute_to_per_sec_rounds_up() {
-        assert_eq!(
-            rate_per_minute_to_per_sec(NonZeroU32::new(1).expect("non-zero")),
-            1
+    #[tokio::test]
+    async fn operator_auth_preserves_fractional_per_minute_rate() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let mut config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        assert_eq!(
-            rate_per_minute_to_per_sec(NonZeroU32::new(60).expect("non-zero")),
-            1
-        );
-        assert_eq!(
-            rate_per_minute_to_per_sec(NonZeroU32::new(61).expect("non-zero")),
-            2
+        config.rate_per_minute = std::num::NonZeroU32::new(1);
+        config.burst = std::num::NonZeroU32::new(1);
+        let auth = build_operator_auth(config, tempdir.path());
+
+        assert!(auth.limiter.allow("operator").await);
+        assert!(!auth.limiter.allow("operator").await);
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        assert!(
+            !auth.limiter.allow("operator").await,
+            "a one-request-per-minute limit must not refill after one second"
         );
     }
     #[test]
     fn registration_options_reports_challenge_rng_failure() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
-            OperatorTokenFallback::Always,
-            OperatorTokenSource::OperatorTokens,
             Vec::new(),
             OperatorAuthLockout::default(),
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let auth = build_operator_auth(config, tempdir.path());
         let ctx = AuthContext {
             key: "registration-rng".to_owned(),
+            enrollment_authority: EnrollmentAuthority::None,
         };
         let err = auth
             .webauthn_registration_options_with_rng(&ctx, &mut FailingOperatorAuthRng)
@@ -1899,13 +1894,11 @@ mod tests {
     fn authentication_options_reports_challenge_rng_failure() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
-            OperatorTokenFallback::Always,
-            OperatorTokenSource::OperatorTokens,
             Vec::new(),
             OperatorAuthLockout::default(),
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let auth = build_operator_auth(config, tempdir.path());
         auth.credentials_write()
             .expect("credential lock")
             .push(StoredCredential {
@@ -1917,6 +1910,7 @@ mod tests {
             });
         let ctx = AuthContext {
             key: "authentication-rng".to_owned(),
+            enrollment_authority: EnrollmentAuthority::None,
         };
         let err = auth
             .webauthn_authentication_options_with_rng(&ctx, &mut FailingOperatorAuthRng)
@@ -1929,13 +1923,11 @@ mod tests {
     fn issue_session_reports_token_rng_failure() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
-            OperatorTokenFallback::Always,
-            OperatorTokenSource::OperatorTokens,
             Vec::new(),
             OperatorAuthLockout::default(),
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let auth = build_operator_auth(config, tempdir.path());
         let err = match auth.issue_session_with_rng(
             b"credential-id",
             Duration::from_secs(60),
@@ -1956,21 +1948,9 @@ mod tests {
         );
         headers
     }
-    fn headers_with_api_token(token: &str) -> HeaderMap {
-        let mut headers = base_headers();
-        headers.insert(
-            HEADER_API_TOKEN,
-            HeaderValue::from_str(token).expect("api token"),
-        );
-        headers
-    }
     #[test]
     fn operator_credentials_reject_duplicate_header_lines() {
-        for name in [
-            HEADER_OPERATOR_SESSION,
-            HEADER_OPERATOR_TOKEN,
-            HEADER_API_TOKEN,
-        ] {
+        for name in [HEADER_OPERATOR_SESSION, HEADER_OPERATOR_TOKEN] {
             let mut headers = HeaderMap::new();
             headers.append(name, HeaderValue::from_static("first"));
             headers.append(name, HeaderValue::from_static("second"));
@@ -2072,8 +2052,10 @@ mod tests {
             json_entry("clientDataJSON", encode_b64url(client_data_json)),
             json_entry("attestationObject", encode_b64url(attestation_object)),
         ]);
+        let credential_id = encode_b64url(credential_id);
         json_object(vec![
-            json_entry("rawId", encode_b64url(credential_id)),
+            json_entry("id", credential_id.clone()),
+            json_entry("rawId", credential_id),
             json_entry("response", response),
         ])
     }
@@ -2088,8 +2070,10 @@ mod tests {
             json_entry("authenticatorData", encode_b64url(authenticator_data)),
             json_entry("signature", encode_b64url(signature)),
         ]);
+        let credential_id = encode_b64url(credential_id);
         json_object(vec![
-            json_entry("rawId", encode_b64url(credential_id)),
+            json_entry("id", credential_id.clone()),
+            json_entry("rawId", credential_id),
             json_entry("response", response),
         ])
     }
@@ -2097,13 +2081,11 @@ mod tests {
     async fn operator_auth_registration_login_and_rollover_es256() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
-            OperatorTokenFallback::Bootstrap,
-            OperatorTokenSource::OperatorTokens,
             vec!["bootstrap".to_owned()],
             OperatorAuthLockout::default(),
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let auth = build_operator_auth(config, tempdir.path());
         let headers = headers_with_operator_token("bootstrap");
         let ctx = auth
             .authorize_bootstrap(&headers, loopback_ip(), ACTION_REGISTER_OPTIONS)
@@ -2189,13 +2171,11 @@ mod tests {
     fn authentication_counter_changes_only_after_persistence_succeeds() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
-            OperatorTokenFallback::Bootstrap,
-            OperatorTokenSource::OperatorTokens,
             vec!["bootstrap".to_owned()],
             OperatorAuthLockout::default(),
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        let mut auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let mut auth = build_operator_auth(config, tempdir.path());
         let signing_key = SigningKey::random(&mut OsRng);
         let credential_id = random_bytes(16).expect("credential id");
         auth.credentials_write()
@@ -2213,6 +2193,7 @@ mod tests {
             });
         let ctx = AuthContext {
             key: "persistence-failure".to_owned(),
+            enrollment_authority: EnrollmentAuthority::None,
         };
         let options = auth
             .webauthn_authentication_options(&ctx)
@@ -2249,38 +2230,103 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn operator_auth_accepts_operator_token_when_fallback_always() {
+    async fn operator_token_only_bootstraps_credential_enrollment() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
-            OperatorTokenFallback::Always,
-            OperatorTokenSource::OperatorTokens,
             vec!["operator-token".to_owned()],
             OperatorAuthLockout::default(),
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let auth = build_operator_auth(config, tempdir.path());
         let headers = headers_with_operator_token("operator-token");
-        auth.authorize_operator_endpoint(&headers, loopback_ip())
+        auth.authorize_bootstrap(&headers, loopback_ip(), ACTION_REGISTER_OPTIONS)
             .await
-            .expect("operator token allowed");
+            .expect("operator token bootstraps first credential");
+        let error = auth
+            .authorize_operator_endpoint(&headers, loopback_ip())
+            .await
+            .expect_err("operator token must never authorize an operator route");
+        assert_eq!(error.code, "operator_session_missing");
     }
-    #[tokio::test]
-    async fn operator_auth_accepts_api_token_when_configured() {
+    #[test]
+    fn bootstrap_enrollment_cannot_race_past_first_credential() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
-            OperatorTokenFallback::Always,
-            OperatorTokenSource::ApiTokens,
-            Vec::new(),
+            vec!["bootstrap".to_owned()],
             OperatorAuthLockout::default(),
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        let mut api_tokens = HashSet::new();
-        api_tokens.insert("api-token".to_owned());
-        let auth = build_operator_auth(config, api_tokens, tempdir.path());
-        let headers = headers_with_api_token("api-token");
-        auth.authorize_operator_endpoint(&headers, loopback_ip())
+        let auth = build_operator_auth(config, tempdir.path());
+        let credential = |id| StoredCredential {
+            id: vec![id],
+            public_key: vec![id; P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN],
+            alg: OperatorWebAuthnAlgorithm::Es256,
+            sign_count: 0,
+            created_at_ms: 0,
+        };
+
+        assert_eq!(
+            auth.upsert_credential(credential(1), EnrollmentAuthority::BootstrapToken)
+                .expect("bootstrap may persist the first credential"),
+            1
+        );
+        let error = auth
+            .upsert_credential(credential(2), EnrollmentAuthority::BootstrapToken)
+            .expect_err("a concurrent bootstrap must not persist a rollover credential");
+        assert_eq!(error.code, "operator_session_missing");
+        assert_eq!(auth.credentials_read().expect("credential state").len(), 1);
+        assert_eq!(
+            auth.upsert_credential(credential(2), EnrollmentAuthority::Session)
+                .expect("an authenticated session may persist a rollover credential"),
+            2
+        );
+    }
+    #[tokio::test]
+    async fn persisted_first_credential_disables_bootstrap_after_restart() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            vec!["bootstrap".to_owned()],
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config.clone(), tempdir.path());
+        auth.upsert_credential(
+            StoredCredential {
+                id: vec![1],
+                public_key: vec![1; P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN],
+                alg: OperatorWebAuthnAlgorithm::Es256,
+                sign_count: 0,
+                created_at_ms: 0,
+            },
+            EnrollmentAuthority::BootstrapToken,
+        )
+        .expect("first credential should persist");
+        drop(auth);
+
+        let restarted = build_operator_auth(config, tempdir.path());
+        let headers = headers_with_operator_token("bootstrap");
+        let error = restarted
+            .authorize_bootstrap(&headers, loopback_ip(), ACTION_REGISTER_OPTIONS)
             .await
-            .expect("api token allowed");
+            .expect_err("persisted enrollment must disable bootstrap after restart");
+        assert_eq!(error.code, "operator_session_missing");
+    }
+    #[tokio::test]
+    async fn api_token_never_bootstraps_operator_auth() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            vec!["bootstrap".to_owned()],
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, tempdir.path());
+        let mut headers = base_headers();
+        headers.insert("x-api-token", HeaderValue::from_static("bootstrap"));
+        let error = auth
+            .authorize_bootstrap(&headers, loopback_ip(), ACTION_REGISTER_OPTIONS)
+            .await
+            .expect_err("Torii API tokens must not bootstrap operator auth");
+        assert_eq!(error.code, "operator_token_missing");
     }
     #[tokio::test]
     async fn operator_auth_enforces_mtls_and_lockout() {
@@ -2290,14 +2336,12 @@ mod tests {
             ..OperatorAuthLockout::default()
         };
         let mut config = base_operator_auth_config(
-            OperatorTokenFallback::Always,
-            OperatorTokenSource::OperatorTokens,
             vec!["valid".to_owned()],
             lockout,
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         config.require_mtls = true;
-        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let auth = build_operator_auth(config, tempdir.path());
         let err = auth
             .authorize_login(&base_headers(), None, ACTION_LOGIN_OPTIONS)
             .await
@@ -2324,14 +2368,12 @@ mod tests {
     async fn operator_auth_rejects_forwarded_mtls_from_untrusted_proxy() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let mut config = base_operator_auth_config(
-            OperatorTokenFallback::Always,
-            OperatorTokenSource::OperatorTokens,
             vec!["valid".to_owned()],
             OperatorAuthLockout::default(),
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         config.require_mtls = true;
-        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let auth = build_operator_auth(config, tempdir.path());
         let mut headers = base_headers();
         headers.insert(
             HEADER_MTLS_FORWARD,
@@ -2351,13 +2393,11 @@ mod tests {
     async fn operator_auth_key_uses_remote_ip_when_internal_header_missing() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
-            OperatorTokenFallback::Always,
-            OperatorTokenSource::OperatorTokens,
             vec!["valid".to_owned()],
             OperatorAuthLockout::default(),
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let auth = build_operator_auth(config, tempdir.path());
         let remote_ip: IpAddr = "198.51.100.33".parse().expect("remote ip");
         let ctx = auth
             .authorize_login(&HeaderMap::new(), Some(remote_ip), ACTION_LOGIN_OPTIONS)
@@ -2369,13 +2409,11 @@ mod tests {
     async fn operator_auth_key_prefers_injected_header_over_transport_remote_ip() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
-            OperatorTokenFallback::Always,
-            OperatorTokenSource::OperatorTokens,
             vec!["valid".to_owned()],
             OperatorAuthLockout::default(),
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let auth = build_operator_auth(config, tempdir.path());
         let mut headers = HeaderMap::new();
         headers.insert(
             limits::REMOTE_ADDR_HEADER,

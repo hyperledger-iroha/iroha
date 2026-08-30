@@ -1873,30 +1873,6 @@ struct StorageFileLayout {
 }
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by the `/v1/sorafs/storage/fetch` endpoint.
-pub struct StorageFetchRequestDto {
-    /// Hex-encoded manifest identifier to read from.
-    pub manifest_id_hex: String,
-    /// Byte offset within the payload to begin reading.
-    pub offset: u64,
-    /// Number of bytes to retrieve from the payload.
-    pub length: u64,
-}
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload returned when streaming back a payload range.
-pub struct StorageFetchResponseDto {
-    /// Hex-encoded manifest identifier that was read.
-    pub manifest_id_hex: String,
-    /// Byte offset served within the payload.
-    pub offset: u64,
-    /// Number of bytes returned in `data_b64`.
-    pub length: u64,
-    /// Base64-encoded chunk data extracted from storage.
-    pub data_b64: String,
-}
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by `/v1/sorafs/storage/token`.
 pub struct StreamTokenRequestDto {
     /// Hex-encoded manifest identifier.
@@ -2378,8 +2354,6 @@ const REPUTATION_EVENTS_WEBSOCKET_PATH_V1: &str = "/v1/sorafs/reputation/events/
 const MAX_SITE_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum canonical local manifest bytes relayed by a metadata response.
 const MAX_LOCAL_MANIFEST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-/// Maximum raw payload bytes returned by one JSON storage-fetch response.
-const MAX_STORAGE_FETCH_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum source payload bytes admitted to one canonical CAR range response.
 const MAX_CAR_RANGE_PAYLOAD_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum encoded canonical CAR bytes returned by one range response.
@@ -25719,9 +25693,6 @@ pub(crate) async fn handle_get_sorafs_cid_path(
     if decode_canonical_content_cid(&cid).is_none() {
         return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
     }
-    if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
-        return response;
-    }
     let stored = match resolve_site_manifest_by_cid(&state, &cid).await {
         Ok(value) => value,
         Err(response) => return response,
@@ -25733,6 +25704,10 @@ pub(crate) async fn handle_get_sorafs_cid_path(
     if let Err(response) =
         enforce_local_gateway_pre_read(&state, &headers, &stored, None, remote).await
     {
+        return response;
+    }
+    // Keep browser redirects behind the same local admission boundary as byte reads.
+    if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
         return response;
     }
     if raw_path == crate::soracloud::PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT
@@ -25765,110 +25740,6 @@ pub(crate) async fn handle_get_sorafs_cid_path(
         attach_cid_gateway_headers(&mut response, &stored);
     }
     response
-}
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_fetch(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    ConnectInfo(remote): ConnectInfo<SocketAddr>,
-    JsonOnly(req): JsonOnly<StorageFetchRequestDto>,
-) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return storage_disabled_response();
-    }
-    if req.length == 0 {
-        return json_error(StatusCode::BAD_REQUEST, "length must be greater than zero");
-    }
-    if req.length > MAX_STORAGE_FETCH_RESPONSE_BYTES {
-        return json_error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            format!(
-                "storage fetch responses are limited to {MAX_STORAGE_FETCH_RESPONSE_BYTES} bytes"
-            ),
-        );
-    }
-    let length = match usize::try_from(req.length) {
-        Ok(length) => length,
-        Err(_) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                "requested length exceeds supported range",
-            );
-        }
-    };
-    let storage_manifest_id = match resolve_manifest_storage_id(&state, &req.manifest_id_hex) {
-        Ok(manifest_id) => manifest_id,
-        Err(response) => return response,
-    };
-    let manifest = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
-        Ok(manifest) => manifest,
-        Err(err) => return node_storage_error_response(err),
-    };
-    let provider_id = match authoritative_sorafs_provider_id(&state) {
-        Ok(provider_id) => Some(provider_id),
-        Err(response) => return response,
-    };
-    if let Err(response) =
-        enforce_local_gateway_pre_read(&state, &headers, &manifest, provider_id, remote).await
-    {
-        return response;
-    }
-    if state.sorafs_gateway_config.enforce_capabilities {
-        match provider_id.as_ref() {
-            Some(provider) => match state.provider_supports_chunk_range(provider) {
-                Some(true) => {}
-                Some(false) => {
-                    return chunk_range_capability_missing_response(
-                        &state,
-                        manifest.chunk_profile_handle(),
-                        provider,
-                        TELEMETRY_ENDPOINT_CHUNK,
-                    );
-                }
-                None => {
-                    return chunk_range_capability_unknown_response(
-                        &state,
-                        manifest.chunk_profile_handle(),
-                        provider,
-                        TELEMETRY_ENDPOINT_CHUNK,
-                    );
-                }
-            },
-            None => {
-                return chunk_range_capability_provider_missing_response(
-                    &state,
-                    manifest.chunk_profile_handle(),
-                    TELEMETRY_ENDPOINT_CHUNK,
-                );
-            }
-        }
-    }
-    let worker_state = state.clone();
-    match sorafs_heavy_blocking_task(&state, "SoraFS storage fetch", move || {
-        let data = worker_state
-            .sorafs_node
-            .read_payload_range(&storage_manifest_id, req.offset, length)
-            .map_err(node_storage_error_response)?;
-        record_storage_metrics(&worker_state);
-        let response = StorageFetchResponseDto {
-            manifest_id_hex: req.manifest_id_hex,
-            offset: req.offset,
-            length: data.len() as u64,
-            data_b64: base64::engine::general_purpose::STANDARD.encode(data),
-        };
-        let value = norito::json::to_value(&response).map_err(|error| {
-            error!(?error, "failed to encode SoraFS storage fetch response");
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to encode storage fetch response",
-            )
-        })?;
-        Ok((StatusCode::OK, JsonBody(value)).into_response())
-    })
-    .await
-    {
-        Ok(response) | Err(response) => response,
-    }
 }
 #[cfg(feature = "app_api")]
 fn required_canonical_stream_header(
@@ -32011,7 +31882,6 @@ mod advert_tests {
         (@call post_moderation_quarantine_release($($args:expr),* $(,)?)) => { handle_post_sorafs_moderation_quarantine_release($($args),*) };
         (@call post_moderation_quarantine_review($($args:expr),* $(,)?)) => { handle_post_sorafs_moderation_quarantine_review($($args),*) };
         (@call post_moderation_screening_result($($args:expr),* $(,)?)) => { handle_post_sorafs_moderation_screening_result($($args),*) };
-        (@call post_storage_fetch($($args:expr),* $(,)?)) => { handle_post_sorafs_storage_fetch($($args),*) };
         (@call post_storage_token($($args:expr),* $(,)?)) => { handle_post_sorafs_storage_token($($args),*) };
         (@call post_storage_token_authenticated($($args:expr),* $(,)?)) => { handle_post_sorafs_storage_token_authenticated($($args),*) };
         ($route:ident; $($arg:expr);+ $(;)?) => { api_test_route!(@call $route($($arg),+)).await };
@@ -39685,7 +39555,7 @@ mod advert_tests {
         );
     }
     #[tokio::test]
-    async fn public_site_and_cid_reads_share_provider_admission_policy() {
+    async fn public_site_and_every_cid_read_share_provider_admission_policy() {
         let mut context = token_test_context();
         let stored = context.manifest();
         let content_cid = encode_content_cid(stored.manifest_cid());
@@ -39703,6 +39573,20 @@ mod advert_tests {
         }));
         inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
         inner.sorafs_gateway_config.enforce_admission = true;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .path_gateway_redirect = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .redirect_html_only = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
         refresh_api_test_gateway_security(&mut inner);
         context.app = Arc::new(inner);
 
@@ -39722,13 +39606,43 @@ mod advert_tests {
         let cid_response = crate::sorafs::public_gateway::handle_get_sorafs_cid_lookup(
             State(context.app.clone()),
             HeaderMap::new(),
-            Path(content_cid),
+            Path(content_cid.clone()),
             axum::extract::RawQuery(None),
         )
         .await;
         let cid_value =
             api_test_response_json_with_status(cid_response, StatusCode::PRECONDITION_FAILED).await;
         assert_json_fields!(cid_value; json_at ["error"] => Some(&Value::String("provider_not_admitted".into())));
+
+        let mut cid_headers = HeaderMap::new();
+        cid_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        cid_headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
+        let cid_root = crate::sorafs::public_gateway::handle_get_sorafs_cid_root(
+            State(context.app.clone()),
+            cid_headers.clone(),
+            format!("/sorafs/cid/{content_cid}")
+                .parse::<Uri>()
+                .expect("CID root URI"),
+            Path(content_cid.clone()),
+        )
+        .await;
+        let cid_root_value =
+            api_test_response_json_with_status(cid_root, StatusCode::PRECONDITION_FAILED).await;
+        assert_json_fields!(cid_root_value; json_at ["error"] => Some(&Value::String("provider_not_admitted".into())));
+
+        cid_headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-0"));
+        let cid_range = crate::sorafs::public_gateway::handle_get_sorafs_cid_path(
+            State(context.app),
+            cid_headers,
+            format!("/sorafs/cid/{content_cid}/asset.bin")
+                .parse::<Uri>()
+                .expect("CID range URI"),
+            Path((content_cid, "asset.bin".to_owned())),
+        )
+        .await;
+        let cid_range_value =
+            api_test_response_json_with_status(cid_range, StatusCode::PRECONDITION_FAILED).await;
+        assert_json_fields!(cid_range_value; json_at ["error"] => Some(&Value::String("provider_not_admitted".into())));
     }
     #[derive(Clone, Copy)]
     enum AuthoritativeSiteBindingCase {
@@ -40419,8 +40333,7 @@ mod advert_tests {
     {
       "method": "GET",
       "path": "/v1/contracts/rollups/swaps/fills",
-      "adapter": "contract.rollups.swaps_fills.v1",
-      "cache_ttl_ms": 2500
+      "adapter": "contract.rollups.swaps_fills.v1"
     }
   ]
 }"#
@@ -40442,7 +40355,6 @@ mod advert_tests {
             .expect("bind remote storage listener");
         let remote_origin = format!("http://{}", listener.local_addr().expect("listener addr"));
         let manifest_requests = Arc::new(AtomicUsize::new(0));
-        let fetch_requests = Arc::new(AtomicUsize::new(0));
         let mut remote_files = Vec::with_capacity(plan.files.len());
         let mut remote_offset = 0_u64;
         for file in &plan.files {
@@ -40471,52 +40383,24 @@ mod advert_tests {
             files: remote_files,
         })
         .expect("serialize remote manifest response");
-        let fetch_response_value = norito::json::to_value(&StorageFetchResponseDto {
-            manifest_id_hex: manifest_id_hex.clone(),
-            offset: 0,
-            length: payload.len() as u64,
-            data_b64: BASE64_STANDARD.encode(payload.as_slice()),
-        })
-        .expect("serialize remote fetch response");
-        let remote_router = Router::new()
-            .route(
-                "/v1/sorafs/storage/manifest/{manifest_id_hex}",
-                get({
+        let remote_router = Router::new().route(
+            "/v1/sorafs/storage/manifest/{manifest_id_hex}",
+            get({
+                let manifest_requests = Arc::clone(&manifest_requests);
+                let manifest_id_hex = manifest_id_hex.clone();
+                let manifest_response_value = manifest_response_value.clone();
+                move |AxumPath(requested_manifest_id_hex): AxumPath<String>| {
                     let manifest_requests = Arc::clone(&manifest_requests);
                     let manifest_id_hex = manifest_id_hex.clone();
                     let manifest_response_value = manifest_response_value.clone();
-                    move |AxumPath(requested_manifest_id_hex): AxumPath<String>| {
-                        let manifest_requests = Arc::clone(&manifest_requests);
-                        let manifest_id_hex = manifest_id_hex.clone();
-                        let manifest_response_value = manifest_response_value.clone();
-                        async move {
-                            manifest_requests.fetch_add(1, Ordering::SeqCst);
-                            assert_eq!(requested_manifest_id_hex, manifest_id_hex);
-                            crate::JsonBody(manifest_response_value).into_response()
-                        }
+                    async move {
+                        manifest_requests.fetch_add(1, Ordering::SeqCst);
+                        assert_eq!(requested_manifest_id_hex, manifest_id_hex);
+                        crate::JsonBody(manifest_response_value).into_response()
                     }
-                }),
-            )
-            .route(
-                "/v1/sorafs/storage/fetch",
-                post({
-                    let fetch_requests = Arc::clone(&fetch_requests);
-                    let manifest_id_hex = manifest_id_hex.clone();
-                    let fetch_response_value = fetch_response_value.clone();
-                    move |body: Bytes| {
-                        let fetch_requests = Arc::clone(&fetch_requests);
-                        let manifest_id_hex = manifest_id_hex.clone();
-                        let fetch_response_value = fetch_response_value.clone();
-                        async move {
-                            fetch_requests.fetch_add(1, Ordering::SeqCst);
-                            let request = norito::json::from_slice::<StorageFetchRequestDto>(&body)
-                                .expect("decode remote fetch request");
-                            assert_eq!(request.manifest_id_hex, manifest_id_hex);
-                            crate::JsonBody(fetch_response_value).into_response()
-                        }
-                    }
-                }),
-            );
+                }
+            }),
+        );
         let remote_server = tokio::spawn(async move {
             axum::serve(listener, remote_router)
                 .await
@@ -40541,7 +40425,6 @@ mod advert_tests {
         .await;
         assert_eq!(manifest_response.status(), StatusCode::BAD_GATEWAY);
         assert_eq!(manifest_requests.load(Ordering::SeqCst), 0);
-        assert_eq!(fetch_requests.load(Ordering::SeqCst), 0);
         assert!(
             state
                 .sorafs_node
@@ -40822,31 +40705,11 @@ mod advert_tests {
         inner_after.sorafs_gateway_policy = Some(Arc::clone(&components_after.policy));
         inner_after.sorafs_gateway_tls_state = Some(Arc::clone(&components_after.tls_state));
         let state_after = Arc::new(inner_after);
-        let mut fetch_headers = HeaderMap::new();
-        insert_static_api_test_header(&mut fetch_headers, HEADER_SORA_NONCE, "restart-fetch");
-        insert_static_api_test_header(&mut fetch_headers, HEADER_SORA_CLIENT, "restart-client");
-        insert_static_api_test_header(
-            &mut fetch_headers,
-            HEADER_SORA_NAME,
-            "alice@banka.dataspace",
-        );
-        fetch_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_PROOF),
-            alias_proof_header("alice@banka.dataspace"),
-        );
-        let fetch_request = StorageFetchRequestDto {
-            manifest_id_hex: manifest_id_hex.clone(),
-            offset: 0,
-            length: payload.len() as u64,
-        };
-        let fetch_response = api_test_route!(post_storage_fetch; State(state_after.clone()); fetch_headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8089))); JsonOnly(fetch_request));
-        assert_eq!(fetch_response.status(), StatusCode::OK);
-        let fetch_value = api_test_response_json(fetch_response).await;
-        let data_b64 = fetch_value.json_str(&["data_b64"]).expect("payload data");
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(data_b64.as_bytes())
-            .expect("decode persisted payload");
-        assert_eq!(decoded, payload);
+        let restored = state_after
+            .sorafs_node
+            .read_payload_range(&manifest_id_hex, 0, payload.len())
+            .expect("restart must retain payload bytes");
+        assert_eq!(restored, payload);
     }
     #[tokio::test]
     async fn storage_token_issues_signed_response() {
@@ -41722,133 +41585,6 @@ mod advert_tests {
             api_test_response_json_with_status(response, StatusCode::PRECONDITION_REQUIRED).await;
         assert_json_fields!(value; json_at ["error"] => Some(&Value::String("manifest_envelope_required".into())));
     }
-    #[derive(Clone, Copy)]
-    enum ManifestEnvelopePolicyCase {
-        Required,
-        Optional,
-    }
-
-    async fn assert_storage_fetch_manifest_envelope(case: ManifestEnvelopePolicyCase) {
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        inner.sorafs_node = node;
-        inner.sorafs_gateway_config.enforce_admission = false;
-        inner.sorafs_gateway_config.require_manifest_envelope =
-            matches!(case, ManifestEnvelopePolicyCase::Required);
-        refresh_api_test_gateway_security(&mut inner);
-        let state = Arc::new(inner);
-        let (payload, por_message, ingest_message, nonce, client, port) = match case {
-            ManifestEnvelopePolicyCase::Required => (
-                &b"sorafs fetch manifest envelope enforcement payload"[..],
-                "derive canonical envelope fixture PoR root",
-                "provider-internal envelope fixture ingest",
-                "fetch-nonce",
-                "fetch-client",
-                8093,
-            ),
-            ManifestEnvelopePolicyCase::Optional => (
-                &b"sorafs fetch manifest envelope optional payload"[..],
-                "derive canonical optional-envelope fixture PoR root",
-                "provider-internal optional-envelope fixture ingest",
-                "fetch-nonce-optional",
-                "fetch-client-optional",
-                8097,
-            ),
-        };
-        let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
-        let car_stats = canonical_fixture_car_stats(&plan, payload);
-        let manifest = ManifestBuilder::new()
-            .root_cid(car_stats.root_cids[0].clone())
-            .dag_codec(DagCodecId(car_stats.dag_codec))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-            .por_root(sorafs_car::compute_por_root(payload, &plan).expect(por_message))
-            .content_length(plan.content_length)
-            .car_digest(car_stats.car_archive_digest.into())
-            .car_size(car_stats.car_size)
-            .pin_policy(PinPolicy::default())
-            .governance(test_governance_proofs())
-            .build()
-            .expect("manifest");
-        let mut reader = payload;
-        let manifest_id_hex = state
-            .sorafs_node
-            .ingest_manifest(&manifest, &plan, &mut reader)
-            .expect(ingest_message);
-        let mut headers = HeaderMap::new();
-        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, nonce);
-        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, client);
-        let fetch_request = StorageFetchRequestDto {
-            manifest_id_hex,
-            offset: 0,
-            length: payload.len() as u64,
-        };
-        let expected_manifest_id = match case {
-            ManifestEnvelopePolicyCase::Required => None,
-            ManifestEnvelopePolicyCase::Optional => Some(fetch_request.manifest_id_hex.clone()),
-        };
-        let response = api_test_route!(post_storage_fetch; State(state.clone()); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], port))); JsonOnly(fetch_request));
-        match case {
-            ManifestEnvelopePolicyCase::Required => {
-                let value =
-                    api_test_response_json_with_status(response, StatusCode::PRECONDITION_REQUIRED)
-                        .await;
-                assert_json_fields!(value; json_at ["error"] => Some(&Value::String("manifest_envelope_required".into())));
-            }
-            ManifestEnvelopePolicyCase::Optional => {
-                let value = api_test_response_json_with_status(response, StatusCode::OK).await;
-                assert_json_fields!(value; json_at ["manifest_id_hex"] => Some(&Value::String(expected_manifest_id.unwrap())));
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn storage_fetch_requires_manifest_envelope_when_policy_enabled() {
-        assert_storage_fetch_manifest_envelope(ManifestEnvelopePolicyCase::Required).await;
-    }
-    #[tokio::test]
-    async fn storage_fetch_fails_closed_without_authoritative_provider_identity() {
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        inner.sorafs_node = node;
-        inner.sorafs_gateway_test_provider_id = None;
-        inner.sorafs_gateway_config.require_manifest_envelope = false;
-        inner.sorafs_gateway_config.enforce_admission = true;
-        inner.sorafs_gateway_config.enforce_capabilities = true;
-        inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
-        refresh_api_test_gateway_security(&mut inner);
-        let state = Arc::new(inner);
-        let payload = b"sorafs fetch provider enforcement payload";
-        let manifest = manifest_for_payload(0x23, payload);
-        let plan = plan_for_pin_payload(&manifest, payload);
-        let mut reader = payload.as_slice();
-        let manifest_id_hex = state
-            .sorafs_node
-            .ingest_manifest(&manifest, &plan, &mut reader)
-            .expect("provider-internal provider-identity fixture ingest");
-        assert!(
-            state.sorafs_node.capacity_usage().provider_id.is_none(),
-            "fixture should not advertise a provider id"
-        );
-        let mut headers = HeaderMap::new();
-        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "missing-provider");
-        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "provider-check");
-
-        let fetch_request = StorageFetchRequestDto {
-            manifest_id_hex,
-            offset: 0,
-            length: payload.len() as u64,
-        };
-        let response = api_test_route!(post_storage_fetch; State(state.clone()); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8100))); JsonOnly(fetch_request));
-        let value =
-            api_test_response_json_with_status(response, StatusCode::SERVICE_UNAVAILABLE).await;
-        assert_json_fields!(value; json_at ["error"] => Some(&Value::String("gateway_compliance_unavailable".into())));
-    }
     #[tokio::test]
     async fn storage_chunk_requires_manifest_envelope_when_policy_enabled() {
         let mut context = token_test_context();
@@ -41875,10 +41611,6 @@ mod advert_tests {
         let value =
             api_test_response_json_with_status(response, StatusCode::PRECONDITION_REQUIRED).await;
         assert_json_fields!(value; json_at ["error"] => Some(&Value::String("manifest_envelope_required".into())));
-    }
-    #[tokio::test]
-    async fn storage_fetch_allows_missing_manifest_envelope_when_policy_disabled() {
-        assert_storage_fetch_manifest_envelope(ManifestEnvelopePolicyCase::Optional).await;
     }
     #[tokio::test]
     async fn car_range_allows_missing_manifest_envelope_when_policy_disabled() {
@@ -41908,109 +41640,6 @@ mod advert_tests {
 
         let response = context.car_range(headers, 8094).await;
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
-    }
-    #[tokio::test]
-    async fn storage_fetch_requires_capability_when_enforced() {
-        let fixture = make_signed_advert();
-        let mut inner = Arc::try_unwrap(app_state_with_seeded_cache(&fixture))
-            .unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _storage_dir) = sorafs_node_with_temp_storage();
-        seed_capacity_declaration(
-            &node,
-            fixture.provider_id(),
-            &fixture.advert.body.profile_id,
-        );
-        inner.sorafs_node = node;
-        inner.sorafs_gateway_config.enforce_admission = false;
-        inner.sorafs_gateway_config.enforce_capabilities = true;
-        refresh_api_test_gateway_security(&mut inner);
-        let state = Arc::new(inner);
-        let payload = b"sorafs capability enforcement payload";
-        let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
-        let manifest = manifest_for_plan(0x4C, payload, &plan);
-
-        seed_paid_pin_record_for_payload(&state, &manifest, payload);
-        let mut reader = payload.as_slice();
-        let manifest_id_hex = state
-            .sorafs_node
-            .ingest_manifest(&manifest, &plan, &mut reader)
-            .expect("provider-internal capability fixture ingest");
-        let provider_bytes = fixture.provider_id();
-        let provider_id_hex = hex::encode(provider_bytes);
-        let manifest_envelope_b64 =
-            signed_manifest_envelope_b64(&paid_pin_record_for_manifest(&state, &manifest), 0x4C);
-        let make_headers = |nonce: &str| {
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_NONCE),
-                HeaderValue::from_str(nonce).expect("nonce header must be ASCII"),
-            );
-            insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "capability-client");
-            insert_static_api_test_header(
-                &mut headers,
-                HEADER_SORA_NAME,
-                "alias@capability.dataspace",
-            );
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_PROOF),
-                alias_proof_header("alias@capability.dataspace"),
-            );
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
-                header_value(&manifest_envelope_b64, HEADER_SORA_MANIFEST_ENVELOPE),
-            );
-            headers
-        };
-        let make_request = || StorageFetchRequestDto {
-            manifest_id_hex: manifest_id_hex.clone(),
-            offset: 0,
-            length: payload.len() as u64,
-        };
-        // Capability advertised via discovery should allow fetch.
-        let response_success = api_test_route!(post_storage_fetch; State(state.clone()); make_headers("capability-allowed"); ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8094))); JsonOnly(make_request()));
-        assert_eq!(response_success.status(), StatusCode::OK);
-        // Capability override denies chunk-range fetch (missing capability branch).
-        state
-            .sorafs_chunk_range_overrides
-            .insert(provider_bytes, false);
-        let response_missing = api_test_route!(post_storage_fetch; State(state.clone()); make_headers("capability-missing"); ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8095))); JsonOnly(make_request()));
-        assert_eq!(response_missing.status(), StatusCode::PRECONDITION_FAILED);
-        let missing_value = api_test_response_json(response_missing).await;
-        assert_json_fields!(missing_value; json_at ["error"] => Some(&Value::String("capability_missing".into())));
-        let missing_details = missing_value
-            .json_object(&["details"])
-            .expect("missing capability details");
-        assert_json_fields!(missing_details; json_str ["provider_id_hex"] => Some(provider_id_hex.as_str()), json_str ["capability"] => Some("chunk_range_fetch"));
-        // Drop override so capability state becomes unknown.
-        state.sorafs_chunk_range_overrides.remove(&provider_bytes);
-        if let Some(cache) = &state.sorafs_cache {
-            let mut guard = cache
-                .try_write()
-                .expect("expire cached provider advert entry");
-            guard.prune_stale(fixture.expires_at().saturating_add(TTL_SECS));
-        }
-        let response_unknown = api_test_route!(post_storage_fetch; State(state.clone()); make_headers("capability-unknown"); ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8096))); JsonOnly(make_request()));
-        assert_eq!(response_unknown.status(), StatusCode::PRECONDITION_FAILED);
-        let unknown_value = api_test_response_json(response_unknown).await;
-        assert_json_fields!(unknown_value; json_at ["error"] => Some(&Value::String("capability_state_unknown".into())));
-        let unknown_details = unknown_value
-            .json_object(&["details"])
-            .expect("unknown capability details");
-        assert_json_fields!(unknown_details; json_str ["provider_id_hex"] => Some(provider_id_hex.as_str()), json_str ["capability"] => Some("chunk_range_fetch"));
-        // Advertise capability (override) and ensure the fetch succeeds.
-        state
-            .sorafs_chunk_range_overrides
-            .insert(provider_bytes, true);
-        let response_restored = api_test_route!(post_storage_fetch; State(state); make_headers("capability-restored"); ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8097))); JsonOnly(make_request()));
-        assert_eq!(response_restored.status(), StatusCode::OK);
-        let restored_value = api_test_response_json(response_restored).await;
-        let data_b64 = restored_value
-            .json_str(&["data_b64"])
-            .expect("payload base64");
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(data_b64.as_bytes())
-            .expect("decode permitted payload");
-        assert_eq!(decoded, payload);
     }
     #[derive(Clone, Copy)]
     enum CapabilityRangeKind {

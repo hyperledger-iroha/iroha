@@ -866,6 +866,7 @@ static ISO_RECORD_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const ISO_CHANGE_REASON_MAX_ENTRIES_V1: usize = 64;
 const ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1: usize = 16 * 1024;
 const ISO_PERSISTED_AUDIT_INDEX_VERSION: u64 = 2;
+const ISO_PERSISTED_AUDIT_INDEX_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const ISO_PERSISTED_AUDIT_DIR: &str = "audit";
 const ISO_PERSISTED_REPLAY_TOMBSTONE_DIR: &str = "replay_tombstones";
 const ISO_PERSISTED_REPLAY_TOMBSTONE_VERSION: u64 = 2;
@@ -1906,14 +1907,18 @@ impl Iso20022BridgeRuntime {
         {
             return Err(IsoAdmissionError::NotAuthorized);
         }
-        let (expected_participant, required_role) = match message_type {
+        let (expected_participant, required_role, expected_from, expected_to) = match message_type {
             "pacs.002" | "pacs.004" | "sese.024" | "sese.025" => (
                 original.parties.counterparty_participant_id.as_str(),
                 IsoParticipantRole::Counterparty,
+                original.parties.counterparty_financial_id.as_str(),
+                original.parties.originator_financial_id.as_str(),
             ),
             "camt.056" => (
                 original.parties.originator_participant_id.as_str(),
                 IsoParticipantRole::Originator,
+                original.parties.originator_financial_id.as_str(),
+                original.parties.counterparty_financial_id.as_str(),
             ),
             _ => return Err(IsoAdmissionError::NotAuthorized),
         };
@@ -1923,9 +1928,11 @@ impl Iso20022BridgeRuntime {
         {
             return Err(IsoAdmissionError::NotAuthorized);
         }
-        if let Some(from) = app_header_financial_identifier(parsed, AppHeaderParty::From)?
-            && !actor.financial_identifiers.contains(&from)
-        {
+        let from = app_header_financial_identifier(parsed, AppHeaderParty::From)?
+            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        let to = app_header_financial_identifier(parsed, AppHeaderParty::To)?
+            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        if from != expected_from || to != expected_to {
             return Err(IsoAdmissionError::NotAuthorized);
         }
         let mut parties = original.parties.clone();
@@ -3704,12 +3711,35 @@ impl Iso20022BridgeRuntime {
         self.uetr_index
             .retain(|_, existing_message| existing_message != message_id);
     }
-    fn load_persisted_tombstones(&self, store_dir: &Path) -> eyre::Result<()> {
+    fn load_persisted_tombstones(&self, store_dir: &Path) -> eyre::Result<Vec<PathBuf>> {
         let tombstones_dir = store_dir.join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR);
-        if !is_real_directory(&tombstones_dir) {
-            return Ok(());
+        match fs::symlink_metadata(&tombstones_dir) {
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                eyre::bail!(
+                    "ISO replay tombstone store `{}` is not a real directory; regenerate the first-release ISO store",
+                    tombstones_dir.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(Vec::new());
+            }
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "failed to inspect ISO replay tombstone store `{}`",
+                        tombstones_dir.display()
+                    )
+                });
+            }
         }
         let now = SystemTime::now();
+        let mut expired_paths = Vec::new();
         let entries =
             fs::read_dir(&tombstones_dir).wrap_err("failed to enumerate ISO replay tombstones")?;
         for entry in entries {
@@ -3720,19 +3750,19 @@ impl Iso20022BridgeRuntime {
             }
             if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
                 eyre::bail!(
-                    "ISO replay tombstone `{}` is not a regular file",
+                    "ISO replay tombstone `{}` is not a regular file; regenerate the first-release ISO store",
                     path.display()
                 );
             }
             let text = read_persisted_record_bounded(&path).ok_or_else(|| {
                 eyre::eyre!(
-                    "ISO replay tombstone `{}` is unreadable or exceeds the V2 byte limit",
+                    "ISO replay tombstone `{}` is unreadable or exceeds the V2 byte limit; regenerate the first-release ISO store",
                     path.display()
                 )
             })?;
             let value = norito::json::from_json::<JsonValue>(&text).wrap_err_with(|| {
                 format!(
-                    "ISO replay tombstone `{}` is not valid JSON",
+                    "ISO replay tombstone `{}` is not valid JSON; regenerate the first-release ISO store",
                     path.display()
                 )
             })?;
@@ -3748,7 +3778,7 @@ impl Iso20022BridgeRuntime {
             }
             let (message_id, tombstone) = replay_tombstone_from_value(&value).ok_or_else(|| {
                 eyre::eyre!(
-                    "ISO replay tombstone `{}` is invalid or corrupt for schema V{}",
+                    "ISO replay tombstone `{}` is invalid or corrupt for schema V{}; regenerate the first-release ISO store",
                     path.display(),
                     ISO_PERSISTED_REPLAY_TOMBSTONE_VERSION
                 )
@@ -3757,12 +3787,12 @@ impl Iso20022BridgeRuntime {
                 != Some(message_filename(&message_id).as_str())
             {
                 eyre::bail!(
-                    "ISO replay tombstone `{}` does not match its embedded message identity",
+                    "ISO replay tombstone `{}` does not match its embedded message identity; regenerate the first-release ISO store",
                     path.display()
                 );
             }
             if now.duration_since(tombstone.expires_at).is_ok() {
-                let _ = fs::remove_file(path);
+                expired_paths.push(path);
                 continue;
             }
             let metadata = replay_tombstone_metadata(&tombstone);
@@ -3770,151 +3800,260 @@ impl Iso20022BridgeRuntime {
                 || self.replay_tombstones.contains_key(&message_id)
             {
                 eyre::bail!(
-                    "ISO bridge replay tombstone store contains conflicting immutable identities"
+                    "ISO bridge replay tombstone store contains conflicting immutable identities; regenerate the first-release ISO store"
                 );
             }
             self.insert_tombstone_indexes(&message_id, &tombstone);
             self.replay_tombstones.insert(message_id, tombstone);
         }
-        Ok(())
+        Ok(expired_paths)
     }
     fn load_persisted_records(&self) -> eyre::Result<()> {
         let Some(store_dir) = self.store_dir.as_deref() else {
             return Ok(());
         };
-        self.load_persisted_tombstones(store_dir)?;
-        let audit_index_path = store_dir
-            .join(ISO_PERSISTED_AUDIT_DIR)
-            .join(ISO_PERSISTED_AUDIT_INDEX_FILE);
-        if audit_index_path.exists()
-            && let Some(text) = read_persisted_record_bounded(&audit_index_path)
-            && let Ok(value) = norito::json::from_json::<JsonValue>(&text)
-            && let Some(version) = value
-                .as_object()
-                .and_then(|object| object.get("version"))
-                .and_then(JsonValue::as_u64)
-            && version != ISO_PERSISTED_AUDIT_INDEX_VERSION
-        {
-            eyre::bail!(
-                "incompatible ISO bridge audit index schema version {version}; expected V{ISO_PERSISTED_AUDIT_INDEX_VERSION}; regenerate the first-release ISO store"
-            );
+        let expired_tombstone_paths = self.load_persisted_tombstones(store_dir)?;
+        let audit_dir = store_dir.join(ISO_PERSISTED_AUDIT_DIR);
+        match fs::symlink_metadata(&audit_dir) {
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                eyre::bail!(
+                    "ISO bridge audit store `{}` is not a real directory; regenerate the first-release ISO store",
+                    audit_dir.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "failed to inspect ISO bridge audit store `{}`",
+                        audit_dir.display()
+                    )
+                });
+            }
         }
+        let audit_index_path = audit_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+        load_persisted_audit_index(&audit_index_path)?;
         let messages_dir = store_dir.join("messages");
-        let load_messages_dir = is_real_directory(&messages_dir);
+        let load_messages_dir = match fs::symlink_metadata(&messages_dir) {
+            Ok(metadata) if metadata.file_type().is_dir() => true,
+            Ok(_) => {
+                eyre::bail!(
+                    "ISO bridge message store `{}` is not a real directory; regenerate the first-release ISO store",
+                    messages_dir.display()
+                );
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                false
+            }
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "failed to inspect ISO bridge message store `{}`",
+                        messages_dir.display()
+                    )
+                });
+            }
+        };
         let now = SystemTime::now();
-        let mut retained = BTreeMap::new();
-        if load_messages_dir && let Ok(entries) = fs::read_dir(&messages_dir) {
-            for entry in entries.flatten() {
-                let Ok(file_type) = entry.file_type() else {
-                    continue;
-                };
-                if !file_type.is_file() {
-                    continue;
-                }
+        let mut persisted_records = BTreeMap::new();
+        if load_messages_dir {
+            let entries = fs::read_dir(&messages_dir)
+                .wrap_err("failed to enumerate ISO bridge V2 message records")?;
+            for entry in entries {
+                let entry =
+                    entry.wrap_err("failed to read an ISO bridge message directory entry")?;
                 let path = entry.path();
                 if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                     continue;
                 }
-                let Some(text) = read_persisted_record_bounded(&path) else {
-                    continue;
-                };
-                let Ok(value) = norito::json::from_json::<JsonValue>(&text) else {
-                    continue;
-                };
-                if let Some(version) = value
+                if !entry
+                    .file_type()
+                    .wrap_err_with(|| {
+                        format!(
+                            "failed to inspect ISO bridge message record `{}`",
+                            path.display()
+                        )
+                    })?
+                    .is_file()
+                {
+                    eyre::bail!(
+                        "ISO bridge message record `{}` is not a regular file; regenerate the first-release ISO store",
+                        path.display()
+                    );
+                }
+                let text = read_persisted_record_bounded(&path).ok_or_else(|| {
+                    eyre::eyre!(
+                        "ISO bridge message record `{}` is unreadable or exceeds the V2 byte limit; regenerate the first-release ISO store",
+                        path.display()
+                    )
+                })?;
+                let value = norito::json::from_json::<JsonValue>(&text).wrap_err_with(|| {
+                    format!(
+                        "ISO bridge message record `{}` is not valid JSON; regenerate the first-release ISO store",
+                        path.display()
+                    )
+                })?;
+                let version = value
                     .as_object()
                     .and_then(|object| object.get("version"))
                     .and_then(JsonValue::as_u64)
-                    && version != ISO_PERSISTED_RECORD_VERSION
-                {
+                    .ok_or_else(|| {
+                        eyre::eyre!(
+                            "ISO bridge message record `{}` does not advertise numeric schema version V{}; regenerate the first-release ISO store",
+                            path.display(),
+                            ISO_PERSISTED_RECORD_VERSION
+                        )
+                    })?;
+                if version != ISO_PERSISTED_RECORD_VERSION {
                     eyre::bail!(
                         "incompatible ISO bridge store record schema version {version}; expected V{ISO_PERSISTED_RECORD_VERSION}; regenerate the first-release ISO store"
                     );
                 }
-                if let Some((message_id, record)) = persisted_record_from_value(&value) {
-                    let expected_filename = message_filename(&message_id);
-                    if path.file_name().and_then(|name| name.to_str())
-                        != Some(expected_filename.as_str())
-                    {
-                        continue;
-                    }
-                    if !record.retention_protected()
-                        && !self.store_retention.is_zero()
-                        && now
-                            .duration_since(record.updated_at)
-                            .is_ok_and(|age| age > self.store_retention)
-                    {
-                        if now.duration_since(record.replay_expires_at).is_err() {
-                            let tombstone = IsoReplayTombstone {
-                                expires_at: record.replay_expires_at,
-                                payload_hash: record.metadata.payload_hash.clone(),
-                                business_message_id: record.metadata.business_message_id.clone(),
-                                uetr: record.metadata.uetr.clone(),
-                            };
-                            if let Some(existing) = self.replay_tombstones.get(&message_id) {
-                                if !record_matches_replay_tombstone(&record, existing.value()) {
-                                    eyre::bail!(
-                                        "ISO bridge V2 store record `{message_id}` conflicts with its durable replay tombstone"
-                                    );
-                                }
-                            } else {
-                                if !self.persist_replay_tombstone(&message_id, &tombstone) {
-                                    retained.insert(
-                                        (system_time_to_ms(record.updated_at), message_id),
-                                        (path, record),
-                                    );
-                                    continue;
-                                }
-                                self.insert_tombstone_indexes(&message_id, &tombstone);
-                                self.replay_tombstones.insert(message_id.clone(), tombstone);
-                            }
-                        }
-                        let _ = fs::remove_file(path);
-                        continue;
-                    }
-                    retained.insert(
-                        (system_time_to_ms(record.updated_at), message_id),
-                        (path, record),
+                let (message_id, record) = persisted_record_from_value(&value).ok_or_else(|| {
+                    eyre::eyre!(
+                        "ISO bridge message record `{}` is invalid or corrupt for schema V{}; regenerate the first-release ISO store",
+                        path.display(),
+                        ISO_PERSISTED_RECORD_VERSION
+                    )
+                })?;
+                let expected_filename = message_filename(&message_id);
+                if path.file_name().and_then(|name| name.to_str())
+                    != Some(expected_filename.as_str())
+                {
+                    eyre::bail!(
+                        "ISO bridge message record `{}` does not match its embedded message identity; regenerate the first-release ISO store",
+                        path.display()
+                    );
+                }
+                if persisted_records
+                    .insert(message_id.clone(), (path, record))
+                    .is_some()
+                {
+                    eyre::bail!(
+                        "ISO bridge V2 store contains duplicate embedded message identity `{message_id}`; regenerate the first-release ISO store"
                     );
                 }
             }
         }
-        // Rich details and replay tombstones are independent. The configured identity
-        // capacity may be temporarily exceeded after an operator lowers the limit; in
-        // that case all existing unexpired identities remain protected and new ingress
-        // receives a retryable capacity rejection.
-        for ((_, message_id), (_, record)) in retained {
-            if !self.record_parties_are_configured(&record) {
+        let mut payload_hash_owners = BTreeMap::new();
+        let mut business_message_id_owners = BTreeMap::new();
+        let mut uetr_owners = BTreeMap::new();
+        let mut transaction_hash_owners = BTreeMap::new();
+        for (message_id, (_, record)) in &persisted_records {
+            if !self.record_parties_are_configured(record) {
                 eyre::bail!(
                     "ISO bridge V2 store record references participants, profile, or signature policy absent from the current configuration"
                 );
             }
             let replay_live = now.duration_since(record.replay_expires_at).is_err();
             if replay_live {
-                let Some(tombstone) = self.replay_tombstones.get(&message_id) else {
+                let Some(tombstone) = self.replay_tombstones.get(message_id) else {
                     eyre::bail!(
                         "ISO bridge V2 store record `{message_id}` is missing its durable replay tombstone"
                     );
                 };
-                if !record_matches_replay_tombstone(&record, tombstone.value()) {
+                if !record_matches_replay_tombstone(record, tombstone.value()) {
                     eyre::bail!(
                         "ISO bridge V2 store record `{message_id}` conflicts with its durable replay tombstone"
                     );
                 }
+                if self.metadata_conflicts(message_id, &record.metadata)
+                    || insert_unique_persisted_identity(
+                        &mut payload_hash_owners,
+                        record.metadata.payload_hash().map(str::to_owned),
+                        message_id,
+                    )
+                    || insert_unique_persisted_identity(
+                        &mut business_message_id_owners,
+                        record
+                            .metadata
+                            .business_message_id()
+                            .and_then(normalise_business_message_id),
+                        message_id,
+                    )
+                    || insert_unique_persisted_identity(
+                        &mut uetr_owners,
+                        record.metadata.uetr().map(normalise_uetr),
+                        message_id,
+                    )
+                {
+                    eyre::bail!(
+                        "ISO bridge V2 store contains conflicting immutable replay identities for record `{message_id}`; regenerate the first-release ISO store"
+                    );
+                }
             }
-            if (replay_live && self.metadata_conflicts(&message_id, &record.metadata))
-                || record.transaction_hash.as_deref().is_some_and(|tx_hash| {
-                    self.tx_hash_index
-                        .get(tx_hash)
-                        .is_some_and(|owner| owner.as_str() != message_id)
-                })
-            {
-                iroha_logger::error!(
-                    message_id_sha256 = %sha256_hex(message_id.as_bytes()),
-                    "ignored persisted ISO record with conflicting replay identity"
+            if insert_unique_persisted_identity(
+                &mut transaction_hash_owners,
+                record.transaction_hash.clone(),
+                message_id,
+            ) {
+                eyre::bail!(
+                    "ISO bridge V2 store contains conflicting transaction identities for record `{message_id}`; regenerate the first-release ISO store"
                 );
+            }
+        }
+        let mut retained = BTreeMap::new();
+        for (message_id, (path, record)) in persisted_records {
+            if !record.retention_protected()
+                && !self.store_retention.is_zero()
+                && now
+                    .duration_since(record.updated_at)
+                    .is_ok_and(|age| age > self.store_retention)
+            {
+                if now.duration_since(record.replay_expires_at).is_err() {
+                    let tombstone = IsoReplayTombstone {
+                        expires_at: record.replay_expires_at,
+                        payload_hash: record.metadata.payload_hash.clone(),
+                        business_message_id: record.metadata.business_message_id.clone(),
+                        uetr: record.metadata.uetr.clone(),
+                    };
+                    if let Some(existing) = self.replay_tombstones.get(&message_id) {
+                        if !record_matches_replay_tombstone(&record, existing.value()) {
+                            eyre::bail!(
+                                "ISO bridge V2 store record `{message_id}` conflicts with its durable replay tombstone"
+                            );
+                        }
+                    } else {
+                        if !self.persist_replay_tombstone(&message_id, &tombstone) {
+                            retained.insert(
+                                (system_time_to_ms(record.updated_at), message_id),
+                                (path, record),
+                            );
+                            continue;
+                        }
+                        self.insert_tombstone_indexes(&message_id, &tombstone);
+                        self.replay_tombstones.insert(message_id.clone(), tombstone);
+                    }
+                }
+                fs::remove_file(&path).wrap_err_with(|| {
+                    format!(
+                        "failed to remove expired ISO bridge V2 message record `{}`",
+                        path.display()
+                    )
+                })?;
                 continue;
             }
+            retained.insert(
+                (system_time_to_ms(record.updated_at), message_id),
+                (path, record),
+            );
+        }
+        // Rich details and replay tombstones are independent. The configured identity
+        // capacity may be temporarily exceeded after an operator lowers the limit; in
+        // that case all existing unexpired identities remain protected and new ingress
+        // receives a retryable capacity rejection.
+        for ((_, message_id), (_, record)) in retained {
+            let replay_live = now.duration_since(record.replay_expires_at).is_err();
             if replay_live {
                 self.insert_metadata_indexes(&message_id, &record.metadata);
             }
@@ -3923,6 +4062,14 @@ impl Iso20022BridgeRuntime {
                     .insert(tx_hash.to_owned(), message_id.clone());
             }
             self.records.insert(message_id, record);
+        }
+        for path in expired_tombstone_paths {
+            fs::remove_file(&path).wrap_err_with(|| {
+                format!(
+                    "failed to remove expired ISO replay tombstone `{}`",
+                    path.display()
+                )
+            })?;
         }
         self.persist_audit_index();
         Ok(())
@@ -4046,11 +4193,20 @@ impl Iso20022BridgeRuntime {
         let Ok(json) = norito::json::to_string_pretty(&payload) else {
             return;
         };
+        if !persisted_json_fits_cap(&json, ISO_PERSISTED_AUDIT_INDEX_MAX_BYTES) {
+            iroha_logger::error!(
+                max_bytes = ISO_PERSISTED_AUDIT_INDEX_MAX_BYTES,
+                "refused to persist an oversized ISO V2 audit index"
+            );
+            return;
+        }
         if let Some(store_dir) = self.store_dir.as_deref() {
             let audit_dir = store_dir.join(ISO_PERSISTED_AUDIT_DIR);
             if ensure_real_directory(&audit_dir) {
                 let path = audit_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE);
-                let _ = fs::write(path, &json);
+                if let Err(error) = write_iso_record_atomically(&path, json.as_bytes()) {
+                    iroha_logger::error!(?error, "failed to persist the ISO V2 audit index");
+                }
             }
         }
         self.persist_external_audit_export(&payload, &json);
@@ -4062,7 +4218,10 @@ impl Iso20022BridgeRuntime {
         if !ensure_real_directory(export_dir) {
             return;
         }
-        let _ = fs::write(export_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE), json);
+        let _ = write_iso_record_atomically(
+            &export_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE),
+            json.as_bytes(),
+        );
         let Some(index_sha256) = audit_index_digest(payload) else {
             return;
         };
@@ -4070,17 +4229,17 @@ impl Iso20022BridgeRuntime {
         let Ok(anchor_json) = norito::json::to_string_pretty(&anchor) else {
             return;
         };
-        let _ = fs::write(
-            export_dir.join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE),
-            &anchor_json,
+        let _ = write_iso_record_atomically(
+            &export_dir.join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE),
+            anchor_json.as_bytes(),
         );
         let anchor_dir = export_dir.join(ISO_AUDIT_EXPORT_ANCHOR_DIR);
         if !ensure_real_directory(&anchor_dir) {
             return;
         }
-        let _ = fs::write(
-            anchor_dir.join(format!("{index_sha256}.notary.json")),
-            anchor_json,
+        let _ = write_iso_record_atomically(
+            &anchor_dir.join(format!("{index_sha256}.notary.json")),
+            anchor_json.as_bytes(),
         );
     }
     fn compact_persisted_records(&self) {
@@ -4535,8 +4694,23 @@ fn record_matches_replay_tombstone(
         && record.metadata.business_message_id == tombstone.business_message_id
         && record.metadata.uetr == tombstone.uetr
 }
+fn insert_unique_persisted_identity(
+    owners: &mut BTreeMap<String, String>,
+    identity: Option<String>,
+    message_id: &str,
+) -> bool {
+    let Some(identity) = identity else {
+        return false;
+    };
+    owners
+        .insert(identity, message_id.to_owned())
+        .is_some_and(|owner| owner != message_id)
+}
 fn persisted_json_fits_record_cap(json: &str) -> bool {
-    u64::try_from(json.len()).is_ok_and(|len| len <= ISO_PERSISTED_RECORD_MAX_BYTES)
+    persisted_json_fits_cap(json, ISO_PERSISTED_RECORD_MAX_BYTES)
+}
+fn persisted_json_fits_cap(json: &str, max_bytes: u64) -> bool {
+    u64::try_from(json.len()).is_ok_and(|len| len <= max_bytes)
 }
 fn persisted_record_body_value(message_id: &str, record: &IsoMessageRecordV2) -> norito::json::Map {
     let mut root = norito::json::Map::new();
@@ -4702,6 +4876,28 @@ const PERSISTED_HISTORY_REQUIRED_KEYS: &[&str] = &[
     "updated_at_ms",
     "detail",
     "reason_code",
+];
+const PERSISTED_AUDIT_INDEX_REQUIRED_KEYS: &[&str] = &[
+    "version",
+    "record_count",
+    "records",
+    ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD,
+];
+const PERSISTED_AUDIT_INDEX_ENTRY_REQUIRED_KEYS: &[&str] = &[
+    "message_id",
+    "filename",
+    ISO_PERSISTED_RECORD_DIGEST_FIELD,
+    "state",
+    "pacs002_code",
+    "updated_at_ms",
+    "settled_at_ms",
+    "transaction_hash",
+    "profile_id",
+    "message_type",
+    "business_message_id",
+    "uetr",
+    "payload_hash",
+    "reference_snapshot_id",
 ];
 fn json_object_has_exact_keys(obj: &norito::json::Map, required: &[&str]) -> bool {
     obj.len() == required.len() && required.iter().all(|key| obj.contains_key(*key))
@@ -4890,6 +5086,148 @@ fn persisted_audit_index_entry_value(
 fn persisted_audit_index_digest_matches(obj: &norito::json::Map) -> bool {
     persisted_json_digest_matches(obj, ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD)
 }
+fn persisted_audit_index_entry_is_valid(value: &JsonValue) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if !json_object_has_exact_keys(object, PERSISTED_AUDIT_INDEX_ENTRY_REQUIRED_KEYS) {
+        return false;
+    }
+    let Some(message_id) = required_clean_string(object, "message_id") else {
+        return false;
+    };
+    let expected_filename = message_filename(&message_id);
+    if required_clean_string(object, "filename").as_deref() != Some(expected_filename.as_str())
+        || object
+            .get(ISO_PERSISTED_RECORD_DIGEST_FIELD)
+            .and_then(JsonValue::as_str)
+            .is_none_or(|digest| {
+                digest.len() != 64 || !digest.chars().all(|ch| matches!(ch, '0'..='9' | 'a'..='f'))
+            })
+        || object
+            .get("state")
+            .and_then(JsonValue::as_str)
+            .and_then(state_from_label)
+            .is_none()
+        || object
+            .get("pacs002_code")
+            .and_then(JsonValue::as_str)
+            .and_then(pacs002_from_code)
+            .is_none()
+        || object
+            .get("updated_at_ms")
+            .and_then(JsonValue::as_u64)
+            .is_none()
+        || required_nullable_time_ms(object, "settled_at_ms").is_none()
+    {
+        return false;
+    }
+    [
+        "transaction_hash",
+        "profile_id",
+        "message_type",
+        "business_message_id",
+        "uetr",
+        "payload_hash",
+        "reference_snapshot_id",
+    ]
+    .into_iter()
+    .all(|key| required_nullable_string(object, key).is_some())
+}
+fn load_persisted_audit_index(path: &Path) -> eyre::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "failed to inspect ISO bridge audit index `{}`",
+                    path.display()
+                )
+            });
+        }
+    };
+    if !metadata.file_type().is_file() {
+        eyre::bail!(
+            "ISO bridge audit index `{}` is not a regular file; regenerate the first-release ISO store",
+            path.display()
+        );
+    }
+    let Some(text) = read_persisted_json_bounded(path, ISO_PERSISTED_AUDIT_INDEX_MAX_BYTES) else {
+        eyre::bail!(
+            "ISO bridge audit index `{}` is unreadable or exceeds the V2 byte limit; regenerate the first-release ISO store",
+            path.display()
+        );
+    };
+    let value = norito::json::from_json::<JsonValue>(&text).wrap_err_with(|| {
+        format!(
+            "ISO bridge audit index `{}` is not valid JSON; regenerate the first-release ISO store",
+            path.display()
+        )
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        eyre::eyre!(
+            "ISO bridge audit index `{}` is invalid or corrupt for schema V{}; regenerate the first-release ISO store",
+            path.display(),
+            ISO_PERSISTED_AUDIT_INDEX_VERSION
+        )
+    })?;
+    let version = object
+        .get("version")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "ISO bridge audit index `{}` does not advertise numeric schema version V{}; regenerate the first-release ISO store",
+                path.display(),
+                ISO_PERSISTED_AUDIT_INDEX_VERSION
+            )
+        })?;
+    if version != ISO_PERSISTED_AUDIT_INDEX_VERSION {
+        eyre::bail!(
+            "incompatible ISO bridge audit index schema version {version}; expected V{ISO_PERSISTED_AUDIT_INDEX_VERSION}; regenerate the first-release ISO store"
+        );
+    }
+    let records = object.get("records").and_then(JsonValue::as_array);
+    let record_count = object.get("record_count").and_then(JsonValue::as_u64);
+    let records_are_current = records.is_some_and(|records| {
+        let mut previous_message_id = None;
+        records.iter().all(|record| {
+            if !persisted_audit_index_entry_is_valid(record) {
+                return false;
+            }
+            let message_id = record
+                .as_object()
+                .and_then(|object| object.get("message_id"))
+                .and_then(JsonValue::as_str)
+                .expect("validated audit entries carry a message id");
+            if previous_message_id.is_some_and(|previous| previous >= message_id) {
+                return false;
+            }
+            previous_message_id = Some(message_id);
+            true
+        })
+    });
+    if !json_object_has_exact_keys(object, PERSISTED_AUDIT_INDEX_REQUIRED_KEYS)
+        || !persisted_audit_index_digest_matches(object)
+        || records.is_none()
+        || record_count != records.and_then(|records| u64::try_from(records.len()).ok())
+        || !records_are_current
+    {
+        eyre::bail!(
+            "ISO bridge audit index `{}` is invalid or corrupt for schema V{}; regenerate the first-release ISO store",
+            path.display(),
+            ISO_PERSISTED_AUDIT_INDEX_VERSION
+        );
+    }
+    Ok(())
+}
 fn audit_index_digest(index: &JsonValue) -> Option<&str> {
     index
         .as_object()
@@ -4932,15 +5270,18 @@ fn audit_export_anchor_digest_matches(obj: &norito::json::Map) -> bool {
     persisted_json_digest_matches(obj, ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD)
 }
 fn read_persisted_record_bounded(path: &Path) -> Option<String> {
+    read_persisted_json_bounded(path, ISO_PERSISTED_RECORD_MAX_BYTES)
+}
+fn read_persisted_json_bounded(path: &Path, max_bytes: u64) -> Option<String> {
     let file = fs::File::open(path).ok()?;
     let metadata = file.metadata().ok()?;
-    if !metadata.is_file() || metadata.len() > ISO_PERSISTED_RECORD_MAX_BYTES {
+    if !metadata.is_file() || metadata.len() > max_bytes {
         return None;
     }
     let initial_capacity = usize::try_from(metadata.len()).ok()?;
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(initial_capacity).ok()?;
-    let mut reader = file.take(ISO_PERSISTED_RECORD_MAX_BYTES.saturating_add(1));
+    let mut reader = file.take(max_bytes.saturating_add(1));
     let mut chunk = [0_u8; 16 * 1024];
     loop {
         let read = reader.read(&mut chunk).ok()?;
@@ -4948,7 +5289,7 @@ fn read_persisted_record_bounded(path: &Path) -> Option<String> {
             break;
         }
         let next_len = bytes.len().checked_add(read)?;
-        if u64::try_from(next_len).ok()? > ISO_PERSISTED_RECORD_MAX_BYTES {
+        if u64::try_from(next_len).ok()? > max_bytes {
             return None;
         }
         bytes.try_reserve_exact(read).ok()?;

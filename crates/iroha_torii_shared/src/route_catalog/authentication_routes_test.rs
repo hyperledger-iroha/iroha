@@ -276,18 +276,6 @@ named_route_policy_test!(
                 ..OPERATOR_READ
             },
         );
-        assert_route_policy(
-            sorafs::STORAGE_FETCH,
-            RoutePolicyExpectation {
-                method: Some(HttpMethod::Post),
-                surface: Some(ApiSurface::Operator),
-                effect: Some(RouteEffect::ExpensiveCompute),
-                admission: Some(AdmissionPolicy::Operator),
-                authentication: Some(AuthenticationPolicy::OperatorSignature),
-                projections: Some(RouteProjections::NONE),
-                ..RoutePolicyExpectation::default()
-            },
-        );
         assert_route_policies(
             [sorafs::STORAGE_CAR, sorafs::STORAGE_CHUNK],
             RoutePolicyExpectation {

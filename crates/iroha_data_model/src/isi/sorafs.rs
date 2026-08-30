@@ -1084,11 +1084,11 @@ isi! {
         /// Exact pinned citizen-bond snapshot digest expected by the operator.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub citizen_snapshot_digest: [u8; 32],
-        /// Exact latest committed parent hash expected to seed the draw.
+        /// Exact consensus-pinned first post-registration block hash expected to seed the draw.
         ///
-        /// Native execution requires this anchor to match consensus state after
-        /// registration closes, preventing applicants or candidates from
-        /// precomputing and selectively entering a favorable draw.
+        /// Native start-of-block maintenance fixes this anchor after registration closes.
+        /// Execution remains stable across later QueuePlan carriers and rejects caller-selected
+        /// or same-anchor-block proposals.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub randomness_anchor: [u8; 32],
         /// Proposed primary roster; execution recomputes and rejects biased input.

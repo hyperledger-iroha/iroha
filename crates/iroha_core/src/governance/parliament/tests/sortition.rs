@@ -420,7 +420,7 @@ fn attempt_rejects_an_inert_compare_and_set_subject() {
     assert_eq!(
         ParliamentAttemptStateV1::try_new(
             attempt(),
-            7,
+            PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
             10,
             root(3),
             GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
@@ -433,7 +433,7 @@ fn attempt_rejects_an_inert_compare_and_set_subject() {
     assert_eq!(
         ParliamentAttemptStateV1::try_new(
             attempt(),
-            7,
+            PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
             10,
             root(3),
             GovernanceExpectedHeadV1::Present(
@@ -443,9 +443,77 @@ fn attempt_rejects_an_inert_compare_and_set_subject() {
                     head_root: [0; 32],
                 },
             ),
+            required.clone(),
+        ),
+        Err(ParliamentReducerErrorV1::ImmutableBindingMismatch)
+    );
+    assert_eq!(
+        ParliamentAttemptStateV1::try_new(
+            attempt(),
+            PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+            10,
+            root(3),
+            GovernanceExpectedHeadV1::Present(
+                iroha_data_model::governance::types::GovernanceExpectedHeadPresentV1 {
+                    subject_id: root(4),
+                    version: 0,
+                    head_root: root(5),
+                },
+            ),
             required,
         ),
         Err(ParliamentReducerErrorV1::ImmutableBindingMismatch)
+    );
+}
+
+#[test]
+fn attempt_rejects_unsupported_policy_and_noncanonical_decision_modes() {
+    let policy_only = vec![RequiredParliamentBodyV1 {
+        body: ParliamentBody::PolicyJury,
+        decision_mode: ParliamentDecisionModeV1::HiddenBindingBallot,
+    }];
+    assert_eq!(
+        ParliamentAttemptStateV1::try_new(
+            attempt(),
+            PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1 + 1,
+            10,
+            root(3),
+            GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+                subject_id: root(4),
+            }),
+            policy_only,
+        ),
+        Err(ParliamentReducerErrorV1::UnsupportedPolicyVersion)
+    );
+    let mut restored = policy_only_state();
+    restored.policy_version = PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1 + 1;
+    assert_eq!(
+        restored.validate(),
+        Err(ParliamentReducerErrorV1::UnsupportedPolicyVersion)
+    );
+
+    let hidden_public_body = vec![
+        RequiredParliamentBodyV1 {
+            body: ParliamentBody::RulesCommittee,
+            decision_mode: ParliamentDecisionModeV1::HiddenBindingBallot,
+        },
+        RequiredParliamentBodyV1 {
+            body: ParliamentBody::PolicyJury,
+            decision_mode: ParliamentDecisionModeV1::HiddenBindingBallot,
+        },
+    ];
+    assert_eq!(
+        ParliamentAttemptStateV1::try_new(
+            attempt(),
+            PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+            10,
+            root(3),
+            GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+                subject_id: root(4),
+            }),
+            hidden_public_body,
+        ),
+        Err(ParliamentReducerErrorV1::InvalidRequiredBodyPipeline)
     );
 }
 
@@ -454,7 +522,7 @@ fn sortition_request_requires_the_exact_frozen_pulse_delay_without_overflow() {
     assert_eq!(
         ParliamentAttemptStateV1::try_new(
             attempt(),
-            7,
+            PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
             0,
             root(3),
             GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
@@ -1381,6 +1449,46 @@ fn body_phase_transition_table_rejects_skip_replay_and_reverse() {
             ParliamentReducerEntityV1::BodyInstance
         ))
     );
+}
+
+#[test]
+fn restore_rejects_partial_body_creation_and_reducer_impossible_statuses() {
+    let fixture = sealed_policy_body(3);
+    fixture
+        .state
+        .validate()
+        .expect("sealed body fixture is canonical");
+
+    let mut orphaned_election = fixture.state.clone();
+    orphaned_election.bodies.remove(&fixture.body_id);
+    orphaned_election
+        .active_bodies
+        .remove(&ParliamentBody::PolicyJury);
+    assert_eq!(
+        orphaned_election.validate(),
+        Err(ParliamentReducerErrorV1::ImmutableBindingMismatch),
+        "Sealed election and body creation are one atomic reducer transition"
+    );
+
+    for impossible_status in [
+        BodyInstanceStatusV1::AwaitingSortition,
+        BodyInstanceStatusV1::AcceptingInvitations,
+        BodyInstanceStatusV1::Superseded,
+    ] {
+        let mut malformed = fixture.state.clone();
+        malformed
+            .bodies
+            .get_mut(&fixture.body_id)
+            .expect("fixture body")
+            .instance
+            .status = impossible_status;
+        assert!(matches!(
+            malformed.validate(),
+            Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                ParliamentReducerEntityV1::BodyInstance
+            ))
+        ));
+    }
 }
 
 #[test]

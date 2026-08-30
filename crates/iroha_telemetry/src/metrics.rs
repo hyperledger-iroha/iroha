@@ -3728,18 +3728,8 @@ fields {
     pub governance_parliament_attempts_by_status: gauge_vec(&["status"]);
     /// Parliament: committed attempt counts grouped by a closed stage.
     pub governance_parliament_attempts_by_stage: gauge_vec(&["stage"]);
-    /// Governance: latest council members count.
-    pub governance_council_members: gauge();
-    /// Governance: latest council alternates count.
-    pub governance_council_alternates: gauge();
-    /// Governance: total candidates considered in the latest draw.
-    pub governance_council_candidates: gauge();
-    /// Governance: epoch index of the latest persisted council.
-    pub governance_council_epoch: gauge();
     /// Governance: total registered citizens.
     pub governance_citizens_total: gauge();
-    /// Governance: citizen service discipline events (decline|no_show|misconduct).
-    pub governance_citizen_service_events_total: int_counter_vec(&["event"]);
     /// Governance: protected-namespace enforcement counters (outcome = allowed|rejected)
     pub governance_protected_namespace_total: int_counter_vec(&["outcome"]);
     /// Governance: manifest admission outcomes (result label)
@@ -5526,13 +5516,7 @@ construct {
                 .set(0);
         }
     }
-    [governance_council_members governance_council_alternates governance_council_candidates
-        governance_council_epoch governance_citizens_total governance_citizen_service_events_total]
-    {
-        for event in ["decline", "no_show", "misconduct"] {
-            let _ = governance_citizen_service_events_total.with_label_values(&[event]);
-        }
-    }
+    [governance_citizens_total]
     [governance_protected_namespace_total]
     {
         for outcome in ["allowed", "rejected"] {
@@ -6118,8 +6102,7 @@ initialize (metrics) {
         storage_da_cache_total storage_da_churn_bytes_total governance_proposals_status
         governance_parliament_transitions_total governance_parliament_no_result_total
         governance_parliament_attempts_by_status governance_parliament_attempts_by_stage
-        governance_council_members governance_council_alternates governance_council_candidates
-        governance_council_epoch governance_citizens_total governance_citizen_service_events_total
+        governance_citizens_total
         governance_protected_namespace_total governance_manifest_admission_total
         governance_manifest_quorum_total governance_manifest_hook_total
         governance_manifest_activations_total governance_bond_events_total
@@ -6409,12 +6392,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 756;
-const METRIC_CATALOG_V2_REGISTERED: usize = 713;
-const METRIC_CATALOG_V2_BYTES: usize = 102_830;
+const METRIC_CATALOG_V2_ROWS: usize = 751;
+const METRIC_CATALOG_V2_REGISTERED: usize = 708;
+const METRIC_CATALOG_V2_BYTES: usize = 102_234;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "d1b8e6f8ce308c0648a1c20322b7649aaa9ecf04b1e33213dbf151389cd43512";
+    "a2a23c5deef66aa99dcfe3d27b402ea7dddd07e63cc2837b77ce9cb68c2e70d8";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

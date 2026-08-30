@@ -5,7 +5,7 @@ use crate::{
     smartcontracts::isi::sorafs_pop_registry::{
         read_active_publications, read_pinned_publications,
     },
-    state::{StateTransaction, WorldReadOnly},
+    state::{StateBlock, StateTransaction, WorldReadOnly},
 };
 use iroha_data_model::{
     account::AccountId,
@@ -44,6 +44,7 @@ use iroha_data_model::{
             MODERATION_CHALLENGE_BOND_AMOUNT_V1, MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
             MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1, MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
             MODERATION_LEDGER_MAX_NONCE_BYTES_V1, MODERATION_LEDGER_MAX_PANEL_SIZE_V1,
+            MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1,
             MODERATION_LEDGER_MAX_REASON_BYTES_V1, MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1,
             MODERATION_QUERY_MAX_CASES_V1, MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1,
             MODERATION_QUERY_MAX_EVENTS_V1, MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
@@ -57,11 +58,12 @@ use iroha_data_model::{
             ModerationJurorReplacementV1, ModerationLedgerPolicyRecord, ModerationLedgerPolicyV1,
             ModerationLedgerStatusV1, ModerationNoShowKindV1, ModerationNoShowRecordV1,
             ModerationOutcomeKindV1, ModerationOutcomeRecordV1, ModerationPanelSelectionV1,
-            ModerationPoPRegistrySnapshotV1, ModerationRevealRecordV1, ModerationSortitionError,
-            ModerationVoteCountsV1, is_canonical_moderation_identifier_v1,
-            sorafs_moderation_panel_roster_hash_v1, sorafs_moderation_pop_challenge_v1,
-            sorafs_moderation_pop_verifier_context_v1, sorafs_moderation_select_panel_v1,
-            sorafs_moderation_sortition_digest_v1, sorafs_moderation_sortition_seed_v1,
+            ModerationPoPRegistrySnapshotV1, ModerationRevealRecordV1, ModerationSortitionAnchorV1,
+            ModerationSortitionError, ModerationVoteCountsV1,
+            is_canonical_moderation_identifier_v1, sorafs_moderation_panel_roster_hash_v1,
+            sorafs_moderation_pop_challenge_v1, sorafs_moderation_pop_verifier_context_v1,
+            sorafs_moderation_select_panel_v1, sorafs_moderation_sortition_digest_v1,
+            sorafs_moderation_sortition_seed_v1,
         },
     },
     state_path::StatePath,
@@ -79,6 +81,7 @@ const STATUS_STATE_KEY: &str = "sorafs_moderation_status_v1";
 const APPEAL_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_v1_";
 const APPEAL_DEPOSIT_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_deposit_v1_";
 const APPEAL_PROOF_TOKEN_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_proof_token_v1_";
+const SORTITION_ANCHOR_SCHEDULE_STATE_KEY: &str = "sorafs_moderation_anchor_schedule_v1";
 const ELIGIBILITY_STATE_KEY_PREFIX: &str = "sorafs_moderation_eligibility_v1_";
 const NULLIFIER_STATE_KEY_PREFIX: &str = "sorafs_moderation_pop_nullifier_v1_";
 const CASE_STATE_KEY_PREFIX: &str = "sorafs_moderation_case_v1_";
@@ -119,6 +122,7 @@ const PROOF_LIMITS: DecodeLimits = DecodeLimits::new(
 );
 const MANAGE_PERMISSION: &str = "CanManageSorafsModeration";
 const MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1: usize = 65_536;
+const MODERATION_SORTITION_ANCHOR_SCHEDULE_VERSION_V1: u16 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// One exact leg of a retained moderation challenge bond settlement.
 pub(in crate::smartcontracts::isi) enum ModerationChallengeBondSettlementLeg {
@@ -238,6 +242,18 @@ struct AppealProofTokenBindingStateV1 {
     case_id: String,
     round_id: String,
     intake_digest: [u8; 32],
+}
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+struct ModerationSortitionAnchorScheduleEntryV1 {
+    registration_deadline_unix_ms: u64,
+    case_id: String,
+    round_id: String,
+    intake_digest: [u8; 32],
+}
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+struct ModerationSortitionAnchorScheduleV1 {
+    version: u16,
+    entries: Vec<ModerationSortitionAnchorScheduleEntryV1>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationPersistedEventV1 {
@@ -362,25 +378,6 @@ fn require_pinned_pop_snapshot(
         snapshot.registry_audit_head,
     )
 }
-fn latest_parent_randomness_anchor(
-    state_transaction: &StateTransaction<'_, '_>,
-) -> Result<[u8; 32], InstructionExecutionError> {
-    let anchor = state_transaction
-        .block_hashes()
-        .last()
-        .map(|hash| *hash.as_ref())
-        .ok_or_else(|| {
-            invalid_parameter(
-                "moderation sortition requires an already committed post-registration parent block",
-            )
-        })?;
-    if anchor == [0; 32] {
-        return Err(corrupt_state(
-            "moderation sortition parent-block randomness anchor is zero",
-        ));
-    }
-    Ok(anchor)
-}
 fn eligibility_class(class: PopEligibilityClassV1) -> ModerationJurorEligibilityClassV1 {
     match class {
         PopEligibilityClassV1::General => ModerationJurorEligibilityClassV1::General,
@@ -397,6 +394,12 @@ fn policy_key() -> &'static StatePath {
 fn status_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| StatePath::from_str(STATUS_STATE_KEY).expect("static state key is valid"))
+}
+fn sortition_anchor_schedule_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
+    KEY.get_or_init(|| {
+        StatePath::from_str(SORTITION_ANCHOR_SCHEDULE_STATE_KEY).expect("static state key is valid")
+    })
 }
 fn event_journal_head_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
@@ -1036,15 +1039,260 @@ fn read_policy_with_current(
     }
     Ok(Some(record))
 }
-/// Validate every persisted moderation policy and case against the first-release schema.
+fn empty_sortition_anchor_schedule() -> ModerationSortitionAnchorScheduleV1 {
+    ModerationSortitionAnchorScheduleV1 {
+        version: MODERATION_SORTITION_ANCHOR_SCHEDULE_VERSION_V1,
+        entries: Vec::new(),
+    }
+}
+fn validate_sortition_anchor_schedule(
+    schedule: &ModerationSortitionAnchorScheduleV1,
+) -> Result<(), InstructionExecutionError> {
+    if schedule.version != MODERATION_SORTITION_ANCHOR_SCHEDULE_VERSION_V1 {
+        return Err(corrupt_state(format!(
+            "unsupported moderation sortition-anchor schedule version {}",
+            schedule.version
+        )));
+    }
+    if schedule.entries.len() > MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1 {
+        return Err(corrupt_state(format!(
+            "moderation sortition-anchor schedule exceeds the hard bound of {MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1}"
+        )));
+    }
+    let mut previous: Option<(u64, String, String)> = None;
+    let mut scopes = std::collections::BTreeSet::new();
+    for entry in &schedule.entries {
+        if entry.registration_deadline_unix_ms == 0
+            || entry.intake_digest == [0; 32]
+            || !is_canonical_moderation_identifier_v1(&entry.case_id)
+            || !is_canonical_moderation_identifier_v1(&entry.round_id)
+        {
+            return Err(corrupt_state(
+                "moderation sortition-anchor schedule contains an invalid entry",
+            ));
+        }
+        let key = (
+            entry.registration_deadline_unix_ms,
+            entry.case_id.clone(),
+            entry.round_id.clone(),
+        );
+        if previous.as_ref().is_some_and(|previous| previous >= &key) {
+            return Err(corrupt_state(
+                "moderation sortition-anchor schedule is duplicated or not canonically ordered",
+            ));
+        }
+        if !scopes.insert((entry.case_id.clone(), entry.round_id.clone())) {
+            return Err(corrupt_state(
+                "moderation sortition-anchor schedule repeats an appeal scope",
+            ));
+        }
+        previous = Some(key);
+    }
+    Ok(())
+}
+fn read_sortition_anchor_schedule(
+    world: &impl WorldReadOnly,
+) -> Result<ModerationSortitionAnchorScheduleV1, InstructionExecutionError> {
+    let Some(bytes) = world
+        .smart_contract_state()
+        .get(sortition_anchor_schedule_key())
+    else {
+        return Ok(empty_sortition_anchor_schedule());
+    };
+    let schedule: ModerationSortitionAnchorScheduleV1 =
+        decode_state_with_current(bytes, "moderation sortition-anchor schedule", None)?;
+    validate_sortition_anchor_schedule(&schedule)?;
+    Ok(schedule)
+}
+fn encode_sortition_anchor_schedule(
+    schedule: &ModerationSortitionAnchorScheduleV1,
+) -> Result<Vec<u8>, InstructionExecutionError> {
+    validate_sortition_anchor_schedule(schedule)?;
+    let encoded = encode_state(schedule, "moderation sortition-anchor schedule")?;
+    if encoded.len() > STATE_MAX_BYTES {
+        return Err(invalid_parameter(format!(
+            "moderation sortition-anchor schedule encoded state exceeds {STATE_MAX_BYTES} bytes"
+        )));
+    }
+    Ok(encoded)
+}
+fn insert_sortition_anchor_schedule_entry(
+    schedule: &mut ModerationSortitionAnchorScheduleV1,
+    entry: ModerationSortitionAnchorScheduleEntryV1,
+) -> Result<(), InstructionExecutionError> {
+    if schedule.entries.len() >= MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1 {
+        return Err(invalid_parameter(format!(
+            "moderation sortition-anchor schedule reached the hard bound of {MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1}"
+        )));
+    }
+    if schedule
+        .entries
+        .iter()
+        .any(|candidate| candidate.case_id == entry.case_id && candidate.round_id == entry.round_id)
+    {
+        return Err(corrupt_state(
+            "moderation sortition-anchor schedule already contains the appeal",
+        ));
+    }
+    let key = (
+        entry.registration_deadline_unix_ms,
+        entry.case_id.as_str(),
+        entry.round_id.as_str(),
+    );
+    let position = schedule
+        .entries
+        .binary_search_by(|candidate| {
+            (
+                candidate.registration_deadline_unix_ms,
+                candidate.case_id.as_str(),
+                candidate.round_id.as_str(),
+            )
+                .cmp(&key)
+        })
+        .unwrap_or_else(|position| position);
+    schedule.entries.insert(position, entry);
+    Ok(())
+}
+/// Pin the exact first consensus block after each due registration deadline.
+///
+/// This bounded start-of-block transition runs before ordinary entrypoints. The consensus header
+/// hash excludes execution results, so committing the anchor in world state is non-circular and
+/// replay-stable. An anchored appeal is removed from the schedule exactly once.
+///
+/// # Errors
+///
+/// Returns an invariant error if the bounded schedule and its indexed appeals disagree.
+pub(crate) fn pin_due_sortition_anchors_v1(
+    state_block: &mut StateBlock<'_>,
+) -> Result<usize, InstructionExecutionError> {
+    let mut transaction = state_block.transaction();
+    let mut schedule = read_sortition_anchor_schedule(transaction.world())?;
+    if schedule.entries.is_empty() {
+        return Ok(0);
+    }
+    let now = block_time_ms(&transaction)?;
+    let due_count = schedule
+        .entries
+        .partition_point(|entry| entry.registration_deadline_unix_ms < now);
+    if due_count == 0 {
+        return Ok(0);
+    }
+    let block_height = transaction._curr_block.height().get();
+    let block_hash = *transaction._curr_block.hash().as_ref();
+    if block_hash == [0; 32] {
+        return Err(corrupt_state(
+            "moderation sortition anchor resolved a zero consensus block hash",
+        ));
+    }
+    let due = schedule.entries.drain(..due_count).collect::<Vec<_>>();
+    for entry in &due {
+        let mut appeal = required_appeal(transaction.world(), &entry.case_id, &entry.round_id)?;
+        if appeal.status != ModerationAppealStatusV1::RegisteringJurors
+            || appeal.sortition_anchor.is_some()
+            || appeal.intake.registration_deadline_unix_ms != entry.registration_deadline_unix_ms
+            || appeal.intake_digest != entry.intake_digest
+        {
+            return Err(corrupt_state(
+                "moderation sortition-anchor schedule disagrees with its indexed appeal",
+            ));
+        }
+        appeal.sortition_anchor = Some(ModerationSortitionAnchorV1 {
+            block_height,
+            block_hash,
+            block_timestamp_unix_ms: now,
+        });
+        let encoded = encode_state(&appeal, "moderation appeal with pinned sortition anchor")?;
+        transaction
+            .world
+            .smart_contract_state
+            .insert(appeal_key(&entry.case_id, &entry.round_id), encoded);
+    }
+    if schedule.entries.is_empty() {
+        transaction
+            .world
+            .smart_contract_state
+            .remove(sortition_anchor_schedule_key().clone());
+    } else {
+        let encoded_schedule = encode_sortition_anchor_schedule(&schedule)?;
+        transaction
+            .world
+            .smart_contract_state
+            .insert(sortition_anchor_schedule_key().clone(), encoded_schedule);
+    }
+    transaction.apply();
+    Ok(due_count)
+}
+/// Validate every persisted moderation policy, appeal, anchor schedule, and case.
 ///
 /// Moderation records live in the otherwise opaque smart-contract state map. Snapshot decoding
 /// therefore cannot rely on the world serializer to decode these values. Startup calls this
-/// validator explicitly so pre-cut policy or case layouts fail before the node serves requests.
+/// validator explicitly so pre-cut layouts fail before the node serves requests.
+///
+/// # Errors
+///
+/// Returns an execution error when retained state does not decode and validate as the canonical
+/// first-release V1 schema, including exact correspondence between unanchored registering appeals
+/// and the bounded anchor schedule.
 pub(crate) fn validate_persisted_moderation_schema_v1(
     world: &impl WorldReadOnly,
 ) -> Result<(), InstructionExecutionError> {
     let policy_present = read_policy(world)?.is_some();
+    let mut expected_schedule = std::collections::BTreeMap::new();
+    let appeal_start = StatePath::from_str(APPEAL_STATE_KEY_PREFIX)
+        .expect("static moderation appeal prefix is valid");
+    let mut appeal_present = false;
+    for (key, payload) in world.smart_contract_state().range(appeal_start..) {
+        if !key.as_ref().starts_with(APPEAL_STATE_KEY_PREFIX) {
+            break;
+        }
+        appeal_present = true;
+        let candidate: ModerationAppealRecordV1 =
+            decode_state_with_current(payload, "moderation appeal", None)?;
+        if appeal_key(&candidate.intake.case_id, &candidate.intake.round_id) != *key {
+            return Err(corrupt_state(
+                "persisted moderation appeal key does not match its V1 record",
+            ));
+        }
+        let restored = read_appeal(world, &candidate.intake.case_id, &candidate.intake.round_id)?
+            .ok_or_else(|| {
+            corrupt_state("persisted moderation appeal disappeared during validation")
+        })?;
+        if restored != candidate {
+            return Err(corrupt_state(
+                "persisted moderation appeal changed during validation",
+            ));
+        }
+        if candidate.status == ModerationAppealStatusV1::RegisteringJurors
+            && candidate.sortition_anchor.is_none()
+        {
+            expected_schedule.insert(
+                (
+                    candidate.intake.case_id.clone(),
+                    candidate.intake.round_id.clone(),
+                ),
+                (
+                    candidate.intake.registration_deadline_unix_ms,
+                    candidate.intake_digest,
+                ),
+            );
+        }
+    }
+    let schedule = read_sortition_anchor_schedule(world)?;
+    let actual_schedule = schedule
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                (entry.case_id.clone(), entry.round_id.clone()),
+                (entry.registration_deadline_unix_ms, entry.intake_digest),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if actual_schedule != expected_schedule {
+        return Err(corrupt_state(
+            "moderation sortition-anchor schedule does not exactly index unanchored registering appeals",
+        ));
+    }
     let start =
         StatePath::from_str(CASE_STATE_KEY_PREFIX).expect("static moderation case prefix is valid");
     let mut case_present = false;
@@ -1072,10 +1320,60 @@ pub(crate) fn validate_persisted_moderation_schema_v1(
             ));
         }
     }
-    if case_present && !policy_present {
+    if (appeal_present || case_present) && !policy_present {
         return Err(corrupt_state(
-            "persisted moderation cases require an active V1 policy",
+            "persisted moderation appeals and cases require an active V1 policy",
         ));
+    }
+    Ok(())
+}
+/// Bind every restored moderation sortition anchor to the committed hash journal.
+///
+/// Snapshot restoration calls this after decoding the world and its exact block-hash prefix.
+/// Live execution performs the same check before sortition, but failing during restore avoids
+/// serving an internally inconsistent first-release snapshot.
+///
+/// # Errors
+///
+/// Returns an invariant error if an anchored appeal names a missing height or a hash other than
+/// the hash committed at that one-based height.
+pub(crate) fn validate_persisted_moderation_anchor_history_v1(
+    world: &impl WorldReadOnly,
+    committed_block_hashes: &[iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>],
+) -> Result<(), InstructionExecutionError> {
+    let appeal_start = StatePath::from_str(APPEAL_STATE_KEY_PREFIX)
+        .expect("static moderation appeal prefix is valid");
+    for (key, payload) in world.smart_contract_state().range(appeal_start..) {
+        if !key.as_ref().starts_with(APPEAL_STATE_KEY_PREFIX) {
+            break;
+        }
+        let candidate: ModerationAppealRecordV1 =
+            decode_state_with_current(payload, "moderation appeal", None)?;
+        let Some(anchor) = candidate.sortition_anchor else {
+            continue;
+        };
+        let zero_based_height = anchor
+            .block_height
+            .checked_sub(1)
+            .ok_or_else(|| corrupt_state("persisted moderation sortition-anchor height is zero"))?;
+        let anchor_index = usize::try_from(zero_based_height).map_err(|_| {
+            corrupt_state("persisted moderation sortition-anchor height exceeds index bounds")
+        })?;
+        let committed_hash = committed_block_hashes
+            .get(anchor_index)
+            .map(|hash| *hash.as_ref())
+            .ok_or_else(|| {
+                corrupt_state(format!(
+                    "persisted moderation sortition anchor for `{}` round `{}` names missing committed height {}",
+                    candidate.intake.case_id, candidate.intake.round_id, anchor.block_height
+                ))
+            })?;
+        if committed_hash != anchor.block_hash {
+            return Err(corrupt_state(format!(
+                "persisted moderation sortition anchor for `{}` round `{}` differs from committed block history at height {}",
+                candidate.intake.case_id, candidate.intake.round_id, anchor.block_height
+            )));
+        }
     }
     Ok(())
 }
@@ -1202,6 +1500,11 @@ fn read_appeal_with_current(
             "failed to digest stored moderation PoP snapshot: {error}"
         ))
     })?;
+    let sortition_anchor_valid = record.sortition_anchor.as_ref().is_none_or(|anchor| {
+        anchor.block_height != 0
+            && anchor.block_hash != [0; 32]
+            && anchor.block_timestamp_unix_ms > record.intake.registration_deadline_unix_ms
+    });
     if record.intake.case_id != case_id
         || record.intake.round_id != round_id
         || record.intake.appellant != record.submitted_by
@@ -1214,6 +1517,7 @@ fn read_appeal_with_current(
         || record.submitted_at_unix_ms == 0
         || record.submitted_at_unix_ms != record.pop_snapshot.captured_at_unix_ms
         || record.submitted_at_unix_ms >= record.intake.registration_deadline_unix_ms
+        || !sortition_anchor_valid
         || record.eligible_jurors.len() > usize::from(record.policy.max_candidate_pool_size)
         || !canonical_account_list(&record.eligible_jurors)
         || !canonical_account_list(&record.accepted_jurors)
@@ -1235,6 +1539,10 @@ fn read_appeal_with_current(
     }
     if let Some(selection) = &record.selection {
         if selection.randomness_anchor == [0; 32]
+            || record.sortition_anchor.as_ref().is_none_or(|anchor| {
+                selection.randomness_anchor != anchor.block_hash
+                    || selection.selected_at_unix_ms < anchor.block_timestamp_unix_ms
+            })
             || selection.seed_digest == [0; 32]
             || selection.seed_digest
                 != sorafs_moderation_sortition_seed_v1(
@@ -1345,6 +1653,7 @@ fn read_appeal_with_current(
         }
         ModerationAppealStatusV1::InsufficientEligiblePool => {
             record.selection.is_none()
+                && record.sortition_anchor.is_some()
                 && record.activated_at_unix_ms.is_none()
                 && record.finalized_at_unix_ms.is_none()
         }
@@ -2500,6 +2809,16 @@ impl Execute for SubmitSorafsModerationAppeal {
                 "failed to digest moderation appeal intake: {error}"
             ))
         })?;
+        let mut anchor_schedule = read_sortition_anchor_schedule(state_transaction.world())?;
+        insert_sortition_anchor_schedule_entry(
+            &mut anchor_schedule,
+            ModerationSortitionAnchorScheduleEntryV1 {
+                registration_deadline_unix_ms: self.intake.registration_deadline_unix_ms,
+                case_id: self.intake.case_id.clone(),
+                round_id: self.intake.round_id.clone(),
+                intake_digest,
+            },
+        )?;
         let record = ModerationAppealRecordV1 {
             intake: self.intake,
             intake_digest,
@@ -2510,6 +2829,7 @@ impl Execute for SubmitSorafsModerationAppeal {
             submitted_by: authority.clone(),
             submitted_at_unix_ms: now,
             eligible_jurors: Vec::new(),
+            sortition_anchor: None,
             selection: None,
             accepted_jurors: Vec::new(),
             replacements: Vec::new(),
@@ -2540,6 +2860,7 @@ impl Execute for SubmitSorafsModerationAppeal {
             "moderation appeal proof-token binding",
         )?;
         let encoded_status = encode_status(&status)?;
+        let encoded_anchor_schedule = encode_sortition_anchor_schedule(&anchor_schedule)?;
         state_transaction
             .world
             .smart_contract_state
@@ -2556,6 +2877,10 @@ impl Execute for SubmitSorafsModerationAppeal {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        state_transaction.world.smart_contract_state.insert(
+            sortition_anchor_schedule_key().clone(),
+            encoded_anchor_schedule,
+        );
         emit_moderation_ledger_event(
             state_transaction,
             SorafsModerationLedgerEventKind::AppealSubmitted,
@@ -2772,12 +3097,41 @@ impl Execute for FinalizeSorafsModerationSortition {
                 })?,
             );
         }
-        let randomness_anchor = latest_parent_randomness_anchor(state_transaction)?;
-        if self.randomness_anchor != randomness_anchor {
+        let anchor = appeal.sortition_anchor.ok_or_else(|| {
+            invalid_parameter(
+                "moderation sortition anchor has not reached committed post-registration state",
+            )
+        })?;
+        let executing_height = state_transaction._curr_block.height().get();
+        if executing_height <= anchor.block_height {
             return Err(invalid_parameter(
-                "moderation sortition randomness anchor does not match the latest committed parent block",
+                "moderation sortition must execute after its pinned anchor block commits",
             ));
         }
+        let anchor_index =
+            usize::try_from(anchor.block_height.saturating_sub(1)).map_err(|_| {
+                corrupt_state("moderation sortition anchor height exceeds local index bounds")
+            })?;
+        let committed_anchor = state_transaction
+            .block_hashes()
+            .get(anchor_index)
+            .map(|hash| *hash.as_ref())
+            .ok_or_else(|| {
+                corrupt_state(
+                    "moderation sortition anchor height is absent from committed block history",
+                )
+            })?;
+        if committed_anchor != anchor.block_hash {
+            return Err(corrupt_state(
+                "moderation sortition anchor differs from committed block history",
+            ));
+        }
+        if self.randomness_anchor != anchor.block_hash {
+            return Err(invalid_parameter(
+                "moderation sortition randomness anchor does not match the consensus-pinned first post-registration block",
+            ));
+        }
+        let randomness_anchor = anchor.block_hash;
         let selection = sorafs_moderation_select_panel_v1(
             appeal.intake_digest,
             appeal.pop_snapshot_digest,
@@ -5497,9 +5851,12 @@ mod tests {
         account::{Account, AccountId},
         asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
-        isi::sorafs::{
-            CommitSorafsPopCredentialBatch, PublishSorafsPopRevocationList,
-            SetSorafsPopIssuerPolicy,
+        isi::{
+            Transfer,
+            sorafs::{
+                CommitSorafsPopCredentialBatch, PublishSorafsPopRevocationList,
+                SetSorafsPopIssuerPolicy,
+            },
         },
         permission::{Permission, Permissions},
         sorafs::{
@@ -5545,6 +5902,71 @@ mod tests {
     const REVEAL_DEADLINE: u64 = CHALLENGE_RESOLUTION_DEADLINE + 1_000;
     const REVEAL_AT: u64 = CHALLENGE_RESOLUTION_DEADLINE + 500;
     const FINALIZE_AT: u64 = REVEAL_DEADLINE + 1;
+    #[derive(norito::codec::Encode)]
+    struct PreCutModerationLedgerPolicyV1 {
+        version: u16,
+        revision: u64,
+        predecessor_policy_digest: Option<[u8; 32]>,
+        max_panel_size: u16,
+        max_candidate_pool_size: u16,
+        max_waitlist_size: u16,
+        max_exclusions_per_case: u16,
+        max_total_window_ms: u64,
+        max_challenges_per_case: u16,
+        missing_commit_penalty_points: u32,
+        unrevealed_commit_penalty_points: u32,
+    }
+    #[derive(norito::codec::Encode)]
+    struct PreCutModerationLedgerPolicyRecord {
+        policy: PreCutModerationLedgerPolicyV1,
+        policy_digest: [u8; 32],
+        activated_at_unix_ms: u64,
+        activated_by: AccountId,
+    }
+    #[derive(norito::codec::Encode)]
+    struct PreCutModerationCaseSpecV1 {
+        version: u16,
+        context: SoraFsModerationBallotContextV1,
+        round_id: String,
+        jurors: Vec<AccountId>,
+        quorum: u16,
+        commit_deadline_unix_ms: u64,
+        challenge_deadline_unix_ms: u64,
+        reveal_deadline_unix_ms: u64,
+        policy_digest: [u8; 32],
+    }
+    #[derive(norito::codec::Encode)]
+    struct PreCutModerationCaseRecordV1 {
+        spec: PreCutModerationCaseSpecV1,
+        policy: PreCutModerationLedgerPolicyV1,
+        status: ModerationCaseStatusV1,
+        opened_at_unix_ms: u64,
+        opened_by: AccountId,
+        commitment_count: u32,
+        reveal_count: u32,
+        challenge_count: u32,
+        challenge_ids: Vec<String>,
+        pending_challenge_count: u32,
+        accepted_challenge_count: u32,
+        expired_challenge_count: u32,
+    }
+    #[derive(norito::codec::Encode)]
+    struct PreCutModerationAppealRecordV1 {
+        intake: ModerationAppealIntakeV1,
+        intake_digest: [u8; 32],
+        policy: ModerationLedgerPolicyV1,
+        pop_snapshot: ModerationPoPRegistrySnapshotV1,
+        pop_snapshot_digest: [u8; 32],
+        status: ModerationAppealStatusV1,
+        submitted_by: AccountId,
+        submitted_at_unix_ms: u64,
+        eligible_jurors: Vec<AccountId>,
+        selection: Option<ModerationPanelSelectionV1>,
+        accepted_jurors: Vec<AccountId>,
+        replacements: Vec<ModerationJurorReplacementV1>,
+        activated_at_unix_ms: Option<u64>,
+        finalized_at_unix_ms: Option<u64>,
+    }
     fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
@@ -5579,6 +6001,34 @@ mod tests {
             unrevealed_commit_penalty_points: 23,
         }
     }
+    fn pre_cut_policy() -> PreCutModerationLedgerPolicyV1 {
+        let current = policy();
+        PreCutModerationLedgerPolicyV1 {
+            version: current.version,
+            revision: current.revision,
+            predecessor_policy_digest: current.predecessor_policy_digest,
+            max_panel_size: current.max_panel_size,
+            max_candidate_pool_size: current.max_candidate_pool_size,
+            max_waitlist_size: current.max_waitlist_size,
+            max_exclusions_per_case: current.max_exclusions_per_case,
+            max_total_window_ms: current.max_total_window_ms,
+            max_challenges_per_case: current.max_challenges_per_case,
+            missing_commit_penalty_points: current.missing_commit_penalty_points,
+            unrevealed_commit_penalty_points: current.unrevealed_commit_penalty_points,
+        }
+    }
+    fn startup_error(world: World) -> String {
+        State::try_new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .err()
+        .expect("pre-cut moderation state must fail startup")
+        .to_string()
+    }
     fn context(jurors: &[AccountId], quorum: u16) -> SoraFsModerationBallotContextV1 {
         SoraFsModerationBallotContextV1 {
             version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
@@ -5603,6 +6053,183 @@ mod tests {
             reveal_deadline_unix_ms: REVEAL_DEADLINE,
             policy_digest: policy().digest().expect("policy digest"),
         }
+    }
+    fn startup_registering_appeal(appellant: &KeyPair) -> ModerationAppealRecordV1 {
+        let intake = panel_intake(appellant, "startup-appeal", 1, 0, 1, 0x95);
+        let intake_digest = intake.digest().expect("startup appeal digest");
+        let pop_snapshot = ModerationPoPRegistrySnapshotV1 {
+            issuer_policy_digest: [0x81; 32],
+            commitment_root: [0x82; 32],
+            commitment_tree_version: 1,
+            revocation_root: [0x83; 32],
+            revocation_list_version: 1,
+            registry_audit_sequence: 1,
+            registry_audit_head: [0x84; 32],
+            captured_at_unix_ms: 1_001_000,
+        };
+        ModerationAppealRecordV1 {
+            intake,
+            intake_digest,
+            policy: policy(),
+            pop_snapshot,
+            pop_snapshot_digest: pop_snapshot.digest().expect("startup PoP snapshot digest"),
+            status: ModerationAppealStatusV1::RegisteringJurors,
+            submitted_by: account(appellant),
+            submitted_at_unix_ms: 1_001_000,
+            eligible_jurors: Vec::new(),
+            sortition_anchor: None,
+            selection: None,
+            accepted_jurors: Vec::new(),
+            replacements: Vec::new(),
+            activated_at_unix_ms: None,
+            finalized_at_unix_ms: None,
+        }
+    }
+    fn startup_world_with_policy(manager: &AccountId) -> World {
+        let active_policy = ModerationLedgerPolicyRecord {
+            policy: policy(),
+            policy_digest: policy().digest().expect("current policy digest"),
+            activated_at_unix_ms: OPENED_AT,
+            activated_by: manager.clone(),
+        };
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            policy_key().clone(),
+            encode_state(&active_policy, "current moderation policy")
+                .expect("encode current policy"),
+        );
+        world
+    }
+    #[test]
+    fn startup_rejects_pre_cut_moderation_policy_layout() {
+        let manager = account(&keypair(0x11));
+        let legacy = PreCutModerationLedgerPolicyRecord {
+            policy: pre_cut_policy(),
+            policy_digest: [0x41; 32],
+            activated_at_unix_ms: OPENED_AT,
+            activated_by: manager,
+        };
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            policy_key().clone(),
+            norito::to_bytes(&legacy).expect("encode pre-cut moderation policy"),
+        );
+        let error = startup_error(world);
+        assert!(
+            error.contains(
+                "incompatible persisted SoraFS moderation V1 policy/appeal/anchor/case state"
+            ) && error.contains("moderation policy"),
+            "startup must identify the incompatible policy layout: {error}"
+        );
+    }
+    #[test]
+    fn startup_rejects_pre_cut_moderation_case_layout() {
+        let manager = account(&keypair(0x11));
+        let jurors = [account(&keypair(0x21)), account(&keypair(0x22))];
+        let current_policy = policy();
+        let current_policy_digest = current_policy.digest().expect("current policy digest");
+        let active_policy = ModerationLedgerPolicyRecord {
+            policy: current_policy,
+            policy_digest: current_policy_digest,
+            activated_at_unix_ms: OPENED_AT,
+            activated_by: manager.clone(),
+        };
+        let legacy = PreCutModerationCaseRecordV1 {
+            spec: PreCutModerationCaseSpecV1 {
+                version: MODERATION_LEDGER_CASE_VERSION_V1,
+                context: context(&jurors, 1),
+                round_id: "round-1".to_owned(),
+                jurors: jurors.to_vec(),
+                quorum: 1,
+                commit_deadline_unix_ms: COMMIT_DEADLINE,
+                challenge_deadline_unix_ms: CHALLENGE_SUBMISSION_DEADLINE,
+                reveal_deadline_unix_ms: REVEAL_DEADLINE,
+                policy_digest: [0x42; 32],
+            },
+            policy: pre_cut_policy(),
+            status: ModerationCaseStatusV1::Open,
+            opened_at_unix_ms: OPENED_AT,
+            opened_by: manager,
+            commitment_count: 0,
+            reveal_count: 0,
+            challenge_count: 0,
+            challenge_ids: Vec::new(),
+            pending_challenge_count: 0,
+            accepted_challenge_count: 0,
+            expired_challenge_count: 0,
+        };
+        let case_id = legacy.spec.context.case_id.clone();
+        let round_id = legacy.spec.round_id.clone();
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            policy_key().clone(),
+            encode_state(&active_policy, "current moderation policy")
+                .expect("encode current policy"),
+        );
+        world.smart_contract_state.insert(
+            case_key(&case_id, &round_id),
+            norito::to_bytes(&legacy).expect("encode pre-cut moderation case"),
+        );
+        let error = startup_error(world);
+        assert!(
+            error.contains(
+                "incompatible persisted SoraFS moderation V1 policy/appeal/anchor/case state"
+            ) && error.contains("moderation case"),
+            "startup must identify the incompatible case layout: {error}"
+        );
+    }
+    #[test]
+    fn startup_rejects_pre_cut_moderation_appeal_layout() {
+        let manager = account(&keypair(0x11));
+        let appellant = keypair(0x12);
+        let current = startup_registering_appeal(&appellant);
+        let case_id = current.intake.case_id.clone();
+        let round_id = current.intake.round_id.clone();
+        let legacy = PreCutModerationAppealRecordV1 {
+            intake: current.intake,
+            intake_digest: current.intake_digest,
+            policy: current.policy,
+            pop_snapshot: current.pop_snapshot,
+            pop_snapshot_digest: current.pop_snapshot_digest,
+            status: current.status,
+            submitted_by: current.submitted_by,
+            submitted_at_unix_ms: current.submitted_at_unix_ms,
+            eligible_jurors: current.eligible_jurors,
+            selection: current.selection,
+            accepted_jurors: current.accepted_jurors,
+            replacements: current.replacements,
+            activated_at_unix_ms: current.activated_at_unix_ms,
+            finalized_at_unix_ms: current.finalized_at_unix_ms,
+        };
+        let mut world = startup_world_with_policy(&manager);
+        world.smart_contract_state.insert(
+            appeal_key(&case_id, &round_id),
+            norito::to_bytes(&legacy).expect("encode pre-cut moderation appeal"),
+        );
+        let error = startup_error(world);
+        assert!(
+            error.contains("incompatible persisted SoraFS moderation V1")
+                && error.contains("moderation appeal"),
+            "startup must identify the incompatible appeal layout: {error}"
+        );
+    }
+    #[test]
+    fn startup_rejects_appeal_anchor_schedule_mismatch() {
+        let manager = account(&keypair(0x11));
+        let appellant = keypair(0x12);
+        let appeal = startup_registering_appeal(&appellant);
+        let mut world = startup_world_with_policy(&manager);
+        world.smart_contract_state.insert(
+            appeal_key(&appeal.intake.case_id, &appeal.intake.round_id),
+            encode_state(&appeal, "current moderation appeal")
+                .expect("encode current moderation appeal"),
+        );
+        let error = startup_error(world);
+        assert!(
+            error.contains("incompatible persisted SoraFS moderation V1")
+                && error.contains("sortition-anchor schedule does not exactly index"),
+            "startup must reject an appeal/schedule mismatch: {error}"
+        );
     }
     fn reveal(
         spec: &ModerationCaseSpecV1,
@@ -5711,6 +6338,48 @@ mod tests {
             .get(&id)
             .map(|value| value.as_ref().clone())
             .unwrap_or_else(Quantity::zero)
+    }
+    fn assert_unique_voting_asset_total(
+        state: &State,
+        accounts: &[AccountId],
+        expected_total: u32,
+    ) {
+        let mut accounts = accounts.to_vec();
+        accounts.sort_by_key(ToString::to_string);
+        accounts.dedup();
+        let total = accounts.iter().fold(Quantity::zero(), |total, account| {
+            total
+                .checked_add(&voting_asset_balance(state, account))
+                .expect("moderation bond custody total remains valid")
+        });
+        assert_eq!(total, Quantity::from(expected_total));
+    }
+    fn assert_bond_custody_distribution(
+        state: &State,
+        challenger: &AccountId,
+        challenger_balance: u32,
+        escrow_balance: u32,
+        slash_receiver_balance: u32,
+    ) {
+        let current_policy = policy();
+        assert_eq!(
+            voting_asset_balance(state, challenger),
+            Quantity::from(challenger_balance)
+        );
+        assert_eq!(
+            voting_asset_balance(state, &current_policy.challenge_escrow_account),
+            Quantity::from(escrow_balance)
+        );
+        assert_eq!(
+            voting_asset_balance(state, &current_policy.challenge_slash_receiver_account),
+            Quantity::from(slash_receiver_balance)
+        );
+        let accounts = [
+            challenger.clone(),
+            current_policy.challenge_escrow_account,
+            current_policy.challenge_slash_receiver_account,
+        ];
+        assert_unique_voting_asset_total(state, &accounts, 1_000);
     }
     #[test]
     fn rejected_challenge_slash_floors_to_voting_asset_precision() {
@@ -6122,12 +6791,21 @@ mod tests {
             })
             .expect("register panel juror eligibility");
         }
+        fn pin_sortition_anchor(&mut self) -> ModerationSortitionAnchorV1 {
+            if self.appeal().sortition_anchor.is_none() {
+                self.run(1_004_000, |_| Ok(()))
+                    .expect("commit first post-registration anchor block");
+            }
+            self.appeal()
+                .sortition_anchor
+                .expect("consensus maintenance pinned the sortition anchor")
+        }
         fn finalize_single_juror_sortition(&mut self) -> [u8; 32] {
             let manager = self.manager_id();
             let juror = self.juror_id();
             let snapshot_digest = self.appeal().pop_snapshot_digest;
-            self.run(1_004_000, |transaction| {
-                let randomness_anchor = latest_parent_randomness_anchor(transaction)?;
+            let randomness_anchor = self.pin_sortition_anchor().block_hash;
+            self.run(1_004_001, |transaction| {
                 FinalizeSorafsModerationSortition::new(
                     "panel-case".to_owned(),
                     "round-1".to_owned(),
@@ -6144,6 +6822,14 @@ mod tests {
                 .expect("selected panel")
                 .sortition_digest
         }
+    }
+    fn panel_anchor_hash(
+        transaction: &StateTransaction<'_, '_>,
+    ) -> Result<[u8; 32], InstructionExecutionError> {
+        required_appeal(transaction.world(), "panel-case", "round-1")?
+            .sortition_anchor
+            .map(|anchor| anchor.block_hash)
+            .ok_or_else(|| corrupt_state("panel fixture has no pinned sortition anchor"))
     }
     #[test]
     fn moderation_payload_decoder_rejects_alternate_norito_layout() {
@@ -6296,6 +6982,11 @@ mod tests {
             submitted_by: manager.clone(),
             submitted_at_unix_ms: 700,
             eligible_jurors: eligible_jurors.clone(),
+            sortition_anchor: Some(ModerationSortitionAnchorV1 {
+                block_height: 1,
+                block_hash: randomness_anchor,
+                block_timestamp_unix_ms: 801,
+            }),
             selection: Some(ModerationPanelSelectionV1 {
                 randomness_anchor,
                 seed_digest,
@@ -6401,6 +7092,12 @@ mod tests {
             }
             result
         }
+    }
+    #[test]
+    fn persisted_current_moderation_policy_and_case_validate_at_startup() {
+        let fixture = Fixture::new(1);
+        validate_persisted_moderation_schema_v1(&fixture.state.world.view())
+            .expect("current first-release moderation state must validate");
     }
     #[test]
     fn successful_commit_reveal_finalization_persists_queries_and_no_show() {
@@ -6568,6 +7265,164 @@ mod tests {
         assert_eq!(status.reveals, 1);
     }
     #[test]
+    fn challenge_submission_deadline_is_inclusive_and_one_tick_later_is_atomic() {
+        let mut at_deadline = Fixture::new(1);
+        let challenger = account(&at_deadline.outsider);
+        at_deadline
+            .run(CHALLENGE_SUBMISSION_DEADLINE, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-at-deadline".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x61; 32],
+                    "submitted at the exact deadline".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .expect("the challenge submission deadline is inclusive");
+        let challenge = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-at-deadline".to_owned(),
+        )
+        .execute(&at_deadline.state.view())
+        .expect("deadline challenge is retained");
+        assert_eq!(challenge.raised_at_unix_ms, CHALLENGE_SUBMISSION_DEADLINE);
+        assert_bond_custody_distribution(&at_deadline.state, &challenger, 850, 150, 150);
+
+        let mut after_deadline = Fixture::new(1);
+        let late_challenger = account(&after_deadline.outsider);
+        let case_before = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&after_deadline.state.view())
+            .expect("fixture case");
+        let status_before = FindSorafsModerationStatus
+            .execute(&after_deadline.state.view())
+            .expect("fixture status");
+        let error = after_deadline
+            .run(CHALLENGE_SUBMISSION_DEADLINE + 1, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-after-deadline".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x62; 32],
+                    "submitted one tick too late".to_owned(),
+                )
+                .execute(&late_challenger, transaction)
+            })
+            .expect_err("one tick after the deadline must reject");
+        assert!(
+            error.to_string().contains("challenge phase is closed"),
+            "unexpected deadline error: {error}"
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&after_deadline.state.view())
+                .expect("fixture case after rejection"),
+            case_before
+        );
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&after_deadline.state.view())
+                .expect("fixture status after rejection"),
+            status_before
+        );
+        assert!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-after-deadline".to_owned(),
+            )
+            .execute(&after_deadline.state.view())
+            .is_err()
+        );
+        assert_bond_custody_distribution(&after_deadline.state, &late_challenger, 1_000, 0, 0);
+    }
+    #[test]
+    fn insufficient_challenge_bond_rejects_without_balances_records_or_counters() {
+        let mut fixture = Fixture::new(1);
+        let challenger = account(&fixture.outsider);
+        let manager = fixture.manager_id();
+        let challenger_asset = AssetId::new(
+            fixture.state.gov.voting_asset_id.clone(),
+            challenger.clone(),
+        );
+        fixture
+            .run(1_500, |transaction| {
+                Transfer::asset_quantity(challenger_asset, 851_u32, manager)
+                    .execute(&challenger, transaction)
+            })
+            .expect("reduce the challenger balance to one unit below the fixed bond");
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(149_u32)
+        );
+        let case_before = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .expect("fixture case");
+        let status_before = FindSorafsModerationStatus
+            .execute(&fixture.state.view())
+            .expect("fixture status");
+        let error = fixture
+            .run(2_500, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-underfunded".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x63; 32],
+                    "bond is one unit short".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .expect_err("a 149-unit balance cannot fund the fixed 150-unit bond");
+        assert!(
+            error.to_string().contains("Not enough quantity"),
+            "unexpected underfunded bond error: {error}"
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("fixture case after rejection"),
+            case_before
+        );
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&fixture.state.view())
+                .expect("fixture status after rejection"),
+            status_before
+        );
+        assert!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-underfunded".to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .is_err()
+        );
+        let current_policy = policy();
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(149_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &current_policy.challenge_escrow_account),
+            Quantity::zero()
+        );
+        assert_eq!(
+            voting_asset_balance(
+                &fixture.state,
+                &current_policy.challenge_slash_receiver_account,
+            ),
+            Quantity::zero()
+        );
+    }
+    #[test]
     fn accepted_challenge_blocks_reveal_and_closes_without_penalties() {
         let mut fixture = Fixture::new(1);
         let juror = fixture.juror_id(0);
@@ -6671,10 +7526,15 @@ mod tests {
                 .execute(&challenger, transaction)
             })
             .unwrap();
-        assert_eq!(
-            voting_asset_balance(&fixture.state, &challenger),
-            Quantity::from(850_u32)
-        );
+        assert_bond_custody_distribution(&fixture.state, &challenger, 850, 150, 150);
+        let case_after_first =
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("case after first challenge");
+        let status_after_first = FindSorafsModerationStatus
+            .execute(&fixture.state.view())
+            .expect("status after first challenge");
+        let juror_balance_after_first = voting_asset_balance(&fixture.state, &juror);
         assert!(
             fixture
                 .run(2_501, |transaction| {
@@ -6707,6 +7567,36 @@ mod tests {
                 })
                 .is_err()
         );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("case after duplicate rejections"),
+            case_after_first,
+            "duplicate id and challenger rejections must preserve all case counters and indexes"
+        );
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&fixture.state.view())
+                .expect("status after duplicate rejections"),
+            status_after_first,
+            "duplicate challenge rejections must preserve global counters"
+        );
+        assert_bond_custody_distribution(&fixture.state, &challenger, 850, 150, 150);
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &juror),
+            juror_balance_after_first,
+            "duplicate evidence rejection must not debit its alternate challenger"
+        );
+        assert!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-second".to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .is_err(),
+            "duplicate challenger rejection must not retain a record"
+        );
         assert!(
             fixture
                 .run(2_502, |transaction| {
@@ -6722,6 +7612,34 @@ mod tests {
                     .execute(&juror, transaction)
                 })
                 .is_err()
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("case after duplicate evidence rejection"),
+            case_after_first
+        );
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&fixture.state.view())
+                .expect("status after duplicate evidence rejection"),
+            status_after_first
+        );
+        assert_bond_custody_distribution(&fixture.state, &challenger, 850, 150, 150);
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &juror),
+            juror_balance_after_first,
+            "duplicate evidence rejection must not debit its alternate challenger"
+        );
+        assert!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-same-evidence".to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .is_err(),
+            "duplicate evidence rejection must not retain a record"
         );
         assert!(
             fixture
@@ -6785,10 +7703,7 @@ mod tests {
             Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
         );
         assert_eq!(challenge.bond.slashed_amount, Quantity::zero());
-        assert_eq!(
-            voting_asset_balance(&fixture.state, &challenger),
-            Quantity::from(1_000_u32)
-        );
+        assert_bond_custody_distribution(&fixture.state, &challenger, 1_000, 0, 0);
         assert_eq!(
             FindSorafsModerationStatus
                 .execute(&fixture.state.view())
@@ -6843,6 +7758,36 @@ mod tests {
                 .execute(&manager, transaction)
             })
             .unwrap();
+        let current_policy = policy();
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(850_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &manager),
+            Quantity::from(850_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &current_policy.challenge_escrow_account),
+            Quantity::from(300_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(
+                &fixture.state,
+                &current_policy.challenge_slash_receiver_account,
+            ),
+            Quantity::from(300_u32)
+        );
+        assert_unique_voting_asset_total(
+            &fixture.state,
+            &[
+                challenger.clone(),
+                manager.clone(),
+                current_policy.challenge_escrow_account.clone(),
+                current_policy.challenge_slash_receiver_account.clone(),
+            ],
+            2_000,
+        );
         assert!(
             fixture
                 .run(2_600, |transaction| {
@@ -6932,9 +7877,17 @@ mod tests {
             Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
         );
         assert_eq!(challenge.bond.slashed_amount, Quantity::zero());
-        assert_eq!(
-            voting_asset_balance(&fixture.state, &challenger),
-            Quantity::from(1_000_u32)
+        assert_bond_custody_distribution(&fixture.state, &challenger, 1_000, 0, 0);
+        assert_bond_custody_distribution(&fixture.state, &manager, 1_000, 0, 0);
+        assert_unique_voting_asset_total(
+            &fixture.state,
+            &[
+                challenger.clone(),
+                manager.clone(),
+                current_policy.challenge_escrow_account,
+                current_policy.challenge_slash_receiver_account,
+            ],
+            2_000,
         );
         let outcome = FindSorafsModerationOutcome::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
@@ -6993,6 +7946,7 @@ mod tests {
                 .execute(&challenger, transaction)
             })
             .unwrap();
+        assert_bond_custody_distribution(&fixture.state, &challenger, 850, 150, 150);
         let manager = fixture.manager_id();
         fixture
             .run(2_600, |transaction| {
@@ -7031,15 +7985,116 @@ mod tests {
         );
         assert_eq!(challenge.bond.refunded_amount, Quantity::from(113_u32));
         assert_eq!(challenge.bond.slashed_amount, Quantity::from(37_u32));
-        assert_eq!(
-            voting_asset_balance(&fixture.state, &challenger),
-            Quantity::from(963_u32)
-        );
+        assert_bond_custody_distribution(&fixture.state, &challenger, 963, 37, 37);
         let outcome = FindSorafsModerationOutcome::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
             .unwrap();
         assert_eq!(outcome.kind, ModerationOutcomeKindV1::Contested);
         assert_eq!(outcome.votes_total, 2);
+    }
+    #[test]
+    fn rejected_challenge_settlement_rolls_back_refund_when_slash_leg_fails() {
+        let mut fixture = Fixture::new(1);
+        let challenger = account(&fixture.outsider);
+        fixture
+            .run(2_500, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-rollback".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x74; 32],
+                    "exercise settlement rollback".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .expect("fund the challenge bond");
+        let current_policy = policy();
+        let escrow_asset = AssetId::new(
+            fixture.state.gov.voting_asset_id.clone(),
+            current_policy.challenge_escrow_account.clone(),
+        );
+        fixture
+            .run(2_501, |transaction| {
+                crate::smartcontracts::isi::asset::isi::debit_numeric_asset_balance_for_test(
+                    &mut transaction.world,
+                    &transaction.network_id,
+                    &escrow_asset,
+                    &Quantity::one(),
+                )
+            })
+            .expect("simulate one-unit custody undercollateralization");
+        let case_before = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .expect("pending challenge case");
+        let status_before = FindSorafsModerationStatus
+            .execute(&fixture.state.view())
+            .expect("pending challenge status");
+        let challenge_before = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-rollback".to_owned(),
+        )
+        .execute(&fixture.state.view())
+        .expect("pending challenge");
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(850_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &current_policy.challenge_escrow_account),
+            Quantity::from(149_u32)
+        );
+
+        let manager = fixture.manager_id();
+        let error = fixture
+            .run(2_600, |transaction| {
+                ResolveSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-rollback".to_owned(),
+                    ModerationChallengeDecisionV1::Rejected,
+                )
+                .execute(&manager, transaction)
+            })
+            .expect_err("the later slash leg must detect undercollateralized custody");
+        assert!(
+            error.to_string().contains("undercollateralized"),
+            "unexpected settlement error: {error}"
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("case after settlement rollback"),
+            case_before
+        );
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&fixture.state.view())
+                .expect("status after settlement rollback"),
+            status_before
+        );
+        assert_eq!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-rollback".to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .expect("pending challenge after settlement rollback"),
+            challenge_before
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(850_u32),
+            "the successful refund leg must roll back with the failed slash leg"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &current_policy.challenge_escrow_account),
+            Quantity::from(149_u32),
+            "failed settlement must preserve undercollateralized custody exactly"
+        );
     }
     #[test]
     fn missed_quorum_persists_distinct_no_show_penalties() {

@@ -1768,7 +1768,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         capturedBody = JSON.parse(init.body);
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+          jsonData: cloneFixture(toriiFixtures.governance.plainBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -1792,7 +1792,8 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     assert.equal(capturedBody.chain_id, undefined);
     assert.equal(capturedInit.redirect, "error");
     assert.equal(fetchCalls, 1);
-    assert.equal(ballot.accepted, true);
+    assert.equal(ballot.drafted, true);
+    assert.equal(ballot.accepted, undefined);
   });
 
   test("governance ballots reject retired identity keys and unbound authentication", async () => {
@@ -2250,7 +2251,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         capturedBody = JSON.parse(init.body);
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+          jsonData: cloneFixture(toriiFixtures.governance.plainBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -2280,7 +2281,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         capturedBody = JSON.parse(init.body);
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+          jsonData: cloneFixture(toriiFixtures.governance.plainBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -2309,7 +2310,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         capturedBody = JSON.parse(init.body);
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+          jsonData: cloneFixture(toriiFixtures.governance.plainBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -2362,7 +2363,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         observedSignal = init?.signal;
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+          jsonData: cloneFixture(toriiFixtures.governance.plainBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -2498,7 +2499,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         calls.push({ url, body: JSON.parse(init.body) });
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.zkBallotDeferred),
+          jsonData: cloneFixture(toriiFixtures.governance.zkBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -2525,8 +2526,8 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     assert.equal(calls[0].body.amount, "18446744073709551616.25");
     assert.equal(calls[0].body.duration_blocks, 0);
     assert.equal(calls[0].body.nullifier, "ff".repeat(32));
-    assert.equal(zkV1Result.accepted, false);
-    assert.equal(zkV1Result.reason, "build transaction skeleton");
+    assert.equal(zkV1Result.drafted, true);
+    assert.equal(zkV1Result.accepted, undefined);
 
     const zkProofResult = await client.governanceSubmitZkBallotProofV1(
       {
@@ -2552,7 +2553,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     assert.equal(calls[1].body.ballot.amount, "18446744073709551616.25");
     assert.equal(calls[1].body.ballot.duration_blocks, 0);
     assert.equal(calls[1].body.ballot.direction, "Nay");
-    assert.equal(zkProofResult.accepted, false);
+    assert.equal(zkProofResult.drafted, true);
   });
 
   test("governance ZK-v1 routes emit full-u64 duration tokens losslessly", async () => {
@@ -2562,7 +2563,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         bodies.push(String(init.body));
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.zkBallotAccepted),
+          jsonData: cloneFixture(toriiFixtures.governance.zkBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },

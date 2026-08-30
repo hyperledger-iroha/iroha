@@ -1344,6 +1344,47 @@ fn no_show_failover_uses_one_stable_native_activation() {
     assert_eq!(*activation.sortition_digest(), expected_sortition_digest);
 }
 #[test]
+fn sortition_maintenance_uses_the_pinned_anchor_not_the_latest_finalized_hash() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let governance = account(99);
+    let finalized_block_hash = [0xF3; 32];
+    let (snapshot, pinned_anchor) =
+        registering_snapshot_with_pinned_anchor(finalized_block_hash, governance.clone());
+    assert_ne!(pinned_anchor, finalized_block_hash);
+    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+        observed_finalized_height: snapshot.finalized_height,
+    }));
+    open_test_orchestrator!(orchestrator = config(&temp, "pinned-anchor.norito"); deps(Arc::new(MockSnapshotReader::new(snapshot)), Arc::clone(&submitter)); "orchestrator");
+
+    let outcomes = orchestrator
+        .run_maintenance(governance, 1)
+        .expect("derive one anchored sortition action");
+    assert_eq!(outcomes.len(), 1);
+    let actions = submitter.actions();
+    let [ModerationNativeActionV1::FinalizeSortition(sortition)] = actions.as_slice() else {
+        panic!("expected one native sortition action");
+    };
+    assert_eq!(*sortition.randomness_anchor(), pinned_anchor);
+    assert_ne!(*sortition.randomness_anchor(), finalized_block_hash);
+}
+#[test]
+fn post_registration_snapshot_without_a_pinned_anchor_fails_closed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let governance = account(99);
+    let (mut snapshot, _) = registering_snapshot_with_pinned_anchor([0xF4; 32], governance.clone());
+    snapshot.appeals[0].appeal.sortition_anchor = None;
+    orchestrator_fixture!(orchestrator; reader = Arc::new(MockSnapshotReader::new(snapshot)); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)); => config(&temp, "missing-anchor.norito"); deps(reader, submitter); "orchestrator");
+
+    let error = orchestrator
+        .run_maintenance(governance, 1)
+        .expect_err("post-registration finalized state without an anchor must fail");
+    assert!(matches!(
+        error,
+        ModerationOrchestratorError::InvalidFinalizedSnapshot(ref message)
+            if message.contains("missing its sortition anchor")
+    ));
+}
+#[test]
 fn same_finalized_tip_produces_byte_identical_maintenance_actions_across_replicas() {
     let temp = tempfile::tempdir().expect("tempdir");
     let governance = account(100);

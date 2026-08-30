@@ -83,6 +83,17 @@ def sample_persisted_record(index_record):
             "reference_snapshot_id": index_record["reference_snapshot_id"],
             "embedded_signature_detected": False,
         },
+        "parties": {
+            "originator_participant_id": "originator-bank",
+            "counterparty_participant_id": "counterparty-bank",
+            "admitting_participant_id": "originator-bank",
+            "admitting_operator_key": "ed25519:operator-public-key",
+            "originator_financial_id": "ORIGINATOR-BIC",
+            "counterparty_financial_id": "COUNTERPARTY-BIC",
+            "pinned_profile_id": index_record["profile_id"],
+            "pinned_signature_policy": "record_only",
+        },
+        "replay_expires_at_ms": index_record["updated_at_ms"] + 86_400_000,
         "status_history": [
             {
                 "status": index_record["state"],
@@ -121,7 +132,7 @@ def sample_record(message_id="msg-1"):
 
 def sample_index():
     root = {
-        "version": 1,
+        "version": ADAPTER.INDEX_VERSION,
         "record_count": 1,
         "records": [sample_record()],
     }
@@ -1575,6 +1586,72 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertNotIn("notary-source-secret", message)
                     self.assertNotIn(hidden, message)
 
+    def test_persisted_record_v2_party_auth_and_replay_shape_is_fail_closed(self):
+        cases = (
+            (
+                "v1-record",
+                lambda source: source.update({"version": 1}),
+                "unsupported persisted record version",
+            ),
+            (
+                "missing-party-field",
+                lambda source: source["parties"].pop("admitting_operator_key"),
+                "parties is missing required keys: admitting_operator_key",
+            ),
+            (
+                "unsupported-signature-policy",
+                lambda source: source["parties"].update(
+                    {"pinned_signature_policy": "accept_anything"}
+                ),
+                "pinned_signature_policy must be record_only",
+            ),
+            (
+                "profile-pin-mismatch",
+                lambda source: source["parties"].update(
+                    {"pinned_profile_id": "different-profile"}
+                ),
+                "pinned_profile_id does not match metadata.profile_id",
+            ),
+            (
+                "boolean-replay-expiry",
+                lambda source: source.update({"replay_expires_at_ms": True}),
+                "replay_expires_at_ms must be a non-negative integer",
+            ),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                record = sample_record()
+                source = sample_persisted_record(record)
+                mutate(source)
+                source = with_digest(source, ADAPTER.PERSISTED_RECORD_DIGEST_FIELD)
+                record[ADAPTER.PERSISTED_RECORD_DIGEST_FIELD] = source[
+                    ADAPTER.PERSISTED_RECORD_DIGEST_FIELD
+                ]
+                record_path = root / record["filename"]
+                record_path.write_text(
+                    json.dumps(source, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._verify_persisted_record_source(
+                        record,
+                        record_path,
+                        "record",
+                    )
+
+                self.assertIn(expected, str(caught.exception))
+
+        v1_index = sample_index()
+        v1_index["version"] = 1
+        v1_index = with_digest(v1_index, ADAPTER.INDEX_DIGEST_FIELD)
+        with self.assertRaisesRegex(
+            ADAPTER.AdapterError,
+            f"audit index version must be {ADAPTER.INDEX_VERSION}",
+        ):
+            ADAPTER.verify_audit_index(v1_index)
+
     def test_persisted_record_unicode_format_controls_are_rejected_without_echo(self):
         cases = (
             (
@@ -2386,7 +2463,11 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             export_dir = root / "export"
             export_dir.mkdir()
             empty_index = with_digest(
-                {"version": 1, "record_count": 0, "records": []},
+                {
+                    "version": ADAPTER.INDEX_VERSION,
+                    "record_count": 0,
+                    "records": [],
+                },
                 ADAPTER.INDEX_DIGEST_FIELD,
             )
             write_export(
@@ -4759,7 +4840,13 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 index["version"] = True
                 write_export(export_dir, index=index)
 
-            cases.append(("index", boolean_index, "audit index version must be 1"))
+            cases.append(
+                (
+                    "index",
+                    boolean_index,
+                    f"audit index version must be {ADAPTER.INDEX_VERSION}",
+                )
+            )
 
             def boolean_index_record_count(export_dir):
                 index = sample_index()
@@ -4987,7 +5074,7 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             export_dir = Path(raw_export)
             record = sample_record("msg-1")
             index = {
-                "version": 1,
+                "version": ADAPTER.INDEX_VERSION,
                 "record_count": 2,
                 "records": [record, dict(record)],
             }

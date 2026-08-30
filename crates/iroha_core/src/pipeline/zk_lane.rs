@@ -702,11 +702,7 @@ fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: ZkOutcome) {
         if let Some(header) = &job.header {
             let artifact =
                 crate::zk::make_trace_digest_artifact(job.code_hash, job.tx_hash.as_ref(), dig);
-            crate::zk::queue_trace_proof(header.height().get(), artifact);
-            crate::zk::queue_trace_for_proving(
-                header.height().get(),
-                crate::zk::TraceForProving::from_task(&job, dig),
-            );
+            crate::zk::queue_trace_digest(header.height().get(), artifact);
         }
     }
     let transport_desc = job.transport_capabilities.as_ref().map(|caps| {
@@ -1203,11 +1199,10 @@ mod tests {
     }
     #[cfg(feature = "zk-preverify")]
     #[test]
-    fn process_batch_enqueues_digest_and_trace_jobs() {
+    fn process_batch_enqueues_trace_digest() {
         use iroha_data_model::block::BlockHeader;
         use std::num::NonZeroU64;
-        crate::zk::reset_trace_proof_state_for_tests();
-        crate::zk::reset_trace_proving_state_for_tests();
+        crate::zk::reset_trace_digest_state_for_tests();
         let header = BlockHeader::new(
             NonZeroU64::new(42).expect("non-zero"),
             None,
@@ -1246,11 +1241,9 @@ mod tests {
         let mut batch = vec![task];
         process_batch(&mut batch);
         assert!(batch.is_empty(), "processing drains the batch");
-        let proving_jobs = crate::zk::collect_traces_for_proving(header.height().get());
-        assert_eq!(proving_jobs.len(), 1, "trace job enqueued for proving");
-        let proofs = crate::zk::collect_trace_proofs_for_height(header.height().get());
-        assert_eq!(proofs.len(), 1, "digest artifact recorded");
-        let artifact = &proofs[0];
+        let digests = crate::zk::collect_trace_digests_for_height(header.height().get());
+        assert_eq!(digests.len(), 1, "digest artifact recorded");
+        let artifact = &digests[0];
         assert_eq!(artifact.backend, "zk-trace/digest");
         assert_eq!(artifact.proof, expected_digest.to_vec());
     }

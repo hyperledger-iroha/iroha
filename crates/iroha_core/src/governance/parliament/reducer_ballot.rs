@@ -1034,8 +1034,8 @@ impl ParliamentAttemptStateV1 {
     /// Mark a due certificate superseded by a different compare-and-set head.
     ///
     /// # Errors
-    /// Returns an error for an unchanged head, early execution, wrong attempt,
-    /// or any replay/noncertified transition.
+    /// Returns an error for an unchanged, malformed, or cross-subject head,
+    /// early execution, a wrong attempt, or any replay/noncertified transition.
     pub fn mark_superseded(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
@@ -1045,6 +1045,12 @@ impl ParliamentAttemptStateV1 {
         let certificate = self.ensure_certified_for_execution(governance_attempt_id, at_height)?;
         if observed_head == certificate.expected_head {
             return Err(ParliamentReducerErrorV1::ExpectedHeadUnchanged);
+        }
+        if !expected_head_is_valid(observed_head)
+            || expected_head_subject(observed_head)
+                != expected_head_subject(certificate.expected_head)
+        {
+            return Err(ParliamentReducerErrorV1::InvalidSupersedingHead);
         }
         self.attempt.status = GovernanceAttemptStatusV1::Superseded;
         self.terminal_height = Some(at_height);

@@ -24,6 +24,8 @@ use sorafs_manifest::{
     },
 };
 #[cfg(test)]
+use sorafs_node::pop_credentials::PopRequestAuthorityV1;
+#[cfg(test)]
 use sorafs_node::pop_credentials::pop_enrollment_recipient_public_key_digest_v1;
 use sorafs_node::pop_credentials::{
     POP_API_AUTHENTICATION_MAX_BYTES_V1, POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1,
@@ -34,8 +36,8 @@ use sorafs_node::pop_credentials::{
     PopCredentialServicePolicyV1, PopEnrollmentRecipientV1, PopEnrollmentStateV1,
     PopEnrollmentStatusV1, PopFinalizedCursorV1, PopFinalizedRegistryProjectionV1,
     PopFinalizedRegistryReader, PopIssuanceDraftV1, PopIssuerSigner, PopIssuerSigningPurposeV1,
-    PopOutboxSubmitOutcomeV1, PopRecipientOpenErrorV1, PopRegistrySubmitter, PopRequestAuthorityV1,
-    PopWalletKeyWrapper, PopWalletRecipientV1, PopWalletVault,
+    PopOutboxSubmitOutcomeV1, PopRecipientOpenErrorV1, PopRegistrySubmitter, PopWalletKeyWrapper,
+    PopWalletRecipientV1, PopWalletVault,
 };
 use std::{fmt, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
@@ -55,8 +57,6 @@ pub const POP_PROOF_REQUEST_MAX_BYTES_V1: usize =
 pub const POP_WALLET_DELIVERY_RESPONSE_MAX_BYTES_V1: usize =
     canonical_base64_max_len(POP_WALLET_DELIVERY_MAX_BYTES_V1) + 8 * 1024;
 const POP_CANONICAL_DECODE_MAX_DEPTH_V1: usize = 64;
-const POP_ISSUE_TRIGGER_BINDING_DOMAIN_V1: &[u8] = b"sorafs.pop.issue-trigger.v1";
-const POP_WALLET_WITNESS_SYNC_BINDING_DOMAIN_V1: &[u8] = b"sorafs.pop.wallet-witness-sync-api.v1";
 const fn canonical_base64_max_len(decoded_len: usize) -> usize {
     decoded_len.div_ceil(3).saturating_mul(4)
 }
@@ -923,7 +923,6 @@ pub struct PopCredentialToriiRuntimeV1 {
     config: PopCredentialRuntimeConfigV1,
     provider_registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
     api: PopCredentialApiV1,
-    authenticator: Arc<dyn PopCredentialApiAuthenticator>,
     service: Mutex<PopCredentialService>,
     registry_submitter: Arc<dyn PopRegistrySubmitter>,
     registry_reader: Arc<dyn PopFinalizedRegistryReader>,
@@ -1075,7 +1074,6 @@ impl PopCredentialToriiRuntimeV1 {
             config,
             provider_registry,
             api: PopCredentialApiV1::new(Arc::clone(&authenticator)),
-            authenticator,
             service: Mutex::new(service),
             registry_submitter,
             registry_reader,
@@ -1120,10 +1118,14 @@ impl PopCredentialToriiRuntimeV1 {
         self.current_finalized_time_sample()
             .map(|sample| sample.finalized_epoch)
     }
-    fn committed_registry_context(
+    fn committed_registry_context_after_authentication(
         &self,
+        authenticated_sample: PopFinalizedTimeSampleV1,
     ) -> Result<PopCommittedRegistryContextV1<'_>, PopCredentialServiceError> {
         let sample = self.current_finalized_time_sample()?;
+        if sample != authenticated_sample {
+            return Err(PopCredentialServiceError::InvalidState);
+        }
         PopCommittedRegistryContextV1::new(
             self.registry_reader.as_ref(),
             PopFinalizedCursorV1 {
@@ -1187,10 +1189,21 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<PopEnrollmentStatusV1, PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let authorization = self.api.authorize_submit_enrollment(
+                credential,
+                canonical_enrollment,
+                authenticated_sample.finalized_epoch,
+            )?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
             let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
-            self.api
-                .submit_enrollment(&mut service, credential, canonical_enrollment, committed)
+            self.api.submit_enrollment_authorized(
+                &mut service,
+                authorization,
+                canonical_enrollment,
+                committed,
+            )
         }
         .await;
         self.provider_registry.finish(result)
@@ -1202,10 +1215,21 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<PopEnrollmentStatusV1, PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let authorization = self.api.authorize_enrollment_status(
+                credential,
+                request_id,
+                authenticated_sample.finalized_epoch,
+            )?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
             let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
-            self.api
-                .enrollment_status(&mut service, credential, request_id, committed)
+            self.api.enrollment_status_authorized(
+                &mut service,
+                authorization,
+                request_id,
+                committed,
+            )
         }
         .await;
         self.provider_registry.finish(result)
@@ -1217,10 +1241,17 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<PopEnrollmentStatusV1, PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let authorization = self.api.authorize_record_approval(
+                credential,
+                &approval,
+                authenticated_sample.finalized_epoch,
+            )?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
             let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
             self.api
-                .record_approval(&mut service, credential, approval, committed)
+                .record_approval_authorized(&mut service, authorization, approval, committed)
         }
         .await;
         self.provider_registry.finish(result)
@@ -1232,16 +1263,18 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<[u8; 32], PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
-            let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
-            let now_epoch = committed.now_epoch();
-            authorize_private_provider_access(
-                self.authenticator.as_ref(),
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let authorization = self.api.authorize_issue_resolved(
                 credential,
-                PopCredentialApiActionV1::TriggerCredentialIssuance,
-                pop_digest_domain(POP_ISSUE_TRIGGER_BINDING_DOMAIN_V1, &request_id),
-                now_epoch,
+                request_id,
+                authenticated_sample.finalized_epoch,
             )?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
+            let now_epoch = committed.now_epoch();
+            let mut service = self.service.lock().await;
+            self.api
+                .consume_issue_resolved_authorization(authorization, request_id, now_epoch)?;
             committed.reconcile(&mut service)?;
             let draft = self
                 .issuance_draft_provider
@@ -1262,10 +1295,21 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<[u8; 32], PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let authorization = self.api.authorize_enqueue_revocation(
+                credential,
+                &revocations,
+                authenticated_sample.finalized_epoch,
+            )?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
             let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
-            self.api
-                .enqueue_revocation(&mut service, credential, revocations, committed)
+            self.api.enqueue_revocation_authorized(
+                &mut service,
+                authorization,
+                revocations,
+                committed,
+            )
         }
         .await;
         self.provider_registry.finish(result)
@@ -1276,11 +1320,21 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<PopOutboxSubmitOutcomeV1, PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let challenge = {
+                let service = self.service.lock().await;
+                self.api.submit_next_authorization_challenge(
+                    &service,
+                    authenticated_sample.finalized_epoch,
+                )?
+            };
+            let authorization = self.api.authorize_challenge(credential, challenge)?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
             let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
-            self.api.submit_next(
-                &mut *service,
-                credential,
+            self.api.submit_next_authorized(
+                &mut service,
+                authorization,
                 self.registry_submitter.as_ref(),
                 committed,
             )
@@ -1291,11 +1345,22 @@ impl PopCredentialToriiRuntimeV1 {
     async fn reconcile_next(&self, credential: &[u8]) -> Result<bool, PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let challenge = {
+                let service = self.service.lock().await;
+                self.api.reconcile_next_authorization_challenge(
+                    &service,
+                    authenticated_sample.finalized_epoch,
+                )?
+            };
+            let authorization = self.api.authorize_challenge(credential, challenge)?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
+            let now_epoch = committed.now_epoch();
             let mut service = self.service.lock().await;
-            let now_epoch = self.current_epoch()?;
-            self.api.reconcile_next(
-                &mut *service,
-                credential,
+            self.api.reconcile_next_authorized(
+                &mut service,
+                authorization,
                 self.registry_reader.as_ref(),
                 now_epoch,
             )
@@ -1317,11 +1382,21 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<Option<PopFinalizedRegistryProjectionV1>, PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let challenge = {
+                let service = self.service.lock().await;
+                self.api.finalized_projection_authorization_challenge(
+                    &service,
+                    authenticated_sample.finalized_epoch,
+                )?
+            };
+            let authorization = self.api.authorize_challenge(credential, challenge)?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
             let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
-            self.api.finalized_projection_bounded(
+            self.api.finalized_projection_bounded_authorized(
                 &mut service,
-                credential,
+                authorization,
                 committed,
                 max_reconciliations,
             )
@@ -1336,10 +1411,17 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<Vec<u8>, PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let authorization = self.api.authorize_wallet_delivery(
+                credential,
+                request_id,
+                authenticated_sample.finalized_epoch,
+            )?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
             let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
             self.api
-                .wallet_delivery(&mut service, credential, request_id, committed)
+                .wallet_delivery_authorized(&mut service, authorization, request_id, committed)
         }
         .await;
         self.provider_registry.finish(result)
@@ -1351,12 +1433,19 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<[u8; 32], PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let authorization = self.api.authorize_import_wallet_delivery(
+                credential,
+                request_id,
+                authenticated_sample.finalized_epoch,
+            )?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
             let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
-            self.api.import_wallet_delivery(
+            self.api.import_wallet_delivery_authorized(
                 &mut service,
                 &self.wallet,
-                credential,
+                authorization,
                 request_id,
                 committed,
             )
@@ -1371,10 +1460,21 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<(), PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let authorization = self.api.authorize_acknowledge_wallet_delivery(
+                credential,
+                request_id,
+                authenticated_sample.finalized_epoch,
+            )?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
             let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
-            self.api
-                .acknowledge_wallet_delivery(&mut service, credential, request_id, committed)
+            self.api.acknowledge_wallet_delivery_authorized(
+                &mut service,
+                authorization,
+                request_id,
+                committed,
+            )
         }
         .await;
         self.provider_registry.finish(result)
@@ -1386,17 +1486,19 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<(), PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
-            let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
-            let now_epoch = committed.now_epoch();
-            authorize_private_provider_access(
-                self.authenticator.as_ref(),
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let authorization = self.api.authorize_synchronize_wallet_witness(
                 credential,
-                PopCredentialApiActionV1::SynchronizeWalletWitness,
-                pop_digest_domain(
-                    POP_WALLET_WITNESS_SYNC_BINDING_DOMAIN_V1,
-                    &credential_commitment,
-                ),
+                credential_commitment,
+                authenticated_sample.finalized_epoch,
+            )?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
+            let now_epoch = committed.now_epoch();
+            let mut service = self.service.lock().await;
+            self.api.consume_synchronize_wallet_witness_authorization(
+                authorization,
+                credential_commitment,
                 now_epoch,
             )?;
             committed.reconcile(&mut service)?;
@@ -1422,12 +1524,21 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<PopMembershipProofV1, PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let authorization = self.api.authorize_prove_membership(
+                credential,
+                credential_commitment,
+                challenge_digest,
+                verifier_context,
+                authenticated_sample.finalized_epoch,
+            )?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
             let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
-            self.api.prove_membership(
+            self.api.prove_membership_authorized(
                 &mut service,
                 &self.wallet,
-                credential,
+                authorization,
                 credential_commitment,
                 challenge_digest,
                 verifier_context,
@@ -1446,11 +1557,20 @@ impl PopCredentialToriiRuntimeV1 {
     ) -> Result<(), PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
-            let mut service = self.service.lock().await;
-            let committed = self.committed_registry_context()?;
-            self.api.verify_membership(
-                &mut *service,
+            let authenticated_sample = self.current_finalized_time_sample()?;
+            let authorization = self.api.authorize_verify_membership(
                 credential,
+                proof,
+                challenge_digest,
+                verifier_context,
+                authenticated_sample.finalized_epoch,
+            )?;
+            let committed =
+                self.committed_registry_context_after_authentication(authenticated_sample)?;
+            let mut service = self.service.lock().await;
+            self.api.verify_membership_authorized(
+                &mut service,
+                authorization,
                 proof,
                 challenge_digest,
                 verifier_context,
@@ -1647,38 +1767,6 @@ fn validate_finalized_time_sample(
             && sample.finalized_block_hash == previous.finalized_block_hash)
     {
         return Err(PopFinalizedTimeSampleErrorV1::Fork);
-    }
-    Ok(())
-}
-fn pop_digest_domain(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(domain);
-    hasher.update(bytes);
-    *hasher.finalize().as_bytes()
-}
-fn authorize_private_provider_access(
-    authenticator: &dyn PopCredentialApiAuthenticator,
-    opaque_credential: &[u8],
-    action: PopCredentialApiActionV1,
-    request_binding: [u8; 32],
-    now_epoch: u64,
-) -> Result<(), PopCredentialServiceError> {
-    if opaque_credential.is_empty()
-        || opaque_credential.len() > POP_API_AUTHENTICATION_MAX_BYTES_V1
-        || now_epoch == 0
-    {
-        return Err(PopCredentialServiceError::Unauthorized);
-    }
-    let principal = authenticator
-        .authenticate(opaque_credential, action, request_binding, now_epoch)
-        .map_err(|_| PopCredentialServiceError::Unauthorized)?;
-    if principal.principal_digest == [0; 32] || principal.expires_at_epoch <= now_epoch {
-        return Err(PopCredentialServiceError::Unauthorized);
-    }
-    if action.requires_caller_signed_transaction()
-        && principal.request_authority != PopRequestAuthorityV1::CallerSignedTransaction
-    {
-        return Err(PopCredentialServiceError::Unauthorized);
     }
     Ok(())
 }
@@ -2599,6 +2687,33 @@ mod tests {
                 .map_err(|_| PopFinalizedTimeProviderErrorV1::Unavailable)
         }
     }
+    #[derive(Debug)]
+    struct AdvancingFinalizedTimeAuthenticator {
+        finalized_time: Arc<FixedFinalizedTimeProvider>,
+        next_sample: PopFinalizedTimeSampleV1,
+        calls: AtomicUsize,
+    }
+    impl PopCredentialApiAuthenticator for AdvancingFinalizedTimeAuthenticator {
+        fn authenticate(
+            &self,
+            _opaque_credential: &[u8],
+            _action: PopCredentialApiActionV1,
+            _request_binding: [u8; 32],
+            _now_epoch: u64,
+        ) -> Result<sorafs_node::pop_credentials::PopAuthenticatedPrincipalV1, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            *self
+                .finalized_time
+                .sample
+                .lock()
+                .map_err(|_| "finalized time lock unavailable".to_owned())? = self.next_sample;
+            Ok(sorafs_node::pop_credentials::PopAuthenticatedPrincipalV1 {
+                principal_digest: [0x71; 32],
+                expires_at_epoch: 1_000,
+                request_authority: PopRequestAuthorityV1::CallerSignedTransaction,
+            })
+        }
+    }
     struct TestRuntimeProviderRegistry {
         handle: String,
         revision: Arc<AtomicU64>,
@@ -3412,6 +3527,176 @@ mod tests {
         assert_eq!(signed_reader_calls.load(Ordering::SeqCst), 1);
     }
     #[tokio::test]
+    async fn invalid_request_authentication_is_not_delayed_by_the_service_mutex() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        registry
+            .providers
+            .lock()
+            .expect("runtime providers lock")
+            .as_mut()
+            .expect("runtime providers")
+            .authenticator = Arc::new(FixedAuthenticator {
+            principal_digest: [0x71; 32],
+            expires_at_epoch: 1_000,
+            request_authority: PopRequestAuthorityV1::CallerSignedTransaction,
+            reject: true,
+            calls: AtomicUsize::new(0),
+        });
+        let runtime =
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("runtime with rejecting authenticator");
+        let service_guard = runtime.service.lock().await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            runtime.enrollment_status(b"invalid credential", [0x91; 32]),
+        )
+        .await
+        .expect("authentication must complete without waiting for service state");
+        assert_eq!(result, Err(PopCredentialServiceError::Unauthorized));
+        drop(service_guard);
+    }
+    #[tokio::test]
+    async fn stale_reconciliation_authorization_cannot_advance_state() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let projections = finalized_projection_sequence(1);
+        let expected_projection = projections[0].clone();
+        let reader_calls = Arc::new(AtomicUsize::new(0));
+        let reader: Arc<dyn PopFinalizedRegistryReader> = Arc::new(ProjectionSequenceReader {
+            projections,
+            calls: Arc::clone(&reader_calls),
+        });
+        let (config, registry, _) = runtime_fixture_with_registry_reader(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+            reader,
+        );
+        let runtime =
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("runtime with finalized reader");
+        let now_epoch = runtime.current_epoch().expect("finalized epoch");
+        let challenge = {
+            let service = runtime.service.lock().await;
+            runtime
+                .api
+                .reconcile_next_authorization_challenge(&service, now_epoch)
+                .expect("authorization challenge")
+        };
+        let authorization = runtime
+            .api
+            .authorize_challenge(b"credential", challenge)
+            .expect("challenge authentication");
+        {
+            let mut service = runtime.service.lock().await;
+            assert!(
+                service
+                    .reconcile_next(runtime.registry_reader.as_ref(), now_epoch)
+                    .expect("independent reconciliation must advance")
+            );
+        }
+        let calls_before_stale_attempt = reader_calls.load(Ordering::SeqCst);
+        let result = {
+            let mut service = runtime.service.lock().await;
+            runtime.api.reconcile_next_authorized(
+                &mut service,
+                authorization,
+                runtime.registry_reader.as_ref(),
+                now_epoch,
+            )
+        };
+        assert_eq!(result, Err(PopCredentialServiceError::InvalidState));
+        assert_eq!(
+            reader_calls.load(Ordering::SeqCst),
+            calls_before_stale_attempt,
+            "stale authorization must fail before consulting the effectful reader"
+        );
+        assert_eq!(
+            runtime.service.lock().await.finalized_projection(),
+            Some(&expected_projection)
+        );
+    }
+    #[tokio::test]
+    async fn stable_reconciliation_authorization_succeeds_with_one_authenticator_call() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        let authenticator = Arc::new(FixedAuthenticator {
+            principal_digest: [0x71; 32],
+            expires_at_epoch: 1_000,
+            request_authority: PopRequestAuthorityV1::CallerSignedTransaction,
+            reject: false,
+            calls: AtomicUsize::new(0),
+        });
+        registry
+            .providers
+            .lock()
+            .expect("runtime providers lock")
+            .as_mut()
+            .expect("runtime providers")
+            .authenticator = authenticator.clone();
+        let runtime =
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("runtime with stable state");
+        assert_eq!(runtime.reconcile_next(b"credential").await, Ok(false));
+        assert_eq!(authenticator.calls.load(Ordering::SeqCst), 1);
+    }
+    #[tokio::test]
+    async fn finalized_head_advance_during_authentication_rejects_before_reconciliation() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let reader_calls = Arc::new(AtomicUsize::new(0));
+        let reader: Arc<dyn PopFinalizedRegistryReader> = Arc::new(FailingRegistryReader {
+            calls: Arc::clone(&reader_calls),
+        });
+        let (config, registry, finalized_time) = runtime_fixture_with_registry_reader(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+            reader,
+        );
+        let authenticator = Arc::new(AdvancingFinalizedTimeAuthenticator {
+            finalized_time,
+            next_sample: finalized_time_sample(2, 2, 101, 101),
+            calls: AtomicUsize::new(0),
+        });
+        registry
+            .providers
+            .lock()
+            .expect("runtime providers lock")
+            .as_mut()
+            .expect("runtime providers")
+            .authenticator = authenticator.clone();
+        let runtime =
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("runtime with advancing finalized time");
+
+        assert_eq!(
+            runtime.reconcile_next(b"credential").await,
+            Err(PopCredentialServiceError::InvalidState)
+        );
+        assert_eq!(authenticator.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            reader_calls.load(Ordering::SeqCst),
+            0,
+            "a stale finalized-head authorization must fail before reader effects"
+        );
+        assert!(
+            runtime
+                .service
+                .lock()
+                .await
+                .finalized_projection()
+                .is_none()
+        );
+    }
+    #[tokio::test]
     async fn finalized_projection_read_fails_closed_at_reconciliation_bound() {
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let projections = finalized_projection_sequence(3);
@@ -3903,41 +4188,30 @@ mod tests {
         );
     }
     #[test]
-    fn private_provider_access_requires_current_action_authorization() {
-        let valid = FixedAuthenticator {
+    fn issue_trigger_requires_current_action_authorization() {
+        let valid = Arc::new(FixedAuthenticator {
             principal_digest: [0x44; 32],
             expires_at_epoch: 101,
             request_authority: PopRequestAuthorityV1::CallerSignedTransaction,
             reject: false,
             calls: std::sync::atomic::AtomicUsize::new(0),
-        };
-        let binding = pop_digest_domain(POP_ISSUE_TRIGGER_BINDING_DOMAIN_V1, &[0x22; 32]);
-        assert_eq!(
-            authorize_private_provider_access(
-                &valid,
-                b"opaque",
-                PopCredentialApiActionV1::TriggerCredentialIssuance,
-                binding,
-                100,
-            ),
-            Ok(())
+        });
+        let api = PopCredentialApiV1::new(valid.clone());
+        assert!(
+            api.authorize_issue_resolved(b"opaque", [0x22; 32], 100)
+                .is_ok()
         );
         assert_eq!(valid.calls.load(std::sync::atomic::Ordering::Relaxed), 1);
-        let unsigned = FixedAuthenticator {
+        let unsigned = Arc::new(FixedAuthenticator {
             principal_digest: [0x44; 32],
             expires_at_epoch: 101,
             request_authority: PopRequestAuthorityV1::AuthenticatedRequest,
             reject: false,
             calls: std::sync::atomic::AtomicUsize::new(0),
-        };
+        });
+        let api = PopCredentialApiV1::new(unsigned.clone());
         assert_eq!(
-            authorize_private_provider_access(
-                &unsigned,
-                b"opaque",
-                PopCredentialApiActionV1::TriggerCredentialIssuance,
-                binding,
-                100,
-            ),
+            api.authorize_issue_resolved(b"opaque", [0x22; 32], 100),
             Err(PopCredentialServiceError::Unauthorized)
         );
         assert_eq!(unsigned.calls.load(std::sync::atomic::Ordering::Relaxed), 1);
@@ -3964,32 +4238,22 @@ mod tests {
                 calls: std::sync::atomic::AtomicUsize::new(0),
             },
         ] {
+            let api = PopCredentialApiV1::new(Arc::new(invalid));
             assert_eq!(
-                authorize_private_provider_access(
-                    &invalid,
-                    b"opaque",
-                    PopCredentialApiActionV1::TriggerCredentialIssuance,
-                    binding,
-                    100,
-                ),
+                api.authorize_issue_resolved(b"opaque", [0x22; 32], 100),
                 Err(PopCredentialServiceError::Unauthorized)
             );
         }
-        let not_called = FixedAuthenticator {
+        let not_called = Arc::new(FixedAuthenticator {
             principal_digest: [0x44; 32],
             expires_at_epoch: 101,
             request_authority: PopRequestAuthorityV1::CallerSignedTransaction,
             reject: false,
             calls: std::sync::atomic::AtomicUsize::new(0),
-        };
+        });
+        let api = PopCredentialApiV1::new(not_called.clone());
         assert_eq!(
-            authorize_private_provider_access(
-                &not_called,
-                &[],
-                PopCredentialApiActionV1::TriggerCredentialIssuance,
-                binding,
-                100,
-            ),
+            api.authorize_issue_resolved(&[], [0x22; 32], 100),
             Err(PopCredentialServiceError::Unauthorized)
         );
         assert_eq!(

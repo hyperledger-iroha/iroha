@@ -1727,6 +1727,7 @@ from iroha_python import (
     create_torii_client,
     GovernanceReferendumResult,
     GovernanceTally,
+    ToriiCanonicalRequestAuth,
 )
 
 client = create_torii_client(
@@ -1734,21 +1735,33 @@ client = create_torii_client(
     auth_token="admin-token",
     api_token="torii-token",
 )
+canonical_auth = ToriiCanonicalRequestAuth(
+    network_id=exact_network_id,
+    account_id=canonical_i105_account_id,
+    signer=wallet.sign,
+)
 
 client.set_protected_namespaces(["apps", "system"])
 # Namespace labels are exact printable-ASCII tokens; whitespace and non-ASCII
 # aliases are rejected before dispatch rather than trimmed.
-protected = client.get_protected_namespaces()
+protected = client.get_protected_namespaces(canonical_auth=canonical_auth)
 governed_contract = client.get_governance_contract_typed(
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    canonical_auth=canonical_auth,
 )
-proposal = client.get_governance_proposal_typed("ab" * 32)
-referendum = client.get_governance_referendum_typed("ref-1")
-tally = client.get_governance_tally_typed("ref-1")
+proposal = client.get_governance_proposal_typed(
+    "ab" * 32, canonical_auth=canonical_auth
+)
+referendum = client.get_governance_referendum_typed(
+    "ref-1", canonical_auth=canonical_auth
+)
+tally = client.get_governance_tally_typed("ref-1", canonical_auth=canonical_auth)
 assert proposal.found is False
 assert referendum == GovernanceReferendumResult(found=False, referendum=None)
-locks = client.get_governance_locks_typed("ref-1")
-unlock_stats_typed = client.get_governance_unlock_stats_typed()
+locks = client.get_governance_locks_typed("ref-1", canonical_auth=canonical_auth)
+unlock_stats_typed = client.get_governance_unlock_stats_typed(
+    canonical_auth=canonical_auth
+)
 print("Referendum found:", referendum.found)
 print("Aye votes:", tally.approve)
 print("Lock owners:", list(locks.locks))

@@ -1,16 +1,17 @@
-//! Deterministic execution-proof summaries returned by the IVM proof syscall.
-/// Version emitted by the first-release execution-proof summary format.
-pub const EXECUTION_PROOF_VERSION_V1: u16 = 1;
-/// Deterministic commitment to an IVM execution.
+//! Deterministic execution summaries returned by the IVM summary syscall.
+/// Version emitted by the first-release execution-summary format.
+pub const EXECUTION_SUMMARY_VERSION_V1: u16 = 1;
+/// Self-reported deterministic summary of an IVM execution.
 ///
-/// This is not a SNARK/STARK proof. It is a byte-stable proof summary built
+/// This is not a proof and is not independently verifiable or authenticated.
+/// It is a byte-stable summary built
 /// from the VM's recorded trace, constraint, memory, register, and Merkle-root
 /// logs. Full cryptographic proof systems can use these commitments as stable
 /// public material while preserving identical output across hardware.
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize,
 )]
-pub struct ExecutionProof {
+pub struct ExecutionSummary {
     /// Summary format version.
     pub version: u16,
     /// Hash of the loaded executable code.
@@ -29,19 +30,19 @@ pub struct ExecutionProof {
     pub register_trace_hash: [u8; 32],
     /// Hash of logged constraints.
     pub constraint_hash: [u8; 32],
-    /// Hash of logged memory accesses and proofs.
+    /// Hash of logged memory-access diagnostics.
     pub memory_log_hash: [u8; 32],
-    /// Hash of logged register accesses and proofs.
+    /// Hash of logged register accesses and their authentication paths.
     pub register_log_hash: [u8; 32],
     /// Hash of per-cycle register and memory roots.
     pub step_log_hash: [u8; 32],
-    /// Cycles consumed at the time the proof summary was created.
+    /// Cycles consumed at the time the summary was created.
     pub cycles: u64,
     /// Maximum cycle bound active for this execution.
     pub max_cycles: u64,
-    /// Gas consumed at the time the proof summary was created.
+    /// Gas consumed at the time the summary was created.
     pub gas_used: u64,
-    /// Gas remaining at the time the proof summary was created.
+    /// Gas remaining at the time the summary was created.
     pub gas_remaining: u64,
     /// Number of compact PC trace entries.
     pub pc_trace_len: u64,
@@ -64,8 +65,8 @@ pub struct ExecutionProof {
     /// Whether a constraint failure had been observed when the summary was created.
     pub constraint_failed: bool,
 }
-impl ExecutionProof {
-    /// Return the exact framed Norito length of a v1 proof summary.
+impl ExecutionSummary {
+    /// Return the exact framed Norito length of a v1 execution summary.
     ///
     /// Every v1 field has a fixed-width representation. Deriving the length
     /// through the canonical encoder keeps gas preparation coupled to the
@@ -79,9 +80,9 @@ mod tests {
     use super::*;
     #[test]
     fn v1_encoded_length_is_value_independent_and_exact() {
-        let empty = ExecutionProof::default();
-        let populated = ExecutionProof {
-            version: EXECUTION_PROOF_VERSION_V1,
+        let empty = ExecutionSummary::default();
+        let populated = ExecutionSummary {
+            version: EXECUTION_SUMMARY_VERSION_V1,
             code_hash: [0x01; 32],
             final_register_root: [0x02; 32],
             final_memory_root: [0x03; 32],
@@ -108,16 +109,16 @@ mod tests {
             halted: true,
             constraint_failed: true,
         };
-        let expected = ExecutionProof::encoded_len_v1().expect("fixed proof schema encodes");
+        let expected = ExecutionSummary::encoded_len_v1().expect("fixed summary schema encodes");
         assert_eq!(
             norito::encode_canonical(&empty)
-                .expect("encode canonical empty proof")
+                .expect("encode canonical empty summary")
                 .len(),
             expected
         );
         assert_eq!(
             norito::encode_canonical(&populated)
-                .expect("encode canonical populated proof")
+                .expect("encode canonical populated summary")
                 .len(),
             expected
         );
@@ -125,7 +126,7 @@ mod tests {
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         assert_eq!(
-            ExecutionProof::encoded_len_v1().expect("canonical length ignores ambient layout"),
+            ExecutionSummary::encoded_len_v1().expect("canonical length ignores ambient layout"),
             expected
         );
     }

@@ -8,9 +8,8 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::isi::governance::{
-    MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1, PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1,
-    PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1, ParliamentLifecycleTransitionKindV1,
-    ParliamentLifecycleTransitionV1,
+    PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1, PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
+    ParliamentLifecycleTransitionKindV1, ParliamentLifecycleTransitionV1,
 };
 use iroha_data_model::{
     NetworkId,
@@ -93,7 +92,7 @@ pub struct ParliamentTransitionDraftRequestV1 {
 }
 
 impl ParliamentTransitionDraftRequestV1 {
-    /// Enforce state-independent vector, record-width, and nonzero-root bounds.
+    /// Enforce the canonical state-independent transition invariants.
     ///
     /// Stateful authority, phase, height, roster, proof, and certificate checks
     /// remain consensus responsibilities when the locally signed instruction is
@@ -103,8 +102,6 @@ impl ParliamentTransitionDraftRequestV1 {
     /// Returns a stable message when an untrusted draft exceeds a first-release
     /// bound or contains a structurally impossible commitment.
     pub fn validate_static(&self) -> Result<(), &'static str> {
-        use ParliamentLifecycleTransitionV1 as Transition;
-
         if self.version != PARLIAMENT_API_VERSION_V1 {
             return Err("unsupported Parliament transition draft version");
         }
@@ -116,72 +113,16 @@ impl ParliamentTransitionDraftRequestV1 {
         {
             return Err("governance attempt id must be non-zero");
         }
-        match &self.transition {
-            Transition::RegisterSortitionRequest(payload) => {
-                if payload.requests.is_empty()
-                    || payload.requests.len() > MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1
-                    || payload
-                        .requests
-                        .iter()
-                        .any(|entry| entry.request.validate(None).is_err())
-                    || payload
-                        .requests
-                        .windows(2)
-                        .any(|pair| pair[0].request.body >= pair[1].request.body)
-                {
-                    return Err(
-                        "sortition request batch must be nonempty, bounded, valid, and body-ordered",
-                    );
-                }
-            }
-            Transition::ConsumeSortitionPulseBatch(payload) => {
-                if !bounded_strict_batch(&payload.request_ids) {
-                    return Err("sortition request batch must be nonempty, bounded, and ordered");
-                }
-            }
-            Transition::RegisterBallotParticipant(payload) => {
-                if payload.registration_record.len()
-                    != PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1
-                {
-                    return Err("timed-OVN registration record has the wrong canonical width");
-                }
-            }
-            Transition::FreezeTimedOvnCorpus(payload) => {
-                if payload.ballot_records.is_empty()
-                    || payload.ballot_records.len()
-                        > PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
-                    || payload
-                        .ballot_records
-                        .iter()
-                        .any(|record| record.len() != PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1)
-                {
-                    return Err("timed-OVN ballot chunk violates its count or record-width bound");
-                }
-            }
-            Transition::BeginBallotOpeningBatch(payload) => {
-                if !bounded_strict_batch(&payload.ballot_attempt_ids) {
-                    return Err("ballot opening batch must be nonempty, bounded, and ordered");
-                }
-            }
-            Transition::EndorsePublicFinding(payload) if root_is_zero(&payload.result_root) => {
-                return Err("public finding root must be non-zero");
-            }
-            _ => {}
+        if let ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) = &self.transition
+            && payload
+                .requests
+                .iter()
+                .any(|entry| entry.request.governance_attempt_id != self.governance_attempt_id)
+        {
+            return Err("sortition request governance attempt id does not match the draft");
         }
-        Ok(())
+        self.transition.validate_static()
     }
-}
-
-fn bounded_strict_batch<T: Ord>(items: &[T]) -> bool {
-    !items.is_empty()
-        && items.len()
-            <= usize::try_from(MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1)
-                .expect("Parliament corpus bound fits usize")
-        && !items.windows(2).any(|pair| pair[0] >= pair[1])
-}
-
-fn root_is_zero(root: &[u8; 32]) -> bool {
-    root.iter().all(|byte| *byte == 0)
 }
 
 /// Bound response for one Parliament lifecycle-transition draft.
@@ -1662,6 +1603,18 @@ mod tests {
         assert_eq!(
             wrong_version.validate_static(),
             Err("unsupported Parliament transition draft version")
+        );
+
+        let zero_election =
+            transition_request(ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(
+                iroha_data_model::isi::governance::ParliamentBeginInvitationAcceptanceV1 {
+                    election_attempt_id:
+                        iroha_data_model::governance::types::BodyElectionAttemptId::new([0; 32]),
+                },
+            ));
+        assert_eq!(
+            zero_election.validate_static(),
+            Err("body-election attempt id must be non-zero")
         );
     }
 

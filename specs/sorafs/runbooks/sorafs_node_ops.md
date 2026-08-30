@@ -370,15 +370,12 @@ the same authority still names the exact fence and canonical checkpoint.
    The sealed checkpoint record must advance monotonically and bind the exact
    predecessor revision/checkpoint digest, bounded canonical checkpoint bytes
    and digest, and deterministic CAS revision.
-4. Fetch the provider-ingested data with the deployment's exact-network
-   operator request-signing helper (for example a `ToriiClient` constructed
-   with a runtime-only `OperatorSigningContext`). The helper must generate a
-   fresh timestamp and nonce and sign the exact
-   `POST /v1/sorafs/storage/fetch` JSON body; unsigned curl, bearer/API tokens,
-   precomputed headers, and redirects are not accepted. Base64-decode the
-   `data_b64` field and verify it matches the original bytes. For normal content
-   delivery, use request-bound stream tokens with the CAR/chunk GET routes;
-   this POST remains a local operator diagnostic only.
+4. Issue a stream token with the deployment's exact-network operator
+   request-signing helper, then fetch the provider-ingested data through the
+   capability-bound CAR or chunk GET route. Verify the returned bytes match the
+   original payload. Torii exposes no JSON range-fetch fallback; unsigned
+   requests, bearer/API tokens, precomputed operator headers, and redirects are
+   not accepted.
 
 ## 3. Restart Recovery Drill
 
@@ -390,8 +387,9 @@ the same authority still names the exact fence and canonical checkpoint.
 3. Restart the Torii process (or the entire node). Startup must requalify the
    configured provider before and after loading its head and revalidate or
    rewrite the local cache from that authoritative record.
-4. Re-submit the freshly operator-signed fetch request. The payload must still
-   be retrievable and the returned digest must match the pre-restart value.
+4. Issue a fresh stream token and repeat the capability-bound CAR or chunk
+   read. The payload must still be retrievable and its digest must match the
+   pre-restart value.
 5. Inspect a freshly operator-signed `GET /v1/sorafs/storage/state` to confirm
    `bytes_used` reflects the persisted manifests after the reboot.
 

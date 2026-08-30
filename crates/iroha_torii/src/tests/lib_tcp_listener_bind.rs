@@ -1,9 +1,10 @@
 use super::{SocketAdmission, WriteTimeoutIo, bind_torii_tcp_listener, serve_torii_http};
-use axum::{Router, routing::get};
+use axum::{Router, body::Body, routing::get};
 use iroha_config::parameters::actual::ToriiHttpTransport;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
 use std::{
+    convert::Infallible,
     net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr, SocketAddrV4},
     num::NonZeroUsize,
     time::Duration,
@@ -132,6 +133,58 @@ async fn partial_http_head_is_closed_at_listener_deadline() {
     tokio::time::timeout(Duration::from_secs(1), server)
         .await
         .expect("Torii test server should stop")
+        .expect("Torii test task should not panic")
+        .expect("Torii test server should exit cleanly");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn shutdown_aborts_a_response_that_never_finishes() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("test listener should bind");
+    let address = listener.local_addr().expect("test listener address");
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let entered_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(entered_tx)));
+    let router = Router::new().route(
+        "/",
+        get({
+            let entered_tx = std::sync::Arc::clone(&entered_tx);
+            move || {
+                if let Some(tx) = entered_tx.lock().expect("entry signal lock").take() {
+                    let _ = tx.send(());
+                }
+                async {
+                    Body::from_stream(
+                        futures::stream::pending::<Result<bytes::Bytes, Infallible>>(),
+                    )
+                }
+            }
+        }),
+    );
+    let mut config = ToriiHttpTransport::default();
+    config.write_timeout = Duration::from_millis(25);
+    let shutdown = ShutdownSignal::new();
+    let server_shutdown = shutdown.clone();
+    let server =
+        tokio::spawn(
+            async move { serve_torii_http(listener, router, config, server_shutdown).await },
+        );
+    let mut client = TcpStream::connect(address)
+        .await
+        .expect("test client should connect");
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .expect("request should reach Torii");
+    tokio::time::timeout(Duration::from_secs(1), entered_rx)
+        .await
+        .expect("handler should be entered")
+        .expect("handler entry signal should be delivered");
+
+    shutdown.send();
+    tokio::time::timeout(Duration::from_secs(1), server)
+        .await
+        .expect("bounded connection drain must stop Torii")
         .expect("Torii test task should not panic")
         .expect("Torii test server should exit cleanly");
 }

@@ -416,7 +416,7 @@ fn test_get_merkle_path_syscall() {
     vm.set_register(11, ivm::Memory::OUTPUT_START);
     let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_PATH as u8);
     vm.load_program(&prog).unwrap();
-    let expected = vm.memory.merkle_path(addr);
+    let expected = vm.memory.merkle_path(addr).unwrap();
     vm.run().expect("merkle path syscall failed");
     let len = vm.register(10) as usize;
     assert_eq!(len, expected.len());
@@ -460,7 +460,7 @@ fn test_get_merkle_compact_syscall() {
     vm.set_register(13, root_out);
     let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_COMPACT as u8);
     vm.load_program(&prog).unwrap();
-    let path = vm.memory.merkle_path(addr);
+    let path = vm.memory.merkle_path(addr).unwrap();
     let root = vm.memory.current_root();
     vm.run().expect("merkle compact syscall failed");
     // Parse header

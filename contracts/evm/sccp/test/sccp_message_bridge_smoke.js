@@ -649,14 +649,16 @@ contract ReentrantToken {
 }
 contract CodeAliasedVerifier {
   bytes32 private configuredNetworkId;
+  uint32 private configuredTargetDomain;
   bool private anchorAliasesCode;
-  constructor(bytes32 networkIdValue, bool aliasAnchor) {
+  constructor(bytes32 networkIdValue, uint32 targetDomain, bool aliasAnchor) {
     configuredNetworkId = networkIdValue;
+    configuredTargetDomain = targetDomain;
     anchorAliasesCode = aliasAnchor;
   }
   function networkId() external view returns(bytes32) { return configuredNetworkId; }
   function expectedSourceDomain() external pure returns(uint32) { return 0; }
-  function expectedTargetDomain() external pure returns(uint32) { return 5; }
+  function expectedTargetDomain() external view returns(uint32) { return configuredTargetDomain; }
   function verifyingKeyHash() external pure returns(bytes32) {
     return keccak256("sccp:test:code-aliased-verifier:key:v1");
   }
@@ -2287,7 +2289,11 @@ async function main() {
   );
   assert.equal(await codecHarness.isTairaAccount(CANONICAL_I105_BYTES), true);
   for (const sender of validTairaSenders) {
-    assert.equal(await codecHarness.isTairaAccount(sender), true);
+    assert.equal(
+      await codecHarness.isTairaAccount(sender),
+      false,
+      "multisig and secp256k1 accounts must not become proof-authenticated senders",
+    );
     assert.equal(
       await codecHarness.isTairaRecipient(sender),
       false,
@@ -2700,7 +2706,7 @@ async function main() {
   const tronCodeAliasedVerifier = await deploy(
     signer,
     codeAliasedVerifierArtifact,
-    [tronNetworkId, true],
+    [tronNetworkId, 3, true],
   );
   const tronCodeAliasedVerifierAddress =
     await tronCodeAliasedVerifier.getAddress();
@@ -3540,7 +3546,7 @@ async function main() {
   const evmCodeAliasedVerifier = await deploy(
     signer,
     codeAliasedVerifierArtifact,
-    [ethers.ZeroHash, false],
+    [ethers.ZeroHash, 2, false],
   );
   const evmCodeAliasedVerifierAddress =
     await evmCodeAliasedVerifier.getAddress();

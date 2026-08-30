@@ -92,8 +92,6 @@ fn retained_proposal_operator(proposal_kind: &ProposalKind) -> Result<&AccountId
         | ProposalKind::SccpRouteGovernance(_)
         | ProposalKind::SorafsProviderGovernance(_)
         | ProposalKind::MusubiRegistryGovernance(_)
-        | ProposalKind::ContractLifecycleGovernance(_)
-        | ProposalKind::ContractEmergencyHold(_)
         | ProposalKind::GlobalDataTriggerPermissionGovernance(_) => Err(inconsistent(
             "non-validation-fee proposal reached the typed validation-fee projection",
         )),

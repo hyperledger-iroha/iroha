@@ -86,33 +86,21 @@
         }
       ]
     },
-    "plainBallotResponse": {
-      "ok": true,
-      "accepted": true,
-      "reason": null,
+    "plainBallotDraftResponse": {
+      "drafted": true,
       "tx_instructions": [
         {
-          "wire_id": "CastPlainBallot"
+          "wire_id": "CastPlainBallot",
+          "payload_hex": "00"
         }
       ]
     },
-    "zkBallotAccepted": {
-      "ok": true,
-      "accepted": true,
-      "reason": null,
+    "zkBallotDraftResponse": {
+      "drafted": true,
       "tx_instructions": [
         {
-          "wire_id": "CastZkBallot"
-        }
-      ]
-    },
-    "zkBallotDeferred": {
-      "ok": true,
-      "accepted": false,
-      "reason": "build transaction skeleton",
-      "tx_instructions": [
-        {
-          "wire_id": "CastZkBallot"
+          "wire_id": "CastZkBallot",
+          "payload_hex": "00"
         }
       ]
     },

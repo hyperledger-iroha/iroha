@@ -88,8 +88,8 @@ app_api_https = []
 app_api_wss = ["dep:tokio-tungstenite"]
 ## Optional push notification bridge for app-facing API (FCM/APNS via HTTP).
 push = ["app_api"]
-## Enable WebSocket integration tests (requires tokio-tungstenite). On by default; disable with
-## `--no-default-features --features app_api,transparent_api`.
+## Enable the WebSocket integration-test marker explicitly. The shipping aggregate already
+## includes the WSS transport without compiling test-only hooks.
 ws_integration_tests = ["app_api_wss"]
 ## Prototype: read-only debug endpoints for proof tag index; forwards to `iroha_core/zk-proof-tags`.
 zk-proof-tags = ["iroha_core/zk-proof-tags"]

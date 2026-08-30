@@ -767,13 +767,6 @@ pub mod isi {
         {
             return account_subject_matches(permission.debited_asset.account(), account_id);
         }
-        if let Ok(permission) =
-            iroha_executor_data_model::permission::governance::CanRecordCitizenService::try_from(
-                permission,
-            )
-        {
-            return account_subject_matches(&permission.owner, account_id);
-        }
         false
     }
     pub(crate) fn remove_account_associated_permissions(
@@ -7432,73 +7425,6 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_removes_citizen_service_permissions_from_accounts_and_roles() {
-        let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &domain_id, &authority);
-        let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
-        seed_domain(&mut state, &holder_domain, &authority);
-        let keypair = checked_keypair();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let holder_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::account(NewAccount::new(account_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register target account");
-        Register::account(NewAccount::new(holder_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register holder account");
-        let permission: Permission =
-            iroha_executor_data_model::permission::governance::CanRecordCitizenService {
-                owner: account_id.clone(),
-            }
-            .into();
-        Grant::account_permission(permission.clone(), holder_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("grant permission to holder");
-        let role_id: RoleId = "CITIZEN_SERVICE_CLEANUP".parse().expect("role id");
-        Register::role(Role::new(role_id.clone(), holder_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register role");
-        Grant::role_permission(permission.clone(), role_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("grant permission to role");
-        assert!(
-            tx.world
-                .account_permissions
-                .get(&holder_id)
-                .is_some_and(|perms| perms.contains(&permission)),
-            "holder should have permission before unregister"
-        );
-        let role = tx.world.roles.get(&role_id).expect("role should exist");
-        assert!(
-            role.permissions().any(|perm| perm == &permission),
-            "role should include permission before unregister"
-        );
-        Unregister::account(account_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("unregister account");
-        assert!(
-            !tx.world
-                .account_permissions
-                .get(&holder_id)
-                .is_some_and(|perms| perms.contains(&permission)),
-            "holder permission should be removed"
-        );
-        let role = tx.world.roles.get(&role_id).expect("role should exist");
-        assert!(
-            !role.permissions().any(|perm| perm == &permission),
-            "role permission should be removed"
-        );
-        assert!(
-            !role.permission_epochs().contains_key(&permission),
-            "permission epochs should be pruned"
-        );
-    }
-    #[test]
     fn unregister_account_removes_permissions_for_deleted_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
@@ -7632,6 +7558,82 @@ mod tests {
                 tx.world.accounts.get(&account_id).is_some(),
                 "account should remain after rejected unregister"
             );
+        });
+    }
+    #[test]
+    fn unregister_account_rejects_contract_owner_and_pending_recipient_until_cleared() {
+        with_registered_account_unregistration_candidate(|authority, _, account_id, tx| {
+            let contract =
+                ContractAddress::derive(tx.network_id(), &authority, 17, DataSpaceId::UNIVERSAL)
+                    .expect("contract address");
+            let subject = contract.subject_id();
+            Register::account(NewAccount::new(subject.clone()))
+                .execute(&authority, tx)
+                .expect("register contract subject");
+            let mut binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &contract,
+                authority.clone(),
+            );
+            binding.lifecycle.owner =
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    account_id.clone(),
+                );
+            tx.world
+                .contract_subject_bindings
+                .insert(contract.clone(), binding);
+            tx.world
+                .contract_subject_addresses
+                .insert(subject, contract.clone());
+
+            let owned = Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect_err("current contract owner must not be unregistered");
+            assert!(
+                owned.to_string().contains(&format!(
+                    "transfer or cancel its lifecycle ownership of contract `{contract}` first"
+                )),
+                "error should identify the retained owned contract: {owned}"
+            );
+            assert!(tx.world.accounts.get(&account_id).is_some());
+
+            let lifecycle = &mut tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract)
+                .expect("contract lifecycle binding")
+                .lifecycle;
+            lifecycle.owner =
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament;
+            lifecycle.pending_owner = Some(
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    account_id.clone(),
+                ),
+            );
+            lifecycle.revision += 1;
+
+            let pending = Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect_err("pending contract owner must not be unregistered");
+            assert!(
+                pending.to_string().contains(&format!(
+                    "transfer or cancel its lifecycle ownership of contract `{contract}` first"
+                )),
+                "error should identify the retained pending contract: {pending}"
+            );
+            assert!(tx.world.accounts.get(&account_id).is_some());
+
+            let lifecycle = &mut tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract)
+                .expect("contract lifecycle binding")
+                .lifecycle;
+            lifecycle.pending_owner = None;
+            lifecycle.revision += 1;
+            Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect("account removal succeeds after lifecycle references are cleared");
+            assert!(tx.world.accounts.get(&account_id).is_none());
         });
     }
     #[test]

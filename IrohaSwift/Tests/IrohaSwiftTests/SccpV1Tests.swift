@@ -43,7 +43,7 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertNil(SccpNetworkV1.fromTag(0))
         XCTAssertNil(SccpNetworkV1(rawValue: "sora-nexus"))
         XCTAssertNil(SccpNetworkV1(rawValue: "sora_nexus"))
-        XCTAssertEqual(SccpCodecV1.allCases.map(\.rawValue), [1, 2, 5, 7])
+        XCTAssertEqual(SccpCodecV1.allCases.map(\.rawValue), [0, 1, 2, 3])
         XCTAssertNil(SccpNetworkV1(rawValue: "solana-mainnet-beta"))
         XCTAssertEqual(SccpNetworkV1.allCases.map(\.tag), [0x40, 0x41, 0x42, 0x43, 0x44])
         for tag in UInt8.min...UInt8.max where !(0x40...0x44).contains(tag) {
@@ -56,9 +56,10 @@ final class SccpV1Tests: XCTestCase {
         ] {
             XCTAssertNil(SccpNetworkV1(rawValue: retired))
         }
-        XCTAssertNil(SccpCodecV1(rawValue: 3))
         XCTAssertNil(SccpCodecV1(rawValue: 4))
+        XCTAssertNil(SccpCodecV1(rawValue: 5))
         XCTAssertNil(SccpCodecV1(rawValue: 6))
+        XCTAssertNil(SccpCodecV1(rawValue: 7))
         XCTAssertEqual(SccpPayloadKindV1.allCases, [.transfer])
     }
 
@@ -1493,9 +1494,9 @@ final class SccpV1Tests: XCTestCase {
         oldSelector["network"] = "bsc-mainnet"
         XCTAssertThrowsError(try SccpMessageBundleV1.parse(jsonData(oldSelector)))
         let invalidTransferFields: [(String, Any)] = [
-            ("sender_codec", 2),
-            ("recipient_codec", 5),
-            ("asset_home_domain", 4),
+            ("sender_codec", 1),
+            ("recipient_codec", 2),
+            ("asset_home_domain", 5),
             ("amount", ""),
             ("amount", "340282366920938463463374607431768211456"),
             ("amount", "١"),
@@ -1517,6 +1518,13 @@ final class SccpV1Tests: XCTestCase {
         let page = try SccpRecentMessages.parse(jsonData(["items": [first, second]]))
         XCTAssertEqual(page.items.map(\.height), [9, 8])
         XCTAssertNil(page.next)
+
+        var tron = first
+        tron["target_profile"] = "tron-mainnet"
+        tron["target_domain"] = 3
+        tron["route_id"] = "taira_tron_xor"
+        tron["payload_projection"] = transferProjection(destinationDomain: 3)
+        XCTAssertNoThrow(try SccpRecentMessages.parse(jsonData(["items": [tron]])))
 
         let exactUInt128Amount = "18446744073709551616000000000"
         var largeAmountItem = first
@@ -1924,6 +1932,13 @@ final class SccpV1Tests: XCTestCase {
         var alternateBackend = try jsonObject(valid, mutableContainers: true)
         alternateBackend["backend"] = "evm-groth16-bn254-v1"
         XCTAssertNoThrow(try SccpBridgeSubmitResponse.parse(jsonData(alternateBackend)))
+        for backend in ["tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1"] {
+            var tron = try jsonObject(valid, mutableContainers: true)
+            tron["backend"] = backend
+            tron["counterparty_domain"] = 3
+            tron["counterparty_chain"] = "tron-mainnet"
+            XCTAssertNoThrow(try SccpBridgeSubmitResponse.parse(jsonData(tron)))
+        }
         for legacy in ["ok", "proof_kind", "message_kind", "manifest_hash_hex", "transaction_scaffold_b64", "signed_transaction_b64", "proof_artifact_hash"] {
             XCTAssertThrowsError(try SccpBridgeSubmitResponse.parse(Data((text.dropLast() + ",\"\(legacy)\":null}").utf8)))
         }
@@ -2252,19 +2267,32 @@ final class SccpV1Tests: XCTestCase {
         [
             "version": 1, "source_domain": 0, "dest_domain": 2, "nonce": "7",
             "route_revision": 1, "asset_home_domain": 0,
-            "asset_id_codec": 1, "asset_id": "0x786f72", "amount": "1000",
-            "sender_codec": 1, "sender": "0x616c696365407461697261",
-            "recipient_codec": 2, "recipient": "0x" + String(repeating: "11", count: 20),
-            "route_id_codec": 1, "route_id": "0x74616972615f6273635f786f72",
+            "asset_id_codec": 0, "asset_id": "0x786f72", "amount": "1000",
+            "sender_codec": 0, "sender": "0x616c696365407461697261",
+            "recipient_codec": 1, "recipient": "0x" + String(repeating: "11", count: 20),
+            "route_id_codec": 0, "route_id": "0x74616972615f6273635f786f72",
         ]
     }
 
     private func transferProjection(destinationDomain: UInt32) -> [String: Any] {
-        let route = destinationDomain == 5 ? "taira_tron_xor" :
-            destinationDomain == 1 ? "taira_eth_xor" : "taira_bsc_xor"
-        let recipient: [String: Any] = destinationDomain == 5
-            ? ["TronAddress21": ["bytes": "0x41" + String(repeating: "11", count: 20)]]
-            : ["EvmAddress20": ["bytes": "0x" + String(repeating: "11", count: 20)]]
+        let route: String
+        let recipient: [String: Any]
+        switch destinationDomain {
+        case 1:
+            route = "taira_eth_xor"
+            recipient = ["EvmAddress20": ["bytes": "0x" + String(repeating: "11", count: 20)]]
+        case 2:
+            route = "taira_bsc_xor"
+            recipient = ["EvmAddress20": ["bytes": "0x" + String(repeating: "11", count: 20)]]
+        case 3:
+            route = "taira_tron_xor"
+            recipient = ["TronAddress21": ["bytes": "0x41" + String(repeating: "11", count: 20)]]
+        case 4:
+            route = "taira_ton_xor"
+            recipient = ["TonAccount36": ["workchain": 0, "account": hashHex(0x11)]]
+        default:
+            preconditionFailure("unsupported SCCP destination domain fixture")
+        }
         return [
             "Transfer": [
                 "version": 1,

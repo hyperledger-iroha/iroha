@@ -4,6 +4,14 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- Replaced Explorer instruction, transaction, and transfer-history page-number
+  pagination with snapshot-bound `cursor`/`limit` APIs and strict continuation
+  metadata. The async, completion-handler, `IrohaSDK`, and Combine surfaces now
+  share the same first-release contract; instruction boxes also expose the
+  server-provided framed SHA-256 digest. Explorer lists, details, streams, and
+  contract activity/event reads plus the generic event SSE feed now use the
+  client's default canonical request signer when configured, while remaining
+  anonymous for public dataspaces.
 - Removed generic shield, shielded-transfer, and unshield request/encoder/native
   signer surfaces from ABI V1. Typed Kagemusha top-up/redemption and their
   underlying proof codecs remain available.

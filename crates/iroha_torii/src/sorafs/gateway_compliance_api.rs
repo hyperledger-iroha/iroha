@@ -640,10 +640,12 @@ where
         .acquire_owned()
         .await
         .map_err(|_| gateway_compliance_worker_unavailable())?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        iroha_core::panic_hook::with_hook_suppressed(operation)
-    })
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        move || {
+            let _permit = permit;
+            operation()
+        },
+    ))
     .await
     .map_err(|_| {
         warn!("gateway compliance blocking worker failed");

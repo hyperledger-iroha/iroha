@@ -1535,10 +1535,12 @@ async fn sign_sorafs_reserve_transaction(
     let mut payload = builder.into_payload().ok()?;
     payload.fee_payment = crate::quote_internal_fee_payment(state, &payload).ok()?;
     let expected_payload = payload.clone();
-    let transaction = tokio::task::spawn_blocking(move || signer.sign(payload))
-        .await
-        .ok()?
-        .ok()?;
+    let transaction = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || signer.sign(payload)),
+    )
+    .await
+    .ok()?
+    .ok()?;
     if transaction.payload() != &expected_payload {
         return None;
     }

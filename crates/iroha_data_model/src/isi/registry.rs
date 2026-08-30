@@ -330,9 +330,9 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 362;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 361;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 362;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 361;
         #[cfg(not(feature = "governance"))]
         const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 344;
         let registry_source = include_str!("registry.rs");
@@ -384,7 +384,7 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "62f7394e1d351ed477dc9377333f0283bcd5e2022608a01f728c9501d5a88758";
+            "5a8afd9ce1e0f86cc4acb458bc7abf9ca2eaf27e8572981b76497e49d4325a26";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
             "ac4d2277c476c444ccc2463716a030e2b49c756f01fe7045e17ffd19215ae0ca";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
@@ -413,7 +413,7 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                18,
+                17,
                 "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(
@@ -442,7 +442,6 @@ mod tests {
             "iroha.instruction.v1::governance::CastPlainBallot",
             "iroha.instruction.v1::governance::SlashGovernanceLock",
             "iroha.instruction.v1::governance::RestituteGovernanceLock",
-            "iroha.instruction.v1::governance::RecordCitizenServiceOutcome",
             "iroha.instruction.v1::governance::RegisterCitizen",
             "iroha.instruction.v1::governance::UnregisterCitizen",
         ];
@@ -1546,7 +1545,6 @@ mod tests {
         for type_name in [
             std::any::type_name::<crate::isi::governance::RegisterCitizen>(),
             std::any::type_name::<crate::isi::governance::UnregisterCitizen>(),
-            std::any::type_name::<crate::isi::governance::RecordCitizenServiceOutcome>(),
         ] {
             assert!(registry.wire_id(type_name).is_some());
             assert!(!registry.contains(type_name));

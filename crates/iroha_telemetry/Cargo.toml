@@ -57,6 +57,9 @@ telegram = [
     "tokio/sync",
     "tokio/time",
 ]
+# TODO: Remove this manifest-only lockfile tombstone and its optional dependencies
+# during the next explicitly authorized Cargo.lock refresh; the in-process OTEL
+# exporter implementation has already been retired.
 otel-exporter = [
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",

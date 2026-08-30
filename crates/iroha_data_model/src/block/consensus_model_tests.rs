@@ -809,10 +809,10 @@ fn canonical_decode_limits_reject_recursive_native_amx_commitment_frames() {
         matches!(
             error,
             norito::core::Error::NestingDepthExceeded {
+                depth,
                 limit: norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
-                context: "owned Norito value",
-                ..
-            }
+                context: "decode budget",
+            } if depth == norito::core::MAX_OWNED_VALUE_DECODE_DEPTH + 1
         ),
         "unexpected canonical decode rejection: {error:?}"
     );

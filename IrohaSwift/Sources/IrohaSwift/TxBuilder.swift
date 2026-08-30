@@ -2502,8 +2502,8 @@ public final class IrohaSDK: @unchecked Sendable {
 
     @available(iOS 15.0, macOS 12.0, *)
     public func getAccountTransferHistory(accountId: String,
-                                          page: UInt64? = nil,
-                                          perPage: UInt64? = nil,
+                                          cursor: String? = nil,
+                                          limit: UInt32? = nil,
                                           assetDefinitionId: String? = nil,
                                           completion: @Sendable @escaping (Result<[ToriiExplorerTransferSummary], Error>) -> Void) {
         guard let toriiRestClient else {
@@ -2511,16 +2511,16 @@ public final class IrohaSDK: @unchecked Sendable {
             return
         }
         toriiRestClient.getAccountTransferHistory(accountId: accountId,
-                                                  page: page,
-                                                  perPage: perPage,
+                                                  cursor: cursor,
+                                                  limit: limit,
                                                   assetDefinitionId: assetDefinitionId,
                                                   completion: completion)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     public func getTransactionHistory(accountId: String,
-                                      page: UInt64? = nil,
-                                      perPage: UInt64? = nil,
+                                      cursor: String? = nil,
+                                      limit: UInt32? = nil,
                                       assetDefinitionId: String? = nil,
                                       completion: @Sendable @escaping (Result<[ToriiExplorerTransferSummary], Error>) -> Void) {
         guard let toriiRestClient else {
@@ -2528,8 +2528,8 @@ public final class IrohaSDK: @unchecked Sendable {
             return
         }
         toriiRestClient.getTransactionHistory(accountId: accountId,
-                                              page: page,
-                                              perPage: perPage,
+                                              cursor: cursor,
+                                              limit: limit,
                                               assetDefinitionId: assetDefinitionId,
                                               completion: completion)
     }
@@ -2767,8 +2767,8 @@ public extension IrohaSDK {
     }
 
     func iterateAccountTransferHistory(accountId: String,
-                                       page: UInt64? = nil,
-                                       perPage: UInt64? = nil,
+                                       cursor: String? = nil,
+                                       limit: UInt32? = nil,
                                        assetDefinitionId: String? = nil,
                                        maxItems: UInt64? = nil) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
         guard let toriiRestClient else {
@@ -2777,8 +2777,8 @@ public extension IrohaSDK {
             }
         }
         return toriiRestClient.iterateAccountTransferHistory(accountId: accountId,
-                                                             page: page,
-                                                             perPage: perPage,
+                                                             cursor: cursor,
+                                                             limit: limit,
                                                              assetDefinitionId: assetDefinitionId,
                                                              maxItems: maxItems)
     }
@@ -2830,8 +2830,8 @@ public extension IrohaSDK {
     }
 
     func streamAccountTransferHistory(accountId: String,
-                                      page: UInt64? = nil,
-                                      perPage: UInt64? = nil,
+                                      cursor: String? = nil,
+                                      limit: UInt32? = nil,
                                       assetDefinitionId: String? = nil,
                                       lastEventId: String? = nil,
                                       maxItems: UInt64? = nil,
@@ -2842,8 +2842,8 @@ public extension IrohaSDK {
             }
         }
         return toriiRestClient.streamAccountTransferHistory(accountId: accountId,
-                                                            page: page,
-                                                            perPage: perPage,
+                                                            cursor: cursor,
+                                                            limit: limit,
                                                             assetDefinitionId: assetDefinitionId,
                                                             lastEventId: lastEventId,
                                                             maxItems: maxItems,
@@ -2954,28 +2954,28 @@ public extension IrohaSDK {
     }
 
     func getAccountTransferHistory(accountId: String,
-                                   page: UInt64? = nil,
-                                   perPage: UInt64? = nil,
+                                   cursor: String? = nil,
+                                   limit: UInt32? = nil,
                                    assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.getAccountTransferHistory(accountId: accountId,
-                                                                   page: page,
-                                                                   perPage: perPage,
+                                                                   cursor: cursor,
+                                                                   limit: limit,
                                                                    assetDefinitionId: assetDefinitionId)
     }
 
     func getTransactionHistory(accountId: String,
-                               page: UInt64? = nil,
-                               perPage: UInt64? = nil,
+                               cursor: String? = nil,
+                               limit: UInt32? = nil,
                                assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.getTransactionHistory(accountId: accountId,
-                                                               page: page,
-                                                               perPage: perPage,
+                                                               cursor: cursor,
+                                                               limit: limit,
                                                                assetDefinitionId: assetDefinitionId)
     }
 

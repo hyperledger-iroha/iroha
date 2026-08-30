@@ -1241,7 +1241,7 @@ internal static class SccpExactParser
                 1 => "taira_eth_xor",
                 2 => "taira_bsc_xor",
                 4 => "taira_ton_xor",
-                5 => "taira_tron_xor",
+                3 => "taira_tron_xor",
                 _ => throw new ArgumentException("Recent SCCP target domain is unsupported."),
             };
             if (assetId is not null && assetId != "xor"
@@ -2184,8 +2184,8 @@ internal static class SccpExactParser
 
         var nonce = DecimalUInt64(item, "nonce", 0);
         var routeRevision = SccpJson.UInt32(item, "route_revision", 1, uint.MaxValue);
-        var assetHomeDomain = SccpJson.UInt32(item, "asset_home_domain", 0, 5);
-        if (assetHomeDomain is not (0 or 1 or 2 or 4 or 5))
+        var assetHomeDomain = SccpJson.UInt32(item, "asset_home_domain", 0, 4);
+        if (assetHomeDomain is not (0 or 1 or 2 or 3 or 4))
         {
             throw new ArgumentException("SCCP transfer asset_home_domain is unsupported or retired.");
         }
@@ -2204,12 +2204,12 @@ internal static class SccpExactParser
             throw new ArgumentException("SCCP transfer amount must fit UInt128.");
         }
 
-        var senderCodec = SccpJson.UInt32(item, "sender_codec", 1, 7);
-        var recipientCodec = SccpJson.UInt32(item, "recipient_codec", 1, 7);
+        var senderCodec = SccpJson.UInt32(item, "sender_codec", 0, 3);
+        var recipientCodec = SccpJson.UInt32(item, "recipient_codec", 0, 3);
         var expectedRecipientCodec = lane.Target.DomainId() switch
         {
             4 => (uint)SccpCodecV1.TonAccount36,
-            5 => (uint)SccpCodecV1.TronAddress21,
+            3 => (uint)SccpCodecV1.TronAddress21,
             _ => (uint)SccpCodecV1.EvmAddress20,
         };
         if (senderCodec != (uint)SccpCodecV1.CanonicalText || recipientCodec != expectedRecipientCodec)
@@ -2224,7 +2224,7 @@ internal static class SccpExactParser
             ("recipient_codec", "recipient"), ("route_id_codec", "route_id"),
         })
         {
-            var tag = SccpJson.UInt32(item, codecField, 1, 7);
+            var tag = SccpJson.UInt32(item, codecField, 0, 3);
             if (!Enum.IsDefined((SccpCodecV1)tag))
             {
                 throw new ArgumentException("SCCP transfer uses a retired codec.");
@@ -2312,7 +2312,7 @@ internal static class SccpExactParser
             1 => "taira_eth_xor",
             2 => "taira_bsc_xor",
             4 => "taira_ton_xor",
-            5 => "taira_tron_xor",
+            3 => "taira_tron_xor",
             _ => throw new ArgumentException($"{label}.Transfer destination domain is unsupported."),
         };
         ExactCanonicalText(transfer, "route_id", expectedRoute, label);
@@ -2381,10 +2381,10 @@ internal static class SccpExactParser
 
         SccpJson.ExactFields(content, ["bytes"], $"{label}.Transfer.{field}.{tag}");
         var encoded = SccpJson.Text(content, "bytes");
-        var expectedLength = destinationDomain == 5 ? 44 : 42;
-        var bodyOffset = destinationDomain == 5 ? 4 : 2;
+        var expectedLength = destinationDomain == 3 ? 44 : 42;
+        var bodyOffset = destinationDomain == 3 ? 4 : 2;
         if (encoded.Length != expectedLength
-            || !encoded.StartsWith(destinationDomain == 5 ? "0x41" : "0x", StringComparison.Ordinal)
+            || !encoded.StartsWith(destinationDomain == 3 ? "0x41" : "0x", StringComparison.Ordinal)
             || encoded.Skip(2).Any(static character =>
                 !(character is >= '0' and <= '9') && !(character is >= 'a' and <= 'f'))
             || !encoded.Skip(bodyOffset).Any(static character => character != '0'))

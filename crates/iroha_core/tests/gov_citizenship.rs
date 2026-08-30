@@ -233,7 +233,7 @@ fn citizenship_records_persist_across_transactions() {
     );
 }
 #[test]
-fn citizenship_top_up_preserves_the_original_bond_interval_and_service_state() {
+fn citizenship_top_up_preserves_the_original_bond_interval() {
     let def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain"),
         "xor".parse().expect("asset name"),
@@ -261,22 +261,6 @@ fn citizenship_top_up_preserves_the_original_bond_interval_and_service_state() {
         .expect("initial citizen bond block commits");
     let mut block_2 = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     let mut stx_2 = block_2.transaction();
-    let mut serviced = stx_2
-        .world
-        .citizens()
-        .get(&*ALICE_ID)
-        .cloned()
-        .expect("persisted citizen record");
-    serviced.seats_in_epoch = 2;
-    serviced.last_epoch_seen = 7;
-    serviced.cooldown_until = 42;
-    serviced.declines_used = 1;
-    serviced.no_show_strikes = 3;
-    serviced.misconduct_strikes = 4;
-    stx_2
-        .world
-        .citizens_mut()
-        .insert(ALICE_ID.clone(), serviced);
     RegisterCitizen {
         owner: ALICE_ID.clone(),
         amount: 75_u64.into(),
@@ -296,12 +280,6 @@ fn citizenship_top_up_preserves_the_original_bond_interval_and_service_state() {
         .expect("topped-up citizen record");
     assert_eq!(retained.amount, Quantity::from(75_u64));
     assert_eq!(retained.bonded_height, 1);
-    assert_eq!(retained.seats_in_epoch, 2);
-    assert_eq!(retained.last_epoch_seen, 7);
-    assert_eq!(retained.cooldown_until, 42);
-    assert_eq!(retained.declines_used, 1);
-    assert_eq!(retained.no_show_strikes, 3);
-    assert_eq!(retained.misconduct_strikes, 4);
     assert_eq!(
         **stx_2
             .world

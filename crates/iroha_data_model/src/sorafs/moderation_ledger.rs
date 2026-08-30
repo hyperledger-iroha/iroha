@@ -26,6 +26,8 @@ pub const MODERATION_APPEAL_INTAKE_VERSION_V1: u16 = 1;
 pub const MODERATION_LEDGER_MAX_PANEL_SIZE_V1: u16 = 128;
 /// Hard upper bound for one appeal's PoP-eligible candidate pool.
 pub const MODERATION_LEDGER_MAX_CANDIDATE_POOL_SIZE_V1: u16 = 1_024;
+/// Hard upper bound for appeals awaiting a consensus-pinned sortition anchor.
+pub const MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1: usize = 1_024;
 /// Hard upper bound for one appeal's deterministic failover waitlist.
 pub const MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1: u16 = 128;
 /// Hard upper bound for conflict-of-interest exclusions on one appeal.
@@ -693,10 +695,10 @@ pub struct ModerationJurorEligibilityRecordV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationPanelSelectionV1 {
-    /// Exact already-committed parent block fixed only after registration closes.
+    /// Exact consensus-pinned first post-registration block.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub randomness_anchor: [u8; 32],
-    /// Deterministic seed digest fixed by appeal, `PoP` snapshot, and parent block.
+    /// Deterministic seed digest fixed by appeal, `PoP` snapshot, and pinned block.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub seed_digest: [u8; 32],
     /// Primary jurors in canonical score order.
@@ -710,6 +712,18 @@ pub struct ModerationPanelSelectionV1 {
     pub selected_at_unix_ms: u64,
     /// Authorised moderation operator that closed registration.
     pub selected_by: AccountId,
+}
+/// Consensus-pinned first committed block after eligibility registration closes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ModerationSortitionAnchorV1 {
+    /// One-based height of the block whose consensus hash seeds sortition.
+    pub block_height: u64,
+    /// Consensus hash of the exact anchor block.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Consensus timestamp of the anchor block.
+    pub block_timestamp_unix_ms: u64,
 }
 /// One deterministic primary-juror no-show replacement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -765,6 +779,8 @@ pub struct ModerationAppealRecordV1 {
     pub submitted_at_unix_ms: u64,
     /// Canonically account-ordered `PoP`-eligible candidates.
     pub eligible_jurors: Vec<AccountId>,
+    /// First committed post-registration block, pinned by consensus maintenance.
+    pub sortition_anchor: Option<ModerationSortitionAnchorV1>,
     /// Selected primary panel and waitlist after registration closes.
     pub selection: Option<ModerationPanelSelectionV1>,
     /// Canonically account-ordered primary assignment acceptances.
@@ -2150,6 +2166,39 @@ mod tests {
             policy_digest: policy().digest().unwrap(),
         }
     }
+    fn appeal_record(
+        sortition_anchor: Option<ModerationSortitionAnchorV1>,
+    ) -> ModerationAppealRecordV1 {
+        let intake = appeal_intake();
+        let intake_digest = intake.digest().expect("appeal intake digest");
+        let pop_snapshot = ModerationPoPRegistrySnapshotV1 {
+            issuer_policy_digest: [0x21; 32],
+            commitment_root: [0x22; 32],
+            commitment_tree_version: 1,
+            revocation_root: [0x23; 32],
+            revocation_list_version: 1,
+            registry_audit_sequence: 1,
+            registry_audit_head: [0x24; 32],
+            captured_at_unix_ms: 1_000,
+        };
+        ModerationAppealRecordV1 {
+            intake,
+            intake_digest,
+            policy: policy(),
+            pop_snapshot,
+            pop_snapshot_digest: pop_snapshot.digest().expect("PoP snapshot digest"),
+            status: ModerationAppealStatusV1::RegisteringJurors,
+            submitted_by: account(9),
+            submitted_at_unix_ms: 1_000,
+            eligible_jurors: Vec::new(),
+            sortition_anchor,
+            selection: None,
+            accepted_jurors: Vec::new(),
+            replacements: Vec::new(),
+            activated_at_unix_ms: None,
+            finalized_at_unix_ms: None,
+        }
+    }
     fn eligibility(seed: u8, snapshot_digest: [u8; 32]) -> ModerationJurorEligibilityRecordV1 {
         ModerationJurorEligibilityRecordV1 {
             case_id: "appeal-1".to_owned(),
@@ -2507,6 +2556,78 @@ mod tests {
         );
     }
     #[test]
+    fn appeal_sortition_anchor_schema_roundtrips_and_rejects_pre_cut_layout() {
+        #[derive(norito::codec::Encode)]
+        struct PreCutModerationAppealRecordV1 {
+            intake: ModerationAppealIntakeV1,
+            intake_digest: [u8; 32],
+            policy: ModerationLedgerPolicyV1,
+            pop_snapshot: ModerationPoPRegistrySnapshotV1,
+            pop_snapshot_digest: [u8; 32],
+            status: ModerationAppealStatusV1,
+            submitted_by: AccountId,
+            submitted_at_unix_ms: u64,
+            eligible_jurors: Vec<AccountId>,
+            selection: Option<ModerationPanelSelectionV1>,
+            accepted_jurors: Vec<AccountId>,
+            replacements: Vec<ModerationJurorReplacementV1>,
+            activated_at_unix_ms: Option<u64>,
+            finalized_at_unix_ms: Option<u64>,
+        }
+
+        let without_anchor = appeal_record(None);
+        let with_anchor = appeal_record(Some(ModerationSortitionAnchorV1 {
+            block_height: 7,
+            block_hash: [0x71; 32],
+            block_timestamp_unix_ms: 2_001,
+        }));
+        assert_canonical_norito_round_trip(&without_anchor);
+        assert_canonical_norito_round_trip(&with_anchor);
+
+        let pre_cut = PreCutModerationAppealRecordV1 {
+            intake: without_anchor.intake.clone(),
+            intake_digest: without_anchor.intake_digest,
+            policy: without_anchor.policy.clone(),
+            pop_snapshot: without_anchor.pop_snapshot,
+            pop_snapshot_digest: without_anchor.pop_snapshot_digest,
+            status: without_anchor.status,
+            submitted_by: without_anchor.submitted_by.clone(),
+            submitted_at_unix_ms: without_anchor.submitted_at_unix_ms,
+            eligible_jurors: without_anchor.eligible_jurors.clone(),
+            selection: without_anchor.selection.clone(),
+            accepted_jurors: without_anchor.accepted_jurors.clone(),
+            replacements: without_anchor.replacements.clone(),
+            activated_at_unix_ms: without_anchor.activated_at_unix_ms,
+            finalized_at_unix_ms: without_anchor.finalized_at_unix_ms,
+        };
+        let pre_cut_bytes =
+            norito::encode_canonical(&pre_cut).expect("encode pre-cut appeal layout");
+        assert!(
+            norito::decode_canonical::<ModerationAppealRecordV1>(&pre_cut_bytes).is_err(),
+            "the first-release appeal schema must reject bytes without the anchor field"
+        );
+
+        #[cfg(feature = "json")]
+        {
+            for record in [&without_anchor, &with_anchor] {
+                let encoded = norito::json::to_vec(record).expect("encode moderation appeal JSON");
+                let decoded: ModerationAppealRecordV1 =
+                    norito::json::from_slice(&encoded).expect("decode moderation appeal JSON");
+                assert_eq!(&decoded, record);
+            }
+            let mut pre_cut_json =
+                norito::json::to_value(&without_anchor).expect("encode appeal JSON value");
+            pre_cut_json
+                .as_object_mut()
+                .expect("moderation appeal JSON object")
+                .remove("sortition_anchor");
+            assert!(
+                norito::json::from_value::<ModerationAppealRecordV1>(pre_cut_json).is_err(),
+                "the first-release appeal JSON schema must require the anchor field, including null"
+            );
+        }
+    }
+    #[test]
     #[expect(
         clippy::too_many_lines,
         reason = "one fail-closed sortition scenario checks ordering, uniqueness, and every rejection class"
@@ -2565,11 +2686,11 @@ mod tests {
         .unwrap();
         assert_ne!(
             first.2, later_anchor.2,
-            "post-registration parent anchors must produce distinct draw seeds"
+            "post-registration pinned anchors must produce distinct draw seeds"
         );
         assert_ne!(
             first.3, later_anchor.3,
-            "sortition commitments must bind the frozen parent anchor through the seed"
+            "sortition commitments must bind the pinned anchor through the seed"
         );
         assert_eq!(first.0.len(), 3);
         assert_eq!(first.1.len(), 2);

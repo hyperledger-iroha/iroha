@@ -16,11 +16,28 @@ as its explicit replay position.
 
 Torii applies ingress limits, API-token policy, CIDR policy, and the route rate
 limit before returning an SSE `200` or WebSocket `101`. A failed check does not
-create a subscriber. Authentication is an establishment check: the currently
-configured static API-token policy is not polled again while a connection is
-open. Credential rotation therefore applies to new connections; operators
-should close existing connections separately when immediate revocation is
-required.
+create a subscriber. The event routes accept either no canonical account
+authentication or one complete canonical account signature. Supplying any
+partial, malformed, stale, replayed, or otherwise invalid authentication tuple
+fails with `401`; it never degrades to anonymous access.
+
+An anonymous event subscriber sees only active public dataspaces. A verified
+account additionally sees dataspaces bound to its UAID and exact
+`CanReadRestrictedDataspace` grants. `CanReadAllLedgerData` sees every active
+dataspace. Transaction events are scoped to the union of every coordinator and
+participant dataspace in their committed routing plan and are emitted only when
+the caller can see every leg. Unknown, stale, or malformed provenance and event
+families without committed route provenance are global-reader-only. Scope is
+applied before subscriber filters and JSON/Norito projection.
+
+The native `/v1/blocks/stream` carries complete `SignedBlock` values and cannot
+be safely redacted. It therefore requires a canonical account signature from a
+caller that currently holds `CanReadAllLedgerData`. Event and Explorer streams
+retain the admitted principal and route scope, re-evaluate account existence and
+permissions while open, and close with a generic authorization-revoked terminal
+error when that authority is removed. Static API-token rotation remains an
+establishment policy; account and dataspace authorization is the live,
+re-evaluated boundary.
 
 SSE clients send `Accept: text/event-stream`. Successful responses use
 `Content-Type: text/event-stream` and `Cache-Control: no-cache`. WebSocket
@@ -95,9 +112,10 @@ HTTP `400`, `X-Iroha-Stream-Error: stream_resume_unsupported`, and a native
 the field would falsely claim a lossless reconnect.
 
 A reconnect without `Last-Event-ID` starts a new live subscription and can have
-a gap. There is no atomic snapshot-to-SSE handoff in `/v1`. Consumers that need
-complete, ordered ledger history must use `/v1/blocks/stream` from a known
-height and derive the relevant committed events.
+a gap. There is no atomic snapshot-to-SSE handoff in `/v1`. Authorized global
+readers that need complete, ordered ledger history may use
+`/v1/blocks/stream` from a known height and derive the relevant committed
+events. Other callers use the dataspace-filtered Explorer summaries.
 
 Explorer block, transaction, and instruction streams suppress repeated or
 stale block heights within one connection, so paired committed/applied

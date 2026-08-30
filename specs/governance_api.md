@@ -15,9 +15,9 @@ eligible-citizen snapshot in its `SortitionRequestV1`; that request is committed
 before a strictly future finalized threshold-beacon pulse. The first consumed
 pulse covers all initially required bodies as one simultaneous draw batch.
 Roster sealing follows authenticated invitation responses. Reads never derive a
-missing roster from assets, compatibility-only roster snapshots, module names,
-or another attempt. Restored legacy roster records are inert and have no public
-projection.
+missing roster from assets, module names, configuration, or another attempt.
+The first-release state schema contains no standing council or detached
+Parliament-roster snapshot; the attempt reducer is the sole roster authority.
 Every governance lock likewise carries its immutable asset, escrow, and slash
 custody binding; missing-custody JSON/Norito records are rejected and runtime
 configuration is never used to reconstruct retained lock custody.
@@ -598,6 +598,9 @@ Code Size Cap
     lock’s amount or expiry. The `owner` must equal the transaction authority.
     Minimum duration is `conviction_step_blocks`, and the resulting lock must
     remain active through the referendum's inclusive `h_end`.
+    Both conviction parameters are non-zero, and one standalone PLAIN
+    referendum retains at most 1,000 voter locks; replacement ballots do not
+    consume another slot. This bounds the exact pre-admission tally scan.
     Context identifiers use the canonical first-release governance selector
     grammar: 1–128 RFC 3986 unreserved ASCII bytes without a leading dot.
     `amount` uses the same
@@ -662,6 +665,24 @@ Code Size Cap
     the result. Live/post-window PLAIN tallies use the same inclusive `h_end`
     eligibility boundary as consensus, and finalized ZK projections include
     the optional abstain slot. None is a Parliament certificate projection.
+  - A selector that is exactly a stored typed-proposal fingerprint is rejected
+    in lower-, upper-, or mixed-case hexadecimal form, with or without `0x` or
+    `0X`; typed-proposal admission and restore enforce the inverse collision
+    guard across standalone referenda, locks, slashes, and elections.
+    Standalone closure emits `ReferendumDecided` under the original selector and
+    produces referendum/lock/tally stream updates only, never a typed
+    `ProposalUpdated` identity.
+  - PLAIN directions are the closed numeric set `0 = Aye`, `1 = Nay`, and
+    `2 = Abstain`. Core uses checked category and turnout accumulation and an
+    exact wide threshold comparison. `min_turnout` counts all three categories,
+    but approval is measured over `Aye + Nay`; an empty decisive tally rejects.
+    Restored locks are rejected if their owner/key, direction, integer amount,
+    or configured aggregate tally is invalid.
+  - A standalone ZK referendum that reaches `h_end + 1` without a finalized
+    tally becomes durably `Closed` without a decision. A subsequently verified
+    tally emits the deferred `ReferendumDecided` once; replay is rejected by the
+    finalized election state. If tally finalization happens first, normal
+    closure emits the same event instead.
 
 - POST `/v1/gov/parliament/ballots` is retired and is not registered. Parliament
   jury participation uses only the authority-bound timed-OVN lifecycle above;
@@ -689,8 +710,8 @@ Governance execution is parameterised via `iroha_config`:
   plain_voting_enabled = true
   conviction_step_blocks = 100
   max_conviction = 6
-  approval_q_num = 1
-  approval_q_den = 2
+  approval_threshold_q_num = 1
+  approval_threshold_q_den = 2
   min_turnout = 0
   voting_asset_id = "61CtjvNd9T3THAR65GsMVHr82Bjc"         # governance bond asset (Sora Nexus default)
   min_bond_amount = "150"              # exact Quantity of voting_asset_id
@@ -795,7 +816,6 @@ RBAC
     - Global data-trigger permission proposals: a registered bonded citizen
     - Standalone ballots: `CanSubmitGovernanceBallot{ referendum_id }`
     - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
-    - Citizen service outcomes: `CanRecordCitizenService{ owner }`
     - Remaining managed Parliament and standalone ZK-election transitions:
       `CanManageParliament`
 - Scoped governance capabilities are bootstrapped by genesis and thereafter
@@ -816,6 +836,18 @@ RBAC
   ballot scope as defense in depth.
 - Slashing/appeals:
   - Double-vote/invalid/ineligible ballots apply configured slash percentages against the bond escrow, moving funds into `slash_receiver_account`, updating the slashing ledger, and emitting typed `LockSlashed` events (reason + destination + note).
+    Both ballot instructions must be the sole direct instruction in their
+    signed transaction; nested and mixed carriers fail closed. The ballot
+    retains its ordinary instruction-error result. When the rejected overlay
+    prevalidated a nonzero slash, Core applies the exact amount in a fresh block
+    rejection transaction before rejected-fee settlement, so `LockSlashed` and
+    `BallotRejected` persist even if fee settlement later fails; no
+    `BallotAccepted` event is emitted. Rejected proof attempts retain their
+    block operation/verifier/proof-byte and gas charges across live and prepared
+    overlay execution, and sealed reveals replay-protect both the carrier and
+    enclosed signed transaction identities in ordinary and autonomous-merge
+    admission. Transaction reads resolve either identity to the canonical outer
+    carrier.
   - Manual `SlashGovernanceLock`/`RestituteGovernanceLock` instructions support operator-driven penalties and appeals; restitution is capped by recorded slashes, restores funds to the bond escrow, updates the ledger, and emits `LockRestituted` while keeping the lock active until expiry.
 
 Protected Namespaces
@@ -967,7 +999,7 @@ Standalone `CastZkBallot` Verification Path
 - If `public_inputs_json` is supplied, it must be a JSON object; non-object payloads are rejected.
 - The host resolves the ballot verifying key from the referendum (`vk_ballot`) or governance defaults and requires the record to exist, be `Active`, and carry inline bytes.
 - Stored verifying-key bytes are re-hashed with `hash_vk`; any commitment mismatch aborts execution before verification to guard against tampered registry entries (`BallotRejected` with `verifying key commitment mismatch`).
-- Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof` and the instruction fails deterministically.
+- Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof`. The instruction fails deterministically; when it applied a configured nonzero slash, the block rejection corridor commits the exact penalty separately from the failed ballot and subsequent fee settlement.
 - The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
 - Successful proofs emit `BallotAccepted`; duplicate nullifiers, stale eligibility roots, or lock regressions continue to produce the existing rejection reasons described earlier in this document.
 

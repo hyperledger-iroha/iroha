@@ -56,8 +56,10 @@ fn reject_client_storage_tokens(headers: &HeaderMap) -> Result<(), Response> {
     Ok(())
 }
 
-fn acquire_public_gateway_permit() -> Result<SemaphorePermit<'static>, Response> {
-    PUBLIC_GATEWAY_INFLIGHT.try_acquire().map_err(|_| {
+fn try_acquire_public_gateway_permit(
+    semaphore: &Semaphore,
+) -> Result<SemaphorePermit<'_>, Response> {
+    semaphore.try_acquire().map_err(|_| {
         let mut response = json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "gateway_busy",
@@ -68,6 +70,10 @@ fn acquire_public_gateway_permit() -> Result<SemaphorePermit<'static>, Response>
             .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
         response
     })
+}
+
+fn acquire_public_gateway_permit() -> Result<SemaphorePermit<'static>, Response> {
+    try_acquire_public_gateway_permit(&PUBLIC_GATEWAY_INFLIGHT)
 }
 
 /// Serve the host-selected site manifest without an application principal.
@@ -568,7 +574,6 @@ fn enforce_compliance_subject(
     subject: &str,
     observed_at_unix: u64,
 ) -> Result<(), Response> {
-    use super::gateway::{GatewayComplianceDecisionSource, GatewayComplianceDisposition};
     let controller = state
         .sorafs_gateway_compliance_controller
         .as_ref()
@@ -582,6 +587,15 @@ fn enforce_compliance_subject(
             );
             compliance_unavailable_response()
         })?;
+    compliance_decision_response(decision)
+}
+
+#[cfg(not(feature = "app_api"))]
+fn compliance_decision_response(
+    decision: super::gateway::GatewayComplianceDecision,
+) -> Result<(), Response> {
+    use super::gateway::{GatewayComplianceDecisionSource, GatewayComplianceDisposition};
+
     match (decision.disposition, decision.source) {
         (
             GatewayComplianceDisposition::Allow,
@@ -831,7 +845,7 @@ async fn handle_get_sorafs_cid_root_inner(
 }
 
 #[cfg(not(feature = "app_api"))]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct ResponseRange {
     offset: u64,
     length: usize,
@@ -1192,27 +1206,203 @@ mod tests {
     use super::*;
 
     #[test]
-    fn public_gateway_rejects_client_storage_tokens() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-sorafs-stream-token",
-            HeaderValue::from_static("legacy-secret"),
-        );
-        let response = reject_client_storage_tokens(&headers)
-            .expect_err("a client storage token must be rejected");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    fn public_gateway_rejects_both_client_storage_token_headers() {
+        for name in CLIENT_STORAGE_TOKEN_HEADERS {
+            let mut headers = HeaderMap::new();
+            headers.insert(name, HeaderValue::from_static("client-secret"));
+            let response = reject_client_storage_tokens(&headers)
+                .expect_err("a client storage token must be rejected");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{name}");
+        }
     }
 
     #[test]
-    fn public_gateway_range_is_single_and_bounded() {
+    fn public_gateway_concurrency_limit_fails_fast_with_retry_after() {
+        let semaphore = Semaphore::new(1);
+        let permit = match try_acquire_public_gateway_permit(&semaphore) {
+            Ok(permit) => permit,
+            Err(_) => panic!("the first gateway request must acquire the only permit"),
+        };
+        let response = match try_acquire_public_gateway_permit(&semaphore) {
+            Ok(_) => panic!("a second gateway request must not exceed the concurrency bound"),
+            Err(response) => response,
+        };
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response.headers().get(header::RETRY_AFTER),
+            Some(&HeaderValue::from_static("1"))
+        );
+        drop(permit);
+        assert!(try_acquire_public_gateway_permit(&semaphore).is_ok());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn every_public_gateway_entrypoint_rejects_client_storage_tokens() {
+        let state = crate::mk_app_state_for_tests();
+        let cid = "client-token-must-win";
+        for name in CLIENT_STORAGE_TOKEN_HEADERS {
+            let mut headers = HeaderMap::new();
+            headers.insert(name, HeaderValue::from_static("client-secret"));
+            let responses = [
+                handle_get_sorafs_site_manifest(
+                    State(state.clone()),
+                    headers.clone(),
+                    axum::extract::RawQuery(None),
+                )
+                .await,
+                handle_get_sorafs_cid_lookup(
+                    State(state.clone()),
+                    headers.clone(),
+                    Path(cid.to_owned()),
+                    axum::extract::RawQuery(None),
+                )
+                .await,
+                handle_get_sorafs_cid_root(
+                    State(state.clone()),
+                    headers.clone(),
+                    format!("/sorafs/cid/{cid}").parse().expect("CID root URI"),
+                    Path(cid.to_owned()),
+                )
+                .await,
+                handle_get_sorafs_cid_path(
+                    State(state.clone()),
+                    headers,
+                    format!("/sorafs/cid/{cid}/asset.bin")
+                        .parse()
+                        .expect("CID path URI"),
+                    Path((cid.to_owned(), "asset.bin".to_owned())),
+                )
+                .await,
+            ];
+            for response in responses {
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{name}");
+            }
+        }
+    }
+
+    #[cfg(not(feature = "app_api"))]
+    #[test]
+    fn no_app_api_gateway_primitives_keep_local_reads_canonical_isolated_and_bounded() {
+        let cid = super::super::site::encode_content_cid(&[0x01, 0x71, 0x1f, 0x20]);
+        assert_eq!(
+            canonical_content_cid(&cid),
+            Some(vec![0x01, 0x71, 0x1f, 0x20])
+        );
+        assert_eq!(canonical_content_cid(&cid.to_ascii_uppercase()), None);
+
+        let mut hosting =
+            iroha_config::parameters::actual::SorafsGatewayUntrustedHosting::default();
+        hosting.enabled = true;
+        hosting.cid_host_suffixes.taira = "sorafs.taira.sora.org".to_owned();
+        assert_eq!(
+            cid_from_host(&format!("{cid}.sorafs.taira.sora.org"), &hosting)
+                .expect("canonical CID host"),
+            Some(cid.clone())
+        );
+        let invalid_host = format!("{}.sorafs.taira.sora.org", cid.to_ascii_uppercase());
+        assert_eq!(
+            cid_from_host(&invalid_host, &hosting)
+                .expect_err("a noncanonical CID host must fail")
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        assert_eq!(
+            super::super::site::path_components_for_request("assets/app.js", "index.html"),
+            Some(vec!["assets".to_owned(), "app.js".to_owned()])
+        );
+        assert_eq!(
+            super::super::site::path_components_for_request("../secret", "index.html"),
+            None
+        );
+        let mut origin_headers = HeaderMap::new();
+        origin_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&format!("{cid}.sorafs.taira.sora.org"))
+                .expect("CID host header"),
+        );
+        assert!(is_cid_derived_origin(&origin_headers, &cid, &hosting));
+        origin_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        assert!(!is_cid_derived_origin(&origin_headers, &cid, &hosting));
+
+        let mut remote_headers = HeaderMap::new();
+        remote_headers.insert(
+            header::HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+            HeaderValue::from_static("203.0.113.7"),
+        );
+        remote_headers.insert(
+            header::HeaderName::from_static(crate::limits::FORWARDED_FOR_HEADER),
+            HeaderValue::from_static("198.51.100.99"),
+        );
+        assert_eq!(
+            effective_remote(&remote_headers)
+                .expect("ingress-normalized remote")
+                .ip()
+                .to_string(),
+            "203.0.113.7"
+        );
+
         let mut headers = HeaderMap::new();
         headers.insert(header::RANGE, HeaderValue::from_static("bytes=2-5"));
-        #[cfg(not(feature = "app_api"))]
-        {
-            let range = response_range(&headers, 8).expect("bounded range");
-            assert_eq!(range.offset, 2);
-            assert_eq!(range.length, 4);
-            assert!(range.partial);
-        }
+        let range = response_range(&headers, 8).expect("bounded range");
+        assert_eq!(range.offset, 2);
+        assert_eq!(range.length, 4);
+        assert!(range.partial);
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-1,4-5"));
+        assert_eq!(
+            response_range(&headers, 8)
+                .expect_err("multiple ranges must fail")
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        headers.clear();
+        assert_eq!(
+            response_range(&headers, MAX_SITE_RESPONSE_BYTES + 1)
+                .expect_err("an unbounded oversized response must fail")
+                .status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+
+    #[cfg(not(feature = "app_api"))]
+    #[test]
+    fn no_app_api_gateway_maps_governed_takedowns_and_provider_denials() {
+        use super::super::gateway::{
+            GatewayComplianceDecision, GatewayComplianceDecisionSource,
+            GatewayComplianceDisposition, PolicyViolation,
+        };
+
+        let decision = GatewayComplianceDecision {
+            disposition: GatewayComplianceDisposition::Deny,
+            source: GatewayComplianceDecisionSource::LegalSafetyHold,
+            reference_id: None,
+            catalog_digest: Some([0xAB; 32]),
+            catalog_sequence: 7,
+            catalog_valid_until_unix: 4_102_444_800,
+        };
+        let response = compliance_decision_response(decision)
+            .expect_err("a governed legal/safety hold must deny readback");
+        assert_eq!(response.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store, max-age=0"))
+        );
+
+        let response = policy_violation_response(PolicyViolation::ProviderNotAdmitted {
+            provider_id: [0xCD; 32],
+        });
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let response = policy_violation_response(PolicyViolation::RateLimited(
+            super::super::gateway::RateLimitError::Banned {
+                retry_after: Some(std::time::Duration::from_secs(3)),
+            },
+        ));
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get(header::RETRY_AFTER),
+            Some(&HeaderValue::from_static("3"))
+        );
     }
 }

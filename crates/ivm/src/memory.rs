@@ -8,7 +8,8 @@
 //! * **Heap** – starts at `0x0010_0000` and grows upward via `SYSCALL_ALLOC`.
 //! * **Input** – read-only buffer beginning at `0x0020_0000` (64 KB).
 //! * **Output** – read/write buffer beginning at `0x0021_0000`.
-//! * **Stack** – 4&nbsp;MB region starting at `0x0030_0000`.
+//! * **Stack** – starts at `0x0030_0000`; ABI V1 derives a deterministic
+//!   64&nbsp;KiB–4&nbsp;MiB active limit from the invocation gas budget.
 use crate::{
     byte_merkle_tree::ByteMerkleTree,
     error::{Perm, VMError},
@@ -204,24 +205,38 @@ impl Memory {
     pub(crate) fn dirty_for_testing(&self) -> bool {
         self.dirty
     }
-    /// Generate the Merkle authentication path for the 32-byte chunk containing `addr`. Pending
-    /// writes are committed before sampling so the returned path matches the latest memory image.
-    pub fn merkle_path(&mut self, addr: u64) -> Vec<[u8; 32]> {
+    fn merkle_leaf_index(&self, addr: u64) -> Result<usize, VMError> {
+        let addr = usize::try_from(addr).map_err(|_| VMError::MemoryOutOfBounds)?;
+        if addr >= self.data.len() {
+            return Err(VMError::MemoryOutOfBounds);
+        }
+        Ok(addr / 32)
+    }
+    /// Generate the Merkle authentication path for the 32-byte chunk containing `addr`.
+    /// Pending writes are committed before sampling so the returned path matches the latest
+    /// memory image.
+    ///
+    /// # Errors
+    /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
+    /// image. In particular, the exclusive end address is not rounded into the final tree leaf.
+    pub fn merkle_path(&mut self, addr: u64) -> Result<Vec<[u8; 32]>, VMError> {
+        let index = self.merkle_leaf_index(addr)?;
         self.commit();
-        const CHUNK: usize = 32;
-        let index = (addr as usize) / CHUNK;
         self.tree.path(index)
     }
     /// Return both the current Merkle root (typed `HashOf<MerkleTree<[u8; 32]>>`)
     /// and the authentication path for the 32-byte chunk containing `addr` in a single operation.
     /// Pending writes are committed first to keep the root/path in sync.
+    ///
+    /// # Errors
+    /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
+    /// image.
     pub fn merkle_root_and_path(
         &mut self,
         addr: u64,
-    ) -> (HashOf<MerkleTree<[u8; 32]>>, Vec<[u8; 32]>) {
+    ) -> Result<(HashOf<MerkleTree<[u8; 32]>>, Vec<[u8; 32]>), VMError> {
+        let index = self.merkle_leaf_index(addr)?;
         self.commit();
-        const CHUNK: usize = 32;
-        let index = (addr as usize) / CHUNK;
         self.tree.root_and_path(index)
     }
     /// Build a compact Merkle proof for the memory chunk containing `addr`.
@@ -229,13 +244,18 @@ impl Memory {
     /// Pending writes are committed before construction. Without truncation the returned root is
     /// the full memory-tree root. When `depth_cap` truncates the path, the returned root commits
     /// only to that path fragment and is not a membership commitment.
+    ///
+    /// # Errors
+    /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
+    /// image.
     pub fn merkle_compact(
         &mut self,
         addr: u64,
         depth_cap: Option<usize>,
-    ) -> (CompactMerkleProof<[u8; 32]>, HashOf<MerkleTree<[u8; 32]>>) {
-        let (full_root, path) = self.merkle_root_and_path(addr);
-        let leaf_index = (addr / 32) as u32;
+    ) -> Result<(CompactMerkleProof<[u8; 32]>, HashOf<MerkleTree<[u8; 32]>>), VMError> {
+        let leaf_index = self.merkle_leaf_index(addr)?;
+        let leaf_index = u32::try_from(leaf_index).map_err(|_| VMError::MemoryOutOfBounds)?;
+        let (full_root, path) = self.merkle_root_and_path(addr)?;
         let mut depth = path.len().min(32);
         if let Some(cap) = depth_cap {
             depth = depth.min(cap);
@@ -273,7 +293,7 @@ impl Memory {
         } else {
             full_root
         };
-        (compact, root)
+        Ok((compact, root))
     }
     /// Return the current full-tree root and exact local memory geometry as one
     /// membership commitment.
@@ -325,29 +345,45 @@ impl Memory {
         // `commit()` or `root()` call.
         self.dirty = true;
     }
-    /// Initialize memory with given code size. Other regions (heap, stack) are also configured.
-    pub fn new(code_size: u64) -> Self {
-        Self::new_with_stack_limit(code_size, IvmStackPolicy::V1.maximum_stack_bytes())
+    /// Initialize an empty memory image with the canonical ABI V1 maximum stack.
+    ///
+    /// Code becomes executable only after a successful [`Self::load_code`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::new_with_stack_limit(IvmStackPolicy::V1.maximum_stack_bytes())
+            .expect("the canonical ABI V1 memory geometry is valid")
     }
     /// Initialize memory with an explicit stack limit (bytes).
     ///
     /// This low-level constructor is used for runtime templates and focused
     /// memory tests. Production VMs derive its argument exclusively from the
     /// immutable ABI stack policy in `IvmConfig`.
-    pub fn new_with_stack_limit(code_size: u64, stack_limit: u64) -> Self {
+    ///
+    /// # Errors
+    /// Returns [`VMError::MemoryOutOfBounds`] when `stack_limit` exceeds the
+    /// ABI V1 maximum or the resulting memory geometry is not representable on
+    /// the host.
+    pub fn new_with_stack_limit(stack_limit: u64) -> Result<Self, VMError> {
+        if stack_limit > IvmStackPolicy::V1.maximum_stack_bytes() {
+            return Err(VMError::MemoryOutOfBounds);
+        }
         let stack_limit = Self::align_stack_bytes(stack_limit);
-        let total_size = Memory::STACK_START + stack_limit + Memory::STACK_SLOP;
+        let total_size = Memory::STACK_START
+            .checked_add(stack_limit)
+            .and_then(|size| size.checked_add(Memory::STACK_SLOP))
+            .ok_or(VMError::MemoryOutOfBounds)?;
+        let total_size = usize::try_from(total_size).map_err(|_| VMError::MemoryOutOfBounds)?;
         let mut mem = Memory {
-            data: vec![0u8; total_size as usize],
+            data: vec![0u8; total_size],
             stack_limit,
             heap_alloc: 0,
             heap_limit: Memory::HEAP_SIZE,
             heap_max_limit: Memory::HEAP_MAX_SIZE,
             heap_contains_data: false,
-            code_length: code_size,
+            code_length: 0,
             output_cursor: 0,
             root: HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32])),
-            tree: ByteMerkleTree::new((total_size as usize).div_ceil(32).max(1), 32),
+            tree: ByteMerkleTree::new(total_size.div_ceil(32).max(1), 32)?,
             dirty: false,
             dirty_chunks: HashSet::new(),
             modified_chunks: HashSet::new(),
@@ -359,7 +395,7 @@ impl Memory {
         };
         // initialize root from zeroed memory
         mem.root = mem.tree.root_hash();
-        mem
+        Ok(mem)
     }
     /// Preload data into the input region. Used by tests/host before execution.
     pub fn preload_input(&mut self, offset: u64, bytes: &[u8]) -> Result<(), VMError> {
@@ -392,23 +428,24 @@ impl Memory {
         bytes: &[u8],
         align: u64,
     ) -> Result<u64, VMError> {
-        let mask = align.saturating_sub(1);
-        let mut off = *cursor;
-        if align > 1 {
-            let rem = off & mask;
-            if rem != 0 {
-                off = off.wrapping_add(align - rem);
-            }
+        if !align.is_power_of_two() {
+            return Err(VMError::MemoryOutOfBounds);
         }
-        let end = off
-            .checked_add(bytes.len() as u64)
+        let mask = align - 1;
+        let off = cursor
+            .checked_add(mask)
+            .map(|value| value & !mask)
             .ok_or(VMError::MemoryOutOfBounds)?;
+        let len = u64::try_from(bytes.len()).map_err(|_| VMError::MemoryOutOfBounds)?;
+        let end = off.checked_add(len).ok_or(VMError::MemoryOutOfBounds)?;
         if end > Memory::INPUT_SIZE {
             return Err(VMError::MemoryOutOfBounds);
         }
         self.preload_input(off, bytes)?;
         *cursor = end;
-        Ok(Memory::INPUT_START + off)
+        Memory::INPUT_START
+            .checked_add(off)
+            .ok_or(VMError::MemoryOutOfBounds)
     }
     #[inline]
     pub fn alloc(&mut self, size: u64) -> Result<u64, VMError> {
@@ -508,10 +545,24 @@ impl Memory {
         self.data[0..len].to_vec()
     }
     /// Load program bytes into the beginning of memory (code region).
-    pub fn load_code(&mut self, code: &[u8]) {
+    ///
+    /// The complete request is validated before any bytes or metadata change.
+    ///
+    /// # Errors
+    /// Returns [`VMError::MemoryOutOfBounds`] when the program overlaps the
+    /// heap boundary or is not representable in the physical memory image.
+    pub fn load_code(&mut self, code: &[u8]) -> Result<(), VMError> {
         let len = code.len();
-        let old_len = usize::try_from(self.code_length)
-            .expect("IVM code length always fits the host address space");
+        let code_region_end = usize::try_from(Memory::HEAP_START)
+            .map_err(|_| VMError::MemoryOutOfBounds)?
+            .min(self.data.len());
+        if len > code_region_end {
+            return Err(VMError::MemoryOutOfBounds);
+        }
+        let old_len = usize::try_from(self.code_length).map_err(|_| VMError::MemoryOutOfBounds)?;
+        if old_len > code_region_end {
+            return Err(VMError::MemoryOutOfBounds);
+        }
         self.data[0..len].copy_from_slice(code);
         if len < old_len {
             self.data[len..old_len].fill(0);
@@ -543,6 +594,7 @@ impl Memory {
                 dump(st, cnt);
             }
         }
+        Ok(())
     }
     /// Determine the permissions for the address range `[addr, addr + size)`.
     #[inline]
@@ -838,11 +890,6 @@ impl Memory {
         }
         ranges
     }
-    /// Clear all recorded dirty ranges without committing them.
-    pub fn clear_dirty(&mut self) {
-        self.dirty_chunks.clear();
-        self.dirty = false;
-    }
     /// Mark the current bytes as an immutable runtime-template baseline.
     pub(crate) fn mark_template_clean(&mut self) {
         self.modified_chunks.clear();
@@ -967,9 +1014,15 @@ impl Memory {
         });
     }
     /// Overwrite just the code region with bytes from another Memory.
-    pub fn overlay_code(&mut self, src: &Memory) {
+    pub fn overlay_code(&mut self, src: &Memory) -> Result<(), VMError> {
         let len = src.code_length as usize;
-        self.load_code(&src.data[0..len]);
+        self.load_code(&src.data[0..len])
+    }
+}
+
+impl Default for Memory {
+    fn default() -> Self {
+        Self::new()
     }
 }
 impl Clone for Memory {
@@ -1045,7 +1098,7 @@ mod tests {
     use iroha_crypto::{Hash, HashOf, MerkleProof};
     #[test]
     fn reset_from_template_restores_runtime_regions() {
-        let mut base = Memory::new(0);
+        let mut base = Memory::new();
         base.preload_input(0, &[1, 2, 3, 4])
             .expect("preload template input");
         base.set_heap_limit(Memory::HEAP_MAX_SIZE - 128)
@@ -1078,7 +1131,7 @@ mod tests {
     }
     #[test]
     fn warm_reset_does_not_copy_unmodified_memory_chunks() {
-        let base = Memory::new(0);
+        let base = Memory::new();
         let mut worker = base.clone();
         let tracked_address = Memory::HEAP_START;
         worker
@@ -1106,11 +1159,11 @@ mod tests {
     }
     #[test]
     fn block_reset_restores_code_hidden_by_template_cleaning() {
-        let mut template = Memory::new(0);
+        let mut template = Memory::new();
         let expected_root = template.current_root();
         let mut worker = template.clone();
         worker.begin_block_transaction_tracking();
-        worker.load_code(&[0xA5; 65]);
+        worker.load_code(&[0xA5; 65]).unwrap();
         worker.commit();
         worker.mark_template_clean();
         assert!(worker.modified_chunks.is_empty());
@@ -1127,13 +1180,13 @@ mod tests {
     #[test]
     fn shorter_code_load_clears_prior_tail_and_matches_fresh_root() {
         let short = [0x11, 0x22, 0x33, 0x44];
-        let mut historical = Memory::new(0);
-        historical.load_code(&[0xA5; 65]);
+        let mut historical = Memory::new();
+        historical.load_code(&[0xA5; 65]).unwrap();
         historical.commit();
-        historical.load_code(&short);
+        historical.load_code(&short).unwrap();
 
-        let mut fresh = Memory::new(0);
-        fresh.load_code(&short);
+        let mut fresh = Memory::new();
+        fresh.load_code(&short).unwrap();
 
         assert_eq!(&historical.data[..short.len()], &short);
         assert!(
@@ -1143,22 +1196,48 @@ mod tests {
         );
         assert_eq!(historical.current_root(), fresh.current_root());
 
-        let mut overlaid = Memory::new(0);
-        overlaid.load_code(&[0x5A; 65]);
-        overlaid.overlay_code(&fresh);
+        let mut overlaid = Memory::new();
+        overlaid.load_code(&[0x5A; 65]).unwrap();
+        overlaid.overlay_code(&fresh).unwrap();
         assert!(overlaid.data[short.len()..65].iter().all(|byte| *byte == 0));
         assert_eq!(overlaid.current_root(), fresh.current_root());
     }
     #[test]
+    fn code_load_enforces_the_exact_code_region_and_is_atomic() {
+        let mut memory = Memory::new();
+        assert_eq!(memory.code_len(), 0);
+        assert!(matches!(
+            memory.load_u8(0),
+            Err(VMError::MemoryAccessViolation {
+                perm: Perm::READ,
+                ..
+            })
+        ));
+
+        let boundary = usize::try_from(Memory::HEAP_START).unwrap();
+        let valid = vec![0xA5; boundary];
+        memory
+            .load_code(&valid)
+            .expect("the code region's full extent is valid");
+        assert_eq!(memory.code_len(), Memory::HEAP_START);
+        assert_eq!(memory.load_u8(Memory::HEAP_START - 1), Ok(0xA5));
+
+        let invalid = vec![0x5A; boundary + 1];
+        assert_eq!(memory.load_code(&invalid), Err(VMError::MemoryOutOfBounds));
+        assert_eq!(memory.code_len(), Memory::HEAP_START);
+        assert_eq!(memory.load_u8(0), Ok(0xA5));
+        assert_eq!(memory.load_u8(Memory::HEAP_START - 1), Ok(0xA5));
+    }
+    #[test]
     fn block_tracking_survives_template_cleaning_for_non_code_writes() {
-        let mut template = Memory::new(0);
+        let mut template = Memory::new();
         let expected_root = template.current_root();
         let mut worker = template.clone();
         worker.begin_block_transaction_tracking();
         worker
             .store_u64(Memory::HEAP_START, 0xDEAD_BEEF)
             .expect("write transaction heap");
-        worker.load_code(&[0xA5; 4]);
+        worker.load_code(&[0xA5; 4]).unwrap();
         worker.commit();
         worker.mark_template_clean();
         assert!(worker.modified_chunks.is_empty());
@@ -1172,7 +1251,7 @@ mod tests {
     }
     #[test]
     fn program_heap_clear_scrubs_inactive_capacity_and_resets_allocator() {
-        let mut memory = Memory::new(0);
+        let mut memory = Memory::new();
         memory
             .store_u64(Memory::HEAP_START, 0x1111)
             .expect("write active heap");
@@ -1184,7 +1263,7 @@ mod tests {
         memory
             .set_heap_max_limit(0x1_000)
             .expect("tighten heap authority above allocation");
-        let mut pristine = Memory::new(0);
+        let mut pristine = Memory::new();
         pristine
             .set_heap_max_limit(0x1_000)
             .expect("match heap authority");
@@ -1201,8 +1280,8 @@ mod tests {
     }
     #[test]
     fn runtime_template_geometry_mismatch_fails_without_replacing_memory() {
-        let mut worker = Memory::new_with_stack_limit(0, Memory::STACK_ALIGNMENT);
-        let template = Memory::new_with_stack_limit(0, 2 * Memory::STACK_ALIGNMENT);
+        let mut worker = Memory::new_with_stack_limit(Memory::STACK_ALIGNMENT).unwrap();
+        let template = Memory::new_with_stack_limit(2 * Memory::STACK_ALIGNMENT).unwrap();
         worker
             .store_u8(Memory::HEAP_START, 0xA5)
             .expect("dirty worker memory");
@@ -1237,7 +1316,7 @@ mod tests {
     }
     #[test]
     fn commit_small_dirty_set_uses_incremental_merkle_update() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         let baseline = mem.root();
         let (_, updates_before) = crate::byte_merkle_tree::merkle_update_counters();
         mem.store_u8(Memory::HEAP_START, 0xAA)
@@ -1260,7 +1339,7 @@ mod tests {
     #[test]
     fn commit_large_dirty_set_matches_full_rebuild_root() {
         let data = vec![0u8; 32 * 8];
-        let tree = ByteMerkleTree::from_bytes(&data, 32);
+        let tree = ByteMerkleTree::from_bytes(&data, 32).unwrap();
         let root = tree.root_hash();
         let mut mem = Memory {
             data,
@@ -1302,7 +1381,7 @@ mod tests {
     #[test]
     fn large_commit_keeps_unaligned_memory_tree_shape() {
         let data = vec![0u8; 32 * 8 + 16];
-        let tree = ByteMerkleTree::new(8, 32);
+        let tree = ByteMerkleTree::new(8, 32).unwrap();
         let root = tree.root_hash();
         let mut incremental = Memory {
             data: data.clone(),
@@ -1347,7 +1426,7 @@ mod tests {
     }
     #[test]
     fn preload_input_out_of_bounds_fails() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         // Offset equal to INPUT_SIZE should be rejected even for empty writes.
         assert!(matches!(
             mem.preload_input(Memory::INPUT_SIZE, &[1]),
@@ -1360,8 +1439,30 @@ mod tests {
         ));
     }
     #[test]
+    fn input_write_aligned_rejects_invalid_alignment_and_overflow() {
+        let mut mem = Memory::new();
+        let baseline = mem.current_root();
+
+        for align in [0, 3] {
+            let mut cursor = 1;
+            assert_eq!(
+                mem.input_write_aligned(&mut cursor, &[0xA5], align),
+                Err(VMError::MemoryOutOfBounds)
+            );
+            assert_eq!(cursor, 1, "failed allocation must preserve the cursor");
+        }
+
+        let mut cursor = u64::MAX;
+        assert_eq!(
+            mem.input_write_aligned(&mut cursor, &[0xA5], 8),
+            Err(VMError::MemoryOutOfBounds)
+        );
+        assert_eq!(cursor, u64::MAX);
+        assert_eq!(mem.current_root(), baseline, "failed writes must be atomic");
+    }
+    #[test]
     fn alloc_rejects_overflow_sizes() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         assert!(matches!(mem.alloc(u64::MAX), Err(VMError::OutOfMemory)));
         // Heap cursor should remain unchanged after failure.
         assert_eq!(mem.heap_alloc, 0);
@@ -1370,7 +1471,7 @@ mod tests {
     }
     #[test]
     fn per_instance_heap_ceiling_cannot_be_bypassed_by_growth() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         mem.set_heap_max_limit(64)
             .expect("install governed heap ceiling");
         assert_eq!(mem.heap_limit(), 64);
@@ -1381,7 +1482,7 @@ mod tests {
     }
     #[test]
     fn grow_heap_rejects_overflow() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         mem.set_heap_limit(Memory::HEAP_MAX_SIZE - 64)
             .expect("lower heap limit before bounded grow");
         let original_limit = mem.heap_limit();
@@ -1393,7 +1494,7 @@ mod tests {
     }
     #[test]
     fn store_u128_respects_output_append_only() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         let base = Memory::OUTPUT_START;
         mem.store_u128(base, 0x0123_4567_89AB_CDEF_0123_4567_89AB_CDEF)
             .expect("initial append succeeds");
@@ -1404,7 +1505,7 @@ mod tests {
     }
     #[test]
     fn load_region_rejects_oversized_len() {
-        let mem = Memory::new(0);
+        let mem = Memory::new();
         let err = mem.load_region(Memory::HEAP_START, u64::from(u32::MAX) + 1);
         assert!(matches!(
             err,
@@ -1416,7 +1517,7 @@ mod tests {
     }
     #[test]
     fn byte_slice_access_rejects_ranges_crossing_region_boundaries() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         let final_heap_byte = Memory::HEAP_START + Memory::HEAP_MAX_SIZE - 1;
         let mut output = [0_u8; 2];
         assert!(matches!(
@@ -1436,7 +1537,7 @@ mod tests {
     }
     #[test]
     fn quote_inspection_does_not_mutate_memory_access_tracking() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         let address = mem.alloc(4).expect("allocate quote fixture");
         mem.store_bytes(address, &[1, 2, 3, 4])
             .expect("write quote fixture");
@@ -1457,7 +1558,7 @@ mod tests {
     }
     #[test]
     fn canonical_stack_limit_boundary_is_enforced() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         assert_eq!(mem.stack_limit(), IvmStackPolicy::V1.maximum_stack_bytes());
         let ok_addr = mem.stack_top() - 1;
         mem.store_u8(ok_addr, 1).expect("write within limit");
@@ -1472,15 +1573,56 @@ mod tests {
     }
     #[test]
     fn explicit_unaligned_stack_limit_is_normalized_before_exposure() {
-        let mut mem = Memory::new_with_stack_limit(0, 0x60a04);
+        let mut mem = Memory::new_with_stack_limit(0x60a04).unwrap();
         assert_eq!(mem.stack_limit() % Memory::STACK_ALIGNMENT, 0);
         assert_eq!(mem.stack_top() % Memory::STACK_ALIGNMENT, 0);
         mem.store_u64(mem.stack_top() - 8, 7)
             .expect("aligned stack top must accept 64-bit stores");
     }
     #[test]
+    fn stack_constructor_enforces_v1_limits() {
+        let minimum = Memory::new_with_stack_limit(0).unwrap();
+        assert_eq!(minimum.stack_limit(), Memory::STACK_ALIGNMENT);
+
+        let maximum = Memory::new_with_stack_limit(Memory::STACK_SIZE).unwrap();
+        assert_eq!(maximum.stack_limit(), Memory::STACK_SIZE);
+        assert_eq!(
+            maximum.stack_top(),
+            Memory::STACK_START + Memory::STACK_SIZE
+        );
+
+        assert!(matches!(
+            Memory::new_with_stack_limit(Memory::STACK_SIZE + 1),
+            Err(VMError::MemoryOutOfBounds)
+        ));
+        assert!(matches!(
+            Memory::new_with_stack_limit(u64::MAX),
+            Err(VMError::MemoryOutOfBounds)
+        ));
+    }
+    #[test]
+    fn memory_merkle_helpers_reject_the_exclusive_end_address() {
+        let mut memory = Memory::new_with_stack_limit(Memory::STACK_ALIGNMENT).unwrap();
+        let final_byte = memory.stack_top() - 1;
+        assert!(memory.merkle_path(final_byte).is_ok());
+        assert!(memory.merkle_root_and_path(final_byte).is_ok());
+        assert!(memory.merkle_compact(final_byte, None).is_ok());
+
+        for invalid in [memory.stack_top(), u64::MAX] {
+            assert_eq!(memory.merkle_path(invalid), Err(VMError::MemoryOutOfBounds));
+            assert_eq!(
+                memory.merkle_root_and_path(invalid),
+                Err(VMError::MemoryOutOfBounds)
+            );
+            assert_eq!(
+                memory.merkle_compact(invalid, None),
+                Err(VMError::MemoryOutOfBounds)
+            );
+        }
+    }
+    #[test]
     fn current_root_recomputes_dirty_state() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         let baseline = mem.current_root();
         let addr = Memory::HEAP_START;
         mem.store_u64(addr, 0xCAFEBABE_DEADBEEF).unwrap();
@@ -1494,24 +1636,24 @@ mod tests {
     }
     #[test]
     fn merkle_path_without_explicit_commit_reflects_writes() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         let addr = Memory::HEAP_START + 96;
         mem.store_u64(addr, 0xFEED_FACE_DEAD_BEEFu64).unwrap();
         let mut reference = mem.clone();
-        let path = mem.merkle_path(addr);
+        let path = mem.merkle_path(addr).unwrap();
         let root = mem.current_root();
-        let expected_path = reference.merkle_path(addr);
+        let expected_path = reference.merkle_path(addr).unwrap();
         let expected_root = reference.current_root();
         assert_eq!(root, expected_root);
         assert_eq!(path, expected_path);
     }
     #[test]
     fn merkle_compact_without_explicit_commit_matches_path() {
-        let mut mem = Memory::new(0);
+        let mut mem = Memory::new();
         let addr = Memory::HEAP_START + 160;
         mem.store_u32(addr, 0x1357_9BDF).unwrap();
         let mut reference = mem.clone();
-        let (proof, root) = mem.merkle_compact(addr, Some(12));
+        let (proof, root) = mem.merkle_compact(addr, Some(12)).unwrap();
         let depth = proof.depth() as usize;
         assert_eq!(proof.siblings().len(), depth);
         assert_ne!(
@@ -1519,7 +1661,7 @@ mod tests {
             (addr / 32) as u32,
             "depth-capped proof must use only its encoded direction bits"
         );
-        let (expected_root, expected_path) = reference.merkle_root_and_path(addr);
+        let (expected_root, expected_path) = reference.merkle_root_and_path(addr).unwrap();
         let mut chunk = [0u8; 32];
         reference
             .load_bytes((addr / 32) * 32, &mut chunk)

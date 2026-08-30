@@ -15,7 +15,7 @@ use crate::{
         Perm, VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic,
         VmSourceLocation, VmTrapKind,
     },
-    execution_proof::{EXECUTION_PROOF_VERSION_V1, ExecutionProof},
+    execution_summary::{EXECUTION_SUMMARY_VERSION_V1, ExecutionSummary},
     gas,
     host::{AccessLog, DefaultHost, IVMHost, host_syscall_metering_spec},
     instruction,
@@ -551,7 +551,10 @@ impl AccelerationPolicy {
     fn env_disables(name: &str) -> bool {
         crate::dev_env::dev_env_flag(name)
     }
-    /// Default policy honouring the environment toggles (`IVM_DISABLE_*`).
+    /// Default local policy honoring developer-only `IVM_DISABLE_*` shims.
+    ///
+    /// Release builds ignore these shims; production nodes apply their parsed
+    /// acceleration configuration explicitly.
     pub fn adaptive() -> Self {
         let allow_cuda = !Self::env_disables("IVM_DISABLE_CUDA");
         let allow_metal = !Self::env_disables("IVM_DISABLE_METAL");
@@ -1749,7 +1752,8 @@ impl IVM {
     fn new_from_config(config: IvmConfig) -> Self {
         // Initially allocate memory for a reasonable code size (can be adjusted upon loading).
         let gas_limit = config.gas_limit();
-        let mem = Memory::new_with_stack_limit(0, config.stack_limit_for_gas());
+        let mem = Memory::new_with_stack_limit(config.stack_limit_for_gas())
+            .expect("IvmConfig derives a valid ABI V1 stack limit");
         vector::set_thread_forced_simd(config.acceleration().forced_simd());
         let max_vector_lanes = {
             #[cfg(target_arch = "x86_64")]
@@ -1970,7 +1974,7 @@ impl IVM {
         self.zk_mode = false;
         // Preserve INPUT/STACK contents but reset HEAP/OUTPUT for a clean run.
         self.memory.clear_program_heap();
-        self.memory.load_code(code);
+        self.memory.load_code(code)?;
         self.memory.clear_output();
         self.pc = 0;
         self.entrypoint_pc = Some(0);
@@ -2136,7 +2140,7 @@ impl IVM {
         self.contract_return_stack.clear();
         self.contract_outer_return_pc = None;
         self.memory.clear_program_heap();
-        self.memory.load_code(image.code_region);
+        self.memory.load_code(image.code_region)?;
         self.memory.clear_output();
         self.registers.set(31, self.memory.stack_top());
         self.code_hash = image.code_hash;
@@ -3673,7 +3677,7 @@ impl IVM {
     }
     fn hash_pc_trace(entries: &[u64]) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(b"ivm-proof:pc-trace:v1");
+        hasher.update(b"ivm-summary:pc-trace:v1");
         hasher.update((entries.len() as u64).to_le_bytes());
         for pc in entries {
             hasher.update(pc.to_le_bytes());
@@ -3682,7 +3686,7 @@ impl IVM {
     }
     fn hash_delta_trace(entries: &[zk::DeltaEntry]) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(b"ivm-proof:delta-trace:v1");
+        hasher.update(b"ivm-summary:delta-trace:v1");
         hasher.update((entries.len() as u64).to_le_bytes());
         for entry in entries {
             hasher.update(entry.pc.to_le_bytes());
@@ -3697,7 +3701,7 @@ impl IVM {
     }
     fn hash_constraints(constraints: &[Constraint]) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(b"ivm-proof:constraints:v1");
+        hasher.update(b"ivm-summary:constraints:v1");
         hasher.update((constraints.len() as u64).to_le_bytes());
         for constraint in constraints {
             match *constraint {
@@ -3730,7 +3734,7 @@ impl IVM {
     }
     fn hash_memory_log(events: &[MemEvent]) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(b"ivm-proof:memory-log:v1");
+        hasher.update(b"ivm-summary:memory-log:v1");
         hasher.update((events.len() as u64).to_le_bytes());
         for event in events {
             match event {
@@ -3768,7 +3772,7 @@ impl IVM {
     }
     fn hash_register_log(events: &[zk::RegEvent]) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(b"ivm-proof:register-log:v1");
+        hasher.update(b"ivm-summary:register-log:v1");
         hasher.update((events.len() as u64).to_le_bytes());
         for event in events {
             match event {
@@ -3806,7 +3810,7 @@ impl IVM {
     }
     fn hash_step_log(steps: &[zk::StepEntry]) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(b"ivm-proof:step-log:v1");
+        hasher.update(b"ivm-summary:step-log:v1");
         hasher.update((steps.len() as u64).to_le_bytes());
         for step in steps {
             hasher.update(step.pc.to_le_bytes());
@@ -3815,9 +3819,9 @@ impl IVM {
         }
         Self::finish_digest(hasher)
     }
-    /// Count trace/log events priced by the execution-proof syscall without
-    /// materializing or hashing the proof summary.
-    pub(crate) fn execution_proof_event_count(&self) -> u64 {
+    /// Count trace/log events priced by the execution-summary syscall without
+    /// materializing or hashing the summary.
+    pub(crate) fn execution_summary_event_count(&self) -> u64 {
         let register_log = self.proof_register_log_handle();
         u64::try_from(self.pc_trace.len())
             .unwrap_or(u64::MAX)
@@ -3828,18 +3832,21 @@ impl IVM {
             .saturating_add(u64::try_from(register_log.lock().events.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.step_log.steps.len()).unwrap_or(u64::MAX))
     }
-    /// Build a deterministic proof summary for the current execution state.
-    pub fn execution_proof(&mut self) -> ExecutionProof {
+    /// Build a deterministic, self-reported summary of the current execution state.
+    ///
+    /// The returned hashes are not an independently verifiable proof or an
+    /// authenticated attestation of execution.
+    pub fn execution_summary(&mut self) -> ExecutionSummary {
         let register_log = self.proof_register_log_handle();
         let register_log = register_log.lock();
         let output = self.memory.read_output();
         let mut output_hasher = Sha256::new();
-        output_hasher.update(b"ivm-proof:output:v1");
+        output_hasher.update(b"ivm-summary:output:v1");
         output_hasher.update((output.len() as u64).to_le_bytes());
         output_hasher.update(output);
         let gas_remaining = self.remaining_gas();
-        ExecutionProof {
-            version: EXECUTION_PROOF_VERSION_V1,
+        ExecutionSummary {
+            version: EXECUTION_SUMMARY_VERSION_V1,
             code_hash: self.code_hash,
             final_register_root: self.register_root(),
             final_memory_root: *self.memory.current_root().as_ref(),
@@ -5771,7 +5778,7 @@ impl IVM {
                         if self.zk_trace_collection_enabled() {
                             for (i, b) in block.iter().enumerate() {
                                 let (root, path) =
-                                    self.memory.merkle_root_and_path(addr + i as u64);
+                                    self.memory.merkle_root_and_path(addr + i as u64)?;
                                 self.mem_log.record(MemEvent::Load {
                                     addr: addr + i as u64,
                                     value: *b as u128,
@@ -6010,87 +6017,6 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::PUBKGEN => {
-                        let rd = instruction::wide::rd(instr);
-                        let rs = instruction::wide::rs1(instr);
-                        if self.zk_mode && self.registers.tag(rs) {
-                            // The legacy operation is scalar multiplication by
-                            // two, not a full-width public-key derivation.
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        let secret = self.registers.get(rs);
-                        let res = crate::field::mul(secret, 2);
-                        self.registers.set(rd, res);
-                        if self.zk_mode {
-                            self.registers.set_tag(rd, false);
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::VALCOM => {
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        if self.zk_mode && (self.registers.tag(rs1) || self.registers.tag(rs2)) {
-                            // The register opcode truncates its compressed
-                            // point. Only PRIVATE_NUMERIC_VALCOM may consume
-                            // and declassify typed private numeric values.
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        let value = self.registers.get(rs1);
-                        let randomness = self.registers.get(rs2);
-                        let res = crate::pedersen::pedersen_commit_truncated(value, randomness);
-                        self.registers.set(rd, res);
-                        if self.zk_mode {
-                            self.registers.set_tag(rd, false);
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::ECADD => {
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
-                        let p = self.registers.get(rs1);
-                        let q = self.registers.get(rs2);
-                        let res = crate::ec::ec_add_truncated(p, q);
-                        self.registers.set(rd, res);
-                        self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::ECMUL_VAR => {
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
-                        let point = self.registers.get(rs1);
-                        let scalar = self.registers.get(rs2);
-                        let res = crate::ec::ec_mul_truncated(point, scalar);
-                        self.registers.set(rd, res);
-                        self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::PAIRING => {
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
-                        let a = self.registers.get(rs1);
-                        let b = self.registers.get(rs2);
-                        let res = crate::ec::pairing_check_truncated(a, b);
-                        self.registers.set(rd, res);
-                        self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
@@ -6695,10 +6621,14 @@ impl IVM {
         idx: usize,
         depth_cap: Option<usize>,
     ) -> Result<crate::merkle_utils::CompactProofBundle, VMError> {
+        if idx >= crate::parallel::REGISTER_COUNT {
+            return Err(VMError::RegisterOutOfBounds);
+        }
+        let idx = u64::try_from(idx).map_err(|_| VMError::RegisterOutOfBounds)?;
         let out_ptr = Memory::OUTPUT_START;
         let root_out = out_ptr + 12288;
         // Set syscall arguments in registers
-        self.set_register(10, idx as u64);
+        self.set_register(10, idx);
         self.set_register(11, out_ptr);
         self.set_register(12, depth_cap.unwrap_or(0) as u64);
         self.set_register(13, root_out);
@@ -7230,7 +7160,7 @@ mod tests {
         program_with_imm(imm)
     }
     #[test]
-    fn execution_proof_summary_is_stable_for_same_program() {
+    fn execution_summary_is_stable_for_same_program() {
         set_banner_enabled(false);
         let program = program_with_imm(7);
         let config = IvmConfig::deterministic(u64::MAX);
@@ -7241,12 +7171,12 @@ mod tests {
             DefaultHost::new(),
         )));
         first.run().expect("first program runs");
-        let first_proof = first.execution_proof();
+        let first_summary = first.execution_summary();
         second.run().expect("second program runs");
-        let second_proof = second.execution_proof();
-        assert_eq!(first_proof, second_proof);
-        assert_eq!(first_proof.version, EXECUTION_PROOF_VERSION_V1);
-        assert_eq!(first_proof.code_hash, first.code_hash());
+        let second_summary = second.execution_summary();
+        assert_eq!(first_summary, second_summary);
+        assert_eq!(first_summary.version, EXECUTION_SUMMARY_VERSION_V1);
+        assert_eq!(first_summary.code_hash, first.code_hash());
     }
     fn store_program_with_mode(mode: u8, max_cycles: u64) -> Vec<u8> {
         let metadata = ProgramMetadata {
@@ -7276,9 +7206,9 @@ mod tests {
             vm.memory.dirty_for_testing(),
             "non-ZK execution should not rebuild the full memory Merkle tree eagerly"
         );
-        let proof = vm.execution_proof();
+        let summary = vm.execution_summary();
         assert!(!vm.memory.dirty_for_testing());
-        assert_ne!(proof.final_memory_root, *before.as_ref());
+        assert_ne!(summary.final_memory_root, *before.as_ref());
     }
     #[test]
     fn zk_run_with_trace_collection_disabled_defers_memory_merkle_commit() {
@@ -7295,9 +7225,9 @@ mod tests {
             vm.memory.dirty_for_testing(),
             "ZK semantic execution without trace collection should not rebuild the full memory Merkle tree eagerly"
         );
-        let proof = vm.execution_proof();
+        let summary = vm.execution_summary();
         assert!(!vm.memory.dirty_for_testing());
-        assert_ne!(proof.final_memory_root, *before.as_ref());
+        assert_ne!(summary.final_memory_root, *before.as_ref());
     }
     #[test]
     fn zk_trace_collection_is_disabled_by_default() {
@@ -7803,7 +7733,7 @@ mod tests {
         vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
             .expect("template program loads");
         let template = vm.runtime_template();
-        vm.memory = Memory::new_with_stack_limit(0, Memory::STACK_ALIGNMENT);
+        vm.memory = Memory::new_with_stack_limit(Memory::STACK_ALIGNMENT).unwrap();
         vm.set_register(7, 99);
         let mismatched_allocation = vm
             .memory

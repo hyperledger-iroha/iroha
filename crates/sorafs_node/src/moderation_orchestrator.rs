@@ -3035,10 +3035,16 @@ impl ModerationOrchestratorV1 {
                 ModerationAppealStatusV1::RegisteringJurors
                     if now_unix_ms > appeal.intake.registration_deadline_unix_ms =>
                 {
+                    let anchor = appeal.sortition_anchor.as_ref().ok_or_else(|| {
+                        ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "post-registration appeal has no consensus-pinned sortition anchor"
+                                .to_owned(),
+                        )
+                    })?;
                     let selection = sorafs_moderation_select_panel_v1(
                         appeal.intake_digest,
                         appeal.pop_snapshot_digest,
-                        cursor.block_hash,
+                        anchor.block_hash,
                         &appeal_view.eligibility,
                         appeal.intake.panel_size,
                         appeal.intake.waitlist_size,
@@ -3060,7 +3066,7 @@ impl ModerationOrchestratorV1 {
                             appeal.intake.case_id.clone(),
                             appeal.intake.round_id.clone(),
                             appeal.pop_snapshot_digest,
-                            cursor.block_hash,
+                            anchor.block_hash,
                             jurors,
                             waitlist,
                         ),
@@ -6448,6 +6454,31 @@ fn validate_finalized_snapshot(
         no_show_total = no_show_total.saturating_add(entry.no_shows.len() as u64);
     }
     for appeal in &snapshot.appeals {
+        match appeal.appeal.sortition_anchor.as_ref() {
+            None if snapshot.finalized_at_unix_ms
+                > appeal.appeal.intake.registration_deadline_unix_ms =>
+            {
+                return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                    "post-registration finalized appeal is missing its sortition anchor".to_owned(),
+                ));
+            }
+            Some(anchor)
+                if anchor.block_height > snapshot.finalized_height
+                    || anchor.block_timestamp_unix_ms > snapshot.finalized_at_unix_ms
+                    || (anchor.block_height == snapshot.finalized_height
+                        && (anchor.block_hash != snapshot.finalized_block_hash
+                            || anchor.block_timestamp_unix_ms
+                                != snapshot.finalized_at_unix_ms))
+                    || (anchor.block_height == snapshot.finalized_height
+                        && appeal.appeal.status != ModerationAppealStatusV1::RegisteringJurors) =>
+            {
+                return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                    "sortition anchor is outside the finalized snapshot or its lifecycle advanced in the anchor block"
+                        .to_owned(),
+                ));
+            }
+            None | Some(_) => {}
+        }
         let case = snapshot.case(
             &appeal.appeal.intake.case_id,
             &appeal.appeal.intake.round_id,
@@ -6737,6 +6768,15 @@ fn validate_appeal_lifecycle(
     entry: &ModerationFinalizedAppealViewV1,
 ) -> Result<(), ModerationOrchestratorError> {
     let appeal = &entry.appeal;
+    if appeal.sortition_anchor.as_ref().is_some_and(|anchor| {
+        anchor.block_height == 0
+            || anchor.block_hash == [0; 32]
+            || anchor.block_timestamp_unix_ms <= appeal.intake.registration_deadline_unix_ms
+    }) {
+        return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+            "appeal contains an invalid consensus-pinned sortition anchor".to_owned(),
+        ));
+    }
     let mut previous_accepted = None;
     for accepted in &appeal.accepted_jurors {
         let canonical = accepted.to_string();
@@ -6753,7 +6793,8 @@ fn validate_appeal_lifecycle(
                     | ModerationAppealStatusV1::InsufficientEligiblePool
             )
             || (appeal.status == ModerationAppealStatusV1::InsufficientEligiblePool
-                && entry.eligibility.len() >= usize::from(appeal.intake.panel_size))
+                && (appeal.sortition_anchor.is_none()
+                    || entry.eligibility.len() >= usize::from(appeal.intake.panel_size)))
         {
             return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
                 "appeal lifecycle is inconsistent without a panel selection".to_owned(),
@@ -6762,6 +6803,10 @@ fn validate_appeal_lifecycle(
         return Ok(());
     };
     if selection.randomness_anchor == [0; 32]
+        || appeal.sortition_anchor.as_ref().is_none_or(|anchor| {
+            anchor.block_hash != selection.randomness_anchor
+                || selection.selected_at_unix_ms < anchor.block_timestamp_unix_ms
+        })
         || selection.seed_digest == [0; 32]
         || selection.sortition_digest == [0; 32]
         || selection.selected_at_unix_ms == 0
@@ -7048,7 +7093,12 @@ fn action_effect(
                     return ActionEffect::Conflict;
                 }
                 if entry.appeal.status == ModerationAppealStatusV1::InsufficientEligiblePool {
-                    return if value.proposed_jurors().is_empty()
+                    return if entry
+                        .appeal
+                        .sortition_anchor
+                        .as_ref()
+                        .is_some_and(|anchor| &anchor.block_hash == value.randomness_anchor())
+                        && value.proposed_jurors().is_empty()
                         && value.proposed_waitlist().is_empty()
                     {
                         ActionEffect::Exact

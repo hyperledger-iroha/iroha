@@ -36,11 +36,19 @@ define_authenticated_application_query_mount!(
     ACCOUNTS_QUERY_POST,
     handler_accounts_query
 );
-define_authenticated_application_query_mount!(
-    mount_transactions_query,
-    TRANSACTIONS_QUERY_POST,
-    handler_transactions_query
-);
+#[cfg(feature = "app_api")]
+fn mount_transactions_query(
+    builder: &mut RouterBuilder,
+    app_state: SharedAppState,
+    max_body_bytes: usize,
+) {
+    builder.route(
+        &route_catalog::application_api::TRANSACTIONS_QUERY_POST,
+        catalog_post(handler_transactions_query)
+            .layer(DefaultBodyLimit::max(max_body_bytes))
+            .authenticated_operator(app_state),
+    );
+}
 define_authenticated_application_query_mount!(
     mount_visible_transactions_query,
     TRANSACTIONS_VISIBLE_QUERY_POST,

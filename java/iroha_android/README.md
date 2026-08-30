@@ -1119,8 +1119,10 @@ when additional crash context (e.g., watchdog buckets) is required.
 ### Torii streaming (SSE)
 
 `HttpClientTransport.newEventStreamClient()` exposes the shared
-`ToriiEventStreamClient`, which reuses the same base URI, telemetry observers, and
-auth headers as the HTTP transport. Streaming clients consume Torii’s
+`ToriiEventStreamClient` without synthesizing an account identity. With no
+auth-bearing default headers, requests remain fully anonymous and public-only.
+The client still reuses the same base URI, telemetry observers, and default
+headers as the HTTP transport. Streaming clients consume Torii’s
 server-sent event feeds and surface parsed frames via the listener interface:
 
 ```java
@@ -1142,6 +1144,12 @@ ToriiEventStream stream =
 // Remember to close the stream when your component is torn down.
 stream.close();
 ```
+
+Use `newEventStreamClient(canonicalAuth)` with a configured
+`LocalSigningContext` for restricted visibility. The client generates all four
+canonical headers after path resolution, filter normalization, and option-query
+assembly, binding the signature to the exact final URI. Precomputed or partial
+canonical headers are rejected before dispatch.
 
 Listeners receive retry hints (via `retry:` frames) so applications can reuse
 Torii’s back-off guidance, and telemetry observers attached to the transport

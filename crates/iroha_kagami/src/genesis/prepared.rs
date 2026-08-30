@@ -808,14 +808,19 @@ mod tests {
                 .expect("read checked-in prepared-verifier config")
                 .parse::<toml::Table>()
                 .expect("parse checked-in prepared-verifier config");
-            table
+            let genesis = table
                 .get_mut("genesis")
                 .and_then(toml::Value::as_table_mut)
-                .expect("fixture config genesis table")
-                .insert(
-                    "public_key".to_owned(),
-                    toml::Value::String(signer.public_key().to_string()),
-                );
+                .expect("fixture config genesis table");
+            genesis.insert(
+                "public_key".to_owned(),
+                toml::Value::String(signer.public_key().to_string()),
+            );
+            genesis.remove("expected_hash_file");
+            genesis.insert(
+                "expected_hash".to_owned(),
+                toml::Value::String("REPLACE_WITH_GENESIS_EXPECTED_HASH".to_owned()),
+            );
             let config_dir = directory
                 .path()
                 .join(format!("taira-validator-{}", index + 1));

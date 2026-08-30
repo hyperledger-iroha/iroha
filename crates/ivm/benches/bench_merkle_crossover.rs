@@ -40,7 +40,8 @@ fn bench_merkle_crossover(c: &mut Criterion) {
                 || make_data(leaves, chunk),
                 |data| {
                     let _root =
-                        ByteMerkleTree::root_from_bytes_accel(std::hint::black_box(&data), chunk);
+                        ByteMerkleTree::root_from_bytes_accel(std::hint::black_box(&data), chunk)
+                            .unwrap();
                     std::hint::black_box(_root);
                 },
                 BatchSize::LargeInput,

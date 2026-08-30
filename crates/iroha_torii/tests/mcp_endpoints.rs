@@ -1193,7 +1193,16 @@ async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
     cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Writer;
     cfg.torii.mcp.allow_tool_prefixes = vec!["iroha.".to_owned()];
     let app = build_router(cfg);
-    let names = list_all_tool_names(&app).await;
+    let tools = list_all_tools(&app).await;
+    let names = tools
+        .iter()
+        .map(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .expect("tool descriptor name")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
     assert!(
         !names.is_empty(),
         "writer+allowlist policy should expose tools"
@@ -2844,7 +2853,12 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
     cfg.torii.mcp.expose_operator_routes = true;
     let app = build_router(cfg);
-    let names = list_all_tool_names(&app).await;
+    let tools = list_all_tools(&app).await;
+    let names = tools
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     assert!(
         names.iter().any(|name| name == "iroha.accounts.list"),
         "expected explicitly allowlisted account listing tool"
@@ -2859,6 +2873,35 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.accounts.history"),
         "expected explicitly allowlisted account history tool"
     );
+    for (name, stable_route_id) in [
+        (
+            "iroha.accounts.transactions",
+            "application.accounts_by_account_id_transactions_get",
+        ),
+        (
+            "iroha.accounts.history",
+            "application.accounts_by_account_id_history_get",
+        ),
+    ] {
+        let descriptor = tools
+            .iter()
+            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+            .unwrap_or_else(|| panic!("missing real tools/list descriptor `{name}`"));
+        let route_auth = descriptor
+            .get("_meta")
+            .and_then(Value::as_object)
+            .and_then(|meta| meta.get("iroha/routeAuth"));
+        assert_eq!(
+            route_auth,
+            Some(&norito::json!({
+                "schemaVersion": 1,
+                "stableRouteId": stable_route_id,
+                "authentication": "optional_canonical_account_signature",
+                "admission": "dataspace_visible"
+            })),
+            "unexpected routeAuth metadata for `{name}`"
+        );
+    }
     assert!(
         names.iter().all(|name| {
             !matches!(

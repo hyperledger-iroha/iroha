@@ -61,13 +61,18 @@ def _governance_auth(captured: Optional[List[bytes]] = None) -> ToriiCanonicalRe
 def test_governance_plain_ballot_uses_exact_network_auth_and_one_shot_transport() -> None:
     session = RecordingSession()
     session.queue(
-        StubResponse(payload={"ok": True, "accepted": True, "reason": None, "tx_instructions": []})
+        StubResponse(
+            payload={
+                "drafted": True,
+                "tx_instructions": [{"wire_id": "CastPlainBallot", "payload_hex": "00"}],
+            }
+        )
     )
     captured: List[bytes] = []
     auth = _governance_auth(captured)
     client = ToriiClient("https://node.test", session=session)
 
-    client.submit_plain_ballot(
+    result = client.submit_plain_ballot(
         authority=CANONICAL_OWNER,
         network_id=GOVERNANCE_NETWORK_ID,
         referendum_id="referendum-1",
@@ -78,6 +83,8 @@ def test_governance_plain_ballot_uses_exact_network_auth_and_one_shot_transport(
         canonical_auth=auth,
     )
 
+    assert result.drafted is True
+    assert result.tx_instructions[0].wire_id == "CastPlainBallot"
     assert len(session.calls) == 1
     call = session.calls[0]
     assert call["allow_redirects"] is False
@@ -96,6 +103,32 @@ def test_governance_plain_ballot_uses_exact_network_auth_and_one_shot_transport(
             nonce=auth.nonce or "",
         )
     ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"ok": True, "accepted": True, "reason": None, "tx_instructions": []},
+        {"drafted": False, "tx_instructions": [{"wire_id": "CastPlainBallot", "payload_hex": "00"}]},
+        {"drafted": True, "tx_instructions": []},
+    ],
+)
+def test_governance_ballot_rejects_non_draft_response_contract(payload: Any) -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    client = ToriiClient("https://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="draft|fields|instruction"):
+        client.submit_plain_ballot(
+            authority=CANONICAL_OWNER,
+            network_id=GOVERNANCE_NETWORK_ID,
+            referendum_id="referendum-1",
+            owner=CANONICAL_OWNER,
+            amount="1",
+            duration_blocks=1,
+            direction="Aye",
+            canonical_auth=_governance_auth(),
+        )
 
 
 @pytest.mark.parametrize("duration_blocks", [-1, 1 << 64, 1.0, "1", True])

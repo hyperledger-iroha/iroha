@@ -5,6 +5,17 @@ Last updated: 2026-08-30
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Default-on capability follow-up
+
+- Upgrade the locked QUIC stack to a qualified `quinn-proto` release, rerun the
+  transport security and four-validator loss/recovery matrix, and only then add
+  QUIC to the portable daemon aggregate.
+- Extend Kagami's prepared-Compose projection with an immutable, read-only
+  prover-key directory per validator; remove the generated-profile prover
+  opt-out after its custody and restart tests pass.
+- During a separately authorized lockfile refresh, remove the retired
+  OpenTelemetry exporter dependency tombstone from `iroha_telemetry`.
+
 ## Security-audit release qualification
 
 - Settle the 21 source-level dispositions in
@@ -382,11 +393,11 @@ Completed history lives in [`status.md`](./status.md).
   its JavaScript adapter in favor of authenticated CAR/chunk reads, then
   regenerate the OpenAPI provenance bundle and update the SoraFS operator
   runbooks in the same change.
-- Collapse permanent operator bearer-token modes to one bootstrap-before-first-
-  credential flow, remove duplicate response fields, and retain only
-  `/openapi.json` as the OpenAPI discovery endpoint. Duplicate MCP Connect tool
-  aliases are already removed; preserve the four canonical `iroha.connect.*`
-  tools without reintroducing composite credential-minting helpers.
+- Remove duplicate response fields and retain only `/openapi.json` as the
+  OpenAPI discovery endpoint. Duplicate MCP Connect tool aliases and permanent
+  operator bearer-token modes are already removed; preserve the four canonical
+  `iroha.connect.*` tools and the single first-credential operator-token
+  bootstrap flow without reintroducing composite credential-minting helpers.
 - Audit wildcard diagnostic and configuration-alias surfaces (`/status/{*tail}`
   and one-way parser spellings) against first-release callers, deleting each
   surface that has no production owner instead of carrying compatibility
@@ -510,6 +521,12 @@ Completed history lives in [`status.md`](./status.md).
   Confirmation-capacity abort, exact stale-head supersession, fail-fast
   execution-failure unchanged-state isolation, state equality, and restart;
   run them from the settled candidate before treating the matrix as evidence.
+  The same immutable-candidate matrix must cover same-block trigger lifecycle
+  ordering and rollback, pre-effect gas reservation, nested-work retention,
+  exact prepared-overlay and live-batch block-gas accounting,
+  authenticated sealed-reveal alias recovery, replay-terminal QueuePlan
+  obligation compaction and exact evidence, opaque contract-state boundaries,
+  and sibling-carrier queue retirement across live cleanup and restart.
 - Candidate-qualify the exact Ready-Proposal-Sign producer-point preemption and
   the certified-response queue-refresh retry. The first patched four-validator
   rerun showed no recurrence of the former queue-cut fail-stop, but its
@@ -15760,9 +15777,8 @@ workflows remain excluded from the first release.
   plus one-use key-certificate fixtures now use checked deterministic Ed25519
   seed expansion before STARK and offline recursive proof regressions consume
   them;
-  gated Torii council persist integration candidate accounts and BLS VRF
-  keypairs now use checked domain-separated Ed25519/BLS seed expansion before
-  persist/derive-vrf regressions consume them;
+  the retired Torii council-persist and governance derive-VRF fixtures and
+  regressions are removed with their unshipped surfaces;
   Torii account-activity unit-test account helpers now use checked
   deterministic Ed25519 seed expansion before activity extraction regressions
   consume them;
@@ -15921,8 +15937,8 @@ workflows remain excluded from the first release.
   routed-read regressions rerun;
   Torii grouped core/Nexus/governance test fixtures now use checked
   `Signature::try_new` and `KeyPair::try_from_seed`, with portfolio filtering,
-  bridge finality, Nexus disabled/enabled lanes, push rejection/success, and
-  gated governance VRF ordering regressions rerun;
+  bridge finality, Nexus disabled/enabled lanes, and push rejection/success
+  regressions rerun;
   Torii routing overlong multisig selector, contract bundle, repair native
   action transaction, and account transaction filter fixtures now use checked seed and
   signature constructors before selector, receipt, repair, and filter

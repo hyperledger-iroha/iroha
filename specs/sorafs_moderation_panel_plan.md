@@ -124,11 +124,13 @@ settlement/publication, and four-validator recovery scenarios.
   advancement cannot rewrite or strand an admitted appeal: every historical
   publication and audit link is revalidated from consensus state. An emergency
   registry pause intentionally freezes both new and pending moderation use until
-  governance resumes it. Sortition
-  freezes the latest committed parent hash only after registration closes,
-  rejects the appellant even when that account also holds the management
-  permission, and requires the independent operator instruction to name that
-  exact anchor. It then uses a
+  governance resumes it. A bounded, canonically ordered consensus schedule pins
+  the first committed block whose timestamp is strictly greater than each
+  registration deadline. Sortition rejects execution in that anchor block,
+  verifies the pin against committed hash history, remains stable across later
+  QueuePlan carriers, rejects the appellant even when that account also holds
+  the management permission, and requires the independent operator instruction
+  to name that exact anchor. It then uses a
   domain-separated, hardware-independent BLAKE3 score over the frozen seed and
   deterministic per-credential appeal nullifier, rejects duplicate people and
   accounts, recomputes the proposed roster, and persists the anchor plus an

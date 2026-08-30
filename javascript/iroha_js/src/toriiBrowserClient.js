@@ -14,7 +14,10 @@ import {
   noritoEncodeMultisigProposeRequest,
 } from "./norito.js";
 import { browserSignedTransactionHashHex } from "./transactionCodec.js";
-import { buildCanonicalJsonRequest } from "./canonicalRequest.js";
+import {
+  buildCanonicalJsonRequest,
+  requireCanonicalAuthAccount,
+} from "./canonicalRequest.js";
 import { rejectPrecomputedCanonicalHeaders } from "./applicationPostAuth.js";
 import { networkIdBytes } from "./networkId.js";
 import {
@@ -52,6 +55,28 @@ const EXPLORER_CURSOR_MAX_LIMIT = 100;
 const EXPLORER_CURSOR_MAX_LENGTH = 1_424;
 const EXPLORER_CURSOR_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const EXPLORER_CURSOR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const EXPLORER_HISTORY_OPTION_KEYS = new Set(["cursor", "limit", "signal"]);
+const EXPLORER_TRANSACTION_HISTORY_OPTION_KEYS = new Set([
+  ...EXPLORER_HISTORY_OPTION_KEYS,
+  "authority",
+  "block",
+  "status",
+  "assetId",
+  "asset_id",
+]);
+const EXPLORER_INSTRUCTION_HISTORY_OPTION_KEYS = new Set([
+  ...EXPLORER_HISTORY_OPTION_KEYS,
+  "account",
+  "authority",
+  "kind",
+  "transactionHash",
+  "transaction_hash",
+  "transactionStatus",
+  "transaction_status",
+  "block",
+  "assetId",
+  "asset_id",
+]);
 const PIPELINE_SUCCESS_STATUS = "Applied";
 const PIPELINE_STATUS_VALUES = new Set([
   "Queued",
@@ -205,6 +230,40 @@ function requireNonEmptyString(value, context) {
     throw new TypeError(`${context} must not be empty`);
   }
   return trimmed;
+}
+
+function normalizeBrowserCanonicalRequestAuth(value, networkId) {
+  if (value === undefined || value === null) return null;
+  if (!isPlainObject(value)) {
+    throw new TypeError(
+      "ToriiBrowserClient options.canonicalRequestAuth must be a plain object",
+    );
+  }
+  const keys = Object.keys(value).sort();
+  if (
+    keys.length !== 2
+    || keys[0] !== "accountId"
+    || keys[1] !== "sign"
+  ) {
+    throw new TypeError(
+      "ToriiBrowserClient options.canonicalRequestAuth requires exactly accountId and sign",
+    );
+  }
+  if (networkId === null) {
+    throw new TypeError(
+      "ToriiBrowserClient options.canonicalRequestAuth requires options.networkId",
+    );
+  }
+  const accountId = requireCanonicalAuthAccount(
+    value.accountId,
+    "ToriiBrowserClient options.canonicalRequestAuth.accountId",
+  );
+  if (typeof value.sign !== "function") {
+    throw new TypeError(
+      "ToriiBrowserClient options.canonicalRequestAuth.sign must be a function",
+    );
+  }
+  return Object.freeze({ accountId, sign: value.sign });
 }
 
 function normalizeContractDeploymentStateRequest(value) {
@@ -688,6 +747,83 @@ function normalizeExplorerCursorPage(value, context, normalizeItem = (item) => i
   };
 }
 
+function normalizeExplorerHistoryCursorMeta(value, context) {
+  const meta = requireObject(value, context);
+  requireExactExplorerCursorFields(
+    meta,
+    ["limit", "snapshot_height", "snapshot_hash", "next_cursor", "has_more"],
+    context,
+  );
+  if (!Number.isSafeInteger(meta.limit) || meta.limit < 1 || meta.limit > EXPLORER_CURSOR_MAX_LIMIT) {
+    throw new TypeError(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+  }
+  if (!Number.isSafeInteger(meta.snapshot_height) || meta.snapshot_height < 0) {
+    throw new TypeError(`${context}.snapshot_height must be a non-negative safe integer`);
+  }
+  let snapshotHash = null;
+  if (meta.snapshot_hash !== null) {
+    if (typeof meta.snapshot_hash !== "string" || !/^[0-9a-f]{64}$/u.test(meta.snapshot_hash)) {
+      throw new TypeError(`${context}.snapshot_hash must be exact lowercase 32-byte hex or null`);
+    }
+    snapshotHash = meta.snapshot_hash;
+  }
+  if ((meta.snapshot_height === 0) !== (snapshotHash === null)) {
+    throw new TypeError(
+      `${context}.snapshot_hash must be null exactly when snapshot_height is zero`,
+    );
+  }
+  if (typeof meta.has_more !== "boolean") {
+    throw new TypeError(`${context}.has_more must be a boolean`);
+  }
+  const nextCursor = normalizeExplorerCursor(meta.next_cursor, `${context}.next_cursor`, {
+    nullable: true,
+  });
+  if (meta.has_more !== (nextCursor !== null)) {
+    throw new TypeError(`${context}.has_more must match next_cursor availability`);
+  }
+  return {
+    limit: meta.limit,
+    snapshot_height: meta.snapshot_height,
+    snapshot_hash: snapshotHash,
+    next_cursor: nextCursor,
+    has_more: meta.has_more,
+  };
+}
+
+function normalizeExplorerHistoryPage(value, context, normalizeItem = (item) => item) {
+  const page = requireObject(value, context);
+  requireExactExplorerCursorFields(page, ["pagination", "items"], context);
+  if (!Array.isArray(page.items)) {
+    throw new TypeError(`${context}.items must be an array`);
+  }
+  const pagination = normalizeExplorerHistoryCursorMeta(
+    page.pagination,
+    `${context}.pagination`,
+  );
+  if (page.items.length > pagination.limit) {
+    throw new TypeError(`${context}.items must not exceed pagination.limit`);
+  }
+  return {
+    pagination,
+    items: page.items.map((item, index) => normalizeItem(item, index)),
+  };
+}
+
+function normalizeExplorerLatestHistoryPage(value, context, normalizeItem = (item) => item) {
+  const page = requireObject(value, context);
+  requireExactExplorerCursorFields(page, ["sampled_at", "pagination", "items"], context);
+  const sampledAt = requireNonEmptyString(page.sampled_at, `${context}.sampled_at`);
+  if (sampledAt !== page.sampled_at) {
+    throw new TypeError(`${context}.sampled_at must be an exact non-empty string`);
+  }
+  const normalized = normalizeExplorerHistoryPage(
+    { pagination: page.pagination, items: page.items },
+    context,
+    normalizeItem,
+  );
+  return { sampled_at: sampledAt, ...normalized };
+}
+
 function normalizePositiveInteger(value, context, fallback) {
   if (value === undefined || value === null) return fallback;
   const numeric = Number(value);
@@ -713,16 +849,6 @@ function normalizeBoolean(value, context) {
   return value;
 }
 
-function normalizeExplorerPagination(options, context) {
-  const page = normalizePositiveInteger(options.page, `${context}.page`, 1);
-  const perPage = normalizePositiveInteger(
-    options.perPage ?? options.per_page,
-    `${context}.perPage`,
-    25,
-  );
-  return { page, per_page: perPage };
-}
-
 function normalizeExplorerCursorPagination(options, context) {
   for (const removed of ["page", "perPage", "per_page", "offset", "pageSize"]) {
     if (Object.prototype.hasOwnProperty.call(options, removed)) {
@@ -744,6 +870,29 @@ function normalizeExplorerCursorPagination(options, context) {
     params.cursor = normalizeExplorerCursor(options.cursor, `${context}.cursor`);
   }
   return params;
+}
+
+function normalizeExplorerHistoryOptionalString(value, context) {
+  if (value === undefined || value === null) return undefined;
+  const normalized = requireNonEmptyString(value, context);
+  if (normalized !== value) {
+    throw new TypeError(`${context} must be an exact non-empty string`);
+  }
+  return value;
+}
+
+function normalizeExplorerHistoryStatus(value, context) {
+  const status = normalizeExplorerHistoryOptionalString(value, context);
+  if (status !== undefined && status !== "committed" && status !== "rejected") {
+    throw new TypeError(`${context} must be committed or rejected`);
+  }
+  return status;
+}
+
+function normalizeExplorerHistoryBlock(value, context) {
+  return value === undefined || value === null
+    ? undefined
+    : normalizeLedgerHeight(value, context);
 }
 
 function normalizeIterablePagination(options, context) {
@@ -1193,6 +1342,9 @@ async function fetchToriiResponse(client, url, init, options, timeoutId) {
     if (timeoutId !== undefined) {
       clearTimeout(timeoutId);
     }
+  }
+  if (init.redirect === "error" && response?.redirected === true) {
+    throw new TypeError("Torii one-shot request must not accept a redirected response");
   }
   const status = responseStatus(response);
   const successStatuses = options.successStatuses ?? DEFAULT_SUCCESS_STATUSES;
@@ -1735,6 +1887,7 @@ export class ToriiBrowserClient {
       ...(normalizedOptions.config?.toriiClient?.defaultHeaders ?? {}),
       ...(normalizedOptions.defaultHeaders ?? {}),
     };
+    rejectPrecomputedCanonicalHeaders(this.defaultHeaders);
     this.timeoutMs =
       normalizedOptions.config?.toriiClient?.timeoutMs ?? normalizedOptions.timeoutMs ?? null;
     const networkId = normalizedOptions.networkId ?? null;
@@ -1746,6 +1899,15 @@ export class ToriiBrowserClient {
       writable: false,
       configurable: false,
       enumerable: true,
+    });
+    Object.defineProperty(this, "_canonicalRequestAuth", {
+      value: normalizeBrowserCanonicalRequestAuth(
+        normalizedOptions.canonicalRequestAuth,
+        networkId,
+      ),
+      writable: false,
+      configurable: false,
+      enumerable: false,
     });
     Object.defineProperty(this, "_operatorSigningContext", {
       value: normalizedOptions.operatorSigningContext ?? null,
@@ -1857,6 +2019,26 @@ export class ToriiBrowserClient {
     return url;
   }
 
+  async _applyDataspaceReadIdentity(url, init) {
+    if (init.method !== "GET" || init.body !== undefined) {
+      throw new TypeError("browser dataspace authentication only supports empty-body GETs");
+    }
+    rejectPrecomputedCanonicalHeaders(init.headers);
+    init.credentials = "omit";
+    if (this._canonicalRequestAuth === null) return;
+    const signed = await buildCanonicalJsonRequest({
+      accountId: this._canonicalRequestAuth.accountId,
+      networkId: this.networkId,
+      method: "GET",
+      path: url.pathname,
+      query: url.search.startsWith("?") ? url.search.slice(1) : url.search,
+      headers: init.headers,
+      sign: this._canonicalRequestAuth.sign,
+    });
+    init.headers = signed.headers;
+    init.redirect = "error";
+  }
+
   async _json(method, path, options = {}) {
     const normalizedOptions = requireObject(options, `${method} ${path} options`);
     const headers = {
@@ -1891,6 +2073,9 @@ export class ToriiBrowserClient {
       };
     }
     const url = this._url(path, normalizedOptions.params);
+    if (normalizedOptions.dataspaceVisible === true) {
+      await this._applyDataspaceReadIdentity(url, init);
+    }
     if (normalizedOptions.operatorSigningContext !== undefined) {
       if (method !== "GET" || init.body !== undefined) {
         throw new TypeError("browser operator authentication only supports empty-body GETs");
@@ -2268,7 +2453,7 @@ export class ToriiBrowserClient {
     return normalizeContractDeploymentStateResponse(response, body);
   }
 
-  /** Read exact account state; caller-supplied canonical signing headers are preserved. */
+  /** Read exact account state, using the configured canonical signer when present. */
   getAccount(accountId, options = {}) {
     const opts = requireObject(options, "getAccount options");
     return this._json(
@@ -2276,6 +2461,7 @@ export class ToriiBrowserClient {
       `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}`,
       {
         headers: opts.headers,
+        dataspaceVisible: true,
         signal: signalFrom(opts),
         successStatuses: opts.successStatuses ?? [200],
       },
@@ -2291,6 +2477,7 @@ export class ToriiBrowserClient {
         with_asset: opts.withAsset ?? opts.with_asset,
         address_format: opts.addressFormat ?? opts.address_format,
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) =>
       normalizeExplorerCursorPage(payload, "explorer accounts response"),
@@ -2301,6 +2488,7 @@ export class ToriiBrowserClient {
     const opts = requireObject(options, "getExplorerAccount options");
     return this._json("GET", `/v1/explorer/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}`, {
       params: { address_format: opts.addressFormat ?? opts.address_format },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     });
   }
@@ -2312,6 +2500,7 @@ export class ToriiBrowserClient {
         ...normalizeExplorerCursorPagination(opts, "listExplorerDomains options"),
         owned_by: opts.ownedBy ?? opts.owned_by,
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) =>
       normalizeExplorerCursorPage(payload, "explorer domains response"),
@@ -2321,6 +2510,7 @@ export class ToriiBrowserClient {
   getExplorerDomain(domainId, options = {}) {
     const opts = requireObject(options, "getExplorerDomain options");
     return this._json("GET", `/v1/explorer/domains/${encodeURIComponent(requireNonEmptyString(domainId, "domainId"))}`, {
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     });
   }
@@ -2334,6 +2524,7 @@ export class ToriiBrowserClient {
         definition: opts.definition,
         asset_id: opts.assetId ?? opts.asset_id,
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) => {
       const context = "explorer assets response";
@@ -2346,6 +2537,7 @@ export class ToriiBrowserClient {
   getExplorerAsset(assetId, options = {}) {
     const opts = requireObject(options, "getExplorerAsset options");
     return this._json("GET", `/v1/explorer/assets/${encodeURIComponent(requireNonEmptyString(assetId, "assetId"))}`, {
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) =>
       normalizeQuantityRecord(payload, "explorer asset response", ["quantity"]),
@@ -2361,6 +2553,7 @@ export class ToriiBrowserClient {
         scope: opts.scope,
         count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) =>
       normalizeQuantityPage(payload, "account assets response", ["quantity"]),
@@ -2376,6 +2569,7 @@ export class ToriiBrowserClient {
       `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/permissions`,
       {
         params: normalizeCountedListParams(opts, context),
+        dataspaceVisible: true,
         signal: signalFrom(opts),
       },
     );
@@ -2396,6 +2590,7 @@ export class ToriiBrowserClient {
             `${context}.assetId`,
           ),
         },
+        dataspaceVisible: true,
         signal: signalFrom(opts),
       },
     );
@@ -2447,6 +2642,7 @@ export class ToriiBrowserClient {
           `${context}.resultOk`,
         ),
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     });
   }
@@ -2460,6 +2656,7 @@ export class ToriiBrowserClient {
         ...normalizeCountedListParams(opts, context),
         ...normalizeContractEventFilterParams(opts, context),
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     });
   }
@@ -2474,12 +2671,18 @@ export class ToriiBrowserClient {
     const params = normalizeContractEventFilterParams(opts, context);
     const client = this;
     return (async function* contractEventIterator() {
-      const response = await client.fetchImpl(client._url("/v1/contracts/events/sse", params), {
+      const url = client._url("/v1/contracts/events/sse", params);
+      const init = {
         method: "GET",
         cache: "no-store",
         headers: streamRequestHeaders(client.defaultHeaders),
         signal: signalFrom(opts),
-      });
+      };
+      await client._applyDataspaceReadIdentity(url, init);
+      const response = await client.fetchImpl(url, init);
+      if (init.redirect === "error" && response?.redirected === true) {
+        throw new TypeError("Torii one-shot request must not accept a redirected response");
+      }
       const status = responseStatus(response);
       if (status !== 200) {
         const errorResponse = typeof response?.clone === "function" ? response.clone() : response;
@@ -2609,6 +2812,7 @@ export class ToriiBrowserClient {
         owning_domain: opts.owningDomain ?? opts.owning_domain,
         owned_by: opts.ownedBy ?? opts.owned_by,
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) => {
       const context = "explorer asset definitions response";
@@ -2621,6 +2825,7 @@ export class ToriiBrowserClient {
   getExplorerAssetDefinitionEconometrics(assetDefinitionId, options = {}) {
     const opts = requireObject(options, "getExplorerAssetDefinitionEconometrics options");
     return this._json("GET", `/v1/explorer/asset-definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, "assetDefinitionId"))}/econometrics`, {
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     });
   }
@@ -2628,6 +2833,7 @@ export class ToriiBrowserClient {
   getExplorerAssetDefinitionSnapshot(assetDefinitionId, options = {}) {
     const opts = requireObject(options, "getExplorerAssetDefinitionSnapshot options");
     return this._json("GET", `/v1/explorer/asset-definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, "assetDefinitionId"))}/snapshot`, {
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     });
   }
@@ -2640,6 +2846,7 @@ export class ToriiBrowserClient {
         owned_by: opts.ownedBy ?? opts.owned_by,
         domain: opts.domain,
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) =>
       normalizeExplorerCursorPage(payload, "explorer nfts response"),
@@ -2649,6 +2856,7 @@ export class ToriiBrowserClient {
   getExplorerNft(nftId, options = {}) {
     const opts = requireObject(options, "getExplorerNft options");
     return this._json("GET", `/v1/explorer/nfts/${encodeURIComponent(requireNonEmptyString(nftId, "nftId"))}`, {
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     });
   }
@@ -2661,6 +2869,7 @@ export class ToriiBrowserClient {
         owned_by: opts.ownedBy ?? opts.owned_by,
         domain: opts.domain,
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) => {
       const context = "explorer rwas response";
@@ -2677,6 +2886,7 @@ export class ToriiBrowserClient {
   getExplorerRwa(rwaId, options = {}) {
     const opts = requireObject(options, "getExplorerRwa options");
     return this._json("GET", `/v1/explorer/rwas/${encodeURIComponent(requireNonEmptyString(rwaId, "rwaId"))}`, {
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) =>
       normalizeQuantityRecord(payload, "explorer rwa response", ["quantity", "held_quantity"]),
@@ -2684,16 +2894,19 @@ export class ToriiBrowserClient {
   }
 
   listExplorerBlocks(options = {}) {
-    const opts = requireObject(options, "listExplorerBlocks options");
+    const context = "listExplorerBlocks options";
+    const opts = requireSupportedOptions(options, context, EXPLORER_HISTORY_OPTION_KEYS);
     return this._json("GET", "/v1/explorer/blocks", {
-      params: normalizeExplorerPagination(opts, "listExplorerBlocks options"),
+      params: normalizeExplorerCursorPagination(opts, context),
+      dataspaceVisible: true,
       signal: signalFrom(opts),
-    });
+    }).then((payload) => normalizeExplorerHistoryPage(payload, "explorer blocks response"));
   }
 
   getExplorerBlock(identifier, options = {}) {
     const opts = requireObject(options, "getExplorerBlock options");
     return this._json("GET", `/v1/explorer/blocks/${encodeURIComponent(String(identifier))}`, {
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     });
   }
@@ -2779,7 +2992,10 @@ export class ToriiBrowserClient {
 
   getExplorerMetrics(options = {}) {
     const opts = requireObject(options, "getExplorerMetrics options");
-    return this._json("GET", "/v1/explorer/metrics", { signal: signalFrom(opts) });
+    return this._json("GET", "/v1/explorer/metrics", {
+      dataspaceVisible: true,
+      signal: signalFrom(opts),
+    });
   }
 
   getExplorerHealth(options = {}) {
@@ -2788,83 +3004,161 @@ export class ToriiBrowserClient {
   }
 
   listExplorerTransactions(options = {}) {
-    const opts = requireObject(options, "listExplorerTransactions options");
+    const context = "listExplorerTransactions options";
+    const opts = requireSupportedOptions(
+      options,
+      context,
+      EXPLORER_TRANSACTION_HISTORY_OPTION_KEYS,
+    );
     return this._json("GET", "/v1/explorer/transactions", {
       params: {
-        ...normalizeExplorerPagination(opts, "listExplorerTransactions options"),
-        authority: opts.authority,
-        block: opts.block,
-        status: opts.status,
-        asset_id: opts.assetId ?? opts.asset_id,
-        address_format: opts.addressFormat ?? opts.address_format,
+        ...normalizeExplorerCursorPagination(opts, context),
+        authority: normalizeExplorerHistoryOptionalString(
+          opts.authority,
+          `${context}.authority`,
+        ),
+        block: normalizeExplorerHistoryBlock(opts.block, `${context}.block`),
+        status: normalizeExplorerHistoryStatus(opts.status, `${context}.status`),
+        asset_id: normalizeExplorerHistoryOptionalString(
+          opts.assetId ?? opts.asset_id,
+          `${context}.assetId`,
+        ),
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeExplorerHistoryPage(payload, "explorer transactions response"),
+    );
   }
 
   listLatestExplorerTransactions(options = {}) {
-    const opts = requireObject(options, "listLatestExplorerTransactions options");
+    const context = "listLatestExplorerTransactions options";
+    const opts = requireSupportedOptions(
+      options,
+      context,
+      EXPLORER_TRANSACTION_HISTORY_OPTION_KEYS,
+    );
     return this._json("GET", "/v1/explorer/transactions/latest", {
       params: {
-        per_page: opts.perPage ?? opts.per_page,
-        authority: opts.authority,
-        block: opts.block,
-        status: opts.status,
-        asset_id: opts.assetId ?? opts.asset_id,
-        address_format: opts.addressFormat ?? opts.address_format,
+        ...normalizeExplorerCursorPagination(opts, context),
+        authority: normalizeExplorerHistoryOptionalString(
+          opts.authority,
+          `${context}.authority`,
+        ),
+        block: normalizeExplorerHistoryBlock(opts.block, `${context}.block`),
+        status: normalizeExplorerHistoryStatus(opts.status, `${context}.status`),
+        asset_id: normalizeExplorerHistoryOptionalString(
+          opts.assetId ?? opts.asset_id,
+          `${context}.assetId`,
+        ),
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeExplorerLatestHistoryPage(
+        payload,
+        "explorer latest transactions response",
+      ),
+    );
   }
 
   getExplorerTransaction(hash, options = {}) {
     const opts = requireObject(options, "getExplorerTransaction options");
     return this._json("GET", `/v1/explorer/transactions/${encodeURIComponent(requireNonEmptyString(hash, "hash"))}`, {
       params: { address_format: opts.addressFormat ?? opts.address_format },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     });
   }
 
   listExplorerInstructions(options = {}) {
-    const opts = requireObject(options, "listExplorerInstructions options");
+    const context = "listExplorerInstructions options";
+    const opts = requireSupportedOptions(
+      options,
+      context,
+      EXPLORER_INSTRUCTION_HISTORY_OPTION_KEYS,
+    );
     return this._json("GET", "/v1/explorer/instructions", {
       params: {
-        ...normalizeExplorerPagination(opts, "listExplorerInstructions options"),
-        account: opts.account,
-        authority: opts.authority,
-        kind: opts.kind,
-        transaction_hash: opts.transactionHash ?? opts.transaction_hash,
-        transaction_status: opts.transactionStatus ?? opts.transaction_status,
-        block: opts.block,
-        asset_id: opts.assetId ?? opts.asset_id,
-        address_format: opts.addressFormat ?? opts.address_format,
+        ...normalizeExplorerCursorPagination(opts, context),
+        account: normalizeExplorerHistoryOptionalString(
+          opts.account,
+          `${context}.account`,
+        ),
+        authority: normalizeExplorerHistoryOptionalString(
+          opts.authority,
+          `${context}.authority`,
+        ),
+        kind: normalizeExplorerHistoryOptionalString(opts.kind, `${context}.kind`),
+        transaction_hash: normalizeExplorerHistoryOptionalString(
+          opts.transactionHash ?? opts.transaction_hash,
+          `${context}.transactionHash`,
+        ),
+        transaction_status: normalizeExplorerHistoryStatus(
+          opts.transactionStatus ?? opts.transaction_status,
+          `${context}.transactionStatus`,
+        ),
+        block: normalizeExplorerHistoryBlock(opts.block, `${context}.block`),
+        asset_id: normalizeExplorerHistoryOptionalString(
+          opts.assetId ?? opts.asset_id,
+          `${context}.assetId`,
+        ),
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeExplorerHistoryPage(payload, "explorer instructions response"),
+    );
   }
 
   listLatestExplorerInstructions(options = {}) {
-    const opts = requireObject(options, "listLatestExplorerInstructions options");
+    const context = "listLatestExplorerInstructions options";
+    const opts = requireSupportedOptions(
+      options,
+      context,
+      EXPLORER_INSTRUCTION_HISTORY_OPTION_KEYS,
+    );
     return this._json("GET", "/v1/explorer/instructions/latest", {
       params: {
-        per_page: opts.perPage ?? opts.per_page,
-        account: opts.account,
-        authority: opts.authority,
-        kind: opts.kind,
-        transaction_hash: opts.transactionHash ?? opts.transaction_hash,
-        transaction_status: opts.transactionStatus ?? opts.transaction_status,
-        block: opts.block,
-        asset_id: opts.assetId ?? opts.asset_id,
-        address_format: opts.addressFormat ?? opts.address_format,
+        ...normalizeExplorerCursorPagination(opts, context),
+        account: normalizeExplorerHistoryOptionalString(
+          opts.account,
+          `${context}.account`,
+        ),
+        authority: normalizeExplorerHistoryOptionalString(
+          opts.authority,
+          `${context}.authority`,
+        ),
+        kind: normalizeExplorerHistoryOptionalString(opts.kind, `${context}.kind`),
+        transaction_hash: normalizeExplorerHistoryOptionalString(
+          opts.transactionHash ?? opts.transaction_hash,
+          `${context}.transactionHash`,
+        ),
+        transaction_status: normalizeExplorerHistoryStatus(
+          opts.transactionStatus ?? opts.transaction_status,
+          `${context}.transactionStatus`,
+        ),
+        block: normalizeExplorerHistoryBlock(opts.block, `${context}.block`),
+        asset_id: normalizeExplorerHistoryOptionalString(
+          opts.assetId ?? opts.asset_id,
+          `${context}.assetId`,
+        ),
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeExplorerLatestHistoryPage(
+        payload,
+        "explorer latest instructions response",
+      ),
+    );
   }
 
   getExplorerInstruction(transactionHash, index, options = {}) {
     const opts = requireObject(options, "getExplorerInstruction options");
     return this._json("GET", `/v1/explorer/instructions/${encodeURIComponent(requireNonEmptyString(transactionHash, "transactionHash"))}/${encodeURIComponent(String(index))}`, {
       params: { address_format: opts.addressFormat ?? opts.address_format },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     });
   }
@@ -2872,6 +3166,7 @@ export class ToriiBrowserClient {
   getExplorerInstructionContractView(transactionHash, index, options = {}) {
     const opts = requireObject(options, "getExplorerInstructionContractView options");
     return this._json("GET", `/v1/explorer/instructions/${encodeURIComponent(requireNonEmptyString(transactionHash, "transactionHash"))}/${encodeURIComponent(String(index))}/contract-view`, {
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     });
   }

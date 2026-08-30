@@ -257,16 +257,26 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   entries, links each entry to the message file's `record_sha256`, and carries
   its own `index_sha256` digest for external archival or notarization. Torii now
   serves the same deterministic manifest at
-  `GET /v1/iso20022/audit/messages` after the normal access checks.
+  `GET /v1/iso20022/audit/messages` after the normal access checks. The local
+  V2 index is written atomically and capped at 32 MiB. On startup, an existing
+  index must be a direct regular file with the exact V2 root/row schema,
+  canonical ordering, count, and self-digest. Because the index is derived and
+  is not transactionally committed with each record rename, a missing or
+  schema-valid stale index is recoverable and is regenerated only after every
+  persisted message and replay tombstone has passed validation.
 - Added operator-controlled durable-store retention with
   `store_retention_secs` and `store_max_records`. Age retention remains disabled
   by default, while count retention defaults to 256 records and is fail-closed
-  above the first-release hard maximum of 1024. Startup reads each record
-  through a stable 1 MiB-capped file handle and retains only the deterministic
-  newest bounded set before building replay indexes. Compaction removes expired
-  or oldest overflow records, clears replay indexes, deletes the corresponding
-  `store_dir/messages/*.json` files, and regenerates the audit index from
-  survivors without cloning the full record store. Records with a prepared
+  above the first-release hard maximum of 1024. Startup treats an existing
+  non-directory store component, unreadable JSON, missing or nonnumeric schema
+  version, non-V2 schema, bad digest, filename drift, or immutable-identity
+  conflict as an incompatibility and stops without silently dropping a record.
+  It reads each record through a stable 1 MiB-capped file handle and validates
+  the complete store before applying retention. Compaction removes only replay-
+  expired rich records, preserves unexpired replay identities even after an
+  operator lowers the configured capacity, clears expired indexes, deletes the
+  corresponding `store_dir/messages/*.json` files, and regenerates the audit
+  index from survivors. Records with a prepared
   transaction hash and unknown queue outcome are not removed by TTL, age, or
   count compaction; admission fails closed when only such pinned records remain.
 - The bounded durable cache is still node-local and optional, so it is not a
@@ -2656,7 +2666,7 @@ verification.
 | Return/cancel lifecycle | Durable outbox helpers exist for `pacs.004`, `camt.029`, `sese.024`, and `sese.025`; known-original return and cancellation transitions have focused Torii coverage plus checked-in `pacs.004` and `camt.056` XML fixtures; full `pacs.004.001.09`, `pacs.004.001.10`, `camt.056.001.08`, and `camt.056.001.09` XSD fixtures now pin live-profile return/cancellation admission where the default rail profiles allow those versions | Add remaining official rail/profile return and cancellation fixture packs |
 | Securities crosswalks | Reference snapshots load locally and live securities profile admission validates instrument, active venue MIC, delivering/receiving BIC lookups, configured CSD venue domain, delivering/receiving settlement-account mappings, and securities cash-leg asset mapping before durable lifecycle recording | Keep operator snapshots current and add live-rail adapter coverage around production CSD/account/cash-leg sources |
 | Profile catalog | Static defaults plus config overrides; the embedded first-release defaults advertise only schema-backed concrete versions, and the XSD preflight reports `31` checked profile versions with `31` schema-backed | Add fixture coverage against official MDR/XSD releases before adding more concrete versions to default profiles |
-| Persistence | Digest-bound local JSON state files plus deterministic local audit index; tampered, schema-incomplete, filename-mismatched, symlinked, or oversized records and symlinked record directories are rejected on reload and excluded from regenerated indexes, oversized runtime records are not written as durable files or audit-index entries, symlinked durable-output directories are not followed for record, audit-index, export-index, or digest-addressed notary-preimage writes, the current manifest is exposed through `GET /v1/iso20022/audit/messages`, configured age/count retention compacts records while regenerating the manifest, `audit_export_dir` mirrors digest-bound manifest/notary preimages to an operator-managed external spool, `scripts/iso_audit_notary_adapter.py` verifies and publishes those preimages to configured HTTPS archival/notary endpoints with local receipts, `scripts/iso_operator_receipt_verify.py` gates those receipts, `scripts/iso_operator_canary.py` records one rail/notary/verify summary, `scripts/iso_operator_evidence_verify.py` rejects non-production summaries before archival, and `scripts/iso_production_readiness.py` aggregates XSD/evidence summaries into the final release report | Run provider-specific production canaries against the selected archival/notary vendors and archive evidence summaries that pass the production-readiness gate |
+| Persistence | Versioned, digest-bound local V2 JSON records and replay tombstones plus a deterministic local V2 audit index; any malformed, legacy, tampered, schema-incomplete, filename-mismatched, conflicting, symlinked, or oversized stored identity stops startup without silently dropping records or regenerating over the evidence. Existing audit indexes are strictly shape/digest/order checked, locally written atomically with a 32 MiB cap, and a missing or valid-stale derived index is regenerated only after the complete record store validates. Oversized runtime records are not written as durable files or audit-index entries, symlinked durable-output directories are not followed, the current manifest is exposed through `GET /v1/iso20022/audit/messages`, configured age/count retention preserves live replay identities while compacting replay-expired details, `audit_export_dir` mirrors digest-bound manifest/notary preimages to an operator-managed external spool, and the operator verification/readiness scripts gate publication and archived evidence | Run provider-specific production canaries against the selected archival/notary vendors and archive evidence summaries that pass the production-readiness gate |
 
 ## Public Interface Notes
 

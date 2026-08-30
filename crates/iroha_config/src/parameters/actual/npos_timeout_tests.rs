@@ -16,14 +16,7 @@ fn dummy_peer(port: u16) -> Peer {
 #[test]
 fn torii_operator_auth_defaults_match_expected() {
     let auth = ToriiOperatorAuth::default();
-    assert!(matches!(
-        auth.token_fallback,
-        OperatorTokenFallback::Bootstrap
-    ));
-    assert!(matches!(
-        auth.token_source,
-        OperatorTokenSource::OperatorTokens
-    ));
+    assert_eq!(auth.tokens, defaults::torii::operator_auth::tokens());
     assert_eq!(
         auth.mtls_trusted_proxy_cidrs,
         defaults::torii::operator_auth::mtls_trusted_proxy_cidrs()

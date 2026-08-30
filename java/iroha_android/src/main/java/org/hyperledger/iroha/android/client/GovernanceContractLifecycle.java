@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigInteger;
+
 /** Complete retained ownership and lifecycle projection for one contract. */
 public final class GovernanceContractLifecycle {
   private final int version;
@@ -11,7 +13,7 @@ public final class GovernanceContractLifecycle {
   private final String pendingOwner;
   private final boolean parliamentDelegated;
   private final String activeCodeHashHex;
-  private final long revision;
+  private final BigInteger revision;
   private final GovernanceContractEmergencyHold emergencyHold;
 
   public GovernanceContractLifecycle(
@@ -24,7 +26,7 @@ public final class GovernanceContractLifecycle {
       final String pendingOwner,
       final boolean parliamentDelegated,
       final String activeCodeHashHex,
-      final long revision,
+      final BigInteger revision,
       final GovernanceContractEmergencyHold emergencyHold) {
     this.version = version;
     this.origin = origin;
@@ -48,6 +50,7 @@ public final class GovernanceContractLifecycle {
   public String pendingOwner() { return pendingOwner; }
   public boolean parliamentDelegated() { return parliamentDelegated; }
   public String activeCodeHashHex() { return activeCodeHashHex; }
-  public long revision() { return revision; }
+  /** Returns the full unsigned lifecycle CAS revision. */
+  public BigInteger revision() { return revision; }
   public GovernanceContractEmergencyHold emergencyHold() { return emergencyHold; }
 }

@@ -1097,6 +1097,7 @@ fn merge_native_projection_execution(
             .iter()
             .map(|entrypoint| Hash::from(entrypoint.hash()))
             .collect(),
+        authenticated_signed_replay_aliases: vec![None; entrypoints.len()],
         entrypoints,
         reservation_keys: vec![Vec::new(); receipts.len()],
         routing_plans: vec![Vec::new(); receipts.len()],

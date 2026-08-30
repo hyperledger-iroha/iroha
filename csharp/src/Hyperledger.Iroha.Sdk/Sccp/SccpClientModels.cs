@@ -522,7 +522,7 @@ internal static class SccpSubmitValidation
     private static bool BackendSupports(string backend, SccpNetworkV1 chain) => backend switch
     {
         "evm-groth16-bn254-v1" => chain.DomainId() is 1 or 2,
-        "tron-groth16-bn254-v1" => chain.DomainId() == 5,
+        "tron-groth16-bn254-v1" => chain.DomainId() == 3,
         "ton-groth16-bls12381-v1" => chain.DomainId() == 4,
         "bridge/sccp/native/ethereum-beacon-v1" => SccpNativeBackendV1.EthereumBeacon.Supports(chain),
         "bridge/sccp/native/bsc-parlia-v1" => SccpNativeBackendV1.BscParlia.Supports(chain),

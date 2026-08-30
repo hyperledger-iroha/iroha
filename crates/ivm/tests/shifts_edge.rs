@@ -14,7 +14,7 @@ fn srai_masks_excess_shamt() {
         HALT_WORD,
     ]);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 0xF000_0000_0000_0000u64);
     vm.registers.set(4, 70);
     vm.run().unwrap();
@@ -28,7 +28,7 @@ fn slli_shamt_0_no_change() {
         HALT_WORD,
     ]);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 0x0123_4567_89AB_CDEFu64);
     vm.registers.set(4, 0);
     vm.run().unwrap();
@@ -41,7 +41,7 @@ fn srli_shamt_63_boundary() {
         HALT_WORD,
     ]);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 0x8000_0000_0000_0001u64);
     vm.registers.set(4, 63);
     vm.run().unwrap();
@@ -54,7 +54,7 @@ fn srai_shamt_63_sign_fill() {
         HALT_WORD,
     ]);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 0x8000_0000_0000_0001u64);
     vm.registers.set(4, 63);
     vm.run().unwrap();
@@ -67,7 +67,7 @@ fn srli_masks_64_to_zero_shift() {
         HALT_WORD,
     ]);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 0xDEAD_BEEF_F00D_BAAFu64);
     vm.registers.set(4, 64);
     vm.run().unwrap();
@@ -80,7 +80,7 @@ fn slli_masks_excess_shamt() {
         HALT_WORD,
     ]);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 0x0123_4567_89AB_CDEFu64);
     vm.registers.set(4, 66);
     vm.run().unwrap();
@@ -93,7 +93,7 @@ fn srli_shamt_1_logical() {
         HALT_WORD,
     ]);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 0x8000_0000_0000_0001u64);
     vm.registers.set(4, 1);
     vm.run().unwrap();
@@ -106,7 +106,7 @@ fn srai_shamt_1_sign() {
         HALT_WORD,
     ]);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 0x8000_0000_0000_0001u64);
     vm.registers.set(4, 1);
     vm.run().unwrap();
@@ -119,7 +119,7 @@ fn srli_shamt_0_no_change() {
         HALT_WORD,
     ]);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 0xDEAD_BEEF_F00D_BAAFu64);
     vm.registers.set(4, 0);
     vm.run().unwrap();
@@ -141,7 +141,7 @@ fn slli_boundaries_positive_and_negative() {
         HALT_WORD,
     ]);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     let pos = 0x0123_4567_89AB_CDEFu64;
     let neg = 0xF123_4567_89AB_CDEFu64;
     vm.registers.set(2, pos);
@@ -186,7 +186,7 @@ fn srli_srai_boundaries_positive_and_negative() {
         HALT_WORD,
     ]);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     let pos = 0x0123_4567_89AB_CDEFu64;
     let neg = 0xF123_4567_89AB_CDEFu64;
     vm.registers.set(2, pos);

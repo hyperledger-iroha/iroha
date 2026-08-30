@@ -311,13 +311,43 @@ fn certificate_and_terminal_transition_table_are_fail_closed() {
         superseded.mark_superseded(id, 60, certificate.expected_head),
         Err(ParliamentReducerErrorV1::ExpectedHeadUnchanged)
     );
-    superseded
-        .mark_superseded(
+    assert_eq!(
+        superseded.mark_superseded(
             id,
             60,
             GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
                 subject_id: root(99),
             }),
+        ),
+        Err(ParliamentReducerErrorV1::InvalidSupersedingHead),
+        "another subject cannot supersede this certificate's compare-and-set head"
+    );
+    assert_eq!(
+        superseded.mark_superseded(
+            id,
+            60,
+            GovernanceExpectedHeadV1::Present(
+                iroha_data_model::governance::types::GovernanceExpectedHeadPresentV1 {
+                    subject_id: expected_head_subject(certificate.expected_head),
+                    version: 0,
+                    head_root: root(99),
+                },
+            ),
+        ),
+        Err(ParliamentReducerErrorV1::InvalidSupersedingHead),
+        "a present superseding head must name a nonzero version"
+    );
+    superseded
+        .mark_superseded(
+            id,
+            60,
+            GovernanceExpectedHeadV1::Present(
+                iroha_data_model::governance::types::GovernanceExpectedHeadPresentV1 {
+                    subject_id: expected_head_subject(certificate.expected_head),
+                    version: 1,
+                    head_root: root(99),
+                },
+            ),
         )
         .expect("different head supersedes");
     assert_eq!(
@@ -332,6 +362,17 @@ fn certificate_and_terminal_transition_table_are_fail_closed() {
     superseded
         .validate()
         .expect("superseded terminal state validates");
+    let mut substituted_subject = superseded.clone();
+    substituted_subject.superseding_head = Some(GovernanceExpectedHeadV1::Absent(
+        GovernanceExpectedHeadAbsentV1 {
+            subject_id: root(99),
+        },
+    ));
+    assert_eq!(
+        substituted_subject.validate(),
+        Err(ParliamentReducerErrorV1::CertificateBindingMismatch),
+        "restored supersession evidence must retain the certificate subject"
+    );
 
     let mut failed = fixture.state;
     assert_eq!(

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc};
+use super::*;
 use axum::http::StatusCode;
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -13,7 +13,7 @@ use iroha_core::{
 use iroha_crypto::Algorithm;
 use iroha_data_model::prelude as dm;
 use iroha_primitives::const_vec::ConstVec;
-use super::*;
+use std::{borrow::Cow, sync::Arc};
 // use tower::ServiceExt; // not needed in this module
 const TEST_ACCOUNT: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 fn checked_smoke_keypair(
@@ -794,6 +794,7 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
     let resp = handle_v1_contracts_activity_get(
         state,
+        DataspaceReadVisibility::all_for_tests(),
         crate::NoritoQuery(ContractActivityGetParams {
             limit: Some(10),
             offset: 0,
@@ -1329,12 +1330,12 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
 }
 #[tokio::test]
 async fn handle_v1_account_transactions_emits_requested_format() {
-    use std::borrow::Cow;
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
         tx::AcceptedTransaction,
     };
     use iroha_data_model::prelude as dm;
+    use std::borrow::Cow;
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(iroha_core::state::State::new_for_testing(

@@ -122,7 +122,14 @@ pub(crate) async fn request_local_partial_release_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::{Method, Request, header::CONTENT_LENGTH};
+    use axum::{
+        Extension, Router,
+        http::{Method, Request, StatusCode, header::CONTENT_LENGTH},
+        routing::post,
+    };
+    use http_body_util::BodyExt as _;
+    use iroha_data_model::account::AccountId;
+    use tower::ServiceExt as _;
 
     #[test]
     fn identifier_parser_rejects_noncanonical_and_zero_ids() {
@@ -152,6 +159,10 @@ mod tests {
     #[test]
     fn route_passes_bounded_admission_into_the_physical_signer_task() {
         let route_source = include_str!("lib.rs");
+        assert!(route_source.contains(
+            "GOV_PARLIAMENT_TLE_PARTIAL_RELEASE => canonical_account_post(\
+             handler_gov_parliament_tle_partial_release, app_state, 1);"
+        ));
         let handler = route_source
             .split("async fn handler_gov_parliament_tle_partial_release")
             .nth(1)
@@ -171,6 +182,103 @@ mod tests {
 
         let service_source = include_str!("parliament_tle_release.rs");
         assert!(service_source.contains("let _signer_admission = signer_admission;"));
+    }
+
+    #[tokio::test]
+    async fn route_authenticates_one_byte_before_rejecting_it_and_caps_larger_bodies() {
+        async fn empty_body_gate(
+            Extension(_verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+            request: Request<Body>,
+        ) -> Result<StatusCode, crate::Error> {
+            require_empty_body_v1(request.into_body()).await?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let key_pair = crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair(
+            0x5B,
+            "derive Parliament partial-release auth fixture key",
+        );
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            crate::tests_runtime_handlers::world_with_account(&account_id),
+        );
+        let route = "/v1/gov/parliament/ballots/test/partial-release";
+        let router = Router::new().route(route, post(empty_body_gate)).layer(
+            axum::middleware::from_fn_with_state(
+                crate::CanonicalAccountBodyAuthState {
+                    app,
+                    max_body_bytes: 1,
+                    missing_auth_code: "canonical_authentication_required",
+                    missing_auth_message: "canonical account request authentication is required",
+                },
+                crate::enforce_canonical_account_body_authentication,
+            ),
+        );
+        let method = Method::POST;
+        let uri = route.parse().expect("partial-release URI");
+
+        let one_byte = b"x";
+        let headers = crate::tests_runtime_handlers::signed_app_headers(
+            &account_id,
+            &key_pair,
+            &method,
+            &uri,
+            one_byte,
+        );
+        let mut request = Request::builder()
+            .method(method.clone())
+            .uri(uri.clone())
+            .body(Body::from(one_byte.to_vec()))
+            .expect("signed one-byte partial-release request");
+        request.headers_mut().extend(headers);
+        let response = router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("one-byte partial-release response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("one-byte rejection body")
+            .to_bytes();
+        let error = norito::decode_from_bytes::<crate::ErrorEnvelope>(&body)
+            .expect("one-byte rejection envelope");
+        assert_eq!(
+            error.code(),
+            "parliament_tle_partial_release_body_not_empty"
+        );
+
+        let oversized = b"xx";
+        let headers = crate::tests_runtime_handlers::signed_app_headers(
+            &account_id,
+            &key_pair,
+            &method,
+            &uri,
+            oversized,
+        );
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::from(oversized.to_vec()))
+            .expect("signed oversized partial-release request");
+        request.headers_mut().extend(headers);
+        let response = router
+            .oneshot(request)
+            .await
+            .expect("oversized partial-release response");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("request_payload_too_large")
+        );
     }
 
     #[tokio::test]

@@ -58,6 +58,10 @@ export function createToriiGovernanceNormalizers({
     "wire_id",
     "payload_hex",
   ]);
+  const GOVERNANCE_BALLOT_DRAFT_RESPONSE_KEYS = new Set([
+    "drafted",
+    "tx_instructions",
+  ]);
   const GOVERNANCE_MANIFEST_PROVENANCE_KEYS = new Set(["signer", "signature"]);
   const GOVERNANCE_PLAIN_BALLOT_REQUEST_KEYS = new Set([
     "authority",
@@ -692,20 +696,25 @@ export function createToriiGovernanceNormalizers({
 
   function normalizeGovernanceBallotResponse(payload, context) {
     const record = ensureRecord(payload, context);
-    if (record.accepted === undefined) {
-      throw new TypeError(`${context}.accepted is required`);
+    assertSupportedOptionKeys(record, GOVERNANCE_BALLOT_DRAFT_RESPONSE_KEYS, context);
+    if (record.drafted !== true) {
+      throw new TypeError(`${context}.drafted must be exactly true`);
     }
-    const base = normalizeGovernanceDraftResponse(record, context);
-    const reason =
-      record.reason === undefined || record.reason === null
-        ? null
-        : requireNonEmptyString(record.reason, `${context}.reason`);
+    if (!Array.isArray(record.tx_instructions) || record.tx_instructions.length !== 1) {
+      throw new TypeError(`${context}.tx_instructions must contain exactly one instruction`);
+    }
+    const itemContext = `${context}.tx_instructions[0]`;
+    const item = ensureRecord(record.tx_instructions[0], itemContext);
+    assertSupportedOptionKeys(item, GOVERNANCE_PROPOSAL_INSTRUCTION_DRAFT_KEYS, itemContext);
     return {
-      ok: base.ok,
-      proposal_id: base.proposal_id,
-      tx_instructions: base.tx_instructions,
-      accepted: Boolean(record.accepted),
-      reason,
+      drafted: true,
+      tx_instructions: [{
+        wire_id: requireExactNonEmptyString(item.wire_id, `${itemContext}.wire_id`),
+        payload_hex: requireExactLowercaseHex(
+          item.payload_hex,
+          `${itemContext}.payload_hex`,
+        ),
+      }],
     };
   }
 

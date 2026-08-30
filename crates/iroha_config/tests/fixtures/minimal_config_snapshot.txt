@@ -270,6 +270,10 @@ Root {
         p2p_proxy: None,
         p2p_proxy_required: false,
         p2p_no_proxy: [],
+        outbound_dial_allow_cidrs: [],
+        outbound_dial_deny_cidrs: [],
+        outbound_dial_allow_dns_suffixes: [],
+        outbound_dial_deny_dns_suffixes: [],
         p2p_proxy_tls_verify: true,
         p2p_proxy_tls_pinned_cert_der_base64: None,
         quic_enabled: false,
@@ -434,6 +438,7 @@ Root {
             allow_cidrs: [],
         },
         privacy_bootle_lantern_issuer: None,
+        sccp_replay_archive: None,
         api_rate_limit_bypass_cidrs: [],
         internal_api_trusted_cidrs: [
             "127.0.0.1/32",
@@ -452,8 +457,6 @@ Root {
                 "127.0.0.1/32",
                 "::1/128",
             ],
-            token_fallback: Bootstrap,
-            token_source: OperatorTokens,
             tokens: [],
             rate_per_minute: Some(
                 30,
@@ -508,6 +511,8 @@ Root {
         attachments_max_bytes: 4194304,
         attachments_per_tenant_max_count: 128,
         attachments_per_tenant_max_bytes: 67108864,
+        attachments_global_max_count: 4096,
+        attachments_global_max_bytes: 1073741824,
         attachments_allowed_mime_types: [
             "application/x-norito",
             "application/json",
@@ -573,6 +578,8 @@ Root {
             audit_export_dir: None,
             embedded_signature_policy: None,
             signer: None,
+            participants: [],
+            audit_admin_keys: [],
             account_aliases: [],
             currency_assets: [],
             reference_data: IsoReferenceData {
@@ -787,8 +794,12 @@ Root {
                 ],
             },
             metering_smoothing: SorafsMeteringSmoothing {
-                gib_hours_alpha: None,
-                por_success_alpha: None,
+                gib_hours_alpha: Some(
+                    0.2,
+                ),
+                por_success_alpha: Some(
+                    0.2,
+                ),
             },
             stream_tokens: SorafsTokenConfig {
                 enabled: false,
@@ -969,7 +980,7 @@ Root {
         sorafs_gateway: SorafsGateway {
             require_manifest_envelope: true,
             enforce_admission: true,
-            enforce_capabilities: false,
+            enforce_capabilities: true,
             salt_schedule_dir: None,
             site_bindings: SorafsGatewaySiteBindings {
                 path: None,
@@ -1783,7 +1794,7 @@ Root {
     logger: Logger {
         level: INFO,
         filter: None,
-        format: Full,
+        format: Json,
         terminal_colors: false,
     },
     queue: Queue {
@@ -1886,6 +1897,33 @@ Root {
             max_clock_skew_ms: 0,
             proof_cache_ttl_slots: 1,
             replay_retention_slots: 128,
+        },
+        atomic_private_settlement: NexusAtomicPrivateSettlement {
+            enabled: false,
+            activation_height: None,
+            minimum_activation_notice_blocks: 7200,
+            proof_profile_version: 1,
+            max_participants: 255,
+            max_expiry_blocks: 7200,
+            audit_timeout_blocks: 1200,
+            prepare_timeout_blocks: 1200,
+            commit_timeout_blocks: 1200,
+            capsule_padding_classes_bytes: [
+                4096,
+                16384,
+                65536,
+                262144,
+            ],
+            max_proof_bytes: 8388608,
+            max_capsule_bytes: 1048576,
+            max_carrier_bytes: 4194304,
+            sidecar_retention_blocks: 1000000,
+            sidecar_max_records: 256,
+            sidecar_max_total_bytes: 3221225472,
+            default_min_auditor_approvals: 1,
+            permitted_policy_versions: {
+                1,
+            },
         },
         lane_relay_emergency: LaneRelayEmergency {
             enabled: false,
@@ -2100,9 +2138,9 @@ Root {
     telemetry: None,
     telemetry_integrity: TelemetryIntegrity {
         enabled: true,
-        state_dir: None,
-        signing_key: None,
-        signing_key_id: None,
+        state_dir_configured: false,
+        signing_key_configured: false,
+        signing_key_id_configured: false,
     },
     dev_telemetry: DevTelemetry {
         out_file: None,
@@ -2559,15 +2597,6 @@ Root {
             trusted_signers: {},
             signature_threshold: 0,
         },
-        citizen_service: CitizenServiceDiscipline {
-            seat_cooldown_blocks: 0,
-            max_seats_per_epoch: 4294967295,
-            free_declines_per_epoch: 4294967295,
-            decline_slash_bps: 0,
-            no_show_slash_bps: 0,
-            misconduct_slash_bps: 0,
-            role_bond_multipliers: {},
-        },
         viral_incentives: ViralIncentives {
             incentive_pool_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
             escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
@@ -2777,6 +2806,10 @@ Root {
             opening_phase_blocks: 600,
             max_ballot_retries: 3,
             max_corpus_entries: 1000,
+        },
+        parliament_tle_key_lifecycle: ParliamentTleKeyLifecycle {
+            session_lifetime_blocks: 37600,
+            max_fresh_ballots_per_session: 1,
         },
         parliament_tle_partial_release_signer_provider_handle: None,
         parliament_tle_partial_release_signer_provider_revision: None,

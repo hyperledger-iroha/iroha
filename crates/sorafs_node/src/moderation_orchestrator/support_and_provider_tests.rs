@@ -19,7 +19,8 @@ use iroha_data_model::{
             ModerationLedgerPolicyRecord, ModerationLedgerPolicyV1, ModerationLedgerStatusV1,
             ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
             ModerationOutcomeRecordV1, ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1,
-            ModerationVoteCountsV1, sorafs_moderation_panel_roster_hash_v1,
+            ModerationSortitionAnchorV1, ModerationVoteCountsV1,
+            sorafs_moderation_panel_roster_hash_v1,
         },
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
@@ -1353,6 +1354,11 @@ fn awaiting_acceptance_snapshot(
         submitted_by: appellant,
         submitted_at_unix_ms: 3,
         eligible_jurors,
+        sortition_anchor: Some(ModerationSortitionAnchorV1 {
+            block_height: height.saturating_sub(1).max(1),
+            block_hash: randomness_anchor,
+            block_timestamp_unix_ms: 21,
+        }),
         selection: Some(selection),
         accepted_jurors: Vec::new(),
         replacements: Vec::new(),
@@ -1399,6 +1405,39 @@ fn awaiting_acceptance_snapshot(
         },
         sortition_digest,
     )
+}
+fn registering_snapshot_with_pinned_anchor(
+    finalized_block_hash: [u8; 32],
+    governance: AccountId,
+) -> (ModerationFinalizedLedgerSnapshotV1, [u8; 32]) {
+    let (mut snapshot, _) =
+        awaiting_acceptance_snapshot(3, finalized_block_hash, governance.clone());
+    let appeal = &mut snapshot.appeals[0].appeal;
+    let anchor_hash = appeal
+        .sortition_anchor
+        .as_ref()
+        .expect("awaiting-acceptance fixture has an anchor")
+        .block_hash;
+    appeal.status = ModerationAppealStatusV1::RegisteringJurors;
+    appeal.selection = None;
+    snapshot.finalized_at_unix_ms = 22;
+    let status = snapshot.status.as_mut().expect("moderation status");
+    status.panel_selections = 0;
+    status.updated_at_unix_ms = 19;
+    snapshot.events[0] = ModerationFinalizedEventV1 {
+        sequence: 5,
+        block_height: 1,
+        block_hash: [0x61; 32],
+        event_index: 0,
+        event: SorafsModerationLedgerEvent::new(
+            SorafsModerationLedgerEventKind::EligibilityRegistered,
+            Some("case-failover".to_owned()),
+            Some("round-1".to_owned()),
+            governance,
+            19,
+        ),
+    };
+    (snapshot, anchor_hash)
 }
 fn activated_case_snapshot(
     height: u64,

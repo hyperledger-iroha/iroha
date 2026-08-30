@@ -1129,7 +1129,7 @@ enum SccpExactParser {
             case 1: expectedRoute = "taira_eth_xor"
             case 2: expectedRoute = "taira_bsc_xor"
             case 4: expectedRoute = "taira_ton_xor"
-            case 5: expectedRoute = "taira_tron_xor"
+            case 3: expectedRoute = "taira_tron_xor"
             default: throw SccpV1Error.invalid("recent SCCP target domain is unsupported")
             }
             guard (assetId == nil || assetId == "xor"),
@@ -2000,8 +2000,8 @@ enum SccpExactParser {
               try SccpStrictJSON.uint32(item, "route_revision", minimum: 1, maximum: UInt32.max) > 0
         else { throw SccpV1Error.invalid("SCCP transfer payload does not match its exact lane") }
         _ = try decimalUInt64(item, "nonce", minimum: 0)
-        let assetHomeDomain = try SccpStrictJSON.uint32(item, "asset_home_domain", minimum: 0, maximum: 5)
-        guard [UInt32(0), 1, 2, 4, 5].contains(assetHomeDomain) else {
+        let assetHomeDomain = try SccpStrictJSON.uint32(item, "asset_home_domain", minimum: 0, maximum: 4)
+        guard [UInt32(0), 1, 2, 3, 4].contains(assetHomeDomain) else {
             throw SccpV1Error.invalid("SCCP transfer asset_home_domain is unsupported or retired")
         }
         let amount = try decimalText(item, "amount", minimum: 1)
@@ -2009,22 +2009,22 @@ enum SccpExactParser {
         guard amount.count < maximumUInt128.count || amount.count == maximumUInt128.count && amount <= maximumUInt128 else {
             throw SccpV1Error.invalid("SCCP transfer amount must fit UInt128")
         }
-        let senderCodec = try SccpStrictJSON.uint32(item, "sender_codec", minimum: 1, maximum: 7)
-        let recipientCodec = try SccpStrictJSON.uint32(item, "recipient_codec", minimum: 1, maximum: 7)
+        let senderCodec = try SccpStrictJSON.uint32(item, "sender_codec", minimum: 0, maximum: 3)
+        let recipientCodec = try SccpStrictJSON.uint32(item, "recipient_codec", minimum: 0, maximum: 3)
         let expectedRecipientCodec: UInt32
         switch lane.target.domainId {
-        case 4: expectedRecipientCodec = 7
-        case 5: expectedRecipientCodec = 5
-        default: expectedRecipientCodec = 2
+        case 4: expectedRecipientCodec = 3
+        case 3: expectedRecipientCodec = 2
+        default: expectedRecipientCodec = 1
         }
-        guard senderCodec == 1, recipientCodec == expectedRecipientCodec else {
+        guard senderCodec == 0, recipientCodec == expectedRecipientCodec else {
             throw SccpV1Error.invalid("SCCP transfer account codecs do not match its exact domains")
         }
         for (codecField, valueField) in [
             ("asset_id_codec", "asset_id"), ("sender_codec", "sender"),
             ("recipient_codec", "recipient"), ("route_id_codec", "route_id"),
         ] {
-            let codec = try SccpStrictJSON.uint32(item, codecField, minimum: 1, maximum: 7)
+            let codec = try SccpStrictJSON.uint32(item, codecField, minimum: 0, maximum: 3)
             guard let exactCodec = SccpCodecV1(rawValue: UInt8(codec)) else { throw SccpV1Error.invalid("SCCP transfer uses a retired codec") }
             _ = try exactCodec.validate(variableHex(item, valueField))
         }
@@ -2562,7 +2562,7 @@ enum SccpExactParser {
         case 1: expectedRoute = "taira_eth_xor"
         case 2: expectedRoute = "taira_bsc_xor"
         case 4: expectedRoute = "taira_ton_xor"
-        case 5: expectedRoute = "taira_tron_xor"
+        case 3: expectedRoute = "taira_tron_xor"
         default: throw SccpV1Error.invalid("\(label).Transfer destination domain is unsupported")
         }
         try normalizedCanonicalText(transfer, field: "route_id", expected: expectedRoute, label: label)

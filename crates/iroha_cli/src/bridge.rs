@@ -564,13 +564,14 @@ fn sccp_submit_native_message(
 }
 fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
     format!(
-        "sccp capabilities: version={} registry_revision={} registry={} bundle={} proof_request={} recent={} proof_submit={} native_submit={}\nregistry_limits: lanes={} live_total={} live_per_lane={} retained_routes_per_lane={} retained_anchors_per_lane={}\nresource_limits: outbound_messages_block={} outbound_payload_bytes={} pending_messages/pending_bytes={}/{} proofs_tx/block={}/{} proof_bytes_each/tx/block={}/{}/{} native_headers_tx/block={}/{} eth_updates_tx/block={}/{} native_bytes_tx/block={}/{} secp_tx/block={}/{} bls_checks_tx/block={}/{} bls_contributions_tx/block={}/{} ed25519_sigs_tx/block={}/{} ed25519_keys_tx/block={}/{} bn254_tx/block={}/{} bls12381_tx/block={}/{}",
+        "sccp capabilities: version={} registry_revision={} registry={} bundle={} proof_request={} recent={} sora_outbound_material={} proof_submit={} native_submit={}\nregistry_limits: lanes={} live_total={} live_per_lane={} retained_routes_per_lane={} retained_anchors_per_lane={}\nresource_limits: outbound_messages_block={} outbound_payload_bytes={} pending_messages/pending_bytes={}/{} proofs_tx/block={}/{} proof_bytes_each/tx/block={}/{}/{} native_headers_tx/block={}/{} eth_updates_tx/block={}/{} native_bytes_tx/block={}/{} secp_tx/block={}/{} bls_checks_tx/block={}/{} bls_contributions_tx/block={}/{} ed25519_sigs_tx/block={}/{} ed25519_keys_tx/block={}/{} bn254_tx/block={}/{} bls12381_tx/block={}/{}",
         capabilities.version,
         capabilities.registry_revision,
         capabilities.registry_path,
         capabilities.message_bundle_path,
         capabilities.proof_request_path,
         capabilities.recent_messages_path,
+        capabilities.sora_outbound_material_path,
         capabilities
             .proof_submit_path
             .as_deref()
@@ -1179,6 +1180,9 @@ mod tests {
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
             proof_request_path: "/v1/sccp/proof-requests/{message_id}".to_owned(),
             recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
+            sora_outbound_material_path:
+                "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
+                    .to_owned(),
             registry_limits: SccpRegistryLimits {
                 governed_lanes: 16,
                 live_governed_routes: 64,
@@ -1220,7 +1224,13 @@ mod tests {
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             native_message_submit_path: Some("/v1/bridge/messages".to_owned()),
         });
-        for required in ["registry=", "bundle=", "proof_request=", "proof_submit="] {
+        for required in [
+            "registry=",
+            "bundle=",
+            "proof_request=",
+            "sora_outbound_material=/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
+            "proof_submit=",
+        ] {
             assert!(summary.contains(required));
         }
         for required in [

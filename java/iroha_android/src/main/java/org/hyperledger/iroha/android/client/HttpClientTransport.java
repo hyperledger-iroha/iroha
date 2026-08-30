@@ -359,14 +359,27 @@ public final class HttpClientTransport implements IrohaClient {
     return config.toNoritoRpcClient(executor);
   }
 
-  /** Creates a streaming client wired to this transport's configuration. */
+  /** Creates a streaming client without a canonical account identity. */
   public ToriiEventStreamClient newEventStreamClient() {
+    return newEventStreamClientBuilder().build();
+  }
+
+  /** Creates a streaming client that signs each exact final request URI. */
+  public ToriiEventStreamClient newEventStreamClient(
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return newEventStreamClientBuilder()
+        .canonicalRequestAuth(
+            config.requireLocalSigningContext(),
+            Objects.requireNonNull(canonicalAuth, "canonicalAuth"))
+        .build();
+  }
+
+  private ToriiEventStreamClient.Builder newEventStreamClientBuilder() {
     return ToriiEventStreamClient.builder()
         .setBaseUri(config.baseUri())
         .setTransportExecutor(executor)
         .defaultHeaders(config.defaultHeaders())
-        .observers(config.observers())
-        .build();
+        .observers(config.observers());
   }
 
   /** Creates a typed DA proof client that reuses this transport's configuration. */

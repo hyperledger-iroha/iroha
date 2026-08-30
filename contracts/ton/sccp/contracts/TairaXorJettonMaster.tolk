@@ -152,6 +152,7 @@ fun onInternalMessage(in: InMessage) {
             assert (
                 msg.messageId != 0 && tail.payloadHash != 0 && tail.payloadSha256 != 0 &&
                 msg.recipient.getWorkchain() == SCCP_WORKCHAIN &&
+                msg.recipient != contract.getAddress() &&
                 sccpAmountWithinRouteCap(msg.jettonAmount, config.maxWrappedSupply)
             ) throw SccpErrors.InvalidMessage;
             val hashes = config.routeHashes.load();

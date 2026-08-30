@@ -22,6 +22,11 @@ fn first_release_extension_opcodes_are_valid_but_reserved_iso_slots_are_invalid(
         );
     }
     for opcode in [
+        instruction::wide::crypto::PUBKGEN,
+        instruction::wide::crypto::VALCOM,
+        instruction::wide::crypto::ECADD,
+        instruction::wide::crypto::ECMUL_VAR,
+        instruction::wide::crypto::PAIRING,
         instruction::wide::iso20022::MSG_CREATE,
         instruction::wide::iso20022::MSG_CLONE,
         instruction::wide::iso20022::MSG_SET,
@@ -41,7 +46,12 @@ fn first_release_extension_opcodes_are_valid_but_reserved_iso_slots_are_invalid(
     ] {
         assert!(
             !instruction::wide::is_valid_opcode(opcode),
-            "reserved ISO 20022 opcode 0x{opcode:02x} must remain invalid in ABI v1"
+            "reserved opcode 0x{opcode:02x} must remain invalid in ABI v1"
+        );
+        assert_eq!(
+            ivm::cost_of(u32::from(opcode) << 24),
+            None,
+            "reserved opcode 0x{opcode:02x} must have no gas schedule entry"
         );
     }
 }

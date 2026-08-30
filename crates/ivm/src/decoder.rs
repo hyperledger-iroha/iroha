@@ -78,8 +78,10 @@ mod tests {
             .into_iter()
             .flat_map(u32::to_le_bytes)
             .collect::<Vec<_>>();
-        let mut memory = Memory::new(code.len() as u64);
-        memory.load_code(&code);
+        let mut memory = Memory::new();
+        memory
+            .load_code(&code)
+            .expect("decoder test program fits code region");
         for pc in [0, 4] {
             assert_eq!(decode_slice(&code, pc), decode(&memory, pc));
         }

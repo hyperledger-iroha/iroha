@@ -5104,6 +5104,20 @@ impl V2ApplyService {
                     &error,
                 )
             })?;
+        // An authenticated sealed reveal also commits the enclosed signed identity.
+        // Retire ordinary sibling carriers keyed by a different outer hash so they cannot
+        // remain permanently capacity-accounted after becoming replay-ineligible.
+        self.queue
+            .remove_state_committed_replay_owners_preserving_globally_bound(
+                &self.state.view(),
+                None,
+            )
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "replay-terminal committed Queue cleanup",
+                    &error,
+                )
+            })?;
         let nexus = self.state.nexus_snapshot();
         let compliance = self.queue.lane_compliance_engine();
         let queue_reconfiguration_started = Instant::now();

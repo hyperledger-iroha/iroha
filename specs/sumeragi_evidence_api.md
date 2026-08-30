@@ -57,7 +57,7 @@ Additional consensus status
   `null` when absent. A sparse projection that omits one of those slots is rejected. See
   `specs/sumeragi_v2.md` and the `SumeragiStatusResponse` OpenAPI schema for the exact fields.
 - GET `/v1/sumeragi/qc` — returns the canonical `SumeragiV2QcResponse` by default. Its required `highest_prepare_qc` and `locked_prepare_qc` slots are nullable; each non-null value carries the full context-bound `QuorumCertificateRef`. Set `Accept: application/json` for the identical schema, including explicit `null` for an unavailable reference.
-- GET `/v1/sumeragi/status/sse` — SSE stream of the same payload (≈1s cadence).
+- GET `/v1/sumeragi/status/sse` — operator-authenticated SSE stream of the same payload (≈1s cadence).
 
 The current authenticated ledger state-root and proof contract is specified in
 [`ledger_state_finality.md`](ledger_state_finality.md). Retired mutable-QC and

@@ -870,12 +870,20 @@ canonical bytes and the exact derived key. Bounded prefix enumeration rejects
 cap overflow, malformed or wrong-route members, and any member without its
 exact pending obligation. Registry/application-state reads enumerate that
 roster and require the obligation's exact member instead of trusting a lossy
-summary. The obligation and all of its members are inserted or removed through
-one nested MV transaction; whole-list admission staging, ordinary bulk
-resolution, and autonomous required resolution call `apply` only after every
-item succeeds. Both native marker prefixes are in
+summary. An obligation with a distinct authenticated signed transaction alias
+also installs one canonical signed-first reverse member. Direct application
+removes the obligation, reverse member, and route roster atomically. Application
+through that signed alias performs the same removal and installs one compact
+outer-identity terminal binding that commits the exact network, signed hash,
+outer hash, and binding hash. Thus replay evidence remains exact without
+retaining a potentially 2 MiB obligation forever. The obligation and all of its
+members are inserted or removed through one nested MV transaction; whole-list
+admission staging, ordinary bulk resolution, signed-alias terminalization, and
+autonomous required resolution call `apply` only after every item succeeds.
+All four native marker prefixes (obligation, route member, pending signed-alias
+member, and compact signed-alias terminal) are in
 `OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES`, so generic contracts cannot read,
-forge, overwrite, enumerate, or delete either half of the paired state.
+forge, overwrite, enumerate, or delete any part of the state machine.
 
 Pending application state is lifecycle-aware. It is `Pending` only when every
 bound lane/dataspace remains in the current Nexus catalog and
@@ -907,7 +915,12 @@ roster validates every enumerated compact canonical member claim and requires
 its exact obligation key to exist without decoding a potentially 2 MiB
 obligation per roster item. Target application and resolution still decode and
 compare the exact obligation/member pair, and every known obligation is checked
-for its exact member on each bound route.
+for its exact member on each bound route. Signed-alias resolution additionally
+requires its exact bounded reverse member and refuses an existing conflicting
+terminal. After resolution, only the canonical compact terminal can establish
+`AppliedViaSignedAlias`; missing, malformed, substituted, partial, or
+route-retaining evidence fails closed. Direct application establishes
+`AppliedDirect` and leaves no alias terminal.
 Missing, phantom, orphaned, malformed, oversized, wrong-key, or over-cap
 evidence must fail closed without publishing a stage or resolution prefix;
 same-route coordinator and participant roles contribute only one route member.
@@ -1137,6 +1150,16 @@ transaction membership is rejected in
 `crates/iroha_core/src/block.rs`. The application path in
 `crates/iroha_core/src/sumeragi/v2_apply.rs` finalizes queue reservations only
 after canonical Kura/WSV commit.
+Each `MergeLaneExecution` also carries aligned
+`authenticated_signed_replay_aliases`. State derives and validates that
+transcript against pre-carrier authentication, binds it to carrier membership,
+and reuses it during Kura recovery. V2 apply retires ordinary sibling carriers
+sharing a committed signed alias. For a globally admitted sibling, State first
+atomically consumes the exact pending obligation, signed-first reverse member,
+and route members and, only for a distinct signed-alias commit, publishes its
+compact outer terminal. Runtime and startup Queue cleanup require the matching
+`AppliedDirect` or `AppliedViaSignedAlias` evidence and refuse to bypass active
+reservations, selection ownership, or the exact Kura terminal corridor.
 
 **Closure condition.** Every peer deterministically re-executes the exact
 certified batch on the committed base WSV and atomically commits canonical
@@ -1180,6 +1203,10 @@ The focused inventory names
 `state::tests::autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash`,
 and
 `state::tests::autonomous_execution_finality_rejects_unbound_event_surface_drift`.
+Replay-alias coverage additionally includes
+`sealed_reveal_membership_requires_exact_preblock_authentication`,
+`committed_sealed_signed_alias_releases_ordinary_sibling_carriers`, and
+`committed_merge_entry_lookup_reconstructs_from_canonical_indexes_after_restart`.
 The final test also corrupts the QC-bound autonomous event prefix before
 pre-vote and requires rejection before retained-root reconstruction can mask
 the drift.

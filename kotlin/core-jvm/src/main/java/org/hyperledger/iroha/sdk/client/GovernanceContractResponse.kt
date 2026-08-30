@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.math.BigInteger
+
 /** Governance binding emitted by `GET /v1/gov/contracts/{contract_address}`. */
 class GovernanceContractResponse(
     @JvmField val found: Boolean,
@@ -11,8 +13,10 @@ class GovernanceContractResponse(
     @JvmField val emergencyHoldActive: Boolean?,
     @JvmField val codeHashHex: String?,
     @JvmField val abiHashHex: String?,
-    @JvmField val publicEntrypoints: List<String>?,
-)
+    publicEntrypoints: List<String>?,
+) {
+    @JvmField val publicEntrypoints: List<String>? = publicEntrypoints?.toList()
+}
 
 /** Complete retained ownership and lifecycle projection for one contract. */
 class GovernanceContractLifecycle(
@@ -26,7 +30,8 @@ class GovernanceContractLifecycle(
     @JvmField val pendingOwner: String?,
     @JvmField val parliamentDelegated: Boolean,
     @JvmField val activeCodeHashHex: String?,
-    @JvmField val revision: Long,
+    /** Full unsigned lifecycle CAS revision. */
+    @JvmField val revision: BigInteger,
     @JvmField val emergencyHold: GovernanceContractEmergencyHold?,
 )
 
@@ -36,6 +41,8 @@ class GovernanceContractEmergencyHold(
     @JvmField val proposalContentIdHex: String,
     @JvmField val governanceAttemptIdHex: String,
     @JvmField val reason: String,
-    @JvmField val imposedAtHeight: Long,
-    @JvmField val expiresAtHeight: Long,
+    /** Full unsigned height at which Parliament imposed the hold. */
+    @JvmField val imposedAtHeight: BigInteger,
+    /** Full unsigned height after which the hold no longer suspends execution. */
+    @JvmField val expiresAtHeight: BigInteger,
 )

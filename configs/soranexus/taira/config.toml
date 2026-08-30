@@ -73,6 +73,13 @@ deploy_rate_per_origin_per_sec = 4
 deploy_burst_per_origin = 8
 query_rate_per_authority_per_sec = 160
 query_burst_per_authority = 320
+
+[torii.transport]
+# The public edge reaches Torii over loopback and appends the socket-observed
+# client address to X-Forwarded-For. Trust only that exact hop so downstream
+# pre-authentication, rate, and ban policy keep distinct public client IPs.
+trusted_proxy_cidrs = ["127.0.0.1/32"]
+
 # First-release Bootle/Lantern issuance is deliberately staged disabled in the
 # shared template. A deployment-owned peer-1 runtime config may enable it only
 # after binding the exact public provider policy and the governed on-chain

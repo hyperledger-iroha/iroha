@@ -1,5 +1,366 @@
 // Same-scope moderation regressions extracted to keep the parent source budget bounded.
 #[test]
+fn sortition_anchor_is_strictly_post_deadline_stable_and_delay_safe() {
+    let mut fixture = PanelFixture::new();
+    fixture.submit(1, 0, 1);
+    fixture.register_juror();
+    let manager = fixture.manager_id();
+    let juror = fixture.juror_id();
+    let snapshot_digest = fixture.appeal().pop_snapshot_digest;
+
+    let deadline_height = fixture.next_height;
+    let error = fixture
+        .run(1_003_000, |transaction| {
+            FinalizeSorafsModerationSortition::new(
+                "panel-case".to_owned(),
+                "round-1".to_owned(),
+                snapshot_digest,
+                [0xE0; 32],
+                vec![juror.clone()],
+                Vec::new(),
+            )
+            .execute(&manager, transaction)
+        })
+        .expect_err("sortition at the exact registration deadline must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("registration must close before sortition"),
+        "unexpected exact-deadline rejection: {error:?}"
+    );
+    assert!(fixture.appeal().sortition_anchor.is_none());
+    fixture
+        .run(1_003_000, |_| Ok(()))
+        .expect("commit exact-deadline block without pinning an anchor");
+    assert!(fixture.appeal().sortition_anchor.is_none());
+
+    let stale_anchor = *header(deadline_height, 1_003_000).hash().as_ref();
+    let anchor_height = fixture.next_height;
+    let expected_anchor_hash = *header(anchor_height, 1_004_000).hash().as_ref();
+    let error = fixture
+        .run(1_004_000, |transaction| {
+            let anchor = required_appeal(transaction.world(), "panel-case", "round-1")?
+                .sortition_anchor
+                .expect("start-of-block maintenance must expose the due anchor");
+            assert_eq!(
+                anchor,
+                ModerationSortitionAnchorV1 {
+                    block_height: anchor_height,
+                    block_hash: expected_anchor_hash,
+                    block_timestamp_unix_ms: 1_004_000,
+                }
+            );
+            FinalizeSorafsModerationSortition::new(
+                "panel-case".to_owned(),
+                "round-1".to_owned(),
+                snapshot_digest,
+                anchor.block_hash,
+                vec![juror.clone()],
+                Vec::new(),
+            )
+            .execute(&manager, transaction)
+        })
+        .expect_err("sortition cannot execute in the block that pins its anchor");
+    assert!(
+        error
+            .to_string()
+            .contains("must execute after its pinned anchor block commits"),
+        "unexpected same-anchor-block rejection: {error:?}"
+    );
+    assert!(
+        fixture.appeal().sortition_anchor.is_none(),
+        "a rejected block must not leak its start-of-block anchor overlay"
+    );
+
+    let anchor = fixture.pin_sortition_anchor();
+    assert_eq!(
+        anchor,
+        ModerationSortitionAnchorV1 {
+            block_height: anchor_height,
+            block_hash: expected_anchor_hash,
+            block_timestamp_unix_ms: 1_004_000,
+        }
+    );
+    assert!(
+        read_sortition_anchor_schedule(fixture.state.view().world())
+            .expect("read committed anchor schedule")
+            .entries
+            .is_empty()
+    );
+
+    let candidate = FindSorafsModerationJurorEligibility::new(
+        "panel-case".to_owned(),
+        "round-1".to_owned(),
+        juror.clone(),
+    )
+    .execute(&fixture.state.view())
+    .expect("query registered candidate");
+    let appeal = fixture.appeal();
+    let (expected_jurors, expected_waitlist, expected_seed, expected_sortition) =
+        sorafs_moderation_select_panel_v1(
+            appeal.intake_digest,
+            appeal.pop_snapshot_digest,
+            anchor.block_hash,
+            &[candidate],
+            1,
+            0,
+            1,
+        )
+        .expect("derive the anchored roster");
+
+    for substituted_anchor in [stale_anchor, [0xFF; 32]] {
+        let error = fixture
+            .run(1_004_100, |transaction| {
+                FinalizeSorafsModerationSortition::new(
+                    "panel-case".to_owned(),
+                    "round-1".to_owned(),
+                    snapshot_digest,
+                    substituted_anchor,
+                    expected_jurors.clone(),
+                    expected_waitlist.clone(),
+                )
+                .execute(&manager, transaction)
+            })
+            .expect_err("stale or substituted caller anchors must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the consensus-pinned first post-registration block"),
+            "unexpected substituted-anchor rejection: {error:?}"
+        );
+        assert_eq!(fixture.appeal().sortition_anchor, Some(anchor));
+    }
+
+    let delayed_parent_height = fixture.next_height;
+    fixture
+        .run(1_004_100, |_| Ok(()))
+        .expect("commit a later carrier parent");
+    assert_ne!(
+        *header(delayed_parent_height, 1_004_100).hash().as_ref(),
+        anchor.block_hash
+    );
+    fixture
+        .run(1_004_200, |transaction| {
+            FinalizeSorafsModerationSortition::new(
+                "panel-case".to_owned(),
+                "round-1".to_owned(),
+                snapshot_digest,
+                anchor.block_hash,
+                expected_jurors.clone(),
+                expected_waitlist.clone(),
+            )
+            .execute(&manager, transaction)
+        })
+        .expect("a delayed carrier must retain the consensus-pinned draw");
+    let selection = fixture.appeal().selection.expect("anchored selection");
+    assert_eq!(selection.randomness_anchor, anchor.block_hash);
+    assert_eq!(selection.seed_digest, expected_seed);
+    assert_eq!(selection.sortition_digest, expected_sortition);
+    assert_eq!(selection.jurors, expected_jurors);
+    assert_eq!(selection.waitlist, expected_waitlist);
+}
+
+#[test]
+fn restored_sortition_anchor_is_bound_to_exact_committed_history() {
+    let mut fixture = PanelFixture::new();
+    fixture.submit(1, 0, 1);
+    fixture
+        .run(1_003_000, |_| Ok(()))
+        .expect("commit exact-deadline block");
+    let anchor = fixture.pin_sortition_anchor();
+    let mut committed_hashes = vec![
+        iroha_crypto::HashOf::new(&header(1, 1_000_000)),
+        iroha_crypto::HashOf::new(&header(2, 1_001_000)),
+        iroha_crypto::HashOf::new(&header(3, 1_003_000)),
+        iroha_crypto::HashOf::new(&header(4, 1_004_000)),
+    ];
+    validate_persisted_moderation_anchor_history_v1(
+        fixture.state.view().world(),
+        &committed_hashes,
+    )
+    .expect("restored anchor matches the exact committed hash journal");
+
+    committed_hashes[3] = iroha_crypto::HashOf::new(&header(4, 1_004_001));
+    let error = validate_persisted_moderation_anchor_history_v1(
+        fixture.state.view().world(),
+        &committed_hashes,
+    )
+    .expect_err("substituted committed history must fail restoration");
+    assert!(
+        error
+            .to_string()
+            .contains("differs from committed block history")
+    );
+    assert_eq!(fixture.appeal().sortition_anchor, Some(anchor));
+
+    committed_hashes.truncate(3);
+    let error = validate_persisted_moderation_anchor_history_v1(
+        fixture.state.view().world(),
+        &committed_hashes,
+    )
+    .expect_err("future anchor height must fail restoration");
+    assert!(
+        error
+            .to_string()
+            .contains("names missing committed height 4")
+    );
+}
+
+#[test]
+fn soft_fork_replacement_repins_the_reverted_anchor_block() -> Result<(), InstructionExecutionError>
+{
+    let mut fixture = PanelFixture::new();
+    fixture.submit(1, 0, 1);
+    fixture
+        .run(1_003_000, |_| Ok(()))
+        .expect("commit exact-deadline block");
+    let original_anchor = fixture.pin_sortition_anchor();
+    let replacement_header = header(original_anchor.block_height, 1_004_500);
+    let replacement_hash = *replacement_header.hash().as_ref();
+    assert_ne!(replacement_hash, original_anchor.block_hash);
+
+    let mut replacement = fixture.state.block_and_revert(replacement_header);
+    let transaction = replacement.transaction();
+    let repinned = required_appeal(transaction.world(), "panel-case", "round-1")?
+        .sortition_anchor
+        .expect("replacement start-of-block maintenance repins the reverted appeal");
+    assert_eq!(
+        repinned,
+        ModerationSortitionAnchorV1 {
+            block_height: original_anchor.block_height,
+            block_hash: replacement_hash,
+            block_timestamp_unix_ms: 1_004_500,
+        }
+    );
+    Ok::<(), InstructionExecutionError>(())
+}
+
+#[test]
+fn same_deadline_anchor_schedule_is_canonical_bounded_and_pins_together() {
+    let mut bounded = empty_sortition_anchor_schedule();
+    for index in (0..MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1).rev() {
+        insert_sortition_anchor_schedule_entry(
+            &mut bounded,
+            ModerationSortitionAnchorScheduleEntryV1 {
+                registration_deadline_unix_ms: 7,
+                case_id: format!("case-{index:04}"),
+                round_id: "round-1".to_owned(),
+                intake_digest: [0xA5; 32],
+            },
+        )
+        .expect("insert within the hard anchor-schedule bound");
+    }
+    validate_sortition_anchor_schedule(&bounded).expect("validate bounded canonical schedule");
+    let encoded =
+        encode_sortition_anchor_schedule(&bounded).expect("encode bounded canonical schedule");
+    let decoded: ModerationSortitionAnchorScheduleV1 =
+        decode_state_with_current(&encoded, "moderation sortition-anchor schedule", None)
+            .expect("decode bounded canonical schedule");
+    assert_eq!(decoded, bounded);
+    assert_eq!(
+        bounded.entries.len(),
+        MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1
+    );
+    assert!(bounded.entries.windows(2).all(|pair| {
+        (
+            pair[0].registration_deadline_unix_ms,
+            pair[0].case_id.as_str(),
+        ) < (
+            pair[1].registration_deadline_unix_ms,
+            pair[1].case_id.as_str(),
+        )
+    }));
+    let error = insert_sortition_anchor_schedule_entry(
+        &mut bounded,
+        ModerationSortitionAnchorScheduleEntryV1 {
+            registration_deadline_unix_ms: 7,
+            case_id: "case-overflow".to_owned(),
+            round_id: "round-1".to_owned(),
+            intake_digest: [0xA6; 32],
+        },
+    )
+    .expect_err("the hard schedule bound must reject one more appeal");
+    assert!(error.to_string().contains("reached the hard bound"));
+    let mut noncanonical = bounded.clone();
+    noncanonical.entries.swap(0, 1);
+    let error = validate_sortition_anchor_schedule(&noncanonical)
+        .expect_err("noncanonical schedule order must fail closed");
+    assert!(error.to_string().contains("not canonically ordered"));
+    let mut wrong_version = bounded.clone();
+    wrong_version.version += 1;
+    let error = validate_sortition_anchor_schedule(&wrong_version)
+        .expect_err("unknown schedule versions must fail closed");
+    assert!(error.to_string().contains("unsupported"));
+    let mut byte_oversized = bounded.clone();
+    for (index, entry) in byte_oversized.entries.iter_mut().enumerate() {
+        entry.case_id = format!("case-{index:04}-{}", "a".repeat(246));
+        entry.round_id = "r".repeat(
+            iroha_data_model::sorafs::moderation_ledger::MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1,
+        );
+    }
+    validate_sortition_anchor_schedule(&byte_oversized)
+        .expect("maximum-width identifiers remain structurally canonical");
+    let error = encode_sortition_anchor_schedule(&byte_oversized)
+        .expect_err("encoded schedule byte ceiling must be enforced before persistence");
+    assert!(error.to_string().contains("encoded state exceeds"));
+
+    let mut fixture = PanelFixture::new();
+    fixture.submit(1, 0, 1);
+    let mut second = panel_intake(&fixture.appellant, "panel-case-2", 1, 0, 1, 0x92);
+    second.proof_token_digest = [0x93; 32];
+    let appellant = fixture.appellant_id();
+    fixture
+        .run(1_001_001, |transaction| {
+            SubmitSorafsModerationAppeal::new(second).execute(&appellant, transaction)
+        })
+        .expect("submit a second appeal with the same deadline");
+    let schedule = read_sortition_anchor_schedule(fixture.state.view().world())
+        .expect("read same-deadline anchor schedule");
+    assert_eq!(schedule.entries.len(), 2);
+    assert_eq!(schedule.entries[0].case_id, "panel-case");
+    assert_eq!(schedule.entries[1].case_id, "panel-case-2");
+    assert!(
+        schedule
+            .entries
+            .iter()
+            .all(|entry| entry.registration_deadline_unix_ms == 1_003_000)
+    );
+
+    fixture
+        .run(1_003_000, |_| Ok(()))
+        .expect("commit the shared exact-deadline block");
+    let second_before_anchor =
+        FindSorafsModerationAppeal::new("panel-case-2".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .expect("query the second appeal before anchoring");
+    assert!(fixture.appeal().sortition_anchor.is_none());
+    assert!(second_before_anchor.sortition_anchor.is_none());
+
+    let anchor_height = fixture.next_height;
+    let expected_hash = *header(anchor_height, 1_004_000).hash().as_ref();
+    fixture
+        .run(1_004_000, |_| Ok(()))
+        .expect("pin both due appeals in one bounded maintenance pass");
+    let expected_anchor = Some(ModerationSortitionAnchorV1 {
+        block_height: anchor_height,
+        block_hash: expected_hash,
+        block_timestamp_unix_ms: 1_004_000,
+    });
+    assert_eq!(fixture.appeal().sortition_anchor, expected_anchor);
+    let second_after_anchor =
+        FindSorafsModerationAppeal::new("panel-case-2".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .expect("query the second appeal after anchoring");
+    assert_eq!(second_after_anchor.sortition_anchor, expected_anchor);
+    assert!(
+        read_sortition_anchor_schedule(fixture.state.view().world())
+            .expect("read drained anchor schedule")
+            .entries
+            .is_empty()
+    );
+}
+
+#[test]
 fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
     let mut fixture = PanelFixture::new();
     fixture.submit(1, 0, 1);
@@ -54,7 +415,7 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
                     "panel-case".to_owned(),
                     "round-1".to_owned(),
                     snapshot_digest,
-                    latest_parent_randomness_anchor(transaction)?,
+                    panel_anchor_hash(transaction)?,
                     vec![juror.clone()],
                     Vec::new(),
                 )
@@ -69,7 +430,7 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
                     "panel-case".to_owned(),
                     "round-1".to_owned(),
                     snapshot_digest,
-                    latest_parent_randomness_anchor(transaction)?,
+                    panel_anchor_hash(transaction)?,
                     vec![juror.clone()],
                     Vec::new(),
                 )
@@ -114,7 +475,7 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
                     "panel-case".to_owned(),
                     "round-1".to_owned(),
                     snapshot_digest,
-                    latest_parent_randomness_anchor(transaction)?,
+                    panel_anchor_hash(transaction)?,
                     vec![juror.clone()],
                     Vec::new(),
                 )
@@ -129,7 +490,7 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
                     "panel-case".to_owned(),
                     "round-1".to_owned(),
                     snapshot_digest,
-                    latest_parent_randomness_anchor(transaction)?,
+                    panel_anchor_hash(transaction)?,
                     vec![outsider.clone()],
                     Vec::new(),
                 )
@@ -144,7 +505,7 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
                     "panel-case".to_owned(),
                     "round-1".to_owned(),
                     snapshot_digest,
-                    latest_parent_randomness_anchor(transaction)?,
+                    panel_anchor_hash(transaction)?,
                     vec![juror.clone(), juror.clone()],
                     Vec::new(),
                 )
@@ -306,13 +667,14 @@ fn insufficient_pool_and_no_show_failover_exhaustion_are_terminal() {
     insufficient.submit(1, 0, 1);
     let snapshot_digest = insufficient.appeal().pop_snapshot_digest;
     let manager = insufficient.manager_id();
+    let randomness_anchor = insufficient.pin_sortition_anchor().block_hash;
     insufficient
-        .run(1_004_000, |transaction| {
+        .run(1_004_001, |transaction| {
             FinalizeSorafsModerationSortition::new(
                 "panel-case".to_owned(),
                 "round-1".to_owned(),
                 snapshot_digest,
-                latest_parent_randomness_anchor(transaction)?,
+                randomness_anchor,
                 Vec::new(),
                 Vec::new(),
             )
@@ -335,7 +697,7 @@ fn insufficient_pool_and_no_show_failover_exhaustion_are_terminal() {
                     "panel-case".to_owned(),
                     "round-1".to_owned(),
                     snapshot_digest,
-                    latest_parent_randomness_anchor(transaction)?,
+                    panel_anchor_hash(transaction)?,
                     Vec::new(),
                     Vec::new(),
                 )
@@ -454,9 +816,9 @@ fn primary_no_show_uses_next_unique_waitlist_juror_atomically() {
         .unwrap();
     let snapshot_digest = appeal.pop_snapshot_digest;
     let mut expected_selection = None;
+    let randomness_anchor = fixture.pin_sortition_anchor().block_hash;
     fixture
-        .run(1_004_000, |transaction| {
-            let randomness_anchor = latest_parent_randomness_anchor(transaction)?;
+        .run(1_004_001, |transaction| {
             let (expected_jurors, expected_waitlist, _, _) = sorafs_moderation_select_panel_v1(
                 appeal.intake_digest,
                 appeal.pop_snapshot_digest,

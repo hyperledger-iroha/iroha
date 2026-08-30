@@ -192,7 +192,6 @@ EXPECTED_EXTERNAL_CALL_SITES = {
     "vadd32": (
         "crates/irohad/src/main.rs",
         "crates/ivm/benches/bench_vector.rs",
-        "crates/ivm/src/halo2.rs",
         "crates/ivm/src/ivm.rs",
         "crates/ivm/tests/acceleration_simd.rs",
         "crates/ivm/tests/crypto_vectors.rs",
@@ -201,32 +200,27 @@ EXPECTED_EXTERNAL_CALL_SITES = {
         "crates/ivm/tests/simd_tail_misalignment.rs",
     ),
     "vadd64": (
-        "crates/ivm/src/halo2.rs",
         "crates/ivm/src/ivm.rs",
         "crates/ivm/tests/cuda.rs",
         "crates/ivm/tests/simd_tail_misalignment.rs",
     ),
     "vand": (
-        "crates/ivm/src/halo2.rs",
         "crates/ivm/src/ivm.rs",
         "crates/ivm/tests/cuda.rs",
         "crates/ivm/tests/vector_ops.rs",
     ),
     "vxor": (
-        "crates/ivm/src/halo2.rs",
         "crates/ivm/src/ivm.rs",
         "crates/ivm/tests/cuda.rs",
         "crates/ivm/tests/vector_ops.rs",
     ),
     "vor": (
-        "crates/ivm/src/halo2.rs",
         "crates/ivm/src/ivm.rs",
         "crates/ivm/tests/cuda.rs",
         "crates/ivm/tests/vector_ops.rs",
     ),
     "vrot32": (
         "crates/ivm/benches/bench_vector.rs",
-        "crates/ivm/src/halo2.rs",
         "crates/ivm/src/ivm.rs",
         "crates/ivm/tests/simd_tail_misalignment.rs",
     ),

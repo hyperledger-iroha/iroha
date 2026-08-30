@@ -20,6 +20,9 @@ const fn operator_signed_get(id: &'static str, path: &'static str) -> RouteDescr
 const fn operator_expensive_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     operator_signed_route(app_get(id, path), RouteEffect::ExpensiveCompute)
 }
+const fn operator_expensive_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+    operator_signed_route(app_post(id, path), RouteEffect::ExpensiveCompute)
+}
 const fn operator_signed_post(id: &'static str, path: &'static str) -> RouteDescriptor {
     operator_signed_route(app_post(id, path), RouteEffect::Mutation)
 }

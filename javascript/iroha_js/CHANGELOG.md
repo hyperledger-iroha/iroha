@@ -52,6 +52,16 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   opaque seek cursors. Node and browser clients now send `cursor`/`limit`,
   validate the `{limit,next_cursor,has_more}` continuation contract, and the NFT
   and RWA async iterators advance only through server-issued cursors.
+- Hard-cut Explorer block, transaction, instruction, and latest-history reads to
+  snapshot-bound `cursor`/`limit` pagination. The Node block client and browser
+  Explorer methods reject page/offset knobs and exact totals, validate the
+  snapshot height/hash plus continuation invariants, and expose typed cursor
+  metadata without reconstructing counts from hidden history. Node and browser
+  Explorer, generic event SSE, and contract replay/stream reads now use the
+  configured default canonical signer to include restricted dataspaces, with
+  anonymous public-only behavior when no signer is configured. Browser callback signers cover the
+  exact final path and wire query, reject redirects and precomputed auth, and do
+  not change the public Explorer health request.
 - Removed the generic `Shield`, `ZkTransfer`, and `Unshield` transaction surface
   from ABI V1. JavaScript builders, TypeScript declarations, exports, and Norito
   discriminants now fail closed; typed Kagemusha top-up/redemption routes and

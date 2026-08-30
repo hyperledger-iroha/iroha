@@ -126,6 +126,12 @@ def load_port_manifest(path: Path) -> dict[str, tuple[int, ...]]:
     """Load the exact per-run endpoint binding emitted by the Rust harness."""
 
     document = _strict_json_loads(_read_manifest(path), "port manifest")
+    return validate_port_manifest(document)
+
+
+def validate_port_manifest(document: Any) -> dict[str, tuple[int, ...]]:
+    """Validate an in-memory copy of the exact capture port manifest."""
+
     if not isinstance(document, dict) or set(document) != PORT_MANIFEST_FIELDS:
         raise CaptureSplitError("port manifest field inventory is invalid")
     if document["version"] != VERSION:
@@ -141,6 +147,96 @@ def load_port_manifest(path: Path) -> dict[str, tuple[int, ...]]:
     if len(all_ports) != len(set(all_ports)):
         raise CaptureSplitError("capture port groups must be pairwise disjoint")
     return groups
+
+
+def _pcapng_packets(path: Path) -> tuple[int, list[bytes]]:
+    """Read the canonical pcapng emitted by this module without guessing layouts."""
+
+    stream, identity = pcapng._open_stable_source(path.absolute())
+    try:
+        section = pcapng._read_exact(
+            stream, len(pcapng.PCAPNG_SECTION_HEADER), "pcapng section header"
+        )
+        if section != pcapng.PCAPNG_SECTION_HEADER:
+            raise CaptureSplitError("capture lacks the canonical pcapng section header")
+        header = pcapng._read_exact(stream, 8, "pcapng interface block header")
+        block_type, block_length = struct.unpack("<II", header)
+        if block_type != 1 or block_length < 20 or block_length % 4 != 0:
+            raise CaptureSplitError("capture lacks one canonical interface block")
+        interface_tail = pcapng._read_exact(
+            stream, block_length - 8, "pcapng interface block"
+        )
+        if struct.unpack_from("<I", interface_tail, len(interface_tail) - 4)[0] != block_length:
+            raise CaptureSplitError("pcapng interface block trailer is invalid")
+        link_type = struct.unpack_from("<H", interface_tail, 0)[0]
+        packets: list[bytes] = []
+        while True:
+            header = stream.read(8)
+            if not header:
+                break
+            if len(header) != 8:
+                raise CaptureSplitError("truncated pcapng block header")
+            block_type, block_length = struct.unpack("<II", header)
+            if block_type != 6 or block_length < 32 or block_length % 4 != 0:
+                raise CaptureSplitError("capture contains a non-canonical packet block")
+            tail = pcapng._read_exact(stream, block_length - 8, "pcapng packet block")
+            if struct.unpack_from("<I", tail, len(tail) - 4)[0] != block_length:
+                raise CaptureSplitError("pcapng packet block trailer is invalid")
+            interface_id, _high, _low, captured, original = struct.unpack_from(
+                "<IIIII", tail, 0
+            )
+            if (
+                interface_id != 0
+                or captured > pcapng.MAX_PACKET_BYTES
+                or original < captured
+                or block_length != 32 + captured + (-captured) % 4
+            ):
+                raise CaptureSplitError("pcapng packet block lengths are inconsistent")
+            packets.append(tail[20 : 20 + captured])
+        after = path.absolute().lstat()
+        stable = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if any(getattr(identity, field) != getattr(after, field) for field in stable):
+            raise CaptureSplitError("capture changed while its packets were replayed")
+        return link_type, packets
+    finally:
+        stream.close()
+
+
+def derive_split_counts(
+    output_dir: Path, groups: Mapping[str, Sequence[int]]
+) -> dict[str, int]:
+    """Independently replay final split files into their source-backed counts."""
+
+    if set(groups) != {"torii", "public_p2p", "restricted_p2p"}:
+        raise CaptureSplitError("capture count replay requires the exact port groups")
+    normalized = {name: frozenset(ports) for name, ports in groups.items()}
+    if any(not ports for ports in normalized.values()):
+        raise CaptureSplitError("capture count replay port groups must not be empty")
+    paths = {name: output_dir / filename for name, filename in OUTPUT_NAMES.items()}
+    decoded = {name: _pcapng_packets(path) for name, path in paths.items()}
+    counts = {name: len(packets) for name, (_link, packets) in decoded.items()}
+    counts.update({name: 0 for name in TORII_DIRECTION_COUNT_NAMES})
+    torii_link, torii_packets = decoded["torii"]
+    for packet in torii_packets:
+        ports = packet_transport_ports(packet, torii_link)
+        if ports is None:
+            raise CaptureSplitError("Torii capture contains a packet without transport ports")
+        source_port, destination_port = ports
+        if source_port not in normalized["torii"] and destination_port not in normalized["torii"]:
+            raise CaptureSplitError("Torii capture contains a packet outside its port manifest")
+        counts["torii_requests"] += destination_port in normalized["torii"]
+        counts["torii_responses"] += source_port in normalized["torii"]
+    for name in ("public_p2p", "restricted_p2p"):
+        link_type, packets = decoded[name]
+        for packet in packets:
+            ports = packet_transport_ports(packet, link_type)
+            if ports is None or not any(port in normalized[name] for port in ports):
+                raise CaptureSplitError(
+                    f"{name} capture contains a packet outside its port manifest"
+                )
+    if any(counts[name] == 0 for name in (*OUTPUT_NAMES, *TORII_DIRECTION_COUNT_NAMES)):
+        raise CaptureSplitError(f"one or more replayed capture channels are empty: {counts}")
+    return counts
 
 
 def _network_offset(packet: bytes, link_type: int) -> int | None:

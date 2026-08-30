@@ -2,9 +2,12 @@ package org.hyperledger.iroha.sdk.client.stream
 
 import org.hyperledger.iroha.sdk.client.ClientObserver
 import org.hyperledger.iroha.sdk.client.ClientResponse
+import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.client.LocalSigningContext
 import org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.TransportSecurity
 import org.hyperledger.iroha.sdk.client.transport.StreamingTransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
@@ -37,14 +40,29 @@ private const val DEFAULT_EVENT_NAME = "message"
  * shares the same configuration surface as `HttpClientTransport`
  * so telemetry observers and authentication headers behave consistently across transports.
  */
-class ToriiEventStreamClient(
+class ToriiEventStreamClient private constructor(
     @JvmField val baseUri: URI,
     private val transport: TransportExecutor,
     defaultHeaders: Map<String, String> = emptyMap(),
     observers: List<ClientObserver> = emptyList(),
+    private val localSigningContext: LocalSigningContext? = null,
+    private val canonicalRequestAuth: ToriiCanonicalRequestAuth? = null,
 ) {
     private val defaultHeaders: Map<String, String> = defaultHeaders.toMap()
     private val observers: List<ClientObserver> = observers.toList()
+
+    init {
+        require((localSigningContext == null) == (canonicalRequestAuth == null)) {
+            "localSigningContext and canonicalRequestAuth must be configured together"
+        }
+    }
+
+    constructor(
+        baseUri: URI,
+        transport: TransportExecutor,
+        defaultHeaders: Map<String, String> = emptyMap(),
+        observers: List<ClientObserver> = emptyList(),
+    ) : this(baseUri, transport, defaultHeaders, observers, null, null)
 
     /**
      * Opens an SSE stream against `path` using the supplied options.
@@ -91,6 +109,11 @@ class ToriiEventStreamClient(
         headers.putIfAbsent("Connection", "keep-alive")
         options.headers.forEach { (k, v) -> headers[k] = v }
         rejectUnsupportedCanonicalResume(path, target, headers)
+        requireCanonicalHeadersUnset(headers)
+        canonicalRequestAuth?.let { auth ->
+            buildCanonicalHeaders(target, localSigningContext!!, auth)
+                .forEach { (name, value) -> headers[name] = value }
+        }
         TransportSecurity.requireHttpRequestAllowed(
             "ToriiEventStreamClient",
             baseUri,
@@ -105,6 +128,39 @@ class ToriiEventStreamClient(
         }
         headers.forEach { (k, v) -> builder.addHeader(k, v) }
         return builder.build()
+    }
+
+    private fun buildCanonicalHeaders(
+        target: URI,
+        signingContext: LocalSigningContext,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): Map<String, String> {
+        val timestampMs = canonicalAuth.timestampMs
+        val nonce = canonicalAuth.nonce
+        require((timestampMs == null) == (nonce == null)) {
+            "timestampMs and nonce must be provided together"
+        }
+        return if (timestampMs == null) {
+            CanonicalRequestSigner.buildHeaders(
+                signingContext.networkId(),
+                "GET",
+                target,
+                null,
+                canonicalAuth.accountId,
+                canonicalAuth.privateKey,
+            )
+        } else {
+            CanonicalRequestSigner.buildHeaders(
+                signingContext.networkId(),
+                "GET",
+                target,
+                null,
+                canonicalAuth.accountId,
+                canonicalAuth.privateKey,
+                timestampMs,
+                nonce!!,
+            )
+        }
     }
 
     private fun resolvePath(path: String?): URI {
@@ -300,6 +356,13 @@ class ToriiEventStreamClient(
     }
 
     companion object {
+        private val CANONICAL_AUTH_HEADERS = listOf(
+            CanonicalRequestSigner.HEADER_ACCOUNT,
+            CanonicalRequestSigner.HEADER_SIGNATURE,
+            CanonicalRequestSigner.HEADER_TIMESTAMP_MS,
+            CanonicalRequestSigner.HEADER_NONCE,
+        )
+
         @JvmStatic
         fun builder(): Builder = Builder()
 
@@ -330,6 +393,14 @@ class ToriiEventStreamClient(
             throw IllegalArgumentException(
                 "Last-Event-ID is unsupported for canonical live SSE streams because they have no replay log",
             )
+        }
+
+        private fun requireCanonicalHeadersUnset(headers: Map<String, String>) {
+            require(headers.keys.none { candidate ->
+                CANONICAL_AUTH_HEADERS.any { it.equals(candidate, ignoreCase = true) }
+            }) {
+                "canonical request headers must be supplied only through canonicalRequestAuth"
+            }
         }
 
         private fun isCanonicalLiveSsePath(requestedPath: String?, target: URI): Boolean {
@@ -538,6 +609,8 @@ class ToriiEventStreamClient(
         private var transport: TransportExecutor = PlatformHttpTransportExecutor.createDefault()
         private val defaultHeaders: MutableMap<String, String> = LinkedHashMap()
         private val observers: MutableList<ClientObserver> = ArrayList()
+        private var localSigningContext: LocalSigningContext? = null
+        private var canonicalRequestAuth: ToriiCanonicalRequestAuth? = null
 
         fun setBaseUri(baseUri: URI): Builder {
             this.baseUri = baseUri
@@ -571,8 +644,25 @@ class ToriiEventStreamClient(
             return this
         }
 
+        /** Configures canonical account signing for every stream request opened by this client. */
+        fun canonicalRequestAuth(
+            localSigningContext: LocalSigningContext,
+            canonicalRequestAuth: ToriiCanonicalRequestAuth,
+        ): Builder {
+            this.localSigningContext = localSigningContext
+            this.canonicalRequestAuth = canonicalRequestAuth
+            return this
+        }
+
         fun build(): ToriiEventStreamClient {
-            return ToriiEventStreamClient(baseUri, transport, defaultHeaders, observers)
+            return ToriiEventStreamClient(
+                baseUri,
+                transport,
+                defaultHeaders,
+                observers,
+                localSigningContext,
+                canonicalRequestAuth,
+            )
         }
     }
 

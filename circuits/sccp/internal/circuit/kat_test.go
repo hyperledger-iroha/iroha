@@ -3,7 +3,6 @@ package circuit
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -113,29 +111,22 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 		Constraints int           `json:"constraints"`
 		KATSHA256   string        `json:"kat_sha256"`
 	}
-	type recurrenceProfile struct {
-		Profile                     string `json:"profile"`
-		ConstraintDelta             int    `json:"constraint_delta"`
-		R1CSBytes                   uint64 `json:"r1cs_bytes"`
-		R1CSSHA256                  string `json:"r1cs_sha256"`
-		KATPublicValuesChanged      *bool  `json:"kat_public_values_changed"`
-		InvalidatedPhase2CeremonyID string `json:"invalidated_phase2_ceremony"`
-	}
-	type recurrenceEvidence struct {
-		R1CSSerialization        string              `json:"r1cs_serialization"`
-		InvalidatedArtifactRoles []string            `json:"invalidated_artifact_roles"`
-		FreshClosureRequired     []string            `json:"fresh_closure_required"`
-		Profiles                 []recurrenceProfile `json:"profiles"`
+	type artifactState struct {
+		R1CSIdentitiesCurrent      bool     `json:"r1cs_identities_current"`
+		InvalidatedArtifactRoles   []string `json:"invalidated_artifact_roles"`
+		FreshClosureRequired       []string `json:"fresh_closure_required"`
+		ProfilesRequiringFreshR1CS []string `json:"profiles_requiring_fresh_r1cs"`
+		Reason                     string   `json:"reason"`
 	}
 	var inventory struct {
-		Schema                string             `json:"schema"`
-		Version               int                `json:"version"`
-		Toolchain             toolchain          `json:"toolchain"`
-		DefinitionState       string             `json:"definition_state"`
-		Profiles              []entry            `json:"profiles"`
-		EpochAnchorRecurrence recurrenceEvidence `json:"epoch_anchor_recurrence"`
-		ProductionAdmissible  bool               `json:"production_admissible"`
-		Note                  string             `json:"note"`
+		Schema               string        `json:"schema"`
+		Version              int           `json:"version"`
+		Toolchain            toolchain     `json:"toolchain"`
+		DefinitionState      string        `json:"definition_state"`
+		Profiles             []entry       `json:"profiles"`
+		ArtifactState        artifactState `json:"artifact_state"`
+		ProductionAdmissible bool          `json:"production_admissible"`
+		Note                 string        `json:"note"`
 	}
 	encoded, err := os.ReadFile(filepath.Join("..", "..", "manifests", "constraint-counts-final-v1.json"))
 	if err != nil {
@@ -164,13 +155,10 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 	}) {
 		t.Fatalf("constraint-count inventory toolchain drift: %#v", inventory.Toolchain)
 	}
-	if inventory.DefinitionState != "post-block-header-root-and-composable-epoch-anchor-binding" {
+	if inventory.DefinitionState != "final-v1-wire-identifiers-aligned" {
 		t.Fatalf("unexpected constraint-count definition state %q", inventory.DefinitionState)
 	}
-	recurrence := inventory.EpochAnchorRecurrence
-	if recurrence.R1CSSerialization != "gnark-v0.16.3-constraint-system-writeto" {
-		t.Fatalf("unexpected epoch R1CS serialization %q", recurrence.R1CSSerialization)
-	}
+	artifactState := inventory.ArtifactState
 	expectedInvalidatedRoles := []string{
 		"r1cs",
 		"phase2_transcript",
@@ -185,9 +173,18 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 		"reproducibility_ceremony_audit",
 		"destination_integration_audit",
 	}
-	if !reflect.DeepEqual(recurrence.InvalidatedArtifactRoles, expectedInvalidatedRoles) ||
-		!reflect.DeepEqual(recurrence.FreshClosureRequired, expectedFreshClosure) {
-		t.Fatalf("epoch recurrence invalidation policy drift: %#v", recurrence)
+	expectedFreshR1CS := []string{
+		"sccp-final-v1-bsc-mainnet-message",
+		"sccp-final-v1-ethereum-mainnet-message",
+		"sccp-final-v1-ton-mainnet-message",
+		"sccp-final-v1-tron-mainnet-epoch-anchor-update",
+		"sccp-final-v1-tron-mainnet-message",
+	}
+	if artifactState.R1CSIdentitiesCurrent || artifactState.Reason == "" ||
+		!reflect.DeepEqual(artifactState.InvalidatedArtifactRoles, expectedInvalidatedRoles) ||
+		!reflect.DeepEqual(artifactState.FreshClosureRequired, expectedFreshClosure) ||
+		!reflect.DeepEqual(artifactState.ProfilesRequiringFreshR1CS, expectedFreshR1CS) {
+		t.Fatalf("wire-alignment invalidation policy drift: %#v", artifactState)
 	}
 	for index, cfg := range configs {
 		entry := inventory.Profiles[index]
@@ -205,36 +202,6 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 		if entry.KATSHA256 != fmt.Sprintf("%x", digest) {
 			t.Fatalf("constraint-count inventory KAT digest mismatch for %q", cfg.ID)
 		}
-	}
-	epochProfileIndex := 0
-	seenR1CS := make(map[string]string, len(recurrence.Profiles))
-	for _, cfg := range configs {
-		if cfg.Role != profile.EpochAnchorUpdate {
-			continue
-		}
-		if epochProfileIndex >= len(recurrence.Profiles) {
-			t.Fatalf("epoch recurrence evidence omits profile %q", cfg.ID)
-		}
-		evidence := recurrence.Profiles[epochProfileIndex]
-		if evidence.Profile != cfg.ID || evidence.ConstraintDelta != 97 ||
-			evidence.R1CSBytes == 0 || evidence.KATPublicValuesChanged == nil ||
-			*evidence.KATPublicValuesChanged ||
-			evidence.InvalidatedPhase2CeremonyID != cfg.Phase2CeremonyID {
-			t.Fatalf("invalid recurrence evidence for %q: %#v", cfg.ID, evidence)
-		}
-		digest, err := hex.DecodeString(evidence.R1CSSHA256)
-		if err != nil || len(digest) != sha256.Size ||
-			evidence.R1CSSHA256 != strings.ToLower(evidence.R1CSSHA256) {
-			t.Fatalf("profile %q has a non-canonical R1CS SHA-256 identity", cfg.ID)
-		}
-		if previous, duplicate := seenR1CS[evidence.R1CSSHA256]; duplicate {
-			t.Fatalf("epoch profiles %q and %q reuse one R1CS identity", previous, cfg.ID)
-		}
-		seenR1CS[evidence.R1CSSHA256] = cfg.ID
-		epochProfileIndex++
-	}
-	if epochProfileIndex != len(recurrence.Profiles) {
-		t.Fatalf("epoch recurrence evidence has %d unexpected profiles", len(recurrence.Profiles)-epochProfileIndex)
 	}
 }
 

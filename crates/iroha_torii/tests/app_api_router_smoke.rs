@@ -398,6 +398,36 @@ async fn app_api_router_smoke() {
             .unwrap(),
     )
     .await;
+    for path in [
+        "/v1/contracts/rollups/swaps/fills?authority=not-a-real-authority",
+        "/v1/contracts/rollups/swaps/candles?authority=not-a-real-authority",
+        "/v1/contracts/rollups/uranai/markets/history?market_id=not-a-real-market",
+        "/v1/contracts/rollups/trader/activity",
+        "/v1/contracts/rollups/trader/account?authority=not-a-real-authority",
+        "/v1/contracts/rollups/intents",
+        "/v1/contracts/rollups/vaults/positions",
+        "/v1/contracts/rollups/operators/status",
+        "/v1/contracts/rollups/margin/health",
+        "/v1/contracts/rollups/rwa/lots",
+        "/v1/contracts/rollups/dlmm/hooks",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("x-iroha-account", "incomplete-canonical-identity")
+                    .body(axum::body::Body::empty())
+                    .expect("partial canonical rollup request"),
+            )
+            .await
+            .expect("rollup authentication response");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{path} must reject partial canonical request identity"
+        );
+    }
     assert_route_is_not_auth_denied(
         app,
         Request::builder()

@@ -25,13 +25,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    str::FromStr,
-    string::String,
-    vec::Vec,
-};
+use std::{collections::BTreeSet, fmt, str::FromStr, string::String, vec::Vec};
 
 /// Voting mode for a referendum.
 #[derive(
@@ -76,62 +70,6 @@ impl norito::json::JsonDeserialize for VotingMode {
         match value.as_str() {
             "Zk" => Ok(Self::Zk),
             "Plain" => Ok(Self::Plain),
-            other => Err(norito::json::Error::unknown_field(other.to_owned())),
-        }
-    }
-}
-/// Council derivation method.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Default,
-    Encode,
-    Decode,
-    iroha_schema::IntoSchema,
-)]
-pub enum CouncilDerivationKind {
-    /// Derived automatically from deterministic bonded-citizen sortition.
-    Sortition,
-    /// Compatibility value for snapshots produced by the retired manual council instruction.
-    ///
-    /// No first-release instruction or Torii route can create or project a new manual roster.
-    #[default]
-    Manual,
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonSerialize for CouncilDerivationKind {
-    fn json_serialize(&self, out: &mut String) {
-        let label = match self {
-            CouncilDerivationKind::Sortition => "Sortition",
-            CouncilDerivationKind::Manual => "Manual",
-        };
-        norito::json::write_json_string(label, out);
-    }
-    fn json_serialize_to(
-        &self,
-        out: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        let label = match self {
-            CouncilDerivationKind::Sortition => "Sortition",
-            CouncilDerivationKind::Manual => "Manual",
-        };
-        norito::json::write_json_string_to(label, out)
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonDeserialize for CouncilDerivationKind {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_string()?;
-        match value.as_str() {
-            "Sortition" => Ok(CouncilDerivationKind::Sortition),
-            "Manual" => Ok(CouncilDerivationKind::Manual),
             other => Err(norito::json::Error::unknown_field(other.to_owned())),
         }
     }
@@ -1197,6 +1135,8 @@ impl GovernanceAttemptV1 {
 /// The bound accommodates the largest permitted Confirmation Jury while
 /// keeping ballot and certificate resource limits finite.
 pub const MAX_PARLIAMENT_BODY_TARGET_SEATS_V1: u32 = 1_000;
+/// The sole consensus policy version implemented by first-release Parliament.
+pub const PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1: u64 = 1;
 /// Hard protocol ceiling for end-to-end governance retries after sequence zero.
 pub const MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1: u32 = 16;
 /// Hard protocol ceiling for future-pulse body-election retries after sequence zero.
@@ -1205,6 +1145,10 @@ pub const MAX_PARLIAMENT_SORTITION_RETRIES_V1: u32 = 16;
 pub const MAX_PARLIAMENT_BALLOT_RETRIES_V1: u32 = 16;
 /// Hard protocol ceiling for registration, survivor, and ballot corpora.
 pub const MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1: u32 = 1_000;
+/// Exact canonical width of one timed-OVN participant-registration record.
+pub const PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1: usize = 3_624;
+/// Exact canonical width of one timed-OVN masked-ballot record.
+pub const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1: usize = 2_858;
 /// Maximum number of contiguous timed-OVN ballot records accepted by one lifecycle transition.
 ///
 /// The complete survivor corpus may contain up to the protocol-wide participant cap. Core derives
@@ -1268,6 +1212,8 @@ pub enum SortitionRequestErrorV1 {
         /// V1 protocol maximum.
         maximum: u32,
     },
+    /// Height zero cannot identify the block committing the request.
+    ZeroRequestHeight,
     /// Height zero cannot identify a threshold-beacon pulse.
     ZeroPulseHeight,
     /// The pulse was not strictly later than request commitment.
@@ -1303,6 +1249,7 @@ impl fmt::Display for SortitionRequestErrorV1 {
                 f,
                 "sortition target seats {target_seats} exceed V1 maximum {maximum}"
             ),
+            Self::ZeroRequestHeight => f.write_str("sortition request height must be non-zero"),
             Self::ZeroPulseHeight => f.write_str("sortition pulse height must be non-zero"),
             Self::PulseNotStrictlyFuture {
                 request_height,
@@ -1428,7 +1375,7 @@ impl SortitionRequestV1 {
     ///
     /// # Errors
     /// Returns [`SortitionRequestErrorV1`] for an empty pool, an invalid target,
-    /// or a pulse that is zero, non-future, or already consumed.
+    /// a zero request height, or a pulse that is zero, non-future, or already consumed.
     #[expect(
         clippy::too_many_arguments,
         reason = "the constructor makes every consensus-bound request field explicit"
@@ -1493,6 +1440,9 @@ impl SortitionRequestV1 {
                 maximum: MAX_PARLIAMENT_BODY_TARGET_SEATS_V1,
             });
         }
+        if self.request_height == 0 {
+            return Err(SortitionRequestErrorV1::ZeroRequestHeight);
+        }
         if self.pulse_height == 0 {
             return Err(SortitionRequestErrorV1::ZeroPulseHeight);
         }
@@ -1548,16 +1498,28 @@ pub enum BodyElectionAttemptStatusV1 {
 /// Binding error for a body-election attempt and its immutable request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyElectionAttemptErrorV1 {
+    /// The immutable sortition request was itself malformed.
+    InvalidSortitionRequest(SortitionRequestErrorV1),
     /// The request names a different governance attempt.
     GovernanceAttemptMismatch,
     /// The request names a different body-election attempt.
     ElectionAttemptMismatch,
     /// The attempt identifier did not bind its attempt, body, and retry sequence.
     NonCanonicalIdentifier,
+    /// The zero-based retry sequence exceeded the V1 protocol maximum.
+    RetryLimitExceeded {
+        /// Supplied retry sequence.
+        sequence: u32,
+        /// V1 protocol maximum.
+        maximum: u32,
+    },
 }
 impl fmt::Display for BodyElectionAttemptErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidSortitionRequest(error) => {
+                write!(f, "invalid body-election sortition request: {error}")
+            }
             Self::GovernanceAttemptMismatch => {
                 f.write_str("sortition request governance attempt does not match election attempt")
             }
@@ -1567,6 +1529,10 @@ impl fmt::Display for BodyElectionAttemptErrorV1 {
             Self::NonCanonicalIdentifier => {
                 f.write_str("body-election attempt identifier is not canonical")
             }
+            Self::RetryLimitExceeded { sequence, maximum } => write!(
+                f,
+                "body-election retry sequence {sequence} exceeds V1 maximum {maximum}"
+            ),
         }
     }
 }
@@ -1626,6 +1592,9 @@ impl BodyElectionAttemptV1 {
         request: SortitionRequestV1,
         status: BodyElectionAttemptStatusV1,
     ) -> Result<Self, BodyElectionAttemptErrorV1> {
+        request
+            .validate(None)
+            .map_err(BodyElectionAttemptErrorV1::InvalidSortitionRequest)?;
         if request.governance_attempt_id != governance_attempt_id {
             return Err(BodyElectionAttemptErrorV1::GovernanceAttemptMismatch);
         }
@@ -1634,6 +1603,12 @@ impl BodyElectionAttemptV1 {
         }
         if id != BodyElectionAttemptId::derive_v1(governance_attempt_id, request.body, sequence) {
             return Err(BodyElectionAttemptErrorV1::NonCanonicalIdentifier);
+        }
+        if sequence > MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
+            return Err(BodyElectionAttemptErrorV1::RetryLimitExceeded {
+                sequence,
+                maximum: MAX_PARLIAMENT_SORTITION_RETRIES_V1,
+            });
         }
         Ok(Self {
             id,
@@ -2556,12 +2531,16 @@ pub enum GovernanceCertificateErrorV1 {
     ZeroBinding,
     /// A typed identifier did not match its complete domain-separated V1 preimage.
     NonCanonicalIdentifier,
+    /// An attempt sequence exceeded its first-release retry ceiling.
+    RetryLimitExceeded,
     /// A successful certificate contained no Parliament body results.
     EmptyBodyBindings,
     /// Body results were not in strict canonical V1 body order.
     NonCanonicalBodyOrder,
     /// A body index disagreed with its complete immutable future-pulse request.
     SortitionRequestMismatch,
+    /// A sealed body claimed more seats than its target or eligible candidate snapshot.
+    InvalidSeatCount,
     /// Two body results reused an attempt, instance, request, ballot, or TLE identifier.
     DuplicateBinding,
     /// The certificate did not contain exactly one Policy Jury result.
@@ -2597,6 +2576,9 @@ impl fmt::Display for GovernanceCertificateErrorV1 {
             Self::NonCanonicalIdentifier => {
                 f.write_str("governance certificate contains a noncanonical identifier")
             }
+            Self::RetryLimitExceeded => {
+                f.write_str("governance certificate contains an over-limit retry sequence")
+            }
             Self::EmptyBodyBindings => {
                 f.write_str("governance certificate has no Parliament body bindings")
             }
@@ -2605,6 +2587,9 @@ impl fmt::Display for GovernanceCertificateErrorV1 {
             }
             Self::SortitionRequestMismatch => {
                 f.write_str("governance certificate sortition request binding is inconsistent")
+            }
+            Self::InvalidSeatCount => {
+                f.write_str("governance certificate contains an impossible sealed-seat count")
             }
             Self::DuplicateBinding => {
                 f.write_str("governance certificate reuses an attempt-local binding")
@@ -2679,10 +2664,13 @@ impl GovernanceCertificateV1 {
         {
             return Err(GovernanceCertificateErrorV1::NonCanonicalIdentifier);
         }
+        if self.governance_attempt_sequence > MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
+            return Err(GovernanceCertificateErrorV1::RetryLimitExceeded);
+        }
         if self.body_bindings.is_empty() {
             return Err(GovernanceCertificateErrorV1::EmptyBodyBindings);
         }
-        if self.policy_version == 0
+        if self.policy_version != PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1
             || self.certified_at_height == 0
             || self.enact_at_height <= self.certified_at_height
         {
@@ -2695,7 +2683,7 @@ impl GovernanceCertificateV1 {
                 }
             }
             GovernanceExpectedHeadV1::Present(head) => {
-                if head.subject_id == [0; 32] || head.head_root == [0; 32] {
+                if head.subject_id == [0; 32] || head.version == 0 || head.head_root == [0; 32] {
                     return Err(GovernanceCertificateErrorV1::InvalidExpectedHead);
                 }
             }
@@ -2739,6 +2727,14 @@ impl GovernanceCertificateV1 {
                 || request.beacon_session_id != binding.beacon_session_id
             {
                 return Err(GovernanceCertificateErrorV1::SortitionRequestMismatch);
+            }
+            if binding.original_seats > request.target_seats
+                || binding.original_seats > request.candidate_count
+            {
+                return Err(GovernanceCertificateErrorV1::InvalidSeatCount);
+            }
+            if binding.election_attempt_sequence > MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
+                return Err(GovernanceCertificateErrorV1::RetryLimitExceeded);
             }
             if binding.election_attempt_id
                 != BodyElectionAttemptId::derive_v1(
@@ -2841,6 +2837,7 @@ impl GovernanceCertificateV1 {
                     return Err(GovernanceCertificateErrorV1::DuplicateBinding);
                 }
                 if ballot.registered_at_height == 0
+                    || ballot.registered_at_height <= request.pulse_height
                     || ballot.registration_close_height <= ballot.registered_at_height
                     || ballot.survivor_freeze_height <= ballot.registration_close_height
                     || ballot.commitment_close_height <= ballot.survivor_freeze_height
@@ -2923,9 +2920,12 @@ impl GovernanceCertificateV1 {
         match (requires_confirmation, confirmation) {
             (false, None) => {}
             (true, Some(confirmation))
-                if confirmation.sortition_request.request_height > policy.result_height
-                    && (confirmation.beacon_session_id != policy.beacon_session_id
-                        || confirmation.beacon_pulse_id != policy.beacon_pulse_id) => {}
+                if (if confirmation.election_attempt_sequence == 0 {
+                    confirmation.sortition_request.request_height == policy.result_height
+                } else {
+                    confirmation.sortition_request.request_height > policy.result_height
+                }) && (confirmation.beacon_session_id != policy.beacon_session_id
+                    || confirmation.beacon_pulse_id != policy.beacon_pulse_id) => {}
             _ => return Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch),
         }
         Ok(())
@@ -2970,36 +2970,6 @@ pub fn parliament_execution_failure_root_v1(
     )
 }
 
-/// Parliament roster for a single body.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct ParliamentRoster {
-    /// Body this roster applies to.
-    pub body: ParliamentBody,
-    /// Epoch/term index for the roster.
-    pub epoch: u64,
-    /// Ordered members assigned to the body.
-    pub members: Vec<AccountId>,
-    /// Alternates that may replace missing members (ordered).
-    #[norito(default)]
-    pub alternates: Vec<AccountId>,
-    /// Total eligible candidates considered by sortition, or roster entries for a manual roster.
-    #[norito(default)]
-    pub candidate_count: u32,
-    /// Derivation method used to compute the roster.
-    #[norito(default)]
-    pub derived_by: CouncilDerivationKind,
-}
-/// Parliament configuration and rosters for all bodies selected in an epoch.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct ParliamentBodies {
-    /// Epoch index used to derive the bodies.
-    pub selection_epoch: u64,
-    /// Rosters keyed by body.
-    #[norito(default)]
-    pub rosters: BTreeMap<ParliamentBody, ParliamentRoster>,
-}
 impl ProposalKind {
     /// Return the first proposal-owned `u64` that cannot be represented exactly by every SDK.
     ///
@@ -3194,7 +3164,7 @@ impl ProposalContentId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AccountId, DomainId};
+    use crate::AccountId;
     use iroha_crypto::KeyPair;
     use iroha_crypto::blake2::{
         Blake2bVar,
@@ -3759,37 +3729,6 @@ mod tests {
         assert_eq!(decoded, id);
     }
     #[test]
-    fn parliament_bodies_roundtrip() {
-        use std::collections::BTreeMap;
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let members = vec![checked_account_id(), checked_account_id()];
-        let alternates = vec![checked_account_id()];
-        let roster = ParliamentRoster {
-            body: ParliamentBody::RulesCommittee,
-            epoch: 3,
-            members: members.clone(),
-            alternates: alternates.clone(),
-            candidate_count: 3,
-            derived_by: CouncilDerivationKind::Sortition,
-        };
-        let mut rosters = BTreeMap::new();
-        rosters.insert(ParliamentBody::RulesCommittee, roster.clone());
-        let bodies = ParliamentBodies {
-            selection_epoch: 3,
-            rosters,
-        };
-        let framed = norito::to_bytes(&bodies).expect("encode bodies");
-        let decoded =
-            norito::decode_from_bytes::<ParliamentBodies>(&framed).expect("decode bodies");
-        assert_eq!(decoded.selection_epoch, bodies.selection_epoch);
-        let back = decoded
-            .rosters
-            .get(&ParliamentBody::RulesCommittee)
-            .expect("rules roster");
-        assert_eq!(back.members, roster.members);
-        assert_eq!(back.derived_by, roster.derived_by);
-    }
-    #[test]
     fn canonical_governance_ids_roundtrip_and_reject_legacy_vec_wire() {
         let content_id = ProposalContentId::new([0x41; 32]);
         let attempt_id = GovernanceAttemptId::new([0x42; 32]);
@@ -3846,9 +3785,13 @@ mod tests {
         )
     }
     #[test]
-    fn sortition_request_rejects_zero_current_and_reused_pulses() {
+    fn sortition_request_rejects_zero_and_reused_heights() {
         assert_eq!(
             checked_sortition_request(500, 500, 0, 0, None),
+            Err(SortitionRequestErrorV1::ZeroRequestHeight)
+        );
+        assert_eq!(
+            checked_sortition_request(500, 500, 1, 0, None),
             Err(SortitionRequestErrorV1::ZeroPulseHeight)
         );
         assert_eq!(
@@ -3959,6 +3902,55 @@ mod tests {
             norito::decode_from_bytes::<BodyElectionAttemptV1>(&bytes)
                 .expect("decode body-election attempt"),
             attempt
+        );
+
+        let mut invalid_request = request;
+        invalid_request.candidate_count += 1;
+        assert!(matches!(
+            BodyElectionAttemptV1::try_new(
+                request.body_election_attempt_id,
+                request.governance_attempt_id,
+                2,
+                invalid_request,
+                BodyElectionAttemptStatusV1::AwaitingPulse,
+            ),
+            Err(BodyElectionAttemptErrorV1::InvalidSortitionRequest(
+                SortitionRequestErrorV1::NonCanonicalIdentifier
+            ))
+        ));
+
+        let sequence = MAX_PARLIAMENT_SORTITION_RETRIES_V1 + 1;
+        let governance_attempt_id = request.governance_attempt_id;
+        let body_election_attempt_id = BodyElectionAttemptId::derive_v1(
+            governance_attempt_id,
+            ParliamentBody::PolicyJury,
+            sequence,
+        );
+        let request = SortitionRequestV1::try_new_canonical(
+            governance_attempt_id,
+            body_election_attempt_id,
+            ParliamentBody::PolicyJury,
+            [0x36; 32],
+            500,
+            500,
+            40,
+            50,
+            BeaconSessionId::new([0x35; 32]),
+            None,
+        )
+        .expect("structurally valid over-limit request");
+        assert_eq!(
+            BodyElectionAttemptV1::try_new(
+                body_election_attempt_id,
+                governance_attempt_id,
+                sequence,
+                request,
+                BodyElectionAttemptStatusV1::AwaitingPulse,
+            ),
+            Err(BodyElectionAttemptErrorV1::RetryLimitExceeded {
+                sequence,
+                maximum: MAX_PARLIAMENT_SORTITION_RETRIES_V1,
+            })
         );
     }
     #[test]
@@ -4315,7 +4307,7 @@ mod tests {
                     outcome,
                 }),
             }],
-            policy_version: 7,
+            policy_version: PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
             effect_preimage_hash: [0x6F; 32],
             expected_head: GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
                 subject_id: [0x70; 32],
@@ -4335,11 +4327,91 @@ mod tests {
             .validate()
             .expect("wide Policy Jury approval is a complete structural certificate");
 
+        let mut unsupported_policy = certificate.clone();
+        unsupported_policy.policy_version = PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1 + 1;
+        assert_eq!(
+            unsupported_policy.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidLifecycle)
+        );
+
+        let mut zero_version_head = certificate.clone();
+        let GovernanceExpectedHeadV1::Present(ref mut head) = zero_version_head.expected_head else {
+            unreachable!("fixture uses a present compare-and-set head")
+        };
+        head.version = 0;
+        assert_eq!(
+            zero_version_head.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidExpectedHead)
+        );
+
+        let mut over_limit_attempt = certificate.clone();
+        over_limit_attempt.governance_attempt_sequence =
+            MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 + 1;
+        over_limit_attempt.governance_attempt_id = GovernanceAttemptId::derive_v1(
+            over_limit_attempt.proposal_content_id,
+            over_limit_attempt.governance_attempt_sequence,
+        );
+        assert_eq!(
+            over_limit_attempt.validate(),
+            Err(GovernanceCertificateErrorV1::RetryLimitExceeded)
+        );
+
+        let mut impossible_seat_count = certificate.clone();
+        impossible_seat_count.body_bindings[0].original_seats = impossible_seat_count.body_bindings
+            [0]
+        .sortition_request
+        .target_seats
+            + 1;
+        assert_eq!(
+            impossible_seat_count.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidSeatCount)
+        );
+
+        let mut ballot_predates_sortition = certificate.clone();
+        let request_pulse_height = ballot_predates_sortition.body_bindings[0]
+            .sortition_request
+            .pulse_height;
+        ballot_predates_sortition.body_bindings[0]
+            .ballot
+            .as_mut()
+            .expect("fixture ballot")
+            .registered_at_height = request_pulse_height;
+        assert_eq!(
+            ballot_predates_sortition.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidLifecycle)
+        );
+
         let mut emergency = certificate.clone();
         emergency.risk_tier = RiskTierV1::Emergency;
         assert_eq!(
             emergency.validate(),
             Err(GovernanceCertificateErrorV1::EmergencyPolicyJuryThreshold)
+        );
+        let below_emergency_threshold_tally = ParliamentAggregateTallyV1 {
+            original_seats: 500,
+            accepted_ballots: 334,
+            aye: 333,
+            nay: 1,
+            abstain: 0,
+        };
+        emergency.body_bindings[0].result_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            body_instance_id,
+            ballot_attempt_id,
+            opening_root,
+            below_emergency_threshold_tally,
+            outcome,
+            result_height,
+        );
+        emergency.body_bindings[0]
+            .ballot
+            .as_mut()
+            .expect("fixture ballot")
+            .tally = below_emergency_threshold_tally;
+        assert_eq!(
+            emergency.validate(),
+            Err(GovernanceCertificateErrorV1::EmergencyPolicyJuryThreshold),
+            "one aye below two-thirds of original seats must reject an emergency hold"
         );
         let emergency_tally = ParliamentAggregateTallyV1 {
             original_seats: 500,
@@ -4564,7 +4636,7 @@ mod tests {
             [0x86; 32],
             500,
             500,
-            1_801,
+            1_800,
             1_802,
             BeaconSessionId::new([0x66; 32]),
             None,
@@ -4640,6 +4712,29 @@ mod tests {
         narrow
             .validate()
             .expect("narrow Policy Jury approval has a fresh Confirmation Jury result");
+
+        let mut delayed_initial_confirmation = narrow.clone();
+        let confirmation = &mut delayed_initial_confirmation.body_bindings[1];
+        let request = confirmation.sortition_request;
+        confirmation.sortition_request = SortitionRequestV1::try_new_canonical(
+            request.governance_attempt_id,
+            request.body_election_attempt_id,
+            request.body,
+            request.candidate_root,
+            request.candidate_count,
+            request.target_seats,
+            request.request_height + 1,
+            request.pulse_height,
+            request.beacon_session_id,
+            None,
+        )
+        .expect("one-block-delayed initial Confirmation request is structurally valid");
+        confirmation.sortition_request_id = confirmation.sortition_request.id;
+        assert_eq!(
+            delayed_initial_confirmation.validate(),
+            Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch),
+            "sequence-zero Confirmation sortition must be atomic with the Policy result"
+        );
 
         let policy_pulse_id = narrow.body_bindings[0].beacon_pulse_id;
         narrow.body_bindings[1].beacon_pulse_id = policy_pulse_id;

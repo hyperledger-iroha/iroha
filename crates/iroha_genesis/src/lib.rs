@@ -4734,9 +4734,10 @@ mod tests {
         let sumeragi_v2 =
             norito::json::to_json(&SumeragiV2GenesisContextParameters::recommended())?;
         let genesis = format!(
-            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","sumeragi_v2":{},"transactions":[{{}}]}}"#,
+            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","wire_protocol_version":{},"sumeragi_v2":{},"transactions":[{{}}]}}"#,
             iroha_data_model::account::address::chain_discriminant(),
             executor_path.file_name().unwrap().to_str().unwrap(),
+            iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             sumeragi_v2,
         );
         let genesis_path = tmp_dir.path().join("genesis.json");

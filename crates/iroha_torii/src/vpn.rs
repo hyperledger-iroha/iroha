@@ -1612,7 +1612,11 @@ fn committed_transaction_by_hash(
         ));
     };
     for (entrypoint_hash, tx, result) in external_signed_transaction_results(block.as_ref()) {
-        if entrypoint_hash != target {
+        if !crate::signed_transaction_carrier_matches_indexed_identity(
+            &entrypoint_hash,
+            &tx,
+            &target,
+        ) {
             continue;
         }
         if result.as_ref().is_err() {

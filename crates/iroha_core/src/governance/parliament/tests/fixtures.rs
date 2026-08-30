@@ -612,7 +612,7 @@ fn state_with_proposal_tag(
 ) -> ParliamentAttemptStateV1 {
     ParliamentAttemptStateV1::try_new(
         attempt_with_proposal_tag(proposal_tag),
-        7,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
         10,
         root(3),
         GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
@@ -863,7 +863,7 @@ fn governance_attempt_retry_bound_is_enforced_at_construction_and_restore() {
         GovernanceAttemptId::derive_v1(final_attempt.proposal_content_id, final_attempt.sequence);
     let final_state = ParliamentAttemptStateV1::try_new(
         final_attempt,
-        7,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
         10,
         root(3),
         GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
@@ -883,7 +883,7 @@ fn governance_attempt_retry_bound_is_enforced_at_construction_and_restore() {
     assert_eq!(
         ParliamentAttemptStateV1::try_new(
             over_limit,
-            7,
+            PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
             10,
             root(3),
             GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
@@ -962,7 +962,7 @@ fn successor_attempt_inherits_exact_proposal_redraw_prefix() {
     let mut successor = ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(
         successor_attempt,
         first.randomness_redraws_used_v1().expect("bounded prefix"),
-        7,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
         10,
         root(3),
         GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
@@ -993,11 +993,13 @@ fn successor_attempt_inherits_exact_proposal_redraw_prefix() {
     assert_eq!(successor.randomness_redraws_used_v1(), Ok(2));
     validate_parliament_randomness_redraw_lineage_v1([&first, &successor])
         .expect("exact inherited redraw lineage");
+    validate_parliament_randomness_redraw_lineage_v1([&successor, &first])
+        .expect("lineage validation is independent of hashed storage-key order");
 
     let reset = ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(
         successor_attempt,
         0,
-        7,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
         10,
         root(3),
         GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
@@ -1010,6 +1012,43 @@ fn successor_attempt_inherits_exact_proposal_redraw_prefix() {
         validate_parliament_randomness_redraw_lineage_v1([&first, &reset]),
         Err(ParliamentReducerErrorV1::RandomnessRedrawLineageMismatch),
         "a terminal attempt must not reset the proposal-wide grinding budget"
+    );
+}
+
+#[test]
+fn proposal_attempt_lineage_requires_exact_contiguous_sequences() {
+    let first = policy_only_state();
+    assert_eq!(
+        validate_parliament_randomness_redraw_lineage_v1([&first, &first]),
+        Err(ParliamentReducerErrorV1::RetrySequenceMismatch),
+        "a duplicate sequence must not masquerade as another zero-cost generation"
+    );
+
+    let mut skipped_attempt = attempt();
+    skipped_attempt.sequence = 2;
+    skipped_attempt.id = GovernanceAttemptId::derive_v1(
+        skipped_attempt.proposal_content_id,
+        skipped_attempt.sequence,
+    );
+    let skipped = ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(
+        skipped_attempt,
+        0,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+        10,
+        root(3),
+        GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+            subject_id: root(4),
+        }),
+        vec![RequiredParliamentBodyV1 {
+            body: ParliamentBody::PolicyJury,
+            decision_mode: ParliamentDecisionModeV1::HiddenBindingBallot,
+        }],
+    )
+    .expect("an isolated reducer cannot prove that its predecessor exists");
+    assert_eq!(
+        validate_parliament_randomness_redraw_lineage_v1([&first, &skipped]),
+        Err(ParliamentReducerErrorV1::RetrySequenceMismatch),
+        "proposal history must not omit sequence one"
     );
 }
 

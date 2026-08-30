@@ -38,6 +38,35 @@ export interface ToriiBrowserExplorerOwnedDomainOptions
   domain?: string;
 }
 
+/** Options shared by snapshot-bound Explorer chain-history routes. */
+export interface ToriiBrowserExplorerHistoryOptions
+  extends ToriiBrowserExplorerCursorOptions {}
+
+/** Filters accepted by both transaction-history projections. */
+export interface ToriiBrowserExplorerTransactionHistoryOptions
+  extends ToriiBrowserExplorerHistoryOptions {
+  authority?: string;
+  block?: NumericLike;
+  status?: "committed" | "rejected";
+  assetId?: string;
+  asset_id?: string;
+}
+
+/** Filters accepted by both instruction-history projections. */
+export interface ToriiBrowserExplorerInstructionHistoryOptions
+  extends ToriiBrowserExplorerHistoryOptions {
+  account?: string;
+  authority?: string;
+  kind?: string;
+  transactionHash?: string;
+  transaction_hash?: string;
+  transactionStatus?: "committed" | "rejected";
+  transaction_status?: "committed" | "rejected";
+  block?: NumericLike;
+  assetId?: string;
+  asset_id?: string;
+}
+
 export interface ToriiBrowserExplorerCursorMeta {
   limit: number;
   next_cursor: string | null;
@@ -47,6 +76,61 @@ export interface ToriiBrowserExplorerCursorMeta {
 export interface ToriiBrowserExplorerCursorPage<T = unknown> {
   pagination: ToriiBrowserExplorerCursorMeta;
   items: ReadonlyArray<T>;
+}
+
+/** Snapshot-bound continuation metadata returned by chain-history routes. */
+export interface ToriiBrowserExplorerHistoryCursorMeta {
+  limit: number;
+  snapshot_height: number;
+  snapshot_hash: string | null;
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+export interface ToriiBrowserExplorerHistoryPage<T = unknown> {
+  pagination: ToriiBrowserExplorerHistoryCursorMeta;
+  items: ReadonlyArray<T>;
+}
+
+export interface ToriiBrowserExplorerLatestHistoryPage<T = unknown>
+  extends ToriiBrowserExplorerHistoryPage<T> {
+  sampled_at: string;
+}
+
+export interface ToriiBrowserExplorerBlock {
+  hash: string;
+  height: number;
+  created_at: string;
+  prev_block_hash: string | null;
+  transactions_hash: string | null;
+  transactions_rejected: number;
+  transactions_total: number;
+}
+
+export interface ToriiBrowserExplorerTransaction {
+  authority: string;
+  hash: string;
+  block: number;
+  created_at: string;
+  executable: string;
+  status: string;
+}
+
+export interface ToriiBrowserExplorerInstructionBox {
+  encoded: string;
+  framed_sha256: string;
+  json: unknown;
+}
+
+export interface ToriiBrowserExplorerInstruction {
+  authority: string;
+  created_at: string;
+  kind: string;
+  box: ToriiBrowserExplorerInstructionBox;
+  transaction_hash: string;
+  transaction_status: string;
+  block: number;
+  index: number;
 }
 
 export interface ToriiBrowserExplorerAssetDefinition {

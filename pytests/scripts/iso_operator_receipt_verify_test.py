@@ -1158,6 +1158,78 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertNotIn("receipt-source-secret", message)
                     self.assertNotIn(hidden, message)
 
+    def test_persisted_record_v2_party_auth_and_replay_shape_is_fail_closed(self):
+        cases = (
+            (
+                "v1-record",
+                lambda source: source.update({"version": 1}),
+                "unsupported persisted record version",
+            ),
+            (
+                "missing-party-field",
+                lambda source: source["parties"].pop("admitting_operator_key"),
+                "parties is missing required keys: admitting_operator_key",
+            ),
+            (
+                "unsupported-signature-policy",
+                lambda source: source["parties"].update(
+                    {"pinned_signature_policy": "accept_anything"}
+                ),
+                "pinned_signature_policy must be record_only",
+            ),
+            (
+                "profile-pin-mismatch",
+                lambda source: source["parties"].update(
+                    {"pinned_profile_id": "different-profile"}
+                ),
+                "pinned_profile_id does not match metadata.profile_id",
+            ),
+            (
+                "boolean-replay-expiry",
+                lambda source: source.update({"replay_expires_at_ms": True}),
+                "replay_expires_at_ms must be a non-negative integer",
+            ),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                record = audit_test.sample_record()
+                source = audit_test.sample_persisted_record(record)
+                mutate(source)
+                source = audit_test.with_digest(
+                    source,
+                    audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD,
+                )
+                record[audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD] = source[
+                    audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD
+                ]
+                record_path = root / record["filename"]
+                record_path.write_text(
+                    json.dumps(source, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._verify_persisted_record_source(
+                        record,
+                        record_path,
+                        "record",
+                    )
+
+                self.assertIn(expected, str(caught.exception))
+
+        v1_index = audit_test.sample_index()
+        v1_index["version"] = 1
+        v1_index = audit_test.with_digest(
+            v1_index,
+            audit_test.ADAPTER.INDEX_DIGEST_FIELD,
+        )
+        with self.assertRaisesRegex(
+            VERIFIER.ReceiptError,
+            f"audit index version must be {VERIFIER.INDEX_VERSION}",
+        ):
+            VERIFIER._verify_audit_index_source(v1_index, "audit index")
+
     def test_optional_metadata_normalizers_reject_unicode_format_controls_without_echo(self):
         cases = (
             (
@@ -2130,7 +2202,11 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             export_dir = root / "export"
             export_dir.mkdir()
             empty_index = audit_test.with_digest(
-                {"version": 1, "record_count": 0, "records": []},
+                {
+                    "version": audit_test.ADAPTER.INDEX_VERSION,
+                    "record_count": 0,
+                    "records": [],
+                },
                 audit_test.ADAPTER.INDEX_DIGEST_FIELD,
             )
             audit_test.write_export(
@@ -4879,7 +4955,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
     def test_notary_anchor_source_mismatches_are_rejected_when_required(self):
         def mismatched_index():
             index = {
-                "version": 1,
+                "version": audit_test.ADAPTER.INDEX_VERSION,
                 "record_count": 1,
                 "records": [audit_test.sample_record("msg-2")],
             }

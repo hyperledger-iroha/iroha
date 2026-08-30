@@ -937,10 +937,17 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
             .entrypoint_results()
             .take(external_entrypoint_count)
             .filter_map(|(_, entrypoint, result)| {
-                let TransactionEntrypoint::External(transaction) = entrypoint else {
+                if !crate::transaction_entrypoint_matches_indexed_identity(
+                    &entrypoint,
+                    &entrypoint_hash,
+                ) {
                     return None;
-                };
-                (transaction.hash() == transaction_hash).then_some(result.0.is_ok())
+                }
+                matches!(
+                    entrypoint,
+                    TransactionEntrypoint::External(_) | TransactionEntrypoint::SealedReveal(_)
+                )
+                .then_some(result.0.is_ok())
             });
         match (exact_results.next(), exact_results.next()) {
             (Some(true), None) => ModerationSubmissionLookupV1::Applied { transaction_id },

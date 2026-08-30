@@ -154,6 +154,8 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "queue_plan_admission_v2_",
     "queue_plan_pending_obligation_v1_",
     "queue_plan_pending_route_member_v1_",
+    "queue_plan_pending_signed_alias_member_v1_",
+    "queue_plan_signed_alias_terminal_v1_",
     "nexus_fee_receipt_settled_",
     "nexus_fee_settlement_settled_",
     "sealed_tx_commitment_",
@@ -2523,6 +2525,9 @@ impl HostExecutionArtifacts {
             &self.durable_state_authorizations,
         )?;
         Self::seed_queued_call_hash_if_missing(tx, &self.queued)?;
+        if self.confidential_gas_delta > 0 {
+            tx.record_confidential_gas_delta(self.confidential_gas_delta);
+        }
         let executor = tx.world.executor.clone();
         for queued in &self.queued {
             if let Some(authorization) = self.entrypoint_authorization.as_ref() {
@@ -2564,9 +2569,6 @@ impl HostExecutionArtifacts {
             &self.durable_state_overlay,
             &self.durable_state_authorizations,
         )?;
-        if self.confidential_gas_delta > 0 {
-            tx.record_confidential_gas_delta(self.confidential_gas_delta);
-        }
         Self::record_completed_axt_states(tx, self.completed_axt)?;
         if !self.durable_state_overlay.is_empty() {
             for (path, value) in self.durable_state_overlay {
@@ -5104,6 +5106,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             &self.durable_state_authorizations,
         )?;
         HostExecutionArtifacts::seed_queued_call_hash_if_missing(tx, &queued)?;
+        let confidential_gas_delta =
+            crate::gas::sum_confidential_gas_costs(queued.iter().map(|queued| &queued.instruction));
+        if confidential_gas_delta > 0 {
+            tx.record_confidential_gas_delta(confidential_gas_delta);
+        }
         let executor = tx.world.executor.clone();
         for queued in &queued {
             HostExecutionArtifacts::validate_queued_authorization(&tx.world, queued)?;
@@ -5126,14 +5133,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             &self.durable_state_overlay,
             &self.durable_state_authorizations,
         )?;
-        if !queued.is_empty() {
-            let delta = crate::gas::sum_confidential_gas_costs(
-                queued.iter().map(|queued| &queued.instruction),
-            );
-            if delta > 0 {
-                tx.record_confidential_gas_delta(delta);
-            }
-        }
         self.flush_completed_axt(tx)?;
         self.flush_durable_state(tx)?;
         Ok(queued
@@ -23285,6 +23284,71 @@ seiyaku Callee {
         assert_eq!(recipient_balance.as_ref(), &Quantity::from(1_u32));
     }
     #[test]
+    fn rejected_queued_confidential_instruction_retains_host_artifact_gas() {
+        let authority = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let fixture =
+            crate::zk::test_utils::halo2_fixture_envelope("halo2/ipa:tiny-add", [0_u8; 32]);
+        let proof = fixture.proof_box("halo2/ipa");
+        let instruction: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(
+            iroha_data_model::proof::ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                proof,
+                iroha_data_model::proof::VerifyingKeyId::new(
+                    "halo2/ipa",
+                    "missing-host-artifact-vk",
+                ),
+            ),
+        )
+        .into();
+        let confidential_gas_delta = crate::gas::confidential_gas_cost(&instruction);
+        assert!(confidential_gas_delta > 0);
+        let artifacts = HostExecutionArtifacts {
+            queued: vec![QueuedInstruction {
+                instruction: instruction.clone(),
+                authority: authority.clone(),
+                contract_runtime_context: None,
+                entrypoint_authorization: None,
+            }],
+            entrypoint_authorization: None,
+            confidential_gas_delta,
+            completed_axt: Vec::new(),
+            durable_state_overlay: BTreeMap::new(),
+            durable_state_authorizations: BTreeMap::new(),
+        };
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut transaction = block.transaction();
+
+        artifacts
+            .apply_to_transaction(&mut transaction, &authority)
+            .expect_err("missing verifying key must reject the queued proof");
+
+        assert_eq!(transaction.zk_confidential_ops_in_tx, 1);
+        assert_eq!(transaction.zk_verify_calls_in_tx, 1);
+        assert_eq!(
+            transaction.confidential_gas_used_in_tx, confidential_gas_delta,
+            "host-artifact gas must be retained before queued execution can reject"
+        );
+        drop(transaction);
+
+        let mut mutable_host = CoreHost::new(authority.clone());
+        mutable_host.queue_instruction(instruction);
+        let mut mutable_host_transaction = block.transaction();
+        mutable_host
+            .apply_queued(&mut mutable_host_transaction, &authority)
+            .expect_err("missing verifying key must reject the mutable host queue");
+        assert_eq!(mutable_host_transaction.zk_confidential_ops_in_tx, 1);
+        assert_eq!(mutable_host_transaction.zk_verify_calls_in_tx, 1);
+        assert_eq!(
+            mutable_host_transaction.confidential_gas_used_in_tx, confidential_gas_delta,
+            "mutable-host gas must be retained before queued execution can reject"
+        );
+    }
+    #[test]
     fn host_execution_artifacts_reject_foreign_durable_path_before_any_write() {
         let authority = fixture_account("alice");
         let state = contract_test_state(&authority);
@@ -24407,6 +24471,8 @@ seiyaku DurableOwner {
             "queue_plan_admission_v2_deadbeef_cafebabe",
             "queue_plan_pending_obligation_v1_deadbeef_cafebabe",
             "queue_plan_pending_route_member_v1_0_0_deadbeef_cafebabe",
+            "queue_plan_pending_signed_alias_member_v1_deadbeef_cafebabe_deadbeef",
+            "queue_plan_signed_alias_terminal_v1_deadbeef_cafebabe",
             "nexus_fee_receipt_settled_deadbeef",
             "nexus_fee_settlement_settled_1_2_3_deadbeef",
             "sealed_tx_commitment_deadbeef",
@@ -24447,6 +24513,8 @@ seiyaku DurableOwner {
             "queue_plan_admission_v2x",
             "queue_plan_pending_obligation_v1x",
             "queue_plan_pending_route_member_v1x",
+            "queue_plan_pending_signed_alias_member_v1x",
+            "queue_plan_signed_alias_terminal_v1x",
             "offline_device_attestation_policyx",
             "kagemushax",
             "pkdeploy_verified_lane_relayx",
@@ -24463,79 +24531,117 @@ seiyaku DurableOwner {
         }
     }
     #[test]
-    fn state_syscalls_cannot_forge_delete_or_disclose_queue_plan_admission_marker() {
-        let marker: StatePath = format!(
-            "queue_plan_admission_v2_{}_{}",
-            "ab".repeat(Hash::LENGTH),
-            "cd".repeat(Hash::LENGTH)
-        )
-        .parse()
-        .expect("QueuePlan admission marker key");
-        let authority: AccountId = fixture_account("alice");
-        let contract = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
-            &authority,
-            178,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive adversarial contract");
-        let mut host = CoreHost::new(authority);
-        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
-            contract_subject: contract.subject_id(),
-            contract_address: contract,
-            contract_alias: Some(
-                "adversarial::queue_plan_registry"
+    fn state_syscalls_cannot_forge_delete_or_disclose_queue_plan_markers() {
+        let markers: [StatePath; 3] = [
+            format!(
+                "queue_plan_admission_v2_{}_{}",
+                "ab".repeat(Hash::LENGTH),
+                "cd".repeat(Hash::LENGTH)
+            )
+            .parse()
+            .expect("QueuePlan admission marker key"),
+            format!(
+                "queue_plan_pending_signed_alias_member_v1_{}_{}_{}",
+                "ab".repeat(Hash::LENGTH),
+                "cd".repeat(Hash::LENGTH),
+                "ef".repeat(Hash::LENGTH)
+            )
+            .parse()
+            .expect("QueuePlan pending signed-alias marker key"),
+            format!(
+                "queue_plan_signed_alias_terminal_v1_{}_{}",
+                "ab".repeat(Hash::LENGTH),
+                "cd".repeat(Hash::LENGTH)
+            )
+            .parse()
+            .expect("QueuePlan signed-alias terminal marker key"),
+        ];
+        for marker in markers {
+            let authority: AccountId = fixture_account("alice");
+            let contract = ContractAddress::derive(
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                     .parse()
-                    .expect("contract alias"),
-            ),
-            entrypoint: "main".to_owned(),
-        }));
-        let mut vm = IVM::new(10_000);
-        let code = ivm::encoding::wide::encode_halt().to_le_bytes();
-        vm.load_program(&build_authenticated_test_contract_program_with_states(
-            &code,
-            0,
-            false,
-            vec![ivm::EmbeddedStateDescriptor {
-                name: marker.to_string(),
-                ty: ivm::EmbeddedStateType::Bytes,
-            }],
-        ))
-        .expect("load self-describing adversarial QueuePlan contract");
-        let path_ptr = store_state_path_tlv(&mut vm, &marker);
-        let forged = norito::to_bytes(&999_u64).expect("encode forged marker fixture");
-        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
-        vm.set_register(10, path_ptr);
-        vm.set_register(11, value_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Err(ivm::VMError::PermissionDenied),
-            "STATE_SET must reject a QueuePlan registry marker before contract scoping"
-        );
-        vm.set_register(10, path_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
-            Err(ivm::VMError::PermissionDenied),
-            "STATE_DEL must not create a QueuePlan registry tombstone"
-        );
-        for syscall in [
-            ivm_sys::SYSCALL_STATE_GET,
-            ivm_sys::SYSCALL_STATE_HAS,
-            ivm_sys::SYSCALL_STATE_LEN,
-        ] {
+                    .expect("canonical test network id"),
+                &authority,
+                178,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("derive adversarial contract");
+            let mut host = CoreHost::new(authority);
+            host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+                contract_subject: contract.subject_id(),
+                contract_address: contract,
+                contract_alias: Some(
+                    "adversarial::queue_plan_registry"
+                        .parse()
+                        .expect("contract alias"),
+                ),
+                entrypoint: "main".to_owned(),
+            }));
+            let mut vm = IVM::new(10_000);
+            let code = ivm::encoding::wide::encode_halt().to_le_bytes();
+            vm.load_program(&build_authenticated_test_contract_program_with_states(
+                &code,
+                0,
+                false,
+                vec![ivm::EmbeddedStateDescriptor {
+                    name: marker.to_string(),
+                    ty: ivm::EmbeddedStateType::Bytes,
+                }],
+            ))
+            .expect("load self-describing adversarial QueuePlan contract");
+            let path_ptr = store_state_path_tlv(&mut vm, &marker);
+            let forged = norito::to_bytes(&999_u64).expect("encode forged marker fixture");
+            host.durable_state_base
+                .insert(marker.clone(), forged.clone());
+            let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
+            vm.set_register(10, path_ptr);
+            vm.set_register(11, value_ptr);
+            assert_eq!(
+                host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+                Err(ivm::VMError::PermissionDenied),
+                "STATE_SET must reject a QueuePlan registry marker before contract scoping"
+            );
             vm.set_register(10, path_ptr);
             assert_eq!(
-                host.syscall(syscall, &mut vm),
+                host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
                 Err(ivm::VMError::PermissionDenied),
-                "QueuePlan registry markers must remain opaque"
+                "STATE_DEL must not create a QueuePlan registry tombstone"
+            );
+            for syscall in [
+                ivm_sys::SYSCALL_STATE_GET,
+                ivm_sys::SYSCALL_STATE_HAS,
+                ivm_sys::SYSCALL_STATE_LEN,
+            ] {
+                vm.set_register(10, path_ptr);
+                assert_eq!(
+                    host.syscall(syscall, &mut vm),
+                    Err(ivm::VMError::PermissionDenied),
+                    "QueuePlan registry markers must remain opaque"
+                );
+            }
+            vm.set_register(10, path_ptr);
+            vm.set_register(11, 0);
+            vm.set_register(12, 1);
+            host.syscall(ivm_sys::SYSCALL_STATE_KEYS, &mut vm)
+                .expect("opaque QueuePlan keys are omitted from enumeration");
+            assert_eq!(vm.register(11), 0, "hidden total must exclude the marker");
+            assert_eq!(vm.register(12), 0, "hidden page must exclude the marker");
+            let keys_tlv = vm
+                .memory
+                .validate_tlv(vm.register(10))
+                .expect("state key list TLV");
+            let keys: Vec<StatePath> =
+                norito::decode_from_bytes(keys_tlv.payload).expect("decode state key list");
+            assert!(
+                keys.is_empty(),
+                "STATE_KEYS must not disclose the marker key"
+            );
+            assert!(
+                host.durable_state_overlay.is_empty(),
+                "rejected QueuePlan registry access must not retain a raw or scoped write"
             );
         }
-        assert!(
-            host.durable_state_overlay.is_empty(),
-            "rejected QueuePlan registry access must not retain a raw or scoped write"
-        );
     }
     #[test]
     fn state_syscalls_cannot_forge_delete_or_disclose_merge_lane_frontier() {

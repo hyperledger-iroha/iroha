@@ -3189,11 +3189,10 @@ pub mod isi {
             ),
         )
     }
-    /// Consume one exact governance movement capability created after retained-state checks.
-    pub(in crate::smartcontracts::isi) fn execute_verified_governance_numeric_movement(
+    fn prepare_verified_governance_numeric_movement(
         state_transaction: &mut StateTransaction<'_, '_>,
         authorization: crate::smartcontracts::isi::world::isi::VerifiedGovernanceNumericMovement,
-    ) -> Result<(), Error> {
+    ) -> Result<PreparedNumericAssetMovement, Error> {
         use crate::smartcontracts::isi::world::isi::VerifiedGovernanceNumericPurpose;
         let (purpose, source_id, destination_id, amount) = authorization.into_parts();
         let (transcript_authority, retained_purpose) = match purpose {
@@ -3307,48 +3306,6 @@ pub mod isi {
                     RetainedNumericAssetMovementPurpose::GovernanceRestitution(binding),
                 )
             }
-            VerifiedGovernanceNumericPurpose::CitizenshipSlash { owner, slash_bps } => {
-                let record = state_transaction
-                    .world
-                    .citizens
-                    .get(&owner)
-                    .ok_or_else(|| {
-                        InstructionExecutionError::InvariantViolation(
-                            "citizenship slash capability has no retained citizenship record"
-                                .into(),
-                        )
-                    })?;
-                let expected_source = AssetId::new(
-                    state_transaction.gov.citizenship_asset_id.clone(),
-                    state_transaction.gov.citizenship_escrow_account.clone(),
-                );
-                let expected_destination = AssetId::new(
-                    state_transaction.gov.citizenship_asset_id.clone(),
-                    state_transaction.gov.slash_receiver_account.clone(),
-                );
-                let expected_amount = record
-                    .amount
-                    .try_mul_decimal(&Numeric::new(u32::from(slash_bps), 4))
-                    .map_err(|_| MathError::Overflow)?;
-                if source_id != expected_source
-                    || destination_id != expected_destination
-                    || amount != expected_amount
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "citizenship slash capability does not match its retained bond".into(),
-                    ));
-                }
-                let binding = canonical_numeric_movement_binding(&(
-                    owner.clone(),
-                    slash_bps,
-                    amount.clone(),
-                    record.amount.clone(),
-                ))?;
-                (
-                    owner,
-                    RetainedNumericAssetMovementPurpose::GovernanceSlash(binding),
-                )
-            }
             VerifiedGovernanceNumericPurpose::CitizenshipRelease { owner } => {
                 let record = state_transaction
                     .world
@@ -3387,13 +3344,28 @@ pub mod isi {
                 )
             }
         };
-        execute_numeric_asset_movement(
+        PreparedNumericAssetMovement::prepare(
             state_transaction,
             source_id,
             destination_id,
             amount,
             NumericAssetMovementAuthorization::retained(&transcript_authority, retained_purpose),
         )
+    }
+    /// Validate one exact governance movement without mutating balances or observability state.
+    pub(in crate::smartcontracts::isi) fn validate_verified_governance_numeric_movement(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::world::isi::VerifiedGovernanceNumericMovement,
+    ) -> Result<(), Error> {
+        prepare_verified_governance_numeric_movement(state_transaction, authorization).map(drop)
+    }
+    /// Consume one exact governance movement capability created after retained-state checks.
+    pub(in crate::smartcontracts::isi) fn execute_verified_governance_numeric_movement(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::world::isi::VerifiedGovernanceNumericMovement,
+    ) -> Result<(), Error> {
+        prepare_verified_governance_numeric_movement(state_transaction, authorization)?
+            .apply(state_transaction)
     }
     /// Consume one exact expired-governance-lock capability produced by the block-start sweep.
     pub(crate) fn execute_verified_governance_unlock(

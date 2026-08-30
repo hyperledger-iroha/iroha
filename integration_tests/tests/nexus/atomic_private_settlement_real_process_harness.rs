@@ -1,12 +1,18 @@
 use iroha::data_model::block::consensus_v2::SumeragiV2GenesisContextParameters;
+use iroha::data_model::events::{
+    EventBox,
+    pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
+};
 use iroha_test_network::{
     ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
     NativeAmxFaultPhase, PrivateSettlementRouteControlAction, PrivateSettlementRouteControlPhase,
 };
+use base64::Engine as _;
+use futures_util::StreamExt as _;
 use norito::json::Value as HarnessJsonValue;
 use sha2::{Digest as Sha2Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     num::NonZeroU64,
@@ -24,6 +30,7 @@ const HARNESS_RESULT_ENV: &str = "APS_REAL_PROCESS_RESULT";
 const HARNESS_REQUEST_SHA_ENV: &str = "APS_REAL_PROCESS_REQUEST_SHA256";
 const HARNESS_VALIDATOR_SHA_ENV: &str = "APS_REAL_PROCESS_VALIDATOR_SHA256";
 const HARNESS_EVIDENCE_DIR_ENV: &str = "APS_REAL_PROCESS_EVIDENCE_DIR";
+const HARNESS_PORT_MANIFEST_ENV: &str = "APS_REAL_PROCESS_PORT_MANIFEST";
 const COORDINATOR_ROOT_ENV: &str = "APS_REAL_PROCESS_COORDINATOR_ROOT";
 const COORDINATOR_COMMAND_FILE: &str = "command.json";
 const COORDINATOR_ACK_FILE: &str = "ack.json";
@@ -37,6 +44,13 @@ const FAULT_BUNDLE_EXPIRY_BLOCKS: u64 = 96;
 const FAULT_CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
 const FAULT_CONTINUOUS_OBSERVATION_DOMAIN_V1: &[u8] =
     b"iroha:aps-fault-continuous-observation:v1\0";
+const LEAKAGE_BLOCK_WIRE_MAGIC_V1: &[u8; 8] = b"APSBLK1\0";
+const LEAKAGE_ARTIFACT_FRAME_DOMAIN_V1: &[u8] = b"iroha:aps-leakage-artifact:v1\0";
+const LEAKAGE_MAX_SOURCE_FILES: usize = 100_000;
+const LEAKAGE_MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+const LEAKAGE_MEMO_FIELD_BYTES: usize = 96;
+const LEAKAGE_ALIAS_FIELD_BYTES: usize = 64;
+const LEAKAGE_CAPSULE_FIELD_BYTES: usize = 64;
 
 #[derive(Debug, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -123,9 +137,61 @@ struct RealProcessFaultRequestV1 {
     payload: RealProcessFaultPayloadV1,
 }
 
+#[derive(Clone, Debug, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct RealProcessLeakageCanaryV1 {
+    name: String,
+    kind: String,
+    value: HarnessJsonValue,
+}
+
+#[derive(Clone, Debug, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct RealProcessLeakageCaptureSurfaceV1 {
+    surface: String,
+    relative_name: String,
+}
+
+#[derive(Debug, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct RealProcessLeakagePayloadV1 {
+    variant: String,
+    canaries: Vec<RealProcessLeakageCanaryV1>,
+    canary_commitments: BTreeMap<String, String>,
+    only_secret_fields_change: bool,
+    capture_surfaces: Vec<RealProcessLeakageCaptureSurfaceV1>,
+    message_count_channels: Vec<String>,
+}
+
+#[derive(Debug, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct RealProcessLeakageRequestV1 {
+    version: u8,
+    protocol: String,
+    request_id: String,
+    invocation_nonce: String,
+    kind: String,
+    commit: String,
+    hardware_sha256: String,
+    hardware_profile_sha256: String,
+    configuration_sha256: String,
+    participants: usize,
+    validators_per_dataspace: usize,
+    global_validators: usize,
+    quorum: String,
+    mandatory_signed_rs16_da_rbc: bool,
+    minimum_signed_rs16_da_observations: u64,
+    authenticated_message_control: bool,
+    seed: u64,
+    run: u64,
+    configuration: HarnessJsonValue,
+    payload: RealProcessLeakagePayloadV1,
+}
+
 enum RealProcessBoundRequestV1 {
     Benchmark(RealProcessBenchmarkRequestV1),
     Fault(RealProcessFaultRequestV1),
+    Leakage(RealProcessLeakageRequestV1),
 }
 
 #[derive(Clone, Debug, norito::JsonSerialize)]
@@ -188,6 +254,47 @@ struct RealProcessFaultResultV1 {
     authenticated_message_control: bool,
     process_inventory: Vec<RealProcessInventoryRowV1>,
     payload: HarnessJsonValue,
+}
+
+#[derive(Clone, Debug, norito::JsonSerialize)]
+struct RealProcessLeakageArtifactV1 {
+    surface: String,
+    relative_name: String,
+    sha256: String,
+    bytes: u64,
+}
+
+#[derive(Clone, Debug, norito::JsonSerialize)]
+struct RealProcessLeakageResultPayloadV1 {
+    variant: String,
+    canaries_injected: Vec<String>,
+    canary_commitments: BTreeMap<String, String>,
+    only_secret_fields_changed: bool,
+    nonpacket_capture_complete: bool,
+    finalized_receipt_observed: bool,
+    successful_leg_applications: usize,
+    each_leg_applied_exactly_once: bool,
+    continuous_atomicity_checks: u64,
+    partial_visible_observations: u64,
+    partial_spendable_observations: u64,
+    nonpacket_artifacts: Vec<RealProcessLeakageArtifactV1>,
+    nonpacket_message_counts: BTreeMap<String, u64>,
+}
+
+#[derive(Debug, norito::JsonSerialize)]
+struct RealProcessLeakageResultV1 {
+    version: u8,
+    protocol: String,
+    request_id: String,
+    invocation_nonce: String,
+    request_sha256: String,
+    commit: String,
+    participants: usize,
+    mandatory_signed_rs16_da_rbc: bool,
+    signed_rs16_da_observations: u64,
+    authenticated_message_control: bool,
+    process_inventory: Vec<RealProcessInventoryRowV1>,
+    payload: RealProcessLeakageResultPayloadV1,
 }
 
 #[derive(Clone, Debug, norito::JsonSerialize, norito::JsonDeserialize)]
@@ -384,6 +491,39 @@ const PRIVATE_BENCHMARK_STAGES: &[&str] = &[
     "end_to_end",
 ];
 const TRANSPARENT_CONTROL_BENCHMARK_STAGES: &[&str] = &["global_finality", "end_to_end"];
+const LEAKAGE_CAPTURE_SURFACES: &[(&str, &str)] = &[
+    ("block_wire_capture", "block-wire.bin"),
+    ("event_capture", "events.json"),
+    ("kura_artifact", "kura.bin"),
+    ("merge_artifact", "merge.bin"),
+    ("operator_log", "operator.json"),
+    ("public_p2p_capture", "public-p2p.pcapng"),
+    ("query_capture", "queries.json"),
+    ("restricted_p2p_capture", "restricted-p2p.pcapng"),
+    ("sanitized_capture", "sanitized-capture.pcapng"),
+    ("snapshot_artifact", "snapshot.bin"),
+    ("telemetry_capture", "telemetry.json"),
+    ("torii_capture", "torii.pcapng"),
+];
+const LEAKAGE_MESSAGE_COUNT_CHANNELS: &[&str] = &[
+    "torii_requests",
+    "torii_responses",
+    "public_p2p_messages",
+    "restricted_p2p_messages",
+    "block_messages",
+    "query_responses",
+    "event_records",
+    "log_records",
+    "telemetry_records",
+];
+const LEAKAGE_CANARY_BASE_NAMES: &[&str] = &[
+    "account_id",
+    "amount",
+    "asset_alias",
+    "asset_id",
+    "capsule",
+    "memo",
+];
 
 fn benchmark_stages(profile: &str) -> Result<&'static [&'static str]> {
     match profile {
@@ -434,7 +574,7 @@ fn validate_real_process_request_common(
     ensure!(
         version == 1
             && protocol == "AtomicPrivateSettlementV1"
-            && matches!(kind, "benchmark" | "fault"),
+            && matches!(kind, "benchmark" | "fault" | "leakage"),
         "Rust harness supports only AtomicPrivateSettlementV1 release requests"
     );
     ensure!(
@@ -604,6 +744,195 @@ fn validate_real_process_fault_request(request: &RealProcessFaultRequestV1) -> R
     Ok(())
 }
 
+fn validate_real_process_leakage_request(request: &RealProcessLeakageRequestV1) -> Result<()> {
+    validate_real_process_request_common(
+        request.version,
+        &request.protocol,
+        &request.kind,
+        &request.request_id,
+        &request.invocation_nonce,
+        &request.commit,
+        &request.hardware_sha256,
+        &request.hardware_profile_sha256,
+        &request.configuration_sha256,
+        request.participants,
+        request.validators_per_dataspace,
+        request.global_validators,
+        &request.quorum,
+        request.mandatory_signed_rs16_da_rbc,
+        request.minimum_signed_rs16_da_observations,
+        request.authenticated_message_control,
+        &request.configuration,
+    )?;
+    ensure!(
+        request.kind == "leakage"
+            && request.participants == PARTICIPANT_COUNT
+            && request.run == 0
+            && matches!(request.payload.variant.as_str(), "left" | "right")
+            && request.payload.only_secret_fields_change,
+        "leakage request is outside the exact primary differential profile"
+    );
+    let suffix = if request.payload.variant == "left" {
+        ""
+    } else {
+        "_variant_b"
+    };
+    let expected_names = LEAKAGE_CANARY_BASE_NAMES
+        .iter()
+        .map(|name| format!("{name}{suffix}"))
+        .collect::<Vec<_>>();
+    ensure!(
+        request
+            .payload
+            .canaries
+            .iter()
+            .map(|canary| canary.name.clone())
+            .collect::<Vec<_>>()
+            == expected_names
+            && request.payload.canary_commitments.keys().cloned().collect::<Vec<_>>()
+                == expected_names
+            && request
+                .payload
+                .canary_commitments
+                .values()
+                .all(|digest| lowercase_digest(digest, &[64])),
+        "leakage request has a substituted canary inventory"
+    );
+    let expected_kinds = ["text", "integer", "text", "text", "binary_base64", "text"];
+    ensure!(
+        request
+            .payload
+            .canaries
+            .iter()
+            .map(|canary| canary.kind.as_str())
+            .eq(expected_kinds),
+        "leakage request has a substituted canary kind"
+    );
+    ensure!(
+        request
+            .payload
+            .capture_surfaces
+            .iter()
+            .map(|surface| (surface.surface.as_str(), surface.relative_name.as_str()))
+            .eq(LEAKAGE_CAPTURE_SURFACES.iter().copied())
+            && request
+                .payload
+                .message_count_channels
+                .iter()
+                .map(String::as_str)
+                .eq(LEAKAGE_MESSAGE_COUNT_CHANNELS.iter().copied()),
+        "leakage request changed the exact capture inventory"
+    );
+    Ok(())
+}
+
+fn leakage_canary<'a>(
+    request: &'a RealProcessLeakageRequestV1,
+    base_name: &str,
+) -> Result<&'a RealProcessLeakageCanaryV1> {
+    let suffix = if request.payload.variant == "left" {
+        ""
+    } else {
+        "_variant_b"
+    };
+    let expected = format!("{base_name}{suffix}");
+    request
+        .payload
+        .canaries
+        .iter()
+        .find(|canary| canary.name == expected)
+        .ok_or_else(|| eyre!("leakage request lacks {expected}"))
+}
+
+fn leakage_text_canary(request: &RealProcessLeakageRequestV1, base_name: &str) -> Result<String> {
+    leakage_canary(request, base_name)?
+        .value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| eyre!("leakage {base_name} canary is not text"))
+}
+
+fn append_fixed_leakage_memo_field(
+    output: &mut Vec<u8>,
+    tag: &[u8; 8],
+    value: &[u8],
+    capacity: usize,
+) -> Result<()> {
+    ensure!(
+        !value.is_empty() && value.len() <= capacity && capacity <= usize::from(u16::MAX),
+        "leakage memo field is empty or exceeds its fixed capacity"
+    );
+    output.extend_from_slice(tag);
+    output.extend_from_slice(&u16::try_from(value.len())?.to_le_bytes());
+    output.extend_from_slice(value);
+    output.resize(output.len() + capacity - value.len(), 0);
+    Ok(())
+}
+
+fn leakage_private_leg_zero(
+    request: &RealProcessLeakageRequestV1,
+) -> Result<(PrivateSettlementLegPrivateData, AssetDefinitionId)> {
+    let variant = request.payload.variant.as_str();
+    let expected_account = leakage_canary_account_id(variant)?;
+    let account_text = leakage_text_canary(request, "account_id")?;
+    ensure!(
+        account_text == expected_account.canonical_i105()?,
+        "leakage account canary does not match the fixed typed payer"
+    );
+    let expected_asset = leakage_canary_asset_definition_id(variant)?;
+    let asset_text = leakage_text_canary(request, "asset_id")?;
+    ensure!(
+        asset_text.parse::<AssetDefinitionId>()? == expected_asset,
+        "leakage asset canary does not match the fixed restricted-governance asset"
+    );
+    let amount = leakage_canary(request, "amount")?
+        .value
+        .as_u128()
+        .ok_or_else(|| eyre!("leakage amount canary is not an unsigned integer"))?;
+    ensure!(
+        amount > 5 && amount < (1_u128 << 120),
+        "leakage amount is outside the proof-safe bound"
+    );
+    let memo_text = leakage_text_canary(request, "memo")?;
+    let asset_alias = leakage_text_canary(request, "asset_alias")?;
+    let capsule_text = leakage_text_canary(request, "capsule")?;
+    let capsule = base64::engine::general_purpose::STANDARD
+        .decode(capsule_text.as_bytes())
+        .wrap_err("decode leakage capsule canary")?;
+    ensure!(
+        base64::engine::general_purpose::STANDARD.encode(&capsule) == capsule_text,
+        "leakage capsule canary is not canonical Base64"
+    );
+    let mut memo = b"iroha:aps-leakage-memo:v1\0".to_vec();
+    append_fixed_leakage_memo_field(
+        &mut memo,
+        b"memo-v1\0",
+        memo_text.as_bytes(),
+        LEAKAGE_MEMO_FIELD_BYTES,
+    )?;
+    append_fixed_leakage_memo_field(
+        &mut memo,
+        b"alias-v1",
+        asset_alias.as_bytes(),
+        LEAKAGE_ALIAS_FIELD_BYTES,
+    )?;
+    append_fixed_leakage_memo_field(
+        &mut memo,
+        b"caps-v1\0",
+        &capsule,
+        LEAKAGE_CAPSULE_FIELD_BYTES,
+    )?;
+    Ok((
+        PrivateSettlementLegPrivateData {
+            payer: leakage_canary_keypair(variant)?,
+            recipient: default_private_settlement_leg_data(0).recipient,
+            amount,
+            memo,
+        },
+        expected_asset,
+    ))
+}
+
 fn read_bound_real_process_request() -> Result<(RealProcessBoundRequestV1, String)> {
     let path = PathBuf::from(
         std::env::var(HARNESS_REQUEST_ENV).wrap_err("missing real-process request path")?,
@@ -650,6 +979,12 @@ fn read_bound_real_process_request() -> Result<(RealProcessBoundRequestV1, Strin
                 norito::json::from_value(value).wrap_err("decode strict fault request")?;
             validate_real_process_fault_request(&request)?;
             RealProcessBoundRequestV1::Fault(request)
+        }
+        "leakage" => {
+            let request: RealProcessLeakageRequestV1 =
+                norito::json::from_value(value).wrap_err("decode strict leakage request")?;
+            validate_real_process_leakage_request(&request)?;
+            RealProcessBoundRequestV1::Leakage(request)
         }
         _ => return Err(eyre!("unsupported real-process request kind")),
     };
@@ -917,6 +1252,406 @@ fn network_storage_bytes(network: &Network) -> Result<u64> {
             .checked_add(regular_tree_bytes(&peer.kura_store_dir())?)
             .ok_or_else(|| eyre!("network storage total overflow"))
     })
+}
+
+#[derive(Debug, norito::JsonSerialize)]
+struct LeakagePortManifestV1 {
+    version: u8,
+    torii_ports: Vec<u16>,
+    public_p2p_ports: Vec<u16>,
+    restricted_p2p_ports: Vec<u16>,
+}
+
+fn leakage_evidence_root() -> Result<PathBuf> {
+    let root = PathBuf::from(
+        std::env::var(HARNESS_EVIDENCE_DIR_ENV).wrap_err("missing leakage evidence directory")?,
+    );
+    let canonical = root
+        .canonicalize()
+        .wrap_err("resolve leakage evidence directory")?;
+    ensure!(canonical == root, "leakage evidence directory is not canonical");
+    let metadata = fs::symlink_metadata(&root)?;
+    ensure!(
+        metadata.is_dir()
+            && !metadata.file_type().is_symlink()
+            && metadata.permissions().mode() & 0o777 == 0o700
+            && fs::read_dir(&root)?.next().is_none(),
+        "leakage evidence directory is unsafe or non-empty"
+    );
+    Ok(root)
+}
+
+fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Result<()> {
+    let path = PathBuf::from(
+        std::env::var(HARNESS_PORT_MANIFEST_ENV)
+            .wrap_err("missing leakage capture port-manifest path")?,
+    );
+    ensure!(!path.exists(), "leakage port manifest path already exists");
+    let mut torii_ports = network
+        .peers()
+        .iter()
+        .map(|peer| peer.api_address().port())
+        .collect::<Vec<_>>();
+    let mut public_p2p_ports = network.peers()[shape.validator_range(0)]
+        .iter()
+        .map(|peer| peer.p2p_address().port())
+        .collect::<Vec<_>>();
+    let mut restricted_p2p_ports = network.peers()[VALIDATORS_PER_LANE..]
+        .iter()
+        .map(|peer| peer.p2p_address().port())
+        .collect::<Vec<_>>();
+    for ports in [&mut torii_ports, &mut public_p2p_ports, &mut restricted_p2p_ports] {
+        ports.sort_unstable();
+        ports.dedup();
+    }
+    let all_ports = torii_ports
+        .iter()
+        .chain(&public_p2p_ports)
+        .chain(&restricted_p2p_ports)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        torii_ports.len() == shape.peer_count()
+            && public_p2p_ports.len() == VALIDATORS_PER_LANE
+            && restricted_p2p_ports.len() == shape.participants * VALIDATORS_PER_LANE
+            && all_ports.len()
+                == torii_ports.len() + public_p2p_ports.len() + restricted_p2p_ports.len(),
+        "leakage capture ports are incomplete or overlap"
+    );
+    let bytes = canonical_harness_json_bytes(&LeakagePortManifestV1 {
+        version: 1,
+        torii_ports,
+        public_p2p_ports,
+        restricted_p2p_ports,
+    })?;
+    write_owner_only_atomic(&path, &bytes)
+}
+
+fn read_stable_leakage_source(path: &Path) -> Result<Vec<u8>> {
+    let before = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("inspect leakage source {}", path.display()))?;
+    ensure!(
+        before.is_file()
+            && !before.file_type().is_symlink()
+            && usize::try_from(before.len()).is_ok_and(|len| len <= LEAKAGE_MAX_SOURCE_BYTES),
+        "leakage source is not a bounded regular file"
+    );
+    let mut file = File::open(path)
+        .wrap_err_with(|| format!("open leakage source {}", path.display()))?;
+    let opened = file.metadata()?;
+    ensure!(
+        std::os::unix::fs::MetadataExt::dev(&before)
+            == std::os::unix::fs::MetadataExt::dev(&opened)
+            && std::os::unix::fs::MetadataExt::ino(&before)
+                == std::os::unix::fs::MetadataExt::ino(&opened),
+        "leakage source changed before open"
+    );
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(u64::try_from(LEAKAGE_MAX_SOURCE_BYTES + 1).expect("bound fits u64"))
+        .read_to_end(&mut bytes)?;
+    let after = file.metadata()?;
+    ensure!(
+        bytes.len() <= LEAKAGE_MAX_SOURCE_BYTES
+            && before.len() == u64::try_from(bytes.len())?
+            && opened.len() == after.len()
+            && std::os::unix::fs::MetadataExt::mtime(&opened)
+                == std::os::unix::fs::MetadataExt::mtime(&after)
+            && std::os::unix::fs::MetadataExt::mtime_nsec(&opened)
+                == std::os::unix::fs::MetadataExt::mtime_nsec(&after),
+        "leakage source changed while read"
+    );
+    Ok(bytes)
+}
+
+fn collect_leakage_source_files<F>(root: &Path, mut selected: F) -> Result<Vec<(String, Vec<u8>)>>
+where
+    F: FnMut(&Path) -> bool,
+{
+    let canonical_root = root
+        .canonicalize()
+        .wrap_err("canonicalize leakage source root")?;
+    let mut stack = vec![canonical_root.clone()];
+    let mut paths = Vec::new();
+    let mut visited = 0_usize;
+    while let Some(path) = stack.pop() {
+        let metadata = fs::symlink_metadata(&path)?;
+        ensure!(
+            !metadata.file_type().is_symlink(),
+            "leakage source tree contains a symbolic link"
+        );
+        if metadata.is_dir() {
+            for entry in fs::read_dir(&path)? {
+                stack.push(entry?.path());
+                visited += 1;
+                ensure!(
+                    visited <= LEAKAGE_MAX_SOURCE_FILES,
+                    "leakage source tree exceeds its entry bound"
+                );
+            }
+        } else if metadata.is_file() && selected(&path) && metadata.len() > 0 {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    let mut total = 0_usize;
+    let mut sources = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = read_stable_leakage_source(&path)?;
+        total = total
+            .checked_add(bytes.len())
+            .ok_or_else(|| eyre!("leakage source byte count overflow"))?;
+        ensure!(
+            total <= LEAKAGE_MAX_SOURCE_BYTES,
+            "leakage source set exceeds its byte bound"
+        );
+        let relative = path
+            .strip_prefix(&canonical_root)
+            .wrap_err("leakage source escaped its root")?
+            .to_str()
+            .ok_or_else(|| eyre!("leakage source path is not UTF-8"))?
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        ensure!(
+            !relative.is_empty() && !relative.split('/').any(|part| part.is_empty() || part == ".."),
+            "leakage source path is not canonical"
+        );
+        sources.push((relative, bytes));
+    }
+    ensure!(!sources.is_empty(), "required leakage source set is empty");
+    Ok(sources)
+}
+
+fn framed_leakage_sources(kind: &str, sources: Vec<(String, Vec<u8>)>) -> Result<Vec<u8>> {
+    ensure!(!kind.is_empty() && !sources.is_empty(), "empty leakage artifact frame");
+    let mut output = LEAKAGE_ARTIFACT_FRAME_DOMAIN_V1.to_vec();
+    output.extend_from_slice(&u16::try_from(kind.len())?.to_le_bytes());
+    output.extend_from_slice(kind.as_bytes());
+    output.extend_from_slice(&u32::try_from(sources.len())?.to_le_bytes());
+    for (path, bytes) in sources {
+        output.extend_from_slice(&u32::try_from(path.len())?.to_le_bytes());
+        output.extend_from_slice(path.as_bytes());
+        output.extend_from_slice(&u64::try_from(bytes.len())?.to_le_bytes());
+        output.extend_from_slice(&bytes);
+    }
+    ensure!(
+        output.len() <= LEAKAGE_MAX_SOURCE_BYTES,
+        "framed leakage artifact exceeds its byte bound"
+    );
+    Ok(output)
+}
+
+fn write_leakage_artifact(
+    root: &Path,
+    surface: &str,
+    relative_name: &str,
+    bytes: &[u8],
+) -> Result<RealProcessLeakageArtifactV1> {
+    ensure!(!bytes.is_empty(), "leakage artifact is empty");
+    let expected = LEAKAGE_CAPTURE_SURFACES
+        .iter()
+        .find(|(candidate, _)| *candidate == surface)
+        .ok_or_else(|| eyre!("unknown leakage surface {surface}"))?;
+    ensure!(
+        expected.1 == relative_name && !relative_name.contains('/'),
+        "leakage artifact name is not canonical"
+    );
+    let path = root.join(relative_name);
+    ensure!(!path.exists(), "leakage artifact already exists");
+    write_owner_only_atomic(&path, bytes)?;
+    Ok(RealProcessLeakageArtifactV1 {
+        surface: surface.to_owned(),
+        relative_name: relative_name.to_owned(),
+        sha256: sha256_hex(bytes),
+        bytes: u64::try_from(bytes.len())?,
+    })
+}
+
+fn leakage_json_records(records: Vec<HarnessJsonValue>) -> Result<Vec<u8>> {
+    ensure!(!records.is_empty(), "leakage JSON record set is empty");
+    canonical_harness_json_value_bytes(&norito::json!({
+        "version": 1,
+        "records": records,
+    }))
+}
+
+fn leakage_block_wire(block: &iroha::data_model::block::SignedBlock) -> Result<Vec<u8>> {
+    let wire = block
+        .encode_wire()
+        .map_err(|error| eyre!("encode canonical leakage carrier block: {error}"))?;
+    ensure!(!wire.is_empty(), "carrier block wire is empty");
+    let mut output = LEAKAGE_BLOCK_WIRE_MAGIC_V1.to_vec();
+    output.extend_from_slice(&1_u32.to_le_bytes());
+    output.extend_from_slice(&u64::try_from(wire.len())?.to_le_bytes());
+    output.extend_from_slice(&wire);
+    Ok(output)
+}
+
+fn leakage_carrier_block(
+    client: &Client,
+    entrypoint: HashOf<TransactionEntrypoint>,
+) -> Result<iroha::data_model::block::SignedBlock> {
+    let mut matching = client
+        .query(FindBlocks)
+        .execute_all()?
+        .into_iter()
+        .filter(|block| block.entrypoint_hashes().any(|hash| hash == entrypoint))
+        .collect::<Vec<_>>();
+    ensure!(
+        matching.len() == 1,
+        "leakage carrier must occur in exactly one canonical block"
+    );
+    Ok(matching.remove(0))
+}
+
+fn submit_leakage_carrier_with_event(
+    runtime: &tokio::runtime::Runtime,
+    sponsor: &Client,
+    submit: PrivateSettlementBundleSubmitRequestV1,
+) -> Result<HarnessJsonValue> {
+    let transaction_hash = submit.transaction.hash();
+    let expected_bundle = submit
+        .transaction
+        .instructions()
+        .next()
+        .and_then(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
+        })
+        .map(|carrier| carrier.commit_bundle.manifest.bundle_id)
+        .ok_or_else(|| eyre!("leakage submission is not the direct APS carrier"))?;
+    let client = sponsor.clone();
+    runtime.block_on(async move {
+        let mut events = tokio::time::timeout(
+            FAULT_CONTROL_TIMEOUT,
+            client.listen_for_events_async([
+                TransactionEventFilter::default().for_hash(transaction_hash),
+            ]),
+        )
+        .await
+        .map_err(|_| eyre!("timed out opening leakage carrier event stream"))??;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let submitter = client.clone();
+        let response = tokio::task::spawn_blocking(move || {
+            submitter.submit_private_settlement_bundle_v1(&submit)
+        })
+        .await
+        .wrap_err("leakage carrier submit worker panicked")??;
+        ensure!(
+            response.bundle_id == expected_bundle,
+            "leakage carrier response substituted its bundle"
+        );
+        let record = tokio::time::timeout(FINALITY_TIMEOUT, async {
+            loop {
+                let Some(next) = events.next().await else {
+                    return Err(eyre!("leakage carrier event stream closed"));
+                };
+                let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
+                    continue;
+                };
+                match event.status() {
+                    TransactionStatus::Queued => {}
+                    TransactionStatus::Approved => {
+                        return Ok(norito::json!({
+                            "peer_index": 0,
+                            "transaction_sha256": sha256_hex(transaction_hash.as_ref()),
+                            "status": "approved",
+                            "lane_id": u64::from(event.lane_id().as_u32()),
+                            "dataspace_id": event.dataspace_id().as_u64(),
+                        }));
+                    }
+                    TransactionStatus::Rejected(reason) => {
+                        return Err(eyre!("leakage carrier rejected: {reason}"));
+                    }
+                    TransactionStatus::Expired => {
+                        return Err(eyre!("leakage carrier expired"));
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| eyre!("timed out waiting for leakage carrier event"))??;
+        events.close().await;
+        Ok(record)
+    })
+}
+
+fn leakage_query_records(
+    network: &Network,
+    bundle_id: Hash,
+    expected: &iroha::data_model::nexus::PrivateSettlementReceiptV1,
+) -> Result<Vec<HarnessJsonValue>> {
+    network
+        .peers()
+        .iter()
+        .enumerate()
+        .map(|(peer_index, peer)| {
+            let response = peer
+                .client()
+                .private_settlement_bundle_receipt_v1(bundle_id)?;
+            let PrivateSettlementBundleReceiptResponseV1::Finalized(receipt) = response else {
+                return Err(eyre!("leakage public receipt query is not finalized"));
+            };
+            ensure!(receipt == *expected, "leakage public receipt query diverged");
+            let encoded = norito::encode_canonical(&receipt)?;
+            Ok(norito::json!({
+                "peer_index": peer_index,
+                "bundle_id_sha256": sha256_hex(bundle_id.as_ref()),
+                "receipt_sha256": sha256_hex(&encoded),
+                "status": "finalized",
+                "leg_count": receipt.legs.len(),
+                "finalized_height": receipt.finalized_height,
+            }))
+        })
+        .collect()
+}
+
+fn leakage_telemetry_records(network: &Network) -> Result<Vec<HarnessJsonValue>> {
+    network
+        .peers()
+        .iter()
+        .enumerate()
+        .map(|(peer_index, peer)| {
+            let status = peer.client().get_status()?;
+            let encoded = norito::encode_canonical(&status)?;
+            Ok(norito::json!({
+                "peer_index": peer_index,
+                "status_sha256": sha256_hex(&encoded),
+            }))
+        })
+        .collect()
+}
+
+fn leakage_operator_log_records(network: &Network) -> Result<Vec<HarnessJsonValue>> {
+    let snapshots = network.startup_snapshot();
+    ensure!(
+        snapshots.len() == network.peers().len(),
+        "leakage log snapshot omitted a validator"
+    );
+    snapshots
+        .into_iter()
+        .map(|snapshot| {
+            let stdout_path = snapshot
+                .logs
+                .stdout_log
+                .ok_or_else(|| eyre!("validator log snapshot lacks stdout source"))?;
+            let stderr_path = snapshot
+                .logs
+                .stderr_log
+                .ok_or_else(|| eyre!("validator log snapshot lacks stderr source"))?;
+            let stdout = read_stable_leakage_source(&stdout_path)?;
+            let stderr = read_stable_leakage_source(&stderr_path)?;
+            ensure!(
+                !stdout.is_empty() || !stderr.is_empty(),
+                "validator emitted no source-backed operator log"
+            );
+            Ok(norito::json!({
+                "peer_index": snapshot.index,
+                "stdout_sha256": sha256_hex(&stdout),
+                "stderr_sha256": sha256_hex(&stderr),
+            }))
+        })
+        .collect()
 }
 
 fn verify_controller_readiness(network: &Network, runtime: &tokio::runtime::Runtime) -> Result<()> {
@@ -2758,7 +3493,7 @@ fn verify_invalid_leg_carrier_is_state_byte_identical(
     barrier: &iroha::data_model::nexus::PrivateSettlementPrepareBarrierV1,
     commits: &[iroha::data_model::nexus::PrivateSettlementPhaseCertificateV1],
 ) -> Result<()> {
-    let before = wait_for_converged_fault_state_snapshot(network, "invalid-leg-before")?;
+    let before = capture_fault_state_snapshot(network, "invalid-leg-before")?;
     let mut invalid_deltas = bundle.deltas.clone();
     let first = invalid_deltas
         .first_mut()
@@ -2794,7 +3529,7 @@ fn verify_invalid_leg_carrier_is_state_byte_identical(
         sponsor.submit_private_settlement_bundle_v1(&request).is_err(),
         "global carrier accepted an invalid private-settlement leg delta"
     );
-    let after = wait_for_converged_fault_state_snapshot(network, "invalid-leg-after")?;
+    let after = capture_fault_state_snapshot(network, "invalid-leg-after")?;
     ensure!(
         before.validators.len() == after.validators.len(),
         "invalid-leg probe changed the validator evidence inventory"
@@ -2805,6 +3540,21 @@ fn verify_invalid_leg_carrier_is_state_byte_identical(
                 && fault_state_identity(before_peer)? == fault_state_identity(after_peer)?,
             "invalid-leg carrier changed APS state on validator #{}",
             before_peer.peer_index
+        );
+    }
+    for snapshot in [&before, &after] {
+        let expected = fault_ledger_identity(
+            snapshot
+                .validators
+                .first()
+                .ok_or_else(|| eyre!("invalid-leg probe has no validator observations"))?,
+        )?;
+        ensure!(
+            snapshot
+                .validators
+                .iter()
+                .all(|observation| fault_ledger_identity(observation).is_ok_and(|value| value == expected)),
+            "invalid-leg probe observed a globally incoherent APS ledger"
         );
     }
     Ok(())

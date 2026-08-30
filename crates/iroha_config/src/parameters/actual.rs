@@ -1840,55 +1840,6 @@ pub struct VerifyingKeyRef {
     /// `backend`.
     pub name: String,
 }
-/// Citizen service discipline knobs applied to governance draws and reliability tracking.
-#[derive(Debug, Clone)]
-pub struct CitizenServiceDiscipline {
-    /// Cooldown (blocks) enforced after a citizen accepts a seat.
-    pub seat_cooldown_blocks: u64,
-    /// Maximum seats a single citizen may occupy within one epoch.
-    pub max_seats_per_epoch: u32,
-    /// Declines permitted per epoch without slashing.
-    pub free_declines_per_epoch: u32,
-    /// Slash applied when declines exceed the free budget (basis points).
-    pub decline_slash_bps: u16,
-    /// Slash applied when a citizen fails to appear for an assigned seat (basis points).
-    pub no_show_slash_bps: u16,
-    /// Slash applied when misconduct is recorded for an assigned seat (basis points).
-    pub misconduct_slash_bps: u16,
-    /// Optional bond multipliers keyed by governance role name.
-    pub role_bond_multipliers: BTreeMap<String, u64>,
-}
-impl CitizenServiceDiscipline {
-    /// Lookup the bond multiplier for a specific governance role (defaults to 1).
-    #[must_use]
-    pub fn bond_multiplier_for_role(&self, role: &str) -> u64 {
-        self.role_bond_multipliers.get(role).copied().unwrap_or(1)
-    }
-    /// Validate that configured percentages remain within basis-point bounds.
-    pub fn assert_valid(&self) {
-        for (label, value) in [
-            ("citizen_decline_slash_bps", self.decline_slash_bps),
-            ("citizen_no_show_slash_bps", self.no_show_slash_bps),
-            ("citizen_misconduct_slash_bps", self.misconduct_slash_bps),
-        ] {
-            assert!(
-                value <= 10_000,
-                "{label} must not exceed 10_000 bps (found {value})"
-            );
-        }
-    }
-}
-impl_default!(CitizenServiceDiscipline => {
-        Self {
-            seat_cooldown_blocks: defaults::governance::citizen_service::SEAT_COOLDOWN_BLOCKS,
-            max_seats_per_epoch: defaults::governance::citizen_service::MAX_SEATS_PER_EPOCH,
-            free_declines_per_epoch: defaults::governance::citizen_service::FREE_DECLINES_PER_EPOCH,
-            decline_slash_bps: defaults::governance::citizen_service::DECLINE_SLASH_BPS,
-            no_show_slash_bps: defaults::governance::citizen_service::NO_SHOW_SLASH_BPS,
-            misconduct_slash_bps: defaults::governance::citizen_service::MISCONDUCT_SLASH_BPS,
-            role_bond_multipliers: defaults::governance::citizen_service::role_bond_multipliers(),
-        }
-});
 /// Viral incentive policy governing social reward flows.
 #[derive(Debug, Clone)]
 pub struct ViralIncentives {
@@ -2182,8 +2133,6 @@ pub struct Governance {
     pub jdg_signature_schemes: BTreeSet<JdgSignatureScheme>,
     /// Runtime upgrade provenance enforcement policy.
     pub runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy,
-    /// Citizen service discipline knobs (cooldown/seat caps/slashing).
-    pub citizen_service: CitizenServiceDiscipline,
     /// Viral incentive policy for social rewards.
     pub viral_incentives: ViralIncentives,
     /// SoraFS pin policy constraints enforced during manifest admission.
@@ -2200,9 +2149,9 @@ pub struct Governance {
     pub sorafs_telemetry: SorafsTelemetryPolicy,
     /// Trusted provider→owner bindings seeded only before the first block.
     pub sorafs_provider_owners: BTreeMap<ProviderId, AccountId>,
-    /// Conviction step in blocks for plain (non‑ZK) voting. Duration/step yields extra weight.
+    /// Nonzero conviction step in blocks for plain (non‑ZK) voting. Duration/step yields extra weight.
     pub conviction_step_blocks: u64,
-    /// Maximum conviction multiplier allowed in plain (non‑ZK) voting.
+    /// Nonzero maximum conviction multiplier allowed in plain (non‑ZK) voting.
     pub max_conviction: u64,
     /// Minimum enactment delay (in blocks) for generating referendum windows.
     pub min_enactment_delay: u64,
@@ -2285,17 +2234,6 @@ impl_default!(Governance => {
                 })
                 .collect(),
             runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy::default(),
-            citizen_service: CitizenServiceDiscipline {
-                seat_cooldown_blocks: defaults::governance::citizen_service::SEAT_COOLDOWN_BLOCKS,
-                max_seats_per_epoch: defaults::governance::citizen_service::MAX_SEATS_PER_EPOCH,
-                free_declines_per_epoch:
-                    defaults::governance::citizen_service::FREE_DECLINES_PER_EPOCH,
-                decline_slash_bps: defaults::governance::citizen_service::DECLINE_SLASH_BPS,
-                no_show_slash_bps: defaults::governance::citizen_service::NO_SHOW_SLASH_BPS,
-                misconduct_slash_bps: defaults::governance::citizen_service::MISCONDUCT_SLASH_BPS,
-                role_bond_multipliers: defaults::governance::citizen_service::role_bond_multipliers(
-                ),
-            },
             viral_incentives: ViralIncentives::default(),
             sorafs_pin_policy: SorafsPinPolicyConstraints::default(),
             sorafs_pin_fee_asset_id: defaults::governance::sorafs_pin_fee::asset_id()
@@ -3977,35 +3915,6 @@ pub fn execution_policy_digest_v1(
     policy.push(
         "governance.runtime_upgrade_provenance.signature_threshold",
         &execution_policy_usize(provenance.signature_threshold),
-    );
-    let citizen = &governance.citizen_service;
-    policy.push(
-        "governance.citizen_service.seat_cooldown_blocks",
-        &citizen.seat_cooldown_blocks,
-    );
-    policy.push(
-        "governance.citizen_service.max_seats_per_epoch",
-        &citizen.max_seats_per_epoch,
-    );
-    policy.push(
-        "governance.citizen_service.free_declines_per_epoch",
-        &citizen.free_declines_per_epoch,
-    );
-    policy.push(
-        "governance.citizen_service.decline_slash_bps",
-        &citizen.decline_slash_bps,
-    );
-    policy.push(
-        "governance.citizen_service.no_show_slash_bps",
-        &citizen.no_show_slash_bps,
-    );
-    policy.push(
-        "governance.citizen_service.misconduct_slash_bps",
-        &citizen.misconduct_slash_bps,
-    );
-    policy.push(
-        "governance.citizen_service.role_bond_multipliers",
-        &citizen.role_bond_multipliers,
     );
     let viral = &governance.viral_incentives;
     policy.push(
@@ -8160,11 +8069,7 @@ pub struct ToriiOperatorAuth {
     pub require_mtls: bool,
     /// Explicit trusted proxy hosts allowed to assert forwarded client certificates.
     pub mtls_trusted_proxy_cidrs: Vec<String>,
-    /// Token fallback mode for operator auth.
-    pub token_fallback: OperatorTokenFallback,
-    /// Token source selection for operator auth.
-    pub token_source: OperatorTokenSource,
-    /// Token allow-list used for operator fallback.
+    /// Operator-token allow-list used only to bootstrap the first credential.
     pub tokens: Vec<String>,
     /// Auth attempt rate (per minute). None disables.
     pub rate_per_minute: Option<NonZeroU32>,
@@ -8176,22 +8081,10 @@ pub struct ToriiOperatorAuth {
     pub webauthn: Option<OperatorWebAuthnConfig>,
 }
 impl_default!(ToriiOperatorAuth => {
-        let token_fallback = match defaults::torii::operator_auth::TOKEN_FALLBACK {
-            "disabled" => OperatorTokenFallback::Disabled,
-            "always" => OperatorTokenFallback::Always,
-            _ => OperatorTokenFallback::Bootstrap,
-        };
-        let token_source = match defaults::torii::operator_auth::TOKEN_SOURCE {
-            "api" => OperatorTokenSource::ApiTokens,
-            "both" => OperatorTokenSource::Both,
-            _ => OperatorTokenSource::OperatorTokens,
-        };
         Self {
             enabled: defaults::torii::operator_auth::ENABLED,
             require_mtls: defaults::torii::operator_auth::REQUIRE_MTLS,
             mtls_trusted_proxy_cidrs: defaults::torii::operator_auth::mtls_trusted_proxy_cidrs(),
-            token_fallback,
-            token_source,
             tokens: defaults::torii::operator_auth::tokens(),
             rate_per_minute: defaults::torii::operator_auth::RATE_PER_MIN.and_then(NonZeroU32::new),
             burst: defaults::torii::operator_auth::BURST.and_then(NonZeroU32::new),
@@ -8199,48 +8092,6 @@ impl_default!(ToriiOperatorAuth => {
             webauthn: None,
         }
 });
-/// Token fallback policy for operator auth.
-#[derive(Debug, Clone, Copy)]
-pub enum OperatorTokenFallback {
-    /// Never accept tokens for operator auth.
-    Disabled,
-    /// Allow tokens only for bootstrap endpoints.
-    Bootstrap,
-    /// Allow tokens for all operator endpoints.
-    Always,
-}
-impl OperatorTokenFallback {
-    /// Render a stable label for telemetry and logging.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Bootstrap => "bootstrap",
-            Self::Always => "always",
-        }
-    }
-}
-/// Token source selection for operator auth.
-#[derive(Debug, Clone, Copy)]
-pub enum OperatorTokenSource {
-    /// Use the operator-specific token allow-list.
-    OperatorTokens,
-    /// Use Torii API tokens.
-    ApiTokens,
-    /// Accept both operator and Torii API tokens.
-    Both,
-}
-impl OperatorTokenSource {
-    /// Render a stable label for telemetry and logging.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::OperatorTokens => "operator",
-            Self::ApiTokens => "api",
-            Self::Both => "both",
-        }
-    }
-}
 /// Lockout policy applied after repeated authentication failures.
 #[derive(Debug, Clone, Copy)]
 pub struct OperatorAuthLockout {

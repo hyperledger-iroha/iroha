@@ -2129,11 +2129,9 @@ impl StateTelemetry {
             GovernanceEvent::ProposalSubmitted(payload) => {
                 self.update_governance_status(payload.id, GPS::Proposed);
             }
-            GovernanceEvent::ProposalApproved(_) => {}
             GovernanceEvent::ProposalRejected(payload) => {
                 self.update_governance_status(payload.id, GPS::Rejected);
             }
-            GovernanceEvent::ReferendumDecided(_) => {}
             GovernanceEvent::ProposalEnacted(payload) => {
                 self.update_governance_status(payload.id, GPS::Enacted);
             }
@@ -2152,13 +2150,24 @@ impl StateTelemetry {
             GovernanceEvent::LockRestituted(_) => {
                 self.record_governance_bond_event("lock_restituted");
             }
-            GovernanceEvent::CouncilPersisted(payload) => {
-                self.record_council_draw(payload);
-            }
-            GovernanceEvent::CitizenServiceRecorded(payload) => {
-                self.record_citizen_service_event(payload.event, &payload.slashed);
-            }
-            _ => {}
+            GovernanceEvent::ProposalApproved(_)
+            | GovernanceEvent::BallotAccepted(_)
+            | GovernanceEvent::BallotRejected(_)
+            | GovernanceEvent::ReferendumOpened(_)
+            | GovernanceEvent::ReferendumClosed(_)
+            | GovernanceEvent::ParliamentAttemptCreated(_)
+            | GovernanceEvent::ParliamentLifecycleTransitionApplied(_)
+            | GovernanceEvent::ParliamentAttemptTransitioned(_)
+            | GovernanceEvent::ParliamentBodyTransitioned(_)
+            | GovernanceEvent::ParliamentBallotTransitioned(_)
+            | GovernanceEvent::ParliamentConcentrationWarning(_)
+            | GovernanceEvent::ParliamentAggregateFinalized(_)
+            | GovernanceEvent::ThresholdKeyLifecycleApplied(_)
+            | GovernanceEvent::ParliamentCertificateIssued(_)
+            | GovernanceEvent::ParliamentApprovalRecorded(_)
+            | GovernanceEvent::CitizenRegistered(_)
+            | GovernanceEvent::CitizenRevoked(_)
+            | GovernanceEvent::ReferendumDecided(_) => {}
         }
     }
     #[cfg(feature = "telemetry")]
@@ -3639,44 +3648,6 @@ impl StateTelemetry {
         .governance_bond_events_total.with_label_values(&[event]).inc();]
     /// Set the total citizen count gauge.
     [record_citizens_total(total: u64) => .governance_citizens_total.set(total);]
-    }
-    /// Increment citizen service discipline counters.
-    pub fn record_citizen_service_event(
-        &self,
-        event: iroha_data_model::isi::governance::CitizenServiceEvent,
-        _slashed: &iroha_primitives::numeric::Quantity,
-    ) {
-        if !self.is_enabled() {
-            return;
-        }
-        let label = match event {
-            iroha_data_model::isi::governance::CitizenServiceEvent::Decline => "decline",
-            iroha_data_model::isi::governance::CitizenServiceEvent::NoShow => "no_show",
-            iroha_data_model::isi::governance::CitizenServiceEvent::Misconduct => "misconduct",
-        };
-        self.metrics
-            .governance_citizen_service_events_total
-            .with_label_values(&[label])
-            .inc();
-    }
-    /// Record council/parliament draw metadata for observability.
-    pub fn record_council_draw(
-        &self,
-        payload: &iroha_data_model::events::data::governance::GovernanceCouncilPersisted,
-    ) {
-        if !self.is_enabled() {
-            return;
-        }
-        self.metrics
-            .governance_council_members
-            .set(u64::from(payload.members_count));
-        self.metrics
-            .governance_council_alternates
-            .set(u64::from(payload.alternates_count));
-        self.metrics
-            .governance_council_candidates
-            .set(u64::from(payload.candidates_count));
-        self.metrics.governance_council_epoch.set(payload.epoch);
     }
     /// Seed governance proposal gauges with the provided statuses.
     pub fn seed_governance_proposal_statuses(
@@ -6761,8 +6732,6 @@ struct Actor {
 }
 impl Actor {
     async fn run(mut self) {
-        #[cfg(feature = "zk-preverify")]
-        crate::zk::start_lane();
         while let Some(message) = self.handle.recv().await {
             match message {
                 Message::Sync { reply } => {
@@ -7214,11 +7183,6 @@ impl Actor {
                         u64::try_from(last_reported_block.commit_time.as_millis())
                             .expect("time should fit into u64"),
                     );
-                    #[cfg(feature = "zk-preverify")]
-                    {
-                        // Enqueue the latest block for background proving
-                        crate::zk::enqueue_block_for_proving(&block.header());
-                    }
                 }
             }
             self.last_sync_block = block_index;
@@ -10752,30 +10716,6 @@ mod tests {
     }
     #[cfg(feature = "telemetry")]
     #[test]
-    fn council_persist_event_updates_gauges() {
-        use iroha_data_model::{
-            events::data::governance::{GovernanceCouncilPersisted, GovernanceEvent},
-            isi::governance::CouncilDerivationKind,
-        };
-        use std::sync::Arc;
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), true);
-        telemetry.on_governance_event(&GovernanceEvent::CouncilPersisted(
-            GovernanceCouncilPersisted {
-                epoch: 4,
-                members_count: 3,
-                alternates_count: 1,
-                candidates_count: 5,
-                derived_by: CouncilDerivationKind::Sortition,
-            },
-        ));
-        assert_eq!(metrics.governance_council_members.get(), 3);
-        assert_eq!(metrics.governance_council_alternates.get(), 1);
-        assert_eq!(metrics.governance_council_candidates.get(), 5);
-        assert_eq!(metrics.governance_council_epoch.get(), 4);
-    }
-    #[cfg(feature = "telemetry")]
-    #[test]
     fn governance_bond_events_increment() {
         use iroha_data_model::events::data::governance::{
             GovernanceEvent, GovernanceLockCreated, GovernanceLockExtended, GovernanceLockUnlocked,
@@ -10824,31 +10764,6 @@ mod tests {
             metrics
                 .governance_bond_events_total
                 .with_label_values(&["lock_unlocked"])
-                .get(),
-            1
-        );
-    }
-    #[cfg(feature = "telemetry")]
-    #[test]
-    fn citizen_service_events_increment() {
-        use iroha_data_model::isi::governance::CitizenServiceEvent;
-        use std::sync::Arc;
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), true);
-        telemetry.record_citizen_service_event(CitizenServiceEvent::Decline, &Quantity::zero());
-        telemetry
-            .record_citizen_service_event(CitizenServiceEvent::Misconduct, &Quantity::from(10_u64));
-        assert_eq!(
-            metrics
-                .governance_citizen_service_events_total
-                .with_label_values(&["decline"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .governance_citizen_service_events_total
-                .with_label_values(&["misconduct"])
                 .get(),
             1
         );

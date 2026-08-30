@@ -13,6 +13,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/lib.rs"
+ROUTE_CATALOG_SOURCE_PATH = (
+    ROOT / "crates/iroha_torii_shared/src/route_catalog.rs"
+)
+ROUTE_AUTH_METADATA_SCHEMA_VERSION = 1
 
 
 class GuardError(AssertionError):
@@ -82,8 +86,8 @@ FAMILIES = {
                 )
             ),
         ),
-        definition_sha256="6efd7a13947783182a35ce61e2ebe8794844070d414eb2b45274201f0a2f6539",
-        expanded_preimage_sha256="250bef5068184896cfc3553775fe1d7e55670da201c141011f9afa42e2599018",
+        definition_sha256="d687bb8391a1e7cfd16adec2a0f167b6097b9b0c86a1962e08fe9ffba6bd2477",
+        expanded_preimage_sha256="553ff5561e4fa417bfadf417331d78661d90b3b18dbe940a610a5db9991172d9",
     ),
     "subscription_action_handlers": WrapperFamily(
         parameters=("handler", "routing_handler", "access_context"),
@@ -172,16 +176,12 @@ FAMILIES = {
             "handler",
             "message_type",
             "access_context",
-            "message_id_field",
-            "missing_message_id",
             "payload_builder",
         ),
         literal_parameters=frozenset(
             {
                 "message_type",
                 "access_context",
-                "message_id_field",
-                "missing_message_id",
             }
         ),
         invocations=(
@@ -191,23 +191,19 @@ FAMILIES = {
                         "handler_iso_pacs008",
                         "pacs.008",
                         "v1/iso20022/pacs008",
-                        "MsgId",
-                        "missing MsgId field",
                         "build_pacs008_payload",
                     ),
                     (
                         "handler_iso_pacs009",
                         "pacs.009",
                         "v1/iso20022/pacs009",
-                        "BizMsgIdr",
-                        "missing BizMsgIdr field",
                         "build_pacs009_payload",
                     ),
                 )
             ),
         ),
-        definition_sha256="7be1ed891831c066458d5530dbb86107df610ef9a180ef4ee2b82e2f3fb3dfbf",
-        expanded_preimage_sha256="0a64ec7004bc8f0af4042518e223901c245f4a7a5816e1106383c462282b5094",
+        definition_sha256="fd5e33624892c8034acbe981fa8080df5ba5e0cb76853ea485bdd76da28019aa",
+        expanded_preimage_sha256="99dc2af613287fa81ee6dfd236922a8c0f61e32f6c4f4d98a13a22809c764ea8",
     ),
     "iso_lifecycle_submission_handlers": WrapperFamily(
         parameters=("handler", "message_type", "access_context"),
@@ -253,18 +249,18 @@ FAMILIES = {
                 )
             ),
         ),
-        definition_sha256="f8d4deedb991e58bd1aff5099767b19b64e72434712d876c89d4c44a3188dac1",
-        expanded_preimage_sha256="7a5cd85f41c0a8ccde22bea51f7efca630bbe98aa0e126d2b93dde472a1292f6",
+        definition_sha256="9409d24394be2a627a2e56e48de200716f229a13f89bfc88ea3603def166dc54",
+        expanded_preimage_sha256="da365df6755156153cc52f91597e7ce091588bffeab679331ece77e6d39d40be",
     ),
 }
 
 ROUTE_MACRO_DEFINITION_SHA256 = {
-    "catalog_route_policy": "98402ff8feed4a1df42e099a14acccf60449b583a29795d0c1fb154f518646ca",
+    "catalog_route_policy": "c475a7e8265ec2c2bf300226a5082cd7cab8653dd29d4e3dfa0629d5a8a444c6",
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
-ROUTE_ROW_COUNT = 548
-ROUTE_TUPLE_SHA256 = "4b2b96ad9d742f23b665ace1e4a293c4c22d712370ac317d97b624826b809bdb"
+ROUTE_ROW_COUNT = 539
+ROUTE_TUPLE_SHA256 = "b9331452184668efedff4f7fa13154aee43ff606394bc39fe8b69cbccd2fcd72"
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -695,9 +691,16 @@ def _route_semantics(policy: str, arguments: list[str]) -> tuple[str, str, str]:
         require(4)
         limit = f"layer({arguments[2]}.clone());auth({arguments[3]})"
         auth = f"canonical-account({arguments[1]}.clone())"
-    elif policy == "canonical_account_proof_post":
-        require(3)
-        limit = f"proof({arguments[2]})"
+    elif policy.startswith("canonical_account_proof_"):
+        if policy == "canonical_account_proof_get":
+            require(2)
+            proof_limit = "0"
+        elif policy == "canonical_account_proof_post":
+            require(3)
+            proof_limit = arguments[2]
+        else:
+            raise GuardError(f"unknown canonical proof route policy: {policy}")
+        limit = f"proof({proof_limit})"
         auth = f"canonical-account-proof({arguments[1]}.clone())"
     elif policy.startswith("canonical_account_"):
         require(3)
@@ -724,7 +727,10 @@ def _route_semantics(policy: str, arguments: list[str]) -> tuple[str, str, str]:
         try:
             auth = {
                 "public": "public",
+                "unauthenticated": "unauthenticated",
                 "canonical_signature": "handler:CanonicalAccountSignature",
+                "optional_canonical_signature":
+                    "handler:OptionalCanonicalAccountSignature",
                 "canonical_signed": "handler:CanonicalSignedBody",
                 "protocol_handshake": "handler:ProtocolHandshake",
             }[stem]
@@ -751,6 +757,8 @@ def _route_semantics(policy: str, arguments: list[str]) -> tuple[str, str, str]:
                 "public": "public",
                 "unauthenticated": "unauthenticated",
                 "canonical_signature": "handler:CanonicalAccountSignature",
+                "optional_canonical_signature":
+                    "handler:OptionalCanonicalAccountSignature",
                 "canonical_signed": "handler:CanonicalSignedBody",
                 "protocol_handshake": "handler:ProtocolHandshake",
                 "operator_credential": "handler:OperatorCredentialExchange",
@@ -833,12 +841,29 @@ def _validate_route_tables(source: str) -> None:
     rows = _route_table_rows(source)
     if len(rows) != ROUTE_ROW_COUNT:
         raise GuardError("Torii route row count drifted")
+    catalog_source = ROUTE_CATALOG_SOURCE_PATH.read_text(encoding="utf-8")
+    schema_match = re.search(
+        r"pub const ROUTE_AUTH_METADATA_SCHEMA_VERSION_V1:\s*u16\s*=\s*(\d+)\s*;",
+        catalog_source,
+    )
+    if schema_match is None:
+        raise GuardError("route-auth metadata schema version is missing")
+    schema_version = int(schema_match.group(1))
+    if schema_version != ROUTE_AUTH_METADATA_SCHEMA_VERSION:
+        raise GuardError("route-auth metadata schema version drifted")
     digest = _sha256(
-        json.dumps(rows, separators=(",", ":"), ensure_ascii=True).encode()
+        json.dumps(
+            {
+                "route_auth_metadata_schema_version": schema_version,
+                "routes": rows,
+            },
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
     )
     if digest != ROUTE_TUPLE_SHA256:
         raise GuardError(
-            "ordered Torii (cfg, method, descriptor, handler, limit, auth) inventory drifted"
+            "versioned ordered Torii (cfg, method, descriptor, handler, limit, auth) inventory drifted"
         )
 
 
@@ -905,6 +930,8 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                 "async fn $handler(\n"
                 "                State(app): State<SharedAppState>,\n"
                 "                headers: axum::http::HeaderMap,\n"
+                "                method: axum::http::Method,\n"
+                "                uri: axum::http::Uri,\n"
                 "                axum::extract::ConnectInfo(remote): "
                 "axum::extract::ConnectInfo<std::net::SocketAddr>,\n"
                 "                AxQuery(params): "
@@ -912,6 +939,8 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                 "async fn $handler(\n"
                 "                State(app): State<SharedAppState>,\n"
                 "                headers: axum::http::HeaderMap,\n"
+                "                method: axum::http::Method,\n"
+                "                uri: axum::http::Uri,\n"
                 "                axum::extract::ConnectInfo(remote): "
                 "axum::extract::ConnectInfo<std::net::SocketAddr>,\n"
                 "                AxQuery(params): "
@@ -971,6 +1000,21 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
             (
                 "catalog_get($handler).authenticated_operator($state.clone())",
                 "catalog_get($handler).authenticated_operator($state)",
+            ),
+            (
+                "HandlerAuthentication::OptionalCanonicalAccountSignature",
+                "HandlerAuthentication::CanonicalAccountSignature",
+            ),
+            (
+                "RESOLVE => limited_optional_canonical_signature_post("
+                "handler_alias_resolve, EXACT_ALIAS_READ_MAX_BODY_BYTES);",
+                "RESOLVE => limited_canonical_signature_post("
+                "handler_alias_resolve, EXACT_ALIAS_READ_MAX_BODY_BYTES);",
+            ),
+            (
+                "ACCOUNTS_BY_ACCOUNT_ID_GET => "
+                "optional_canonical_signature_get(handler_account_get);",
+                "ACCOUNTS_BY_ACCOUNT_ID_GET => public_get(handler_account_get);",
             ),
         )
         for old, new in mutations:

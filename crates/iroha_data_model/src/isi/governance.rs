@@ -11,7 +11,7 @@ pub use crate::governance::types::AtWindow;
 use crate::governance::types::GlobalDataTriggerPermissionGovernanceActionV1;
 #[cfg(test)]
 use crate::isi::bridge::SccpRouteGovernanceActionV1;
-pub use crate::parliament_types::{CouncilDerivationKind, VotingMode};
+pub use crate::parliament_types::VotingMode;
 use crate::{
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, ContractEmergencyHoldProposalV1,
@@ -201,48 +201,6 @@ pub struct CastPlainBallot {
     pub direction: u8,
 }
 impl crate::seal::Instruction for CastPlainBallot {}
-/// Discipline event recorded for a citizen assigned to a governance role.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-    norito(tag = "event", content = "value", rename_all = "kebab-case")
-)]
-pub enum CitizenServiceEvent {
-    /// Citizen declined the assignment.
-    Decline,
-    /// Citizen failed to appear for the assignment.
-    NoShow,
-    /// Citizen committed misconduct during the assignment.
-    Misconduct,
-}
-impl core::cmp::PartialOrd for CitizenServiceEvent {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl core::cmp::Ord for CitizenServiceEvent {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        (*self as u8).cmp(&(*other as u8))
-    }
-}
-/// Record a citizen service discipline event (decline, no-show, misconduct) for a role/epoch.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct RecordCitizenServiceOutcome {
-    /// Citizen account receiving the record.
-    pub owner: AccountId,
-    /// Epoch index associated with the assignment.
-    pub epoch: u64,
-    /// Governance role label (e.g., "council", "`policy_jury`").
-    pub role: String,
-    /// Recorded event kind.
-    pub event: CitizenServiceEvent,
-}
-impl crate::seal::Instruction for RecordCitizenServiceOutcome {}
 /// Bond the configured citizenship amount to join the citizen registry.
 ///
 /// Ordinary execution is owner-authorized. The authenticated initial genesis may instead seed an
@@ -371,12 +329,6 @@ impl_governance_decode_from_slice!(RestituteGovernanceLock {
     owner: AccountId,
     amount: Quantity,
     reason: String,
-});
-impl_governance_decode_from_slice!(RecordCitizenServiceOutcome {
-    owner: AccountId,
-    epoch: u64,
-    role: String,
-    event: CitizenServiceEvent,
 });
 impl_governance_decode_from_slice!(RegisterCitizen {
     owner: AccountId,
@@ -603,12 +555,6 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
-    #[test]
-    fn council_derivation_json_has_exact_checked_bound() {
-        assert_exact_json(&CouncilDerivationKind::Sortition);
-        assert_exact_json(&CouncilDerivationKind::Manual);
-    }
     #[test]
     fn runtime_upgrade_proposal_roundtrip() {
         let ins = ProposeRuntimeUpgradeProposal {
@@ -707,12 +653,6 @@ mod tests {
             owner: account(1),
             amount: 50_u64.into(),
             reason: "appeal accepted".to_owned(),
-        });
-        assert_slice_roundtrip(RecordCitizenServiceOutcome {
-            owner: account(1),
-            epoch: 7,
-            role: "policy_jury".to_owned(),
-            event: CitizenServiceEvent::NoShow,
         });
         assert_slice_roundtrip(RegisterCitizen {
             owner: account(1),
