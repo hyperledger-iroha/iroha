@@ -232,6 +232,51 @@ REQUIRED_FORMAL_CONFIGURATIONS = (
     ("AtomicPrivateSettlementV1_commit_before_prepare_bug.cfg", "safety_violation"),
     ("AtomicPrivateSettlementV1_drop_stage_on_crash_bug.cfg", "safety_violation"),
 )
+REQUIRED_FORMAL_CONFIGURATION_MODELS = (
+    ("AtomicPrivateSettlementV1_3.cfg", "pass", "AtomicPrivateSettlementV1.tla"),
+    ("AtomicPrivateSettlementV1_255.cfg", "pass", "AtomicPrivateSettlementV1.tla"),
+    ("AtomicPrivateSettlementV1_expiry.cfg", "pass", "AtomicPrivateSettlementV1.tla"),
+    (
+        "AtomicPrivateSettlementV1CommitteeFaults_2_validator_focused.cfg",
+        "pass",
+        "AtomicPrivateSettlementV1CommitteeFaults.tla",
+    ),
+    (
+        "AtomicPrivateSettlementV1CommitteeFaults_2.cfg",
+        "pass",
+        "AtomicPrivateSettlementV1CommitteeFaults.tla",
+    ),
+    (
+        "AtomicPrivateSettlementV1CommitteeFaults_3.cfg",
+        "pass",
+        "AtomicPrivateSettlementV1CommitteeFaults.tla",
+    ),
+    (
+        "AtomicPrivateSettlementV1CommitteeFaults_4_clean.cfg",
+        "pass",
+        "AtomicPrivateSettlementV1CommitteeFaults.tla",
+    ),
+    (
+        "AtomicPrivateSettlementV1CommitteeFaults_expiry.cfg",
+        "pass",
+        "AtomicPrivateSettlementV1CommitteeFaults.tla",
+    ),
+    (
+        "AtomicPrivateSettlementV1_partial_apply_bug.cfg",
+        "safety_violation",
+        "AtomicPrivateSettlementV1.tla",
+    ),
+    (
+        "AtomicPrivateSettlementV1_commit_before_prepare_bug.cfg",
+        "safety_violation",
+        "AtomicPrivateSettlementV1.tla",
+    ),
+    (
+        "AtomicPrivateSettlementV1_drop_stage_on_crash_bug.cfg",
+        "safety_violation",
+        "AtomicPrivateSettlementV1.tla",
+    ),
+)
 _FORMAL_MODEL_FILES = (
     "AtomicPrivateSettlementV1.tla",
     "AtomicPrivateSettlementV1CommitteeFaults.tla",
@@ -1522,29 +1567,21 @@ def _formal_transcript_sections(
 ) -> list[str]:
     """Split an exact producer transcript into its ordered payload sections."""
 
-    sections: list[str] = []
-    offset = first_offset
-    for index, header in enumerate(headers):
-        marker = f"{header}\n"
+    markers = [f"{header}\n" for header in headers]
+    observed = list(re.finditer(r"(?m)^===== .* =====\n", transcript[first_offset:]))
+    if len(observed) != len(markers):
+        raise EvidenceError("formal TLC transcript contains an unexpected section header")
+    offsets = [first_offset + match.start() for match in observed]
+    if offsets[0] != first_offset:
+        raise EvidenceError("formal TLC transcript contains data before its first section")
+    for marker, offset in zip(markers, offsets, strict=True):
         if not transcript.startswith(marker, offset):
-            raise EvidenceError(
-                f"formal TLC transcript is missing or reordered at {header!r}"
-            )
+            raise EvidenceError("formal TLC transcript sections are missing or reordered")
+    sections: list[str] = []
+    for index, (marker, offset) in enumerate(zip(markers, offsets, strict=True)):
         payload_offset = offset + len(marker)
-        if index + 1 == len(headers):
-            sections.append(transcript[payload_offset:])
-            offset = len(transcript)
-            continue
-        next_marker = f"{headers[index + 1]}\n"
-        next_offset = transcript.find(next_marker, payload_offset)
-        if next_offset < 0:
-            raise EvidenceError(
-                f"formal TLC transcript is missing or reordered at {headers[index + 1]!r}"
-            )
-        sections.append(transcript[payload_offset:next_offset])
-        offset = next_offset
-    if offset != len(transcript):
-        raise EvidenceError("formal TLC transcript contains trailing data")
+        payload_end = offsets[index + 1] if index + 1 < len(offsets) else len(transcript)
+        sections.append(transcript[payload_offset:payload_end])
     return sections
 
 
@@ -1562,11 +1599,9 @@ def _validate_formal_tlc_transcript(
     except UnicodeDecodeError as error:
         raise EvidenceError("formal TLC transcript is not UTF-8") from error
     validator = _load_formal_tlc_report_validator()
-    producer_matrix = tuple(
-        (name, outcome) for name, outcome, _ in validator.CONFIGURATIONS
-    )
+    producer_matrix = tuple(validator.CONFIGURATIONS)
     if (
-        producer_matrix != REQUIRED_FORMAL_CONFIGURATIONS
+        producer_matrix != REQUIRED_FORMAL_CONFIGURATION_MODELS
         or (validator.COUNT_MODEL, validator.INDEXED_MODEL) != _FORMAL_MODEL_FILES
     ):
         raise EvidenceError("formal TLC producer and release verifier matrices differ")
@@ -1575,28 +1610,26 @@ def _validate_formal_tlc_transcript(
     first_offset = transcript.find(f"{first_header}\n")
     if first_offset < 0:
         raise EvidenceError("formal TLC transcript lacks the first SANY section")
-    metadata_lines = transcript[:first_offset].splitlines()
-    if len(metadata_lines) != 8:
-        raise EvidenceError("formal TLC transcript metadata is incomplete")
-    expected_metadata = (
-        "===== AtomicPrivateSettlementV1 TLC release run =====",
-        f"commit={commit}",
-        f"tool_version={_PINNED_FORMAL_TOOL_VERSION}",
-        f"tool_sha256={_PINNED_FORMAL_TOOL_SHA256}",
-        f"model_sha256={model_sha256}",
+    metadata = transcript[:first_offset]
+    metadata_match = re.fullmatch(
+        re.escape(
+            "===== AtomicPrivateSettlementV1 TLC release run =====\n"
+            f"commit={commit}\n"
+            f"tool_version={_PINNED_FORMAL_TOOL_VERSION}\n"
+            f"tool_sha256={_PINNED_FORMAL_TOOL_SHA256}\n"
+            f"model_sha256={model_sha256}\n"
+        )
+        + r"seed=(?P<seed>0|[1-9][0-9]*)\n"
+        + r"fingerprint_index=(?P<fingerprint_index>0|[1-9][0-9]*)\n"
+        + r"workers=(?P<workers>[1-9][0-9]*)\n",
+        metadata,
     )
-    if tuple(metadata_lines[:5]) != expected_metadata:
+    if metadata_match is None:
         raise EvidenceError("formal TLC transcript metadata differs from the report")
-
-    controls: dict[str, int] = {}
-    for line, field in zip(
-        metadata_lines[5:], ("seed", "fingerprint_index", "workers"), strict=True
-    ):
-        prefix = f"{field}="
-        raw = line.removeprefix(prefix)
-        if raw == line or not raw.isascii() or not raw.isdigit():
-            raise EvidenceError(f"formal TLC transcript {field} is not canonical")
-        controls[field] = int(raw)
+    controls = {
+        field: int(metadata_match.group(field))
+        for field in ("seed", "fingerprint_index", "workers")
+    }
     if (
         controls["fingerprint_index"] > 63
         or controls["workers"] < 1
@@ -1611,12 +1644,12 @@ def _validate_formal_tlc_transcript(
                 f"===== SANY {model} stderr =====",
             )
         )
-    for name, outcome in REQUIRED_FORMAL_CONFIGURATIONS:
+    for name, outcome, model in REQUIRED_FORMAL_CONFIGURATION_MODELS:
         status = 0 if outcome == "pass" else 12
         headers.extend(
             (
-                f"===== {name} stdout (status {status}) =====",
-                f"===== {name} stderr =====",
+                f"===== {name} model {model} stdout (status {status}) =====",
+                f"===== {name} model {model} stderr =====",
             )
         )
     sections = _formal_transcript_sections(transcript, headers, first_offset)
@@ -1636,8 +1669,8 @@ def _validate_formal_tlc_transcript(
                 f"formal TLC transcript has no clean SANY result for {model}"
             )
 
-    for row, (name, expected_outcome) in zip(
-        configurations, REQUIRED_FORMAL_CONFIGURATIONS, strict=True
+    for row, (name, expected_outcome, model) in zip(
+        configurations, REQUIRED_FORMAL_CONFIGURATION_MODELS, strict=True
     ):
         stdout = sections[section_index]
         stderr = sections[section_index + 1]
@@ -1646,6 +1679,7 @@ def _validate_formal_tlc_transcript(
         try:
             summary = validator.parse_run(
                 name=name,
+                model=model,
                 expected_outcome=expected_outcome,
                 stdout=stdout,
                 stderr=stderr,
@@ -1725,6 +1759,7 @@ def _validate_formal_model_report(
             value,
             {
                 "name",
+                "model",
                 "expected_outcome",
                 "observed_outcome",
                 "generated_states",
@@ -1734,22 +1769,24 @@ def _validate_formal_model_report(
             f"formal_model_report.configurations[{index}]",
         )
         name = row["name"]
+        model = row["model"]
         expected = row["expected_outcome"]
         outcome = row["observed_outcome"]
         if (
             not isinstance(name, str)
+            or not isinstance(model, str)
             or not isinstance(expected, str)
             or outcome != expected
         ):
             raise EvidenceError("formal model report outcome differs from expectation")
-        observed.append((name, expected))
+        observed.append((name, expected, model))
         for field in ("generated_states", "distinct_states", "depth"):
             count = row[field]
             if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
                 raise EvidenceError(
                     f"formal_model_report.configurations[{index}].{field} must be positive"
                 )
-    if observed != list(REQUIRED_FORMAL_CONFIGURATIONS):
+    if observed != list(REQUIRED_FORMAL_CONFIGURATION_MODELS):
         raise EvidenceError(
             "formal model report lacks an exact positive/negative matrix"
         )

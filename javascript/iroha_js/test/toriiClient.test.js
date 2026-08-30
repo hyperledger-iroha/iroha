@@ -52,6 +52,10 @@ import {
   AccountAddressErrorCode,
 } from "../src/address.js";
 import { sorafsGatewayFetch } from "../src/sorafs.js";
+import {
+  TORII_TEST_HOOKS,
+  TORII_TEST_NATIVE_BINDING,
+} from "../src/toriiTestHooks.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "../src/ivmArtifact.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { contractPayloadDigestHex } from "../src/contractPayload.js";
@@ -119,6 +123,10 @@ if (sumeragiDiagnosticsFocus !== null && typeof nodeTest.only === "function") {
 }
 
 const BASE_URL = "https://localhost:8080";
+
+function toriiTestHooks(hooks) {
+  return { [TORII_TEST_HOOKS]: hooks };
+}
 const GOVERNANCE_PROPOSAL_ID = "ab".repeat(32);
 const VK_SIGNING_NETWORK_ID = FocusNetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -1654,9 +1662,17 @@ test("ToriiClient constructor enforces option shapes", () => {
     () =>
       new ToriiClient(BASE_URL, {
         fetchImpl,
+        __nativeBinding: {},
+      }),
+    /options\.__nativeBinding is not a public option/,
+  );
+  assert.throws(
+    () =>
+      new ToriiClient(BASE_URL, {
+        fetchImpl,
         sorafsGatewayFetch: "not-a-function",
       }),
-    /options\.sorafsGatewayFetch must be a function/,
+    /options\.sorafsGatewayFetch is not a public option/,
   );
   assert.throws(
     () =>
@@ -1664,7 +1680,7 @@ test("ToriiClient constructor enforces option shapes", () => {
         fetchImpl,
         generateDaProofSummary: 42,
       }),
-    /options\.generateDaProofSummary must be a function/,
+    /options\.generateDaProofSummary is not a public option/,
   );
   assert.throws(
     () =>
@@ -1802,7 +1818,7 @@ test("listAccountAssets rejects retired domain-selector-prefixed segments", asyn
     called = true;
     return createResponse({ status: 200, jsonData: { items: [], total: 0 } });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: {} });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: {} });
   await assert.rejects(
     () => client.listAccountAssets(forms.selectorPrefixedHex),
     (error) => {
@@ -2911,7 +2927,7 @@ test("registerSorafsPinManifest posts only an exact canonical V1 transaction", a
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   const result = await client.registerSorafsPinManifestTyped(signedTransaction);
@@ -2946,7 +2962,7 @@ test("registerSorafsPinManifest rejects an unmarked transaction hash", async () 
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.registerSorafsPinManifestTyped(Buffer.from([0x01, 0xaa])),
@@ -2962,7 +2978,7 @@ test("registerSorafsPinManifest rejects missing or noncanonical V1 codecs before
   };
   const withoutCodec = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: {},
+    [TORII_TEST_NATIVE_BINDING]: {},
   });
   await assert.rejects(
     () => withoutCodec.registerSorafsPinManifest(Buffer.from([0x01, 0xaa])),
@@ -2971,7 +2987,7 @@ test("registerSorafsPinManifest rejects missing or noncanonical V1 codecs before
 
   const framed = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => framed.registerSorafsPinManifest(Buffer.from("NRT0legacy", "ascii")),
@@ -2987,7 +3003,7 @@ test("registerSorafsPinManifest rejects legacy secret-bearing request objects", 
       fetchCalls += 1;
       throw new Error("fetch must not run");
     },
-    __nativeBinding: {},
+    [TORII_TEST_NATIVE_BINDING]: {},
   });
 
   await assert.rejects(
@@ -3025,7 +3041,7 @@ test("registerSorafsPinManifestTyped rejects pre-finality fee or custody claims"
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -4563,7 +4579,7 @@ test("SoraFS orderbook rejects stale cursors and noncanonical transactions", asy
       fetchCount += 1;
       throw new Error("fetch must not run for invalid orderbook input");
     },
-    __nativeBinding: {
+    [TORII_TEST_NATIVE_BINDING]: {
       encodeSignedTransactionVersioned: () => {
         throw new Error("noncanonical signed transaction");
       },
@@ -5872,7 +5888,7 @@ test("fetchDaPayloadViaGateway fetches manifest bundle and invokes gateway", asy
   const gatewayMock = t.mock.fn(() => gatewayResult);
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    sorafsGatewayFetch: gatewayMock,
+    ...toriiTestHooks({ sorafsGatewayFetch: gatewayMock }),
   });
   const providers = [
     {
@@ -5951,7 +5967,7 @@ test("fetchDaPayloadViaGateway validates signal option", async () => {
   ];
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
-    sorafsGatewayFetch: () => ({
+    ...toriiTestHooks({ sorafsGatewayFetch: () => ({
       manifestIdHex: manifestBundle.manifest_hash_hex,
       chunkerHandle: "sorafs.sf1@1.0.0",
       chunkCount: 1,
@@ -5964,7 +5980,7 @@ test("fetchDaPayloadViaGateway validates signal option", async () => {
       localProxyManifest: null,
       carVerification: null,
       metadata: {},
-    }),
+    }) }),
   });
 
   await assert.rejects(
@@ -5992,9 +6008,9 @@ test("fetchDaPayloadViaGateway rejects invalid stream tokens", async () => {
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
-    sorafsGatewayFetch: () => {
+    ...toriiTestHooks({ sorafsGatewayFetch: () => {
       throw new Error("unexpected sorafsGatewayFetch call");
-    },
+    } }),
   });
 
   await assert.rejects(
@@ -6054,8 +6070,10 @@ test("fetchDaPayloadViaGateway uses custom hooks", async (t) => {
   const summaryMock = t.mock.fn(() => ({ summary: "ok" }));
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
-    sorafsGatewayFetch: gatewayMock,
-    generateDaProofSummary: summaryMock,
+    ...toriiTestHooks({
+      sorafsGatewayFetch: gatewayMock,
+      generateDaProofSummary: summaryMock,
+    }),
   });
   const session = await client.fetchDaPayloadViaGateway({
     manifestBundle,
@@ -6146,7 +6164,7 @@ test("fetchDaPayloadViaGateway reuses provided manifest bundle", async (t) => {
     fetchImpl: async () => {
       throw new Error("manifest fetch should not be called");
     },
-    sorafsGatewayFetch: gatewayMock,
+    ...toriiTestHooks({ sorafsGatewayFetch: gatewayMock }),
   });
   const session = await client.fetchDaPayloadViaGateway({
     manifestBundle,
@@ -6222,7 +6240,7 @@ test("fetchDaPayloadViaGateway accepts providers alias", async (t) => {
     metadata: {},
   }));
   const client = new ToriiClient(BASE_URL, {
-    sorafsGatewayFetch: gatewayMock,
+    ...toriiTestHooks({ sorafsGatewayFetch: gatewayMock }),
   });
   const session = await client.fetchDaPayloadViaGateway({
     manifestBundle,
@@ -6323,8 +6341,10 @@ test("fetchDaPayloadViaGateway attaches proof summary when requested", async (t)
   const proofMock = t.mock.fn(() => proofSummary);
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    sorafsGatewayFetch: gatewayMock,
-    generateDaProofSummary: proofMock,
+    ...toriiTestHooks({
+      sorafsGatewayFetch: gatewayMock,
+      generateDaProofSummary: proofMock,
+    }),
   });
   const providers = [
       {
@@ -6368,7 +6388,7 @@ test("fetchDaPayloadViaGateway rejects invalid manifest_b64 for proof summary", 
   };
   const gatewayMock = t.mock.fn(() => ({ payload: Buffer.from([1]) }));
   const client = new ToriiClient(BASE_URL, {
-    sorafsGatewayFetch: gatewayMock,
+    ...toriiTestHooks({ sorafsGatewayFetch: gatewayMock }),
   });
   await assert.rejects(
     () =>
@@ -6804,8 +6824,10 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
   const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "tmp-js-da-prove-"));
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    sorafsGatewayFetch: async () => gatewayResult,
-    generateDaProofSummary: async () => proofSummary,
+    ...toriiTestHooks({
+      sorafsGatewayFetch: async () => gatewayResult,
+      generateDaProofSummary: async () => proofSummary,
+    }),
   });
   try {
     const result = await client.proveDaAvailabilityToDir({
@@ -8210,24 +8232,15 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
       headers: { "content-type": "application/x-norito" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = canonicalTransactionCodecNative({
+  const nativeBinding = canonicalTransactionCodecNative({
     decodeTransactionReceiptJson: (buffer) => {
       assert.ok(Buffer.isBuffer(buffer));
       return receiptJson;
     },
   });
-  try {
-    const result = await client.submitTransaction(payload);
-    assert.deepEqual(result, JSON.parse(receiptJson));
-  } finally {
-    if (originalBinding === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
-    }
-  }
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
+  const result = await client.submitTransaction(payload);
+  assert.deepEqual(result, JSON.parse(receiptJson));
 });
 
 test("submitTransactionBatch posts a Norito transaction payload vector", async () => {
@@ -8297,7 +8310,7 @@ test("submitTransactionBatch posts a Norito transaction payload vector", async (
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   const result = await client.submitTransactionBatch(payloads);
@@ -8370,7 +8383,7 @@ test("submitTransactionBatch uses native framed Norito batch encoder when availa
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: nativeBinding,
+    [TORII_TEST_NATIVE_BINDING]: nativeBinding,
   });
 
   const result = await client.submitTransactionBatch(payloads);
@@ -8389,7 +8402,7 @@ test("submitTransactionBatch rejects malformed batch inputs before network submi
     fetchImpl: async () => {
       throw new Error("submitTransactionBatch should not issue a request");
     },
-    __nativeBinding: {},
+    [TORII_TEST_NATIVE_BINDING]: {},
   });
 
   await assert.rejects(
@@ -8415,7 +8428,7 @@ test("submitTransactionBatch rejects native transaction versioning failures befo
     fetchImpl: async () => {
       throw new Error("submitTransactionBatch should not issue a request");
     },
-    __nativeBinding: {
+    [TORII_TEST_NATIVE_BINDING]: {
       encodeSignedTransactionVersioned: () => {
         throw new Error("native versioning failed");
       },
@@ -8433,7 +8446,7 @@ test("submitTransactionBatch rejects an empty canonical encoder result before ne
     fetchImpl: async () => {
       throw new Error("submitTransactionBatch should not issue a request");
     },
-    __nativeBinding: {
+    [TORII_TEST_NATIVE_BINDING]: {
       encodeSignedTransactionVersioned: () => Buffer.alloc(0),
     },
   });
@@ -8481,7 +8494,7 @@ test("submitTransactionBatch rejects native batch encoder failures without posti
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative({
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative({
       encodeTransactionPayloadBatch: () => {
         throw new Error("native batch encoder failed");
       },
@@ -8538,7 +8551,7 @@ test("submitTransactionBatch rejects malformed accepted-count admission headers"
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -8571,7 +8584,7 @@ test("submitTransactionBatch requires a canonical accepted-count admission heade
     };
     const client = new ToriiClient(BASE_URL, {
       fetchImpl,
-      __nativeBinding: canonicalTransactionCodecNative(),
+      [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
     });
     await assert.rejects(
       () => client.submitTransactionBatch([Buffer.from([0x01, 0xde, 0xad])]),
@@ -8599,7 +8612,7 @@ test("submitTransactionBatch never retries a lost POST response", async () => {
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [503],
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -8630,7 +8643,7 @@ test("submitTransactionBatch never retries retryable HTTP statuses", async () =>
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [503],
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -8659,7 +8672,7 @@ test("submitTransactionBatch rejects 308 without redirecting or retrying", async
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [308],
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -8681,7 +8694,7 @@ test("submitTransaction rejects framed signed transactions before any request", 
       fetchCalls += 1;
       throw new Error("framed transaction must fail before fetch");
     },
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(framedPayload),
@@ -8697,7 +8710,7 @@ test("submitTransaction requires the canonical native V1 validator before any re
       fetchCalls += 1;
       throw new Error("unvalidated transaction must fail before fetch");
     },
-    __nativeBinding: {},
+    [TORII_TEST_NATIVE_BINDING]: {},
   });
   await assert.rejects(
     () => client.submitTransaction(Buffer.from([0x01, 0xaa])),
@@ -8724,7 +8737,7 @@ test("submitTransaction never retries a retryable HTTP status", async () => {
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [503],
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(payload),
@@ -8753,7 +8766,7 @@ test("submitTransaction never retries a network failure after dispatch", async (
     fetchImpl,
     maxRetries: 9,
     retryMethods: ["POST"],
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(payload),
@@ -8786,7 +8799,7 @@ test("submitTransaction never retries its authenticated capability preflight", a
     fetchImpl,
     maxRetries: 2,
     backoffInitialMs: 0,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -8818,7 +8831,7 @@ for (const redirectStatus of [307, 308]) {
       maxRetries: 9,
       retryMethods: ["POST"],
       retryStatuses: [redirectStatus],
-      __nativeBinding: canonicalTransactionCodecNative(),
+      [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
     });
 
     await assert.rejects(
@@ -8879,7 +8892,7 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
     }
     throw new Error(`Unexpected URL ${url}`);
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   await assert.rejects(() => client.submitTransaction(payload), /405/);
   assert.deepEqual(seenUrls, [
     `${BASE_URL}/v1/node/capabilities`,
@@ -8941,7 +8954,7 @@ test("submitTransaction posts unchanged canonical VersionedSignedTransaction V1 
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   const response = await client.submitTransaction(payload, {
     signal: controller.signal,
   });
@@ -8983,7 +8996,7 @@ test("submitTransaction rejects a native encoder result that changes the input",
     fetchCalls += 1;
     throw new Error("mutated signed transaction must fail before fetch");
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   await assert.rejects(
     () => client.submitTransaction(payload),
     /not the exact canonical VersionedSignedTransaction V1 encoding/,
@@ -9041,7 +9054,7 @@ test("submitTransaction validates canonical versioned transaction payload exactl
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   const response = await client.submitTransaction(payload);
   assert.deepEqual(response, { ok: true });
   assert.equal(versionedEncodeCalls, 1);
@@ -9063,7 +9076,7 @@ test("submitTransaction propagates canonical encoder rejection before any reques
     fetchCalls += 1;
     throw new Error("rejected transaction must fail before fetch");
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   await assert.rejects(() => client.submitTransaction(payload), /schema mismatch/);
   assert.equal(nativeEncodeCalls, 1);
   assert.equal(fetchCalls, 0);
@@ -9119,7 +9132,7 @@ test("submitTransaction does not fall back to removed public submit route", asyn
     }
     throw new Error(`Unexpected URL ${url}`);
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   await assert.rejects(() => client.submitTransaction(payload), /405/);
   assert.deepEqual(seenUrls, [
     `${BASE_URL}/v1/node/capabilities`,
@@ -9144,7 +9157,7 @@ test("submitTransaction rejects missing node capabilities advert", async () => {
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(payload),
@@ -9195,7 +9208,7 @@ test("submitTransaction rejects mismatched data model version", async () => {
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(payload),
@@ -26781,7 +26794,7 @@ test("submitTransaction bounds node capabilities before any pipeline side effect
           };
     const client = new ToriiClient(BASE_URL, {
       timeoutMs: 10,
-      __nativeBinding: canonicalTransactionCodecNative(),
+      [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
       fetchImpl: async (url) => {
         if (url.endsWith("/v1/node/capabilities")) {
           return {
@@ -26813,7 +26826,7 @@ test("submitTransaction caller abort does not wait for shared capability validat
   let pipelineCalls = 0;
   const client = new ToriiClient(BASE_URL, {
     timeoutMs: 30,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
     fetchImpl: async (url) => {
       if (url.endsWith("/v1/node/capabilities")) {
         return {
@@ -26877,7 +26890,7 @@ test("submitTransaction bounds JSON and Norito success receipts after one submit
             };
       const client = new ToriiClient(BASE_URL, {
         timeoutMs: 10,
-        __nativeBinding: canonicalTransactionCodecNative(),
+        [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
         fetchImpl: async (url) => {
           if (url.endsWith("/v1/node/capabilities")) {
             return createResponse({
@@ -27116,7 +27129,7 @@ test("http errors surface reject header codes", async () => {
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(new Uint8Array([0x01, 0x02])),

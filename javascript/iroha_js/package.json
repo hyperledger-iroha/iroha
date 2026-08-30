@@ -11,7 +11,7 @@
       "types": "./index.d.ts"
     },
     "./address": {
-      "import": "./dist/address.js",
+      "import": "./dist/public/address.js",
       "types": "./address.d.ts"
     },
     "./browser": {
@@ -35,8 +35,8 @@
       "types": "./atomic-private-settlement.d.ts"
     },
     "./transaction-codec": {
-      "browser": "./dist/transactionCodec.js",
-      "import": "./dist/transactionCodec.js",
+      "browser": "./dist/public/transactionCodec.js",
+      "import": "./dist/public/transactionCodec.js",
       "types": "./transaction-codec.d.ts"
     },
     "./contract-payload": {
@@ -50,8 +50,8 @@
       "types": "./smart-contract-deployment.d.ts"
     },
     "./normalizers": {
-      "browser": "./dist/normalizers.js",
-      "import": "./dist/normalizers.js",
+      "browser": "./dist/public/normalizers.js",
+      "import": "./dist/public/normalizers.js",
       "types": "./normalizers.d.ts"
     },
     "./blake2b": {
@@ -83,7 +83,7 @@
       "types": "./sumeragi-typed.d.ts"
     },
     "./norito": {
-      "import": "./dist/norito.js",
+      "import": "./dist/public/norito.js",
       "types": "./norito.d.ts"
     },
     "./canonical-request": {
@@ -96,12 +96,12 @@
       "types": "./sccp.d.ts"
     },
     "./sorafs": {
-      "import": "./dist/sorafs.js",
+      "import": "./dist/public/sorafs.js",
       "types": "./sorafs.d.ts"
     },
     "./crypto": {
-      "browser": "./dist/crypto.browser.js",
-      "import": "./dist/crypto.js",
+      "browser": "./dist/public/crypto.browser.js",
+      "import": "./dist/public/crypto.js",
       "types": "./crypto.d.ts"
     },
     "./connect-browser": {

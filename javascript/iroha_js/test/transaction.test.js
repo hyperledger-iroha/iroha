@@ -23,6 +23,7 @@ import {
 } from "../src/toriiClient.js";
 import { AccountAddress } from "../src/address.js";
 import { NetworkId } from "../src/networkId.js";
+import { TORII_TEST_NATIVE_BINDING } from "../src/toriiTestHooks.js";
 import { makeNativeTest } from "./helpers/native.js";
 
 const BASE_URL = "https://localhost:8080";
@@ -61,7 +62,7 @@ const CANONICAL_SIGNED_TRANSACTION_NATIVE = Object.freeze({
 class ToriiClient extends BaseToriiClient {
   constructor(baseUrl, options = {}) {
     super(baseUrl, {
-      __nativeBinding: CANONICAL_SIGNED_TRANSACTION_NATIVE,
+      [TORII_TEST_NATIVE_BINDING]: CANONICAL_SIGNED_TRANSACTION_NATIVE,
       canonicalRequestAuth: CANONICAL_REQUEST_AUTH,
       localSigningContext: LOCAL_SIGNING_CONTEXT,
       ...options,

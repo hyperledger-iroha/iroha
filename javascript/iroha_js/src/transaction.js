@@ -1425,23 +1425,46 @@ const IVM_PROVED_CONTRACT_METADATA_KEYS = new Set([
   "validation_fee_transfer_entry_index",
 ]);
 
-function readExclusiveInputAlias(record, aliases, context) {
-  const supplied = [];
-  for (const alias of aliases) {
-    if (!Object.prototype.hasOwnProperty.call(record, alias)) continue;
-    const descriptor = Object.getOwnPropertyDescriptor(record, alias);
-    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-      throw new TypeError(`${context}.${alias} must be an enumerable data property`);
+const IVM_PROVED_CONTRACT_INPUT_ALIASES = [
+  ["expected_code_hash_hex", "expectedCodeHashHex"],
+  ["expected_artifact_sha256_hex", "expectedArtifactSha256Hex"],
+  ["vk_ref", "vkRef"],
+  ["private_key", "privateKey"],
+  ["private_key_algorithm", "privateKeyAlgorithm"],
+  ["contract_address", "contractAddress"],
+  ["contract_alias", "contractAlias"],
+  ["fee_payment", "feePayment"],
+  ["creation_time_ms", "creationTimeMs"],
+  ["ttl_ms", "ttlMs"],
+  ["required_overlay_transfer", "requiredOverlayTransfer"],
+];
+
+const REQUIRED_IVM_OVERLAY_TRANSFER_ALIASES = [
+  ["source_asset_holding_id", "sourceAssetHoldingId"],
+  ["sourceAssetId", "sourceAssetHoldingId"],
+  ["source_asset_id", "sourceAssetHoldingId"],
+  ["destination_account_id", "destinationAccountId"],
+];
+
+function rejectInputAliases(record, aliases, context) {
+  for (const [alias, canonical] of aliases) {
+    if (Object.prototype.hasOwnProperty.call(record, alias)) {
+      throw new TypeError(
+        `${context}.${alias} is unsupported; use ${context}.${canonical}`,
+      );
     }
-    const value = descriptor.value;
-    if (value !== undefined) supplied.push({ alias, value });
   }
-  if (supplied.length > 1) {
+}
+
+function readInputField(record, field, context) {
+  if (!Object.prototype.hasOwnProperty.call(record, field)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(record, field);
+  if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
     throw new TypeError(
-      `${context} must use exactly one of ${aliases.join(", ")}`,
+      `${context}.${field} must be an enumerable data property`,
     );
   }
-  return supplied.length === 0 ? undefined : supplied[0].value;
+  return descriptor.value;
 }
 
 function normalizeIvmProvedContractMetadata(value) {
@@ -1755,22 +1778,22 @@ function normalizeRequiredOverlayTransfer(requiredTransfer) {
     requiredTransfer,
     "requiredOverlayTransfer",
   );
+  rejectInputAliases(
+    transfer,
+    REQUIRED_IVM_OVERLAY_TRANSFER_ALIASES,
+    "requiredOverlayTransfer",
+  );
   return buildTransferAssetInstruction({
-    sourceAssetHoldingId: readExclusiveInputAlias(
+    sourceAssetHoldingId: readInputField(
       transfer,
-      [
-        "sourceAssetHoldingId",
-        "source_asset_holding_id",
-        "sourceAssetId",
-        "source_asset_id",
-      ],
-      "requiredOverlayTransfer.sourceAssetHoldingId",
+      "sourceAssetHoldingId",
+      "requiredOverlayTransfer",
     ),
-    quantity: transfer.quantity,
-    destinationAccountId: readExclusiveInputAlias(
+    quantity: readInputField(transfer, "quantity", "requiredOverlayTransfer"),
+    destinationAccountId: readInputField(
       transfer,
-      ["destinationAccountId", "destination_account_id"],
-      "requiredOverlayTransfer.destinationAccountId",
+      "destinationAccountId",
+      "requiredOverlayTransfer",
     ),
   });
 }
@@ -1819,6 +1842,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     throw new TypeError("client must be an instance of ToriiClient");
   }
   const record = normalizePlainObject(input, "input");
+  rejectInputAliases(record, IVM_PROVED_CONTRACT_INPUT_ALIASES, "input");
   const opts = normalizePlainObject(options, "options");
   rejectRetiredTransactionFinalityFields(opts, "options");
   const { signal } = ToriiClient._normalizeOptionsWithSignal(
@@ -1868,35 +1892,23 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   transactionNetworkIdBytes(record, "input");
   const networkId = record.networkId;
   const expectedCodeHashHex = normalizeIvmCodeHashHex(
-    readExclusiveInputAlias(
-      record,
-      ["expectedCodeHashHex", "expected_code_hash_hex"],
-      "input.expectedCodeHashHex",
-    ),
+    readInputField(record, "expectedCodeHashHex", "input"),
     "input.expectedCodeHashHex",
   );
   const expectedArtifactSha256Hex = normalizeIvmCodeHashHex(
-    readExclusiveInputAlias(
-      record,
-      ["expectedArtifactSha256Hex", "expected_artifact_sha256_hex"],
-      "input.expectedArtifactSha256Hex",
-    ),
+    readInputField(record, "expectedArtifactSha256Hex", "input"),
     "input.expectedArtifactSha256Hex",
   );
   const vkRef = normalizeIvmVerifyingKeyRef(
-    readExclusiveInputAlias(record, ["vkRef", "vk_ref"], "input.vkRef"),
+    readInputField(record, "vkRef", "input"),
     "input.vkRef",
   );
-  const privateKeyValue = readExclusiveInputAlias(
-    record,
-    ["privateKey", "private_key"],
-    "input.privateKey",
-  );
+  const privateKeyValue = readInputField(record, "privateKey", "input");
   const privateKey = Buffer.from(toBuffer(privateKeyValue, "input.privateKey"));
-  const privateKeyAlgorithmValue = readExclusiveInputAlias(
+  const privateKeyAlgorithmValue = readInputField(
     record,
-    ["privateKeyAlgorithm", "private_key_algorithm"],
-    "input.privateKeyAlgorithm",
+    "privateKeyAlgorithm",
+    "input",
   );
   if (
     typeof privateKeyAlgorithmValue === "string" &&
@@ -1917,16 +1929,12 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     // Parse the algorithm-specific key before creating any proof-side effects.
     publicKeyFromPrivate(privateKey, { algorithm: privateKeyAlgorithm });
   }
-  const contractAddressValue = readExclusiveInputAlias(
+  const contractAddressValue = readInputField(
     record,
-    ["contractAddress", "contract_address"],
-    "input.contractAddress",
+    "contractAddress",
+    "input",
   );
-  const contractAliasValue = readExclusiveInputAlias(
-    record,
-    ["contractAlias", "contract_alias"],
-    "input.contractAlias",
-  );
+  const contractAliasValue = readInputField(record, "contractAlias", "input");
   if (
     (contractAddressValue === undefined || contractAddressValue === null) ===
     (contractAliasValue === undefined || contractAliasValue === null)
@@ -1969,11 +1977,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
       );
     }
   }
-  const feePayment = readExclusiveInputAlias(
-    record,
-    ["feePayment", "fee_payment"],
-    "input.feePayment",
-  );
+  const feePayment = readInputField(record, "feePayment", "input");
   // Serialize once before any proof-side effect so malformed or unbounded
   // intents fail before simulation and proving work is started.
   feePaymentIntentToNoritoJson(feePayment);
@@ -1986,8 +1990,12 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     { allowZero: false },
   );
   const metadataInput = normalizeIvmProvedContractMetadata(record.metadata);
-  function optionalTransactionInteger(aliases, context, { positive = false } = {}) {
-    const value = readExclusiveInputAlias(record, aliases, context);
+  function optionalTransactionInteger(
+    field,
+    context,
+    { positive = false } = {},
+  ) {
+    const value = readInputField(record, field, "input");
     if (value === undefined || value === null) return null;
     const normalized = ToriiClient._normalizeUnsignedInteger(value, context, {
       allowZero: !positive,
@@ -1998,34 +2006,46 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     return normalized;
   }
   const creationTimeMs = optionalTransactionInteger(
-    ["creationTimeMs", "creation_time_ms"],
+    "creationTimeMs",
     "input.creationTimeMs",
   );
-  const ttlMs = optionalTransactionInteger(
-    ["ttlMs", "ttl_ms"],
-    "input.ttlMs",
-  );
-  const nonce = optionalTransactionInteger(["nonce"], "input.nonce", {
+  const ttlMs = optionalTransactionInteger("ttlMs", "input.ttlMs");
+  const nonce = optionalTransactionInteger("nonce", "input.nonce", {
     positive: true,
   });
   if (nonce !== null && nonce > 0xffff_ffff) {
     throw new RangeError("input.nonce must fit in u32");
   }
-  const callerRequiredTransferValue = readExclusiveInputAlias(
+  const callerRequiredTransferValue = readInputField(
     record,
-    ["requiredOverlayTransfer", "required_overlay_transfer"],
-    "input.requiredOverlayTransfer",
+    "requiredOverlayTransfer",
+    "input",
   );
   const callerRequiredTransfer =
     callerRequiredTransferValue === undefined ||
     callerRequiredTransferValue === null
       ? null
       : normalizeRequiredOverlayTransfer(callerRequiredTransferValue);
-  const validationFeeIntent = readExclusiveInputAlias(
+  const validationFeePolicy = readInputField(
     record,
-    ["validationFeePolicy", "validation_fee_policy"],
-    "input.validationFeePolicy",
+    "validationFeePolicy",
+    "input",
   );
+  const validationFeePolicyWire = readInputField(
+    record,
+    "validation_fee_policy",
+    "input",
+  );
+  if (
+    validationFeePolicy !== undefined &&
+    validationFeePolicyWire !== undefined
+  ) {
+    throw new TypeError(
+      "input.validationFeePolicy must use exactly one of validationFeePolicy, validation_fee_policy",
+    );
+  }
+  const validationFeeIntent =
+    validationFeePolicy ?? validationFeePolicyWire;
   if (validationFeeIntent !== undefined && validationFeeIntent !== null) {
     throw new TypeError(
       "input.validationFeePolicy is retired; validation-fee authority comes only from a locally verified Parliament registry proof",

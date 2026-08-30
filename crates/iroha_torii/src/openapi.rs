@@ -2987,7 +2987,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing catalog descriptor for {method} {path}"));
             assert_eq!(
                 operation.get(ROUTE_AUTH_EXTENSION),
-                Some(&route_auth_metadata(**descriptor)),
+                Some(&route_auth_metadata(*descriptor)),
                 "static route-auth metadata drift for {method} {path}"
             );
             if let Some(expected_security) =

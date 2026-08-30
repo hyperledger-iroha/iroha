@@ -154,9 +154,9 @@ async fn shutdown_aborts_a_response_that_never_finishes() {
                     let _ = tx.send(());
                 }
                 async {
-                    Body::from_stream(
-                        futures::stream::pending::<Result<bytes::Bytes, Infallible>>(),
-                    )
+                    Body::from_stream(futures::stream::pending::<
+                        Result<axum::body::Bytes, Infallible>,
+                    >())
                 }
             }
         }),

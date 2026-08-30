@@ -14,10 +14,8 @@ import {
   noritoEncodeMultisigProposeRequest,
 } from "./norito.js";
 import { browserSignedTransactionHashHex } from "./transactionCodec.js";
-import {
-  buildCanonicalJsonRequest,
-  requireCanonicalAuthAccount,
-} from "./canonicalRequest.js";
+import { buildCanonicalJsonRequest } from "./canonicalRequest.js";
+import { requireCanonicalAuthAccount } from "./canonicalAccount.js";
 import { rejectPrecomputedCanonicalHeaders } from "./applicationPostAuth.js";
 import { networkIdBytes } from "./networkId.js";
 import {

@@ -1460,7 +1460,8 @@ async fn background_worker_processes_pending_attachments() {
         norito::json::to_json_pretty(&err_meta).expect("err meta json"),
     )
     .expect("write err meta");
-    super::start_worker();
+    let shutdown = ShutdownSignal::new();
+    super::start_worker(shutdown.clone());
     use tokio::time::{Duration, Instant, sleep};
     let deadline = Instant::now() + Duration::from_secs(6);
     let mut ok_report_ready = false;
@@ -1479,6 +1480,7 @@ async fn background_worker_processes_pending_attachments() {
         }
         sleep(Duration::from_millis(100)).await;
     }
+    shutdown.send();
     assert!(ok_report_ready, "Proof attachment should produce a report");
     assert!(
         err_ready,

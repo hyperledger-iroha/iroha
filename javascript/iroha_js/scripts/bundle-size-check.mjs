@@ -21,11 +21,11 @@ export const BUNDLE_TARGETS = Object.freeze([
     // The first-release simplification audit measured a 1,082,470-byte eager
     // closure before moving Norito-heavy validation, Kagemusha, SCCP, and route
     // governance behind the existing optional boundary. The reviewed eager path
-    // is now 815,608 bytes (-24.7%); the 797 KiB ceiling leaves 520 bytes while
+    // is now 813,893 bytes (-24.8%); the 797 KiB ceiling leaves 2,235 bytes while
     // every deferred closure remains independently inventoried below.
     limitKb: 797,
-    reviewedEagerBytes: 815_608,
-    reviewedCombinedBytes: 1_214_644,
+    reviewedEagerBytes: 813_893,
+    reviewedCombinedBytes: 1_212_491,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./toriiOptional.js",
@@ -38,7 +38,7 @@ export const BUNDLE_TARGETS = Object.freeze([
         specifier: "./sumeragiTyped.js",
         entryPoint: join(ROOT, "src", "sumeragiTyped.js"),
         edgeCount: 3,
-        reviewedBytes: 72_931,
+        reviewedBytes: 72_493,
         limitKb: 72,
       }),
     ]),
@@ -50,9 +50,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // Browser package mapping is defined for checked-in dist paths, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The reviewed
-    // first-release codec closure is 310,503 bytes after exact ProofAttachment,
-    // instruction archive, and response-binding validation. The 304 KiB ceiling
-    // leaves 793 bytes and preserves the release-wide 5% regression policy.
+    // first-release codec closure is 308,737 bytes after exact ProofAttachment,
+    // instruction archive, response-binding validation, and a declaration-exact
+    // public facade. The 304 KiB ceiling leaves 2,559 bytes.
     limitKb: 304,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -63,10 +63,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree. Canonical ProofAttachment handling and the shared
-    // asset-definition builder bring current V1 to 385,674 bytes (+3.84%). The
-    // 380 KiB ceiling remains below a 5% predecessor regression.
-    limitKb: 380,
+    // pre-reset tree. The exact first-release public graph is now 359,417 bytes
+    // (-3.23%). The 354 KiB ceiling leaves 3,079 bytes.
+    limitKb: 354,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -75,9 +74,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
     platform: "browser",
     target: "es2020",
-    // Protected pre-reset baseline: 97,869 bytes. Current V1: 95,840 bytes
-    // (-2.07%). The 100 KiB ceiling remains below a 5% predecessor regression.
-    limitKb: 100,
+    // Protected pre-reset baseline: 97,869 bytes. Current V1: 93,480 bytes
+    // (-4.48%). The 94 KiB ceiling leaves 2,776 bytes.
+    limitKb: 94,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -109,20 +108,21 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // The checked-in first-release aggregate measured a 517,074-byte eager split
-    // closure on the pinned runner. The reviewed strict-response and exact-export
-    // surface is 517,186 bytes; the 506 KiB ceiling leaves 958 bytes. The typed Sumeragi
-    // parser and deployment-submit continuation remain separately inventoried so
-    // aggregate startup and deferred code cannot trade against one another.
-    limitKb: 506,
-    reviewedEagerBytes: 517_186,
-    reviewedCombinedBytes: 600_068,
+    // The prior first-release aggregate measured a 517,186-byte eager split closure
+    // on the pinned runner. Removing feature-specific exports from the aggregate
+    // reduces the reviewed eager surface to 489,420 bytes (-5.37%); the 480 KiB
+    // ceiling leaves 2,100 bytes. The typed Sumeragi parser and deployment-submit
+    // continuation remain separately inventoried so startup and deferred code
+    // cannot trade against one another.
+    limitKb: 480,
+    reviewedEagerBytes: 489_420,
+    reviewedCombinedBytes: 571_416,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
         entryPoint: join(ROOT, "dist", "sumeragiTyped.js"),
         edgeCount: 2,
-        reviewedBytes: 73_692,
+        reviewedBytes: 72_806,
         limitKb: 72,
       }),
       Object.freeze({

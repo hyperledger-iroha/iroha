@@ -15,6 +15,17 @@ import {
 import { verifyEd25519Strict } from "./ed25519Strict.js";
 import { getNativeBinding } from "./native.js";
 import { networkIdBytes } from "./networkId.js";
+import {
+  CRYPTO_ALGORITHMS,
+  normalizeCryptoAlgorithm,
+  SUPPORTED_CRYPTO_ALGORITHMS,
+} from "./cryptoAlgorithms.js";
+
+export {
+  CRYPTO_ALGORITHMS,
+  normalizeCryptoAlgorithm,
+  SUPPORTED_CRYPTO_ALGORITHMS,
+};
 
 const ED25519_SEED_LENGTH = 32;
 const ED25519_PUBLIC_KEY_LENGTH = 32;
@@ -62,34 +73,6 @@ const CONFIDENTIAL_MEMO_SUITE_PARAMETERS_V1 = Object.freeze({
 const CONFIDENTIAL_MEMO_MAX_RECIPIENTS_V1 = 8;
 const CONFIDENTIAL_MEMO_KEYPAIR_ACCESS = Symbol("ConfidentialMemoKeypairV1.access");
 const PRIVACY_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff;
-export const CRYPTO_ALGORITHMS = Object.freeze({
-  ED25519: "ed25519",
-  SECP256K1: "secp256k1",
-  ML_DSA: "ml-dsa",
-  BLS_NORMAL: "bls_normal",
-  BLS_SMALL: "bls_small",
-  GOST_2012_256_A: "gost3410-2012-256-paramset-a",
-  GOST_2012_256_B: "gost3410-2012-256-paramset-b",
-  GOST_2012_256_C: "gost3410-2012-256-paramset-c",
-  GOST_2012_512_A: "gost3410-2012-512-paramset-a",
-  GOST_2012_512_B: "gost3410-2012-512-paramset-b",
-  SM2: "sm2",
-});
-
-export const SUPPORTED_CRYPTO_ALGORITHMS = Object.freeze([
-  CRYPTO_ALGORITHMS.ED25519,
-  CRYPTO_ALGORITHMS.SECP256K1,
-  CRYPTO_ALGORITHMS.BLS_NORMAL,
-  CRYPTO_ALGORITHMS.BLS_SMALL,
-  CRYPTO_ALGORITHMS.ML_DSA,
-  CRYPTO_ALGORITHMS.GOST_2012_256_A,
-  CRYPTO_ALGORITHMS.GOST_2012_256_B,
-  CRYPTO_ALGORITHMS.GOST_2012_256_C,
-  CRYPTO_ALGORITHMS.GOST_2012_512_A,
-  CRYPTO_ALGORITHMS.GOST_2012_512_B,
-  CRYPTO_ALGORITHMS.SM2,
-]);
-
 const SM2_FIXTURE_REFERENCE = Object.freeze({
   distid: "1234567812345678",
   seedHex: "1111111111111111111111111111111111111111111111111111111111111111",
@@ -152,17 +135,6 @@ export function supportedCryptoAlgorithms() {
   }
   return [CRYPTO_ALGORITHMS.ED25519];
 }
-
-export function normalizeCryptoAlgorithm(algorithm = CRYPTO_ALGORITHMS.ED25519) {
-  if (
-    typeof algorithm !== "string" ||
-    !SUPPORTED_CRYPTO_ALGORITHMS.includes(algorithm)
-  ) {
-    throw new Error(`unsupported crypto algorithm: ${algorithm}`);
-  }
-  return algorithm;
-}
-
 
 function ensureGenericCryptoNative(native, operation) {
   if (!native || typeof native[operation] !== "function") {

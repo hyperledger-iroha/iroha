@@ -369,32 +369,31 @@ test("crypto algorithm labels cover Rust signing algorithms", () => {
     "gost3410-2012-512-paramset-b",
     "sm2",
   ]);
-  assert.equal(normalizeCryptoAlgorithm("ML_DSA-65"), "ml-dsa");
-  assert.equal(
-    normalizeCryptoAlgorithm("GOST3410-2012-512-PARAMSET-B"),
-    "gost3410-2012-512-paramset-b",
-  );
-  assert.equal(normalizeCryptoAlgorithm("bls-small"), "bls_small");
+  for (const algorithm of SUPPORTED_CRYPTO_ALGORITHMS) {
+    assert.equal(normalizeCryptoAlgorithm(algorithm), algorithm);
+  }
 });
 
-test("crypto algorithm labels reject unsupported and Unicode-confusable aliases", () => {
+test("crypto algorithm labels reject every noncanonical alias and Unicode confusable", () => {
   for (const [label, normalize] of [
     ["src", normalizeCryptoAlgorithm],
     ["dist", normalizeDistCryptoAlgorithm],
   ]) {
-    for (const [algorithm, expected] of [
-      ["ed-25519", "ed25519"],
-      ["mldsa65", "ml-dsa"],
-      ["ML-DSA-65", "ml-dsa"],
-      ["ML_DSA_65", "ml-dsa"],
-      ["ML_DSA-65", "ml-dsa"],
-      ["GOST3410-2012-512-PARAMSET-B", "gost3410-2012-512-paramset-b"],
-    ]) {
-      assert.equal(normalize(algorithm), expected, `${label} keeps ${algorithm}`);
-    }
     for (const algorithm of [
       "",
       "unknown",
+      "ed",
+      "eddsa",
+      "ed-25519",
+      "secp",
+      "secpk1",
+      "mldsa65",
+      "ML-DSA-65",
+      "ML_DSA_65",
+      "ML_DSA-65",
+      "bls-small",
+      "GOST3410-2012-512-PARAMSET-B",
+      "gost256a",
       " ed25519",
       "ed25519 ",
       "\u00A0ed25519",
@@ -482,17 +481,18 @@ test("generic crypto helpers delegate non-Ed25519 algorithms to native binding",
       "ed25519",
       "gost3410-2012-256-paramset-a",
     ]);
-    const keyPair = generateKeyPair({ algorithm: "gost256a", seed: Buffer.alloc(32, 0x73) });
+    const algorithm = "gost3410-2012-256-paramset-a";
+    const keyPair = generateKeyPair({ algorithm, seed: Buffer.alloc(32, 0x73) });
     assert.equal(keyPair.algorithm, "gost3410-2012-256-paramset-a");
     assert.deepEqual(keyPair.privateKey, privateKey);
     assert.deepEqual(keyPair.publicKey, publicKey);
     assert.equal(keyPair.distid, null);
-    assert.deepEqual(loadKeyPair(privateKey, { algorithm: "gost256a" }).publicKey, publicKey);
-    assert.deepEqual(publicKeyFromPrivate(privateKey, { algorithm: "gost256a" }), publicKey);
-    assert.deepEqual(sign(MESSAGE, privateKey, { algorithm: "gost256a" }), signature);
-    assert.equal(verify(MESSAGE, signature, publicKey, { algorithm: "gost256a" }), true);
-    assert.equal(publicKeyMultihash(publicKey, { algorithm: "gost256a" }), "gost-pub-mh");
-    assert.equal(privateKeyMultihash(privateKey, { algorithm: "gost256a" }), "gost-priv-mh");
+    assert.deepEqual(loadKeyPair(privateKey, { algorithm }).publicKey, publicKey);
+    assert.deepEqual(publicKeyFromPrivate(privateKey, { algorithm }), publicKey);
+    assert.deepEqual(sign(MESSAGE, privateKey, { algorithm }), signature);
+    assert.equal(verify(MESSAGE, signature, publicKey, { algorithm }), true);
+    assert.equal(publicKeyMultihash(publicKey, { algorithm }), "gost-pub-mh");
+    assert.equal(privateKeyMultihash(privateKey, { algorithm }), "gost-priv-mh");
   });
 });
 

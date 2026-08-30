@@ -4216,8 +4216,6 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
   allowInsecure?: boolean;
   sorafsAliasPolicy?: SorafsAliasPolicyOptions;
   onSorafsAliasWarning?: (warning: SorafsAliasWarning) => void;
-  sorafsGatewayFetch?: typeof sorafsGatewayFetch;
-  generateDaProofSummary?: typeof generateDaProofSummary;
   retryTelemetryHook?: (event: ToriiRetryTelemetryEvent) => void;
   insecureTransportTelemetryHook?: (
     event: InsecureTransportTelemetryEvent,
@@ -7625,13 +7623,9 @@ export interface RegisterMultisigTransactionInput extends FeePaymentRequired {
 }
 
 export interface RequiredIvmOverlayTransfer {
-  sourceAssetHoldingId?: string;
-  source_asset_holding_id?: string;
-  sourceAssetId?: string;
-  source_asset_id?: string;
+  sourceAssetHoldingId: string;
   quantity: QuantityInput;
-  destinationAccountId?: string;
-  destination_account_id?: string;
+  destinationAccountId: string;
 }
 
 export interface IvmProvedContractCallInputBase {
@@ -7642,69 +7636,9 @@ export interface IvmProvedContractCallInputBase {
   nonce?: number | null;
 }
 
-type IvmRequiredAliasPair<
-  Camel extends string,
-  Snake extends string,
-  Value,
-> =
-  | ({ [Key in Camel]: Value } & { [Key in Snake]?: never })
-  | ({ [Key in Camel]?: never } & { [Key in Snake]: Value });
-
-type IvmOptionalAliasPair<
-  Camel extends string,
-  Snake extends string,
-  Value,
-> =
-  | ({ [Key in Camel]?: Value } & { [Key in Snake]?: never })
-  | ({ [Key in Camel]?: never } & { [Key in Snake]: Value });
-
 type IvmContractTarget =
-  | (IvmRequiredAliasPair<"contractAddress", "contract_address", string> & {
-      contractAlias?: never;
-      contract_alias?: never;
-    })
-  | (IvmRequiredAliasPair<"contractAlias", "contract_alias", string> & {
-      contractAddress?: never;
-      contract_address?: never;
-    });
-
-type IvmProvedContractCallCore = IvmProvedContractCallInputBase &
-  {
-    networkId: NetworkId;
-    chain?: never;
-    chainId?: never;
-    chain_id?: never;
-  } &
-  IvmRequiredAliasPair<
-    "privateKey",
-    "private_key",
-    Buffer | ArrayBuffer | ArrayBufferView
-  > &
-  IvmOptionalAliasPair<
-    "privateKeyAlgorithm",
-    "private_key_algorithm",
-    string | null
-  > &
-  IvmRequiredAliasPair<"vkRef", "vk_ref", IvmVerifyingKeyRef> &
-  IvmContractTarget &
-  IvmRequiredAliasPair<"feePayment", "fee_payment", BrowserFeePayment> &
-  IvmOptionalAliasPair<
-    "requiredOverlayTransfer",
-    "required_overlay_transfer",
-    RequiredIvmOverlayTransfer | null
-  > &
-  IvmOptionalAliasPair<"creationTimeMs", "creation_time_ms", number | null> &
-  IvmOptionalAliasPair<"ttlMs", "ttl_ms", number | null> &
-  IvmRequiredAliasPair<
-    "expectedCodeHashHex",
-    "expected_code_hash_hex",
-    string
-  > &
-  IvmRequiredAliasPair<
-    "expectedArtifactSha256Hex",
-    "expected_artifact_sha256_hex",
-    string
-  >;
+  | { contractAddress: string; contractAlias?: never }
+  | { contractAlias: string; contractAddress?: never };
 
 /**
  * A proved deployed-contract call must carry an independently trusted code
@@ -7712,7 +7646,23 @@ type IvmProvedContractCallCore = IvmProvedContractCallInputBase &
  * Torii's simulation, the ledger/Core body hash, and every header/body byte
  * against those values before deriving, proving, signing, or submitting.
  */
-export type IvmProvedContractCallInput = IvmProvedContractCallCore;
+export type IvmProvedContractCallInput = IvmProvedContractCallInputBase &
+  IvmContractTarget &
+  {
+    networkId: NetworkId;
+    chain?: never;
+    chainId?: never;
+    chain_id?: never;
+    privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+    privateKeyAlgorithm?: string | null;
+    vkRef: IvmVerifyingKeyRef;
+    feePayment: BrowserFeePayment;
+    requiredOverlayTransfer?: RequiredIvmOverlayTransfer | null;
+    creationTimeMs?: number | null;
+    ttlMs?: number | null;
+    expectedCodeHashHex: string;
+    expectedArtifactSha256Hex: string;
+  };
 
 export interface IvmProvedContractCallOptions {
   signal?: AbortSignal;

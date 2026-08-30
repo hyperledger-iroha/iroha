@@ -1486,15 +1486,6 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
       sign: 0,
       submit: 0,
     });
-    const duplicate = await rejectsBeforeSigning({
-      input: {
-        expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
-        expected_code_hash_hex: ZK_IVM_CODE_HASH_HEX,
-      },
-      expected: /must use exactly one of expectedCodeHashHex, expected_code_hash_hex/,
-    });
-    assert.equal(duplicate.simulate, 0);
-
     const missingArtifactHash = await rejectsBeforeSigning({
       input: { expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX },
       expected: /expectedArtifactSha256Hex must be exactly 32 hexadecimal bytes/,
@@ -1502,7 +1493,85 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
     assert.equal(missingArtifactHash.simulate, 0);
   });
 
-  await t.test("rejects every conflicting input alias before simulation", async () => {
+  await t.test("rejects removed input aliases before simulation", async () => {
+    const trusted = {
+      expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
+      expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
+    };
+    const removedAliases = [
+      ["private_key", PRIVATE_KEY, "privateKey"],
+      ["private_key_algorithm", "ed25519", "privateKeyAlgorithm"],
+      [
+        "vk_ref",
+        { backend: "halo2/ipa", name: "ivm-exec-v1" },
+        "vkRef",
+      ],
+      ["contract_address", "irohac1attacker", "contractAddress"],
+      ["contract_alias", "attacker::router.universal", "contractAlias"],
+      ["fee_payment", IVM_AUTHORITY_FEE_PAYMENT, "feePayment"],
+      ["creation_time_ms", 1, "creationTimeMs"],
+      ["ttl_ms", 1, "ttlMs"],
+      ["required_overlay_transfer", null, "requiredOverlayTransfer"],
+      [
+        "expected_code_hash_hex",
+        ZK_IVM_CODE_HASH_HEX,
+        "expectedCodeHashHex",
+      ],
+      [
+        "expected_artifact_sha256_hex",
+        ZK_IVM_ARTIFACT_SHA256_HEX,
+        "expectedArtifactSha256Hex",
+      ],
+    ];
+    for (const [alias, value, canonical] of removedAliases) {
+      const calls = await rejectsBeforeSigning({
+        input: { ...trusted, [alias]: value },
+        expected: new RegExp(
+          `input\\.${alias} is unsupported; use input\\.${canonical}`,
+          "u",
+        ),
+      });
+      assert.equal(calls.simulate, 0);
+      assert.equal(calls.derive, 0);
+      assert.equal(calls.prove, 0);
+    }
+
+    const requiredTransfer = {
+      sourceAssetHoldingId: CANONICAL_ASSET_ID_INPUT,
+      quantity: "1",
+      destinationAccountId: RELAY_ACCOUNT_ID_INPUT,
+    };
+    for (const [alias, value, canonical] of [
+      [
+        "source_asset_holding_id",
+        CANONICAL_ASSET_ID_INPUT,
+        "sourceAssetHoldingId",
+      ],
+      ["sourceAssetId", CANONICAL_ASSET_ID_INPUT, "sourceAssetHoldingId"],
+      ["source_asset_id", CANONICAL_ASSET_ID_INPUT, "sourceAssetHoldingId"],
+      [
+        "destination_account_id",
+        RELAY_ACCOUNT_ID_INPUT,
+        "destinationAccountId",
+      ],
+    ]) {
+      const calls = await rejectsBeforeSigning({
+        input: {
+          ...trusted,
+          requiredOverlayTransfer: { ...requiredTransfer, [alias]: value },
+        },
+        expected: new RegExp(
+          `requiredOverlayTransfer\\.${alias} is unsupported; use requiredOverlayTransfer\\.${canonical}`,
+          "u",
+        ),
+      });
+      assert.equal(calls.simulate, 0);
+      assert.equal(calls.derive, 0);
+      assert.equal(calls.prove, 0);
+    }
+  });
+
+  await t.test("rejects retired and ambiguous inputs before simulation", async () => {
     const trusted = {
       expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
       expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
@@ -1511,30 +1580,9 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
       [{ ...trusted, chain: "test-chain" }, /input\.chain is unsupported/u],
       [{ ...trusted, chainId: "test-chain" }, /input\.chainId is unsupported/u],
       [{ ...trusted, chain_id: "test-chain" }, /input\.chain_id is unsupported/u],
-      [{ ...trusted, private_key: PRIVATE_KEY }, /exactly one of privateKey, private_key/],
-      [
-        {
-          ...trusted,
-          privateKeyAlgorithm: "ed25519",
-          private_key_algorithm: "ed25519",
-        },
-        /exactly one of privateKeyAlgorithm, private_key_algorithm/,
-      ],
-      [
-        { ...trusted, vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" } },
-        /exactly one of vkRef, vk_ref/,
-      ],
-      [
-        { ...trusted, contract_alias: "attacker::router.universal" },
-        /exactly one of contractAlias, contract_alias/,
-      ],
       [
         { ...trusted, contractAddress: "irohac1attacker" },
         /exactly one of contractAddress or contractAlias/,
-      ],
-      [
-        { ...trusted, fee_payment: IVM_AUTHORITY_FEE_PAYMENT },
-        /exactly one of feePayment, fee_payment/,
       ],
       [
         { ...trusted, gasAssetId: null },
@@ -1549,40 +1597,12 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
         /gasLimit is retired/,
       ],
       [
-        { ...trusted, creationTimeMs: 1, creation_time_ms: 1 },
-        /exactly one of creationTimeMs, creation_time_ms/,
-      ],
-      [{ ...trusted, ttlMs: 1, ttl_ms: 1 }, /exactly one of ttlMs, ttl_ms/],
-      [
-        {
-          ...trusted,
-          requiredOverlayTransfer: null,
-          required_overlay_transfer: null,
-        },
-        /exactly one of requiredOverlayTransfer, required_overlay_transfer/,
-      ],
-      [
         {
           ...trusted,
           validationFeePolicy: null,
           validation_fee_policy: null,
         },
         /exactly one of validationFeePolicy, validation_fee_policy/,
-      ],
-      [
-        {
-          expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
-          expected_code_hash_hex: ZK_IVM_CODE_HASH_HEX,
-          expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
-        },
-        /exactly one of expectedCodeHashHex, expected_code_hash_hex/,
-      ],
-      [
-        {
-          ...trusted,
-          expected_artifact_sha256_hex: ZK_IVM_ARTIFACT_SHA256_HEX,
-        },
-        /exactly one of expectedArtifactSha256Hex, expected_artifact_sha256_hex/,
       ],
     ];
     for (const [input, expected] of cases) {

@@ -149,23 +149,26 @@ def fixture_formal_transcript() -> bytes:
             f"Semantic processing of module {Path(model).stem}\n"
             f"===== SANY {model} stderr =====\n"
         )
-    for name, outcome in MODULE.REQUIRED_FORMAL_CONFIGURATIONS:
+    for name, outcome, model in MODULE.REQUIRED_FORMAL_CONFIGURATION_MODELS:
         status = 0 if outcome == "pass" else 12
-        outcome_marker = (
-            "Model checking completed. No error has been found."
+        result_body = (
+            "1 states generated, 1 distinct states found, 0 states left on queue.\n"
+            "The depth of the complete state graph search is 1.\n"
+            "Model checking completed. No error has been found.\n"
             if outcome == "pass"
-            else "Error: Invariant Safety is violated."
+            else "Error: Invariant Safety is violated.\n"
+            "Error: The behavior up to this point is:\n"
+            "1 states generated, 1 distinct states found, 0 states left on queue.\n"
+            "The depth of the complete state graph search is 1.\n"
         )
         sections.append(
-            f"===== {name} stdout (status {status}) =====\n"
+            f"===== {name} model {model} stdout (status {status}) =====\n"
             "TLC2 Version 2.19 of fixture\n"
             "Running breadth-first search Model-Checking with fp 0 and seed "
             "20260829 with 1 worker on fixture.\n"
-            "1 states generated, 1 distinct states found, 0 states left on queue.\n"
-            "The depth of the complete state graph search is 1.\n"
-            f"{outcome_marker}\n"
+            f"{result_body}"
             "Finished in 1s at (2026-08-29 00:00:00)\n"
-            f"===== {name} stderr =====\n"
+            f"===== {name} model {model} stderr =====\n"
         )
     return "".join(sections).encode("utf-8")
 
@@ -582,13 +585,16 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         "configurations": [
                             {
                                 "name": name,
+                                "model": model,
                                 "expected_outcome": outcome,
                                 "observed_outcome": outcome,
                                 "generated_states": 1,
                                 "distinct_states": 1,
                                 "depth": 1,
                             }
-                            for name, outcome in MODULE.REQUIRED_FORMAL_CONFIGURATIONS
+                            for name, outcome, model in (
+                                MODULE.REQUIRED_FORMAL_CONFIGURATION_MODELS
+                            )
                         ],
                         "passed": True,
                         "transcript": transcript,

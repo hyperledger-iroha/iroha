@@ -41,22 +41,20 @@ test("browser crypto advertises only algorithms it can execute locally", () => {
     ["src", srcBrowserCrypto],
     ["dist", distBrowserCrypto],
   ]) {
-    for (const [algorithm, expected] of [
-      ["ed-25519", "ed25519"],
-      ["mldsa65", "ml-dsa"],
-      ["ML-DSA-65", "ml-dsa"],
-      ["ML_DSA_65", "ml-dsa"],
-      ["ML_DSA-65", "ml-dsa"],
-      ["GOST3410-2012-256-PARAMSET-A", "gost3410-2012-256-paramset-a"],
-    ]) {
-      assert.equal(
-        crypto.normalizeCryptoAlgorithm(algorithm),
-        expected,
-        `${label} keeps ${algorithm}`,
-      );
-    }
     for (const algorithm of [
       "",
+      "ed",
+      "eddsa",
+      "ed-25519",
+      "secp",
+      "secpk1",
+      "mldsa65",
+      "ML-DSA-65",
+      "ML_DSA_65",
+      "ML_DSA-65",
+      "bls-small",
+      "GOST3410-2012-256-PARAMSET-A",
+      "gost256a",
       " ed25519",
       "ed25519 ",
       "\u00A0ed25519",
@@ -212,6 +210,12 @@ test("browser crypto covers the package root crypto export surface", () => {
     [...browserCryptoSource.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z0-9_]+)/g)]
       .map((match) => match[1]),
   );
+  for (const match of browserCryptoSource.matchAll(/export\s+\{([\s\S]*?)\}\s*;/g)) {
+    for (const specifier of match[1].split(",")) {
+      const name = specifier.trim().split(/\s+as\s+/u).at(-1);
+      if (name) browserExports.add(name);
+    }
+  }
   assert.deepEqual(
     rootCryptoExports.filter((name) => !browserExports.has(name)),
     [],
@@ -222,7 +226,7 @@ test("browser package wiring omits the retired privacy catalog module", () => {
   const packageJson = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   );
-  assert.equal(packageJson.exports["./crypto"].browser, "./dist/crypto.browser.js");
+  assert.equal(packageJson.exports["./crypto"].browser, "./dist/public/crypto.browser.js");
   assert.equal(packageJson.browser["./dist/crypto.js"], "./dist/crypto.browser.js");
 
   for (const [label, relativePath] of [

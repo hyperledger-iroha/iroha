@@ -5,7 +5,15 @@ import {
   resolveToriiClientConfig,
   extractConfidentialGasConfig,
 } from "./config.js";
-import { getNativeBinding } from "./native.js";
+import {
+  createNativeRuntime,
+  resolveNativeRuntimeBinding,
+  resolveOptionalNativeRuntimeBinding,
+} from "./nativeRuntime.js";
+import {
+  TORII_TEST_HOOKS,
+  TORII_TEST_NATIVE_BINDING,
+} from "./toriiTestHooks.js";
 import { crc64Xz } from "./crc64Xz.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import {
@@ -328,6 +336,16 @@ const eventTargetRemoveEventListener =
   typeof EventTarget === "undefined"
     ? null
     : EventTarget.prototype.removeEventListener;
+const AbortControllerConstructor = globalThis.AbortController;
+const abortControllerAbort = AbortControllerConstructor?.prototype?.abort ?? null;
+const abortControllerSignalGetter = AbortControllerConstructor
+  ? Object.getOwnPropertyDescriptor(
+      AbortControllerConstructor.prototype,
+      "signal",
+    )?.get ?? null
+  : null;
+const scheduleTimeout = globalThis.setTimeout;
+const cancelTimeout = globalThis.clearTimeout;
 const BOUNDED_JSON_MAX_READ_TIMEOUT_MS = 30_000;
 const HTTP_ERROR_BODY_MAX_BYTES = 64 * 1024;
 const DEFAULT_ISO_POLL_INTERVAL_MS = 2_000;
@@ -457,26 +475,16 @@ const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
   "CANCELED",
   "EXPIRED",
 ]);
-function resolveNativeBinding(nativeBinding) {
-  return nativeBinding ?? globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+function resolveNativeBinding(nativeRuntime) {
+  return resolveNativeRuntimeBinding(nativeRuntime);
 }
 
-function resolveOptionalNativeBinding(nativeBinding) {
-  if (nativeBinding !== undefined) {
-    return nativeBinding;
-  }
-  if (globalThis.__IROHA_NATIVE_BINDING__ !== undefined) {
-    return globalThis.__IROHA_NATIVE_BINDING__;
-  }
-  try {
-    return getNativeBinding();
-  } catch {
-    return null;
-  }
+function resolveOptionalNativeBinding(nativeRuntime) {
+  return resolveOptionalNativeRuntimeBinding(nativeRuntime);
 }
 
-function decodeTransactionReceiptPayload(payload) {
-  const native = resolveNativeBinding();
+function decodeTransactionReceiptPayload(payload, nativeRuntime) {
+  const native = resolveNativeBinding(nativeRuntime);
   if (!native || typeof native.decodeTransactionReceiptJson !== "function") {
     return null;
   }
@@ -950,8 +958,8 @@ const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
   "offset",
   "signal",
 ]);
-function encodeCanonicalVersionedSignedTransactionV1(payload, nativeBinding) {
-  const native = resolveNativeBinding(nativeBinding);
+function encodeCanonicalVersionedSignedTransactionV1(payload, nativeRuntime) {
+  const native = resolveNativeBinding(nativeRuntime);
   if (
     !native ||
     typeof native.encodeSignedTransactionVersioned !== "function"
@@ -975,8 +983,8 @@ function encodeCanonicalVersionedSignedTransactionV1(payload, nativeBinding) {
   return encoded;
 }
 
-async function encodeTransactionPayloadBatch(payloads, nativeBinding) {
-  const native = resolveOptionalNativeBinding(nativeBinding);
+async function encodeTransactionPayloadBatch(payloads, nativeRuntime) {
+  const native = resolveOptionalNativeBinding(nativeRuntime);
   if (
     native &&
     typeof native.encodeTransactionPayloadBatch === "function"
@@ -1513,11 +1521,8 @@ export class ToriiClient {
    * @param {LocalSigningContext} [options.localSigningContext] Immutable context required by local-signing APIs.
    * @param {OperatorSigningContext} [options.operatorSigningContext] Immutable exact-network signer required by operator-only APIs.
    * @param {CanonicalRequestAuth} [options.canonicalRequestAuth] Default exact-network signer for authenticated calls, including expensive query POSTs and optional-auth dataspace reads.
-   * @param {typeof sorafsGatewayFetch} [options.sorafsGatewayFetch] Custom gateway fetch hook (tests).
    * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
    * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
-   * @param {(manifest: Buffer, payload: Buffer, options: Record<string, unknown>) => unknown} [options.generateDaProofSummary] Custom proof summary generator (tests).
- * @param {object} [options.__nativeBinding] Custom native binding (tests).
  */
   constructor(baseUrl, options = {}) {
     if (!baseUrl) {
@@ -1532,6 +1537,19 @@ export class ToriiClient {
         throw createValidationError(
           ValidationErrorCode.INVALID_OBJECT,
           `ToriiClient options.${field} is not supported; use a LocalSigningContext`,
+          `ToriiClient.options.${field}`,
+        );
+      }
+    }
+    for (const field of [
+      "__nativeBinding",
+      "sorafsGatewayFetch",
+      "generateDaProofSummary",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(opts, field)) {
+        throw createValidationError(
+          ValidationErrorCode.INVALID_OBJECT,
+          `ToriiClient options.${field} is not a public option`,
           `ToriiClient.options.${field}`,
         );
       }
@@ -1563,42 +1581,64 @@ export class ToriiClient {
     }
     Object.defineProperties(this, { _baseUrl: { value: normalizedBaseUrl }, _fetch: { value: fetchImpl } });
     if (
-      opts.__nativeBinding !== undefined &&
-      (opts.__nativeBinding === null || typeof opts.__nativeBinding !== "object")
+      opts[TORII_TEST_NATIVE_BINDING] !== undefined &&
+      (opts[TORII_TEST_NATIVE_BINDING] === null ||
+        typeof opts[TORII_TEST_NATIVE_BINDING] !== "object")
     ) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        "ToriiClient options.__nativeBinding must be an object when provided",
-        "ToriiClient.options.__nativeBinding",
+        "ToriiClient internal native binding must be an object when provided",
+        "ToriiClient.testNativeBinding",
       );
     }
-    this._nativeBinding = opts.__nativeBinding;
+    Object.defineProperty(this, "_nativeRuntime", {
+      value: createNativeRuntime(opts[TORII_TEST_NATIVE_BINDING]),
+      writable: false,
+      configurable: false,
+      enumerable: false,
+    });
+    const testHooks = opts[TORII_TEST_HOOKS] ?? {};
+    if (testHooks === null || typeof testHooks !== "object" || Array.isArray(testHooks)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "ToriiClient internal test hooks must be an object",
+        "ToriiClient.testHooks",
+      );
+    }
     if (
-      opts.sorafsGatewayFetch !== undefined &&
-      typeof opts.sorafsGatewayFetch !== "function"
+      testHooks.sorafsGatewayFetch !== undefined &&
+      typeof testHooks.sorafsGatewayFetch !== "function"
     ) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        "ToriiClient options.sorafsGatewayFetch must be a function",
-        "ToriiClient.options.sorafsGatewayFetch",
+        "ToriiClient internal sorafsGatewayFetch hook must be a function",
+        "ToriiClient.testHooks.sorafsGatewayFetch",
       );
     }
-    this._sorafsGatewayFetch =
-      typeof opts.sorafsGatewayFetch === "function" ? opts.sorafsGatewayFetch : sorafsGatewayFetch;
     if (
-      opts.generateDaProofSummary !== undefined &&
-      typeof opts.generateDaProofSummary !== "function"
+      testHooks.generateDaProofSummary !== undefined &&
+      typeof testHooks.generateDaProofSummary !== "function"
     ) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        "ToriiClient options.generateDaProofSummary must be a function when provided",
-        "ToriiClient.options.generateDaProofSummary",
+        "ToriiClient internal generateDaProofSummary hook must be a function",
+        "ToriiClient.testHooks.generateDaProofSummary",
       );
     }
-    this._generateDaProofSummary =
-      typeof opts.generateDaProofSummary === "function"
-        ? opts.generateDaProofSummary
-        : generateDaProofSummary;
+    Object.defineProperties(this, {
+      _sorafsGatewayFetch: {
+        value: testHooks.sorafsGatewayFetch ?? sorafsGatewayFetch,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      },
+      _generateDaProofSummary: {
+        value: testHooks.generateDaProofSummary ?? generateDaProofSummary,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      },
+    });
     const allowInsecure =
       opts.allowInsecure ??
       (opts.config &&
@@ -1615,9 +1655,8 @@ export class ToriiClient {
     delete overrides.allowInsecure;
     delete overrides.sorafsAliasPolicy;
     delete overrides.onSorafsAliasWarning;
-    delete overrides.sorafsGatewayFetch;
-    delete overrides.generateDaProofSummary;
-    delete overrides.__nativeBinding;
+    delete overrides[TORII_TEST_HOOKS];
+    delete overrides[TORII_TEST_NATIVE_BINDING];
     delete overrides.localSigningContext;
     delete overrides.operatorSigningContext;
     this._config = resolveToriiClientConfig({
@@ -5002,7 +5041,7 @@ export class ToriiClient {
     throwIfAborted(signal);
     const body = encodeCanonicalVersionedSignedTransactionV1(
       rawTransaction,
-      this._nativeBinding,
+      this._nativeRuntime,
     );
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
     throwIfAborted(signal);
@@ -5816,7 +5855,7 @@ export class ToriiClient {
     const rawPayload = toBuffer(payload);
     const pipelinePayload = encodeCanonicalVersionedSignedTransactionV1(
       rawPayload,
-      this._nativeBinding,
+      this._nativeRuntime,
     );
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
     throwIfAborted(signal);
@@ -5872,7 +5911,7 @@ export class ToriiClient {
       if (body.length === 0) {
         return enrichSubmission(null);
       }
-      return enrichSubmission(decodeTransactionReceiptPayload(body));
+      return enrichSubmission(decodeTransactionReceiptPayload(body, this._nativeRuntime));
     }
     return enrichSubmission(
       await this._maybeBoundedJson(
@@ -5902,7 +5941,7 @@ export class ToriiClient {
     const versionedPayloads = payloads.map((payload) =>
       encodeCanonicalVersionedSignedTransactionV1(
         toBuffer(payload),
-        this._nativeBinding,
+        this._nativeRuntime,
       ),
     );
     throwIfAborted(signal);
@@ -5910,7 +5949,7 @@ export class ToriiClient {
     throwIfAborted(signal);
     const batchPayload = await encodeTransactionPayloadBatch(
       versionedPayloads,
-      this._nativeBinding,
+      this._nativeRuntime,
     );
     let response;
     try {
@@ -11090,7 +11129,7 @@ export class ToriiClient {
     if (this._sorafsResolvedPolicy) {
       return this._sorafsResolvedPolicy;
     }
-    const native = requireSorafsNativeBinding();
+    const native = requireSorafsNativeBinding(this._nativeRuntime);
     const defaults = native.sorafsAliasPolicyDefaults();
     const policy = { ...defaults };
     const overrides = this._sorafsPolicyOverrides;
@@ -11168,7 +11207,7 @@ export class ToriiClient {
     if (!proofB64) {
       return;
     }
-    const native = requireSorafsNativeBinding();
+    const native = requireSorafsNativeBinding(this._nativeRuntime);
     const policy = this._resolveSorafsPolicy();
 
     let evaluation;
@@ -11668,7 +11707,7 @@ export class ToriiClient {
       expectedNetworkIdBytes: networkIdBytes(this._localSigningContext.networkId, `${context}.networkId`),
       expectedChainDiscriminant: this._localSigningContext.chainDiscriminant,
       expectedReceiptSigner: normalized.expectedReceiptSigner,
-      native: resolveOptionalNativeBinding(this._nativeBinding), context,
+      native: resolveOptionalNativeBinding(this._nativeRuntime), context,
     });
     const operation = createSorafsOrderbookSubmissionDeadline(signal, this._config.timeoutMs, context, { addAbortListener: addSignalAbortListener, removeAbortListener: removeSignalAbortListener, isAborted: signalIsAborted });
     try {
@@ -11694,9 +11733,9 @@ export class ToriiClient {
         const { bytes } = await this._readBoundedResponseBytes(response,
           SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1, `${context} receipt`, { signal: operation.signal });
         return verifySorafsOrderbookSubmissionReceipt(Buffer.from(bytes), prepared);
-      } catch {
+      } catch (error) {
         if (response !== undefined) cancelResponseBodyBestEffort(response, `${context} outcome is ambiguous`);
-        throw new SorafsOrderbookSubmissionAmbiguousError(route, prepared.identity);
+        throw new SorafsOrderbookSubmissionAmbiguousError(route, prepared.identity, error);
       }
     } finally {
       operation.dispose();
@@ -19349,7 +19388,9 @@ function bodyContainsSensitiveKeyMaterial(body, headers) {
 
 function composeRequestSignal(callerSignal, timeoutMs) {
   if (
-    typeof AbortController !== "function" ||
+    typeof AbortControllerConstructor !== "function" ||
+    typeof abortControllerAbort !== "function" ||
+    typeof abortControllerSignalGetter !== "function" ||
     !(typeof timeoutMs === "number" && timeoutMs > 0)
   ) {
     return {
@@ -19358,11 +19399,12 @@ function composeRequestSignal(callerSignal, timeoutMs) {
       didTimeout: () => false,
     };
   }
-  const controller = new AbortController();
+  const controller = new AbortControllerConstructor();
+  const composedSignal = Reflect.apply(abortControllerSignalGetter, controller, []);
   let timedOut = false;
   let timeoutId;
   const onCallerAbort = () => {
-    controller.abort(signalAbortReason(callerSignal));
+    Reflect.apply(abortControllerAbort, controller, [signalAbortReason(callerSignal)]);
   };
   if (callerSignal) {
     if (signalIsAborted(callerSignal)) {
@@ -19371,19 +19413,21 @@ function composeRequestSignal(callerSignal, timeoutMs) {
       addSignalAbortListener(callerSignal, onCallerAbort);
     }
   }
-  if (!signalIsAborted(controller.signal)) {
-    timeoutId = setTimeout(() => {
+  if (!signalIsAborted(composedSignal)) {
+    timeoutId = scheduleTimeout(() => {
       timedOut = true;
-      controller.abort(new Error(`Torii request timed out after ${timeoutMs} ms`));
+      Reflect.apply(abortControllerAbort, controller, [
+        new Error(`Torii request timed out after ${timeoutMs} ms`),
+      ]);
     }, timeoutMs);
   }
   let cleaned = false;
   return {
-    signal: controller.signal,
+    signal: composedSignal,
     cleanup() {
       if (cleaned) return;
       cleaned = true;
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      if (timeoutId !== undefined) cancelTimeout(timeoutId);
       if (callerSignal) removeSignalAbortListener(callerSignal, onCallerAbort);
     },
     didTimeout: () => timedOut,
@@ -19846,17 +19890,8 @@ function requireEvidencePhase(value, context) {
   return phase;
 }
 
-let cachedSorafsNative;
-
-function getSorafsNativeBinding() {
-  if (cachedSorafsNative === undefined) {
-    cachedSorafsNative = getNativeBinding();
-  }
-  return cachedSorafsNative;
-}
-
-function requireSorafsNativeBinding() {
-  const binding = getSorafsNativeBinding();
+function requireSorafsNativeBinding(nativeRuntime) {
+  const binding = resolveNativeBinding(nativeRuntime);
   if (
     !binding ||
     typeof binding.sorafsEvaluateAliasProof !== "function" ||

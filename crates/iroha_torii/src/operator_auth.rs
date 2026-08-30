@@ -2373,8 +2373,10 @@ mod tests {
                 extra,
             ]);
             let bytes = norito::json::to_vec(&payload).expect("clientDataJSON");
-            let error = parse_client_data(&bytes, "webauthn.get")
-                .expect_err("cross-origin context must fail closed");
+            let error = match parse_client_data(&bytes, "webauthn.get") {
+                Ok(_) => panic!("cross-origin context must fail closed"),
+                Err(error) => error,
+            };
             assert_eq!(error.code, "operator_webauthn_payload_invalid");
         }
     }
@@ -2540,9 +2542,11 @@ mod tests {
         let mut rng = FallibleOsRng;
         auth.issue_session_with_rng(b"credential", Duration::from_secs(60), &mut rng)
             .expect("first session");
-        let session_error = auth
-            .issue_session_with_rng(b"credential", Duration::from_secs(60), &mut rng)
-            .expect_err("second live session must exceed capacity");
+        let session_error =
+            match auth.issue_session_with_rng(b"credential", Duration::from_secs(60), &mut rng) {
+                Ok(_) => panic!("second live session must exceed capacity"),
+                Err(error) => error,
+            };
         assert_eq!(session_error.code, "operator_auth_state_capacity_exhausted");
     }
     #[test]

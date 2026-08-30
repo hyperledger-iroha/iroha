@@ -64,6 +64,7 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
     def test_parse_positive_and_negative_results(self) -> None:
         passing = MODULE.parse_run(
             name="positive.cfg",
+            model="Positive.tla",
             expected_outcome="pass",
             stdout=positive_log(),
             stderr="",
@@ -80,6 +81,7 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
 
         negative = MODULE.parse_run(
             name="negative.cfg",
+            model="Negative.tla",
             expected_outcome="safety_violation",
             stdout=negative_log(),
             stderr="",
@@ -96,6 +98,7 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ReportError, "separate stderr"):
             MODULE.parse_run(
                 name="stderr.cfg",
+                model="Positive.tla",
                 expected_outcome="pass",
                 stdout=positive_log(),
                 stderr="warning\n",
@@ -108,6 +111,7 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ReportError, "clean passing result"):
             MODULE.parse_run(
                 name="status.cfg",
+                model="Positive.tla",
                 expected_outcome="pass",
                 stdout=positive_log(),
                 stderr="",
@@ -120,6 +124,7 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ReportError, "continues after"):
             MODULE.parse_run(
                 name="trailing.cfg",
+                model="Positive.tla",
                 expected_outcome="pass",
                 stdout=positive_log() + "untrusted trailing text\n",
                 stderr="",
@@ -132,6 +137,7 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ReportError, "run controls differ"):
             MODULE.parse_run(
                 name="seed-substitution.cfg",
+                model="Positive.tla",
                 expected_outcome="pass",
                 stdout=positive_log(),
                 stderr="",
@@ -144,6 +150,7 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ReportError, "retained queued states"):
             MODULE.parse_run(
                 name="queued.cfg",
+                model="Positive.tla",
                 expected_outcome="pass",
                 stdout=positive_log(queued="1"),
                 stderr="",
@@ -156,6 +163,7 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ReportError, "distinct state count"):
             MODULE.parse_run(
                 name="impossible-count.cfg",
+                model="Positive.tla",
                 expected_outcome="pass",
                 stdout=positive_log(generated="1", distinct="2"),
                 stderr="",
@@ -173,6 +181,7 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ReportError, "unexpected diagnostics"):
             MODULE.parse_run(
                 name="multiple-primary-diagnostics.cfg",
+                model="Negative.tla",
                 expected_outcome="safety_violation",
                 stdout=duplicate_primary,
                 stderr="",

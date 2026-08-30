@@ -6,10 +6,11 @@ export const SORAFS_ORDERBOOK_TRANSACTION_MAX_BYTES_V1 = 2 * 1024 * 1024;
 export const SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1 = 1024 * 1024;
 
 export class SorafsOrderbookSubmissionAmbiguousError extends Error {
-  constructor(route, identity) {
+  constructor(route, identity, cause) {
     super(
       "SoraFS orderbook submission outcome is ambiguous after dispatch; "
       + "do not resubmit automatically, reconcile the expected transaction identity",
+      cause === undefined ? undefined : { cause },
     );
     this.name = "SorafsOrderbookSubmissionAmbiguousError";
     Object.defineProperties(this, {

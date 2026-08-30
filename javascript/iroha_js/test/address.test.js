@@ -681,28 +681,40 @@ test("fromAccount rejects control and Unicode-confusable curve algorithm aliases
   }
 });
 
-test("curve registry accepts only the canonical ML-DSA label in src and dist", () => {
+test("curve registry accepts only exact canonical V1 algorithm labels in src and dist", () => {
   for (const addressModule of [sourceAddressModule, distAddressModule]) {
-    assert.equal(addressModule.curveIdFromAlgorithm("ml-dsa"), 2);
+    for (const [algorithm, curveId] of [
+      ["ed25519", 1],
+      ["ml-dsa", 2],
+      ["bls_normal", 3],
+      ["secp256k1", 4],
+      ["bls_small", 5],
+      ["gost3410-2012-256-paramset-a", 10],
+      ["gost3410-2012-256-paramset-b", 11],
+      ["gost3410-2012-256-paramset-c", 12],
+      ["gost3410-2012-512-paramset-a", 13],
+      ["gost3410-2012-512-paramset-b", 14],
+      ["sm2", 15],
+    ]) {
+      assert.equal(addressModule.curveIdFromAlgorithm(algorithm), curveId);
+      assert.equal(addressModule.curveIdToAlgorithm(curveId), algorithm);
+    }
     for (const algorithm of [
-        "mldsa",
-        "ml_dsa",
-        "mldsa65",
-        "MLDSA65",
-        "ml-dsa-65",
-        "ML-DSA-65",
-        "ml_dsa_65",
-        "ML_DSA_65",
-        "ml_dsa-65",
-        "ML_DSA-65",
-        "MLDSA44",
-        "MLDSA87",
-        "ML-DSA-44",
-        "ML-DSA-87",
-        "ML_DSA_44",
-        "ML_DSA_87",
-        "ML_DSA-44",
-        "ML_DSA-87",
+      "ED25519",
+      "ed-25519",
+      "secp",
+      "SECP256K1",
+      "bls-normal",
+      "BLS_NORMAL",
+      "mldsa",
+      "ml_dsa",
+      "mldsa65",
+      "ML-DSA-65",
+      "gost256a",
+      "gost512b",
+      "GOST3410-2012-256-PARAMSET-A",
+      "sm-2",
+      "SM2",
     ]) {
       assert.throws(
         () => addressModule.curveIdFromAlgorithm(algorithm),
@@ -799,7 +811,7 @@ test("displayFormats validates chain discriminant input", () => {
 test("every V1 curve round-trips without process-wide configuration", () => {
   for (const [algorithm, publicKey] of [
     ["secp256k1", SECP256K1_PUBLIC_KEY],
-    ["gost256a", GOST256_PUBLIC_KEY],
+    ["gost3410-2012-256-paramset-a", GOST256_PUBLIC_KEY],
     ["sm2", SM2_PUBLIC_KEY],
     ["bls_normal", BLS_NORMAL_PUBLIC_KEY],
     ["bls_small", BLS_SMALL_PUBLIC_KEY],

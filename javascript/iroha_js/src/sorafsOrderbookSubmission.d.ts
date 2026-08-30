@@ -22,7 +22,11 @@ export interface SorafsOrderbookSubmissionReceipt {
 }
 
 export declare class SorafsOrderbookSubmissionAmbiguousError extends Error {
-  constructor(route: string, expectedIdentity: SorafsOrderbookSubmissionIdentity);
+  constructor(
+    route: string,
+    expectedIdentity: SorafsOrderbookSubmissionIdentity,
+    cause?: unknown,
+  );
   readonly route: string;
   readonly expectedIdentity: Readonly<SorafsOrderbookSubmissionIdentity>;
 }

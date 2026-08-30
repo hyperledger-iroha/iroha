@@ -94,6 +94,15 @@ _PRIMARY_FAILURE_DIAGNOSTIC = re.compile(
     r"|Temporal properties were violated\.$)",
     re.MULTILINE,
 )
+_UNEXPECTED_NEGATIVE_DIAGNOSTIC = re.compile(
+    r"^[ \t]*Error: (?!Invariant Safety is violated\.$"
+    r"|The behavior up to this point is:$).+$",
+    re.MULTILINE,
+)
+_SANY_FAILURE_DIAGNOSTIC = re.compile(
+    r"(?:error|exception|abort)",
+    re.IGNORECASE,
+)
 
 
 class ReportError(RuntimeError):
@@ -105,6 +114,7 @@ class RunSummary:
     """Validated state-space summary for one configuration."""
 
     name: str
+    model: str
     expected_outcome: str
     observed_outcome: str
     generated_states: int
@@ -116,6 +126,7 @@ class RunSummary:
 
         return {
             "name": self.name,
+            "model": self.model,
             "expected_outcome": self.expected_outcome,
             "observed_outcome": self.observed_outcome,
             "generated_states": self.generated_states,
@@ -134,6 +145,7 @@ def _positive_int(raw: str, *, label: str) -> int:
 def parse_run(
     *,
     name: str,
+    model: str,
     expected_outcome: str,
     stdout: str,
     stderr: str,
@@ -147,6 +159,8 @@ def parse_run(
 
     if stderr:
         raise ReportError(f"{name}: TLC emitted separate stderr")
+    if not model.endswith(".tla") or Path(model).name != model:
+        raise ReportError(f"{name}: model identity is not canonical")
 
     version_matches = list(_TLC_VERSION.finditer(stdout))
     if len(version_matches) != 1 or version_matches[0].group("version") != tlc_version:
@@ -178,12 +192,24 @@ def parse_run(
 
     success_count = stdout.splitlines().count(SUCCESS_MARKER)
     safety_count = stdout.splitlines().count(SAFETY_VIOLATION_MARKER)
+    success_offset = stdout.find(SUCCESS_MARKER)
+    safety_offset = stdout.find(SAFETY_VIOLATION_MARKER)
+    if not (
+        version_matches[0].start()
+        < run_header.start()
+        < state.start()
+        < depth_matches[0].start()
+        < terminal_matches[0].start()
+    ):
+        raise ReportError(f"{name}: TLC result markers are out of order")
     if expected_outcome == "pass":
         if status != 0 or success_count != 1 or safety_count != 0:
             raise ReportError(f"{name}: TLC did not produce one clean passing result")
         diagnostics = _FAILURE_DIAGNOSTIC.findall(stdout)
         if diagnostics:
             raise ReportError(f"{name}: passing TLC output contains failure diagnostics")
+        if not depth_matches[0].end() < success_offset < terminal_matches[0].start():
+            raise ReportError(f"{name}: passing TLC result markers are out of order")
         observed_outcome = "pass"
     elif expected_outcome == "safety_violation":
         if status != 12 or safety_count != 1 or success_count != 0:
@@ -193,6 +219,10 @@ def parse_run(
         diagnostics = _PRIMARY_FAILURE_DIAGNOSTIC.findall(stdout)
         if len(diagnostics) != 1:
             raise ReportError(f"{name}: negative control emitted unexpected diagnostics")
+        if _UNEXPECTED_NEGATIVE_DIAGNOSTIC.search(stdout):
+            raise ReportError(f"{name}: negative control emitted unexpected diagnostics")
+        if not run_header.end() < safety_offset < state.start():
+            raise ReportError(f"{name}: negative TLC result markers are out of order")
         observed_outcome = "safety_violation"
     else:
         raise ReportError(f"{name}: unsupported expected outcome {expected_outcome!r}")
@@ -207,6 +237,7 @@ def parse_run(
 
     return RunSummary(
         name=name,
+        model=model,
         expected_outcome=expected_outcome,
         observed_outcome=observed_outcome,
         generated_states=generated_states,
@@ -238,6 +269,7 @@ def formal_package_sha256(formal_dir: Path) -> str:
 def _read_run(
     logs_dir: Path,
     name: str,
+    model: str,
     expected_outcome: str,
     *,
     seed: int,
@@ -260,6 +292,7 @@ def _read_run(
         raise ReportError(f"cannot read TLC artifacts for {name}: {error}") from error
     summary = parse_run(
         name=name,
+        model=model,
         expected_outcome=expected_outcome,
         stdout=stdout,
         stderr=stderr,
@@ -270,10 +303,12 @@ def _read_run(
         tlc_version=tlc_version,
     )
     section = (
-        f"===== {name} stdout (status {status}) =====\n".encode("ascii")
+        f"===== {name} model {model} stdout (status {status}) =====\n".encode(
+            "ascii"
+        )
         + stdout_bytes
         + (b"" if stdout_bytes.endswith(b"\n") else b"\n")
-        + f"===== {name} stderr =====\n".encode("ascii")
+        + f"===== {name} model {model} stderr =====\n".encode("ascii")
         + stderr_bytes
         + (b"" if not stderr_bytes or stderr_bytes.endswith(b"\n") else b"\n")
     )
@@ -299,6 +334,7 @@ def _read_sany(sany_dir: Path, model: str) -> bytes:
         or stderr_bytes
         or stdout.splitlines().count(SANY_VERSION_MARKER) != 1
         or stdout.splitlines().count(semantic_marker) != 1
+        or _SANY_FAILURE_DIAGNOSTIC.search(stdout)
     ):
         raise ReportError(f"{model}: SANY did not produce one clean semantic result")
     return (
@@ -342,7 +378,7 @@ def build_report(
         raise ReportError("seed must be an unsigned integer")
     if fingerprint_index < 0 or fingerprint_index > 63:
         raise ReportError("fingerprint index must be between 0 and 63")
-    if not workers.isascii() or not workers.isdigit() or int(workers) < 1:
+    if re.fullmatch(r"[1-9][0-9]*", workers) is None:
         raise ReportError(
             "complete release evidence requires an explicit positive worker count"
         )
@@ -370,10 +406,11 @@ def build_report(
     sections: list[bytes] = [metadata]
     for model in (COUNT_MODEL, INDEXED_MODEL):
         sections.append(_read_sany(sany_dir, model))
-    for name, expected_outcome, _ in CONFIGURATIONS:
+    for name, expected_outcome, model in CONFIGURATIONS:
         summary, section = _read_run(
             logs_dir,
             name,
+            model,
             expected_outcome,
             seed=seed,
             fingerprint_index=fingerprint_index,

@@ -187,7 +187,7 @@ test("every public export has a safe runtime target and an explicit declaration 
     "typesVersions must cover every public subpath exactly once",
   );
   assert.deepEqual(packageJson.exports["./norito"], {
-    import: "./dist/norito.js",
+    import: "./dist/public/norito.js",
     types: "./norito.d.ts",
   });
 });
@@ -444,20 +444,11 @@ test("Torii client declarations never promise unimplemented methods", async () =
   }
 });
 
-test("narrow subpath declarations never advertise missing runtime values", async () => {
+test("narrow subpath declarations exactly match their runtime values", async () => {
   const packageJson = readPackageJson();
-  const subpaths = [
-    "./address",
-    "./normalizers",
-    "./blake2b",
-    "./instruction-builders",
-    "./torii",
-    "./torii-browser",
-    "./norito",
-    "./sccp",
-    "./sorafs",
-    "./crypto",
-  ];
+  const subpaths = Object.keys(packageJson.exports).filter(
+    (subpath) => subpath !== ".",
+  );
 
   for (const subpath of subpaths) {
     const descriptor = packageJson.exports[subpath];
@@ -471,20 +462,45 @@ test("narrow subpath declarations never advertise missing runtime values", async
     });
     const declaration = program.getSourceFile(declarationPath);
     assert.ok(declaration, `${subpath} declaration did not load`);
-    const declaredValues = declaration.statements
-      .filter(
-        (statement) =>
-          ts.isExportDeclaration(statement) &&
-          statement.isTypeOnly !== true &&
-          statement.exportClause !== undefined &&
-          ts.isNamedExports(statement.exportClause),
-      )
-      .flatMap((statement) =>
-        statement.exportClause.elements
-          .filter((element) => element.isTypeOnly !== true)
-          .map((element) => element.name.text),
-      )
-      .sort();
+    const declaredValues = [];
+    for (const statement of declaration.statements) {
+      if (
+        ts.isExportDeclaration(statement) &&
+        statement.isTypeOnly !== true &&
+        statement.exportClause !== undefined &&
+        ts.isNamedExports(statement.exportClause)
+      ) {
+        declaredValues.push(
+          ...statement.exportClause.elements
+            .filter((element) => element.isTypeOnly !== true)
+            .map((element) => element.name.text),
+        );
+        continue;
+      }
+      const isExported = statement.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+      );
+      if (!isExported) continue;
+      if (
+        (ts.isClassDeclaration(statement) ||
+          ts.isFunctionDeclaration(statement) ||
+          ts.isEnumDeclaration(statement)) &&
+        statement.name
+      ) {
+        declaredValues.push(statement.name.text);
+        continue;
+      }
+      if (ts.isVariableStatement(statement)) {
+        for (const declarationNode of statement.declarationList.declarations) {
+          assert.ok(
+            ts.isIdentifier(declarationNode.name),
+            `${subpath} exports a destructured declaration`,
+          );
+          declaredValues.push(declarationNode.name.text);
+        }
+      }
+    }
+    const uniqueDeclaredValues = [...new Set(declaredValues)].sort();
 
     const runtimeTargets = new Set(
       [descriptor.import, descriptor.browser].filter(Boolean),
@@ -492,13 +508,11 @@ test("narrow subpath declarations never advertise missing runtime values", async
     for (const runtimeTarget of runtimeTargets) {
       const runtimePath = path.resolve(PACKAGE_ROOT, runtimeTarget);
       const runtime = await import(pathToFileURL(runtimePath).href);
-      for (const name of declaredValues) {
-        assert.equal(
-          Object.hasOwn(runtime, name),
-          true,
-          `${subpath} declares ${name}, but ${runtimeTarget} does not export it`,
-        );
-      }
+      assert.deepEqual(
+        Object.keys(runtime).sort(),
+        uniqueDeclaredValues,
+        `${subpath} runtime ${runtimeTarget} diverges from its declarations`,
+      );
     }
   }
 

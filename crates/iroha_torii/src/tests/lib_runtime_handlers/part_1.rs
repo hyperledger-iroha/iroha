@@ -1774,6 +1774,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         "default query memory pool admits one stored ordinary query"
     );
     Arc::new(AppState {
+        shutdown_signal: ShutdownSignal::new(),
         events,
         kura,
         chain_id: Arc::new(chain_id),

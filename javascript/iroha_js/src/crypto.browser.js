@@ -9,6 +9,17 @@ import {
   validateMnemonic,
 } from "@scure/bip39";
 import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
+import {
+  CRYPTO_ALGORITHMS,
+  normalizeCryptoAlgorithm,
+  SUPPORTED_CRYPTO_ALGORITHMS,
+} from "./cryptoAlgorithms.js";
+
+export {
+  CRYPTO_ALGORITHMS,
+  normalizeCryptoAlgorithm,
+  SUPPORTED_CRYPTO_ALGORITHMS,
+};
 
 const ED25519_SEED_LENGTH = 32;
 const ED25519_PUBLIC_KEY_LENGTH = 32;
@@ -47,34 +58,6 @@ export const PRIVACY_FFI_ERROR_MALFORMED_NORITO = 2;
 export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM = 3;
 export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED = 4;
 export const PRIVACY_FFI_ERROR_INVALID_REQUEST = 5;
-export const CRYPTO_ALGORITHMS = Object.freeze({
-  ED25519: "ed25519",
-  SECP256K1: "secp256k1",
-  ML_DSA: "ml-dsa",
-  BLS_NORMAL: "bls_normal",
-  BLS_SMALL: "bls_small",
-  GOST_2012_256_A: "gost3410-2012-256-paramset-a",
-  GOST_2012_256_B: "gost3410-2012-256-paramset-b",
-  GOST_2012_256_C: "gost3410-2012-256-paramset-c",
-  GOST_2012_512_A: "gost3410-2012-512-paramset-a",
-  GOST_2012_512_B: "gost3410-2012-512-paramset-b",
-  SM2: "sm2",
-});
-
-export const SUPPORTED_CRYPTO_ALGORITHMS = Object.freeze([
-  CRYPTO_ALGORITHMS.ED25519,
-  CRYPTO_ALGORITHMS.SECP256K1,
-  CRYPTO_ALGORITHMS.BLS_NORMAL,
-  CRYPTO_ALGORITHMS.BLS_SMALL,
-  CRYPTO_ALGORITHMS.ML_DSA,
-  CRYPTO_ALGORITHMS.GOST_2012_256_A,
-  CRYPTO_ALGORITHMS.GOST_2012_256_B,
-  CRYPTO_ALGORITHMS.GOST_2012_256_C,
-  CRYPTO_ALGORITHMS.GOST_2012_512_A,
-  CRYPTO_ALGORITHMS.GOST_2012_512_B,
-  CRYPTO_ALGORITHMS.SM2,
-]);
-
 function normalizeSeed(seed) {
   const buffer = toBuffer(seed, "seed");
   if (buffer.length !== ED25519_SEED_LENGTH) {
@@ -131,17 +114,6 @@ function unsupported(operation) {
 export function supportedCryptoAlgorithms() {
   return [CRYPTO_ALGORITHMS.ED25519];
 }
-
-export function normalizeCryptoAlgorithm(algorithm = CRYPTO_ALGORITHMS.ED25519) {
-  if (
-    typeof algorithm !== "string" ||
-    !SUPPORTED_CRYPTO_ALGORITHMS.includes(algorithm)
-  ) {
-    throw new Error(`unsupported crypto algorithm: ${algorithm}`);
-  }
-  return algorithm;
-}
-
 
 /**
  * Generate an Ed25519 key pair. Seed material is hashed to 32 bytes when needed.

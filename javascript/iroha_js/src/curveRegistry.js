@@ -1,6 +1,7 @@
 "use strict";
 
-import { ED25519_ALGORITHM, JS_TYPE_STRING } from "./commonLiterals.js";
+import { JS_TYPE_STRING } from "./commonLiterals.js";
+import { CRYPTO_ALGORITHMS } from "./cryptoAlgorithms.js";
 
 export const CurveId = Object.freeze({
   ED25519: 1,
@@ -19,67 +20,67 @@ export const CurveId = Object.freeze({
 export const CURVE_REGISTRY = Object.freeze([
   Object.freeze({
     id: CurveId.ED25519,
-    algorithm: ED25519_ALGORITHM,
+    algorithm: CRYPTO_ALGORITHMS.ED25519,
     publicKeyLength: 32,
     publicKeyMulticodec: 0xed,
   }),
   Object.freeze({
     id: CurveId.MLDSA,
-    algorithm: "ml-dsa",
+    algorithm: CRYPTO_ALGORITHMS.ML_DSA,
     publicKeyLength: 1952,
     publicKeyMulticodec: 0xee,
   }),
   Object.freeze({
     id: CurveId.BLS_NORMAL,
-    algorithm: "bls_normal",
+    algorithm: CRYPTO_ALGORITHMS.BLS_NORMAL,
     publicKeyLength: 48,
     publicKeyMulticodec: 0xea,
   }),
   Object.freeze({
     id: CurveId.SECP256K1,
-    algorithm: "secp256k1",
+    algorithm: CRYPTO_ALGORITHMS.SECP256K1,
     publicKeyLength: 33,
     publicKeyMulticodec: 0xe7,
   }),
   Object.freeze({
     id: CurveId.BLS_SMALL,
-    algorithm: "bls_small",
+    algorithm: CRYPTO_ALGORITHMS.BLS_SMALL,
     publicKeyLength: 96,
     publicKeyMulticodec: 0xeb,
   }),
   Object.freeze({
     id: CurveId.GOST_256_A,
-    algorithm: "gost256a",
+    algorithm: CRYPTO_ALGORITHMS.GOST_2012_256_A,
     publicKeyLength: 64,
     publicKeyMulticodec: 0x1200,
   }),
   Object.freeze({
     id: CurveId.GOST_256_B,
-    algorithm: "gost256b",
+    algorithm: CRYPTO_ALGORITHMS.GOST_2012_256_B,
     publicKeyLength: 64,
     publicKeyMulticodec: 0x1201,
   }),
   Object.freeze({
     id: CurveId.GOST_256_C,
-    algorithm: "gost256c",
+    algorithm: CRYPTO_ALGORITHMS.GOST_2012_256_C,
     publicKeyLength: 64,
     publicKeyMulticodec: 0x1202,
   }),
   Object.freeze({
     id: CurveId.GOST_512_A,
-    algorithm: "gost512a",
+    algorithm: CRYPTO_ALGORITHMS.GOST_2012_512_A,
     publicKeyLength: 128,
     publicKeyMulticodec: 0x1203,
   }),
   Object.freeze({
     id: CurveId.GOST_512_B,
-    algorithm: "gost512b",
+    algorithm: CRYPTO_ALGORITHMS.GOST_2012_512_B,
     publicKeyLength: 128,
     publicKeyMulticodec: 0x1204,
   }),
   Object.freeze({
     id: CurveId.SM2,
-    algorithm: "sm2",
+    algorithm: CRYPTO_ALGORITHMS.SM2,
     publicKeyLength: 65,
     publicKeyMulticodec: 0x1306,
   }),
@@ -107,11 +108,7 @@ export function getCurveEntryByAlgorithm(algorithm) {
   if (typeof algorithm !== JS_TYPE_STRING) {
     return null;
   }
-  if (!/^[A-Za-z0-9_-]+$/.test(algorithm)) {
-    return null;
-  }
-  const normalized = algorithm.toLowerCase();
-  return CURVE_NAME_TO_ENTRY.get(normalized) ?? null;
+  return CURVE_NAME_TO_ENTRY.get(algorithm) ?? null;
 }
 
 export function getCurveEntryByPublicKeyMulticodec(multicodec) {

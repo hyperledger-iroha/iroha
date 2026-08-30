@@ -7,6 +7,7 @@ import {
   ToriiClient,
 } from "../src/toriiClient.js";
 import { NetworkId } from "../src/networkId.js";
+import { TORII_TEST_NATIVE_BINDING } from "../src/toriiTestHooks.js";
 
 const BASE_URL = "https://torii.example";
 const SIGNER = "ed0120ABCDEF";
@@ -91,7 +92,7 @@ function client(fetchImpl, native = nativeBinding(), options = {}) {
   const { validation = async () => {}, ...clientOptions } = options;
   const sdk = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: native,
+    [TORII_TEST_NATIVE_BINDING]: native,
     localSigningContext: new LocalSigningContext(NETWORK_ID, 369),
     ...clientOptions,
   });
@@ -181,7 +182,7 @@ test("orderbook submit requires https unless insecure transport is explicit and 
   let fetches = 0;
   const insecure = new ToriiClient("http://torii.example", {
     fetchImpl: async () => { fetches += 1; return acceptedResponse(); },
-    __nativeBinding: nativeBinding(),
+    [TORII_TEST_NATIVE_BINDING]: nativeBinding(),
     localSigningContext: new LocalSigningContext(NETWORK_ID, 369),
   });
   insecure._ensureDataModelValidation = async () => {};
@@ -195,7 +196,7 @@ test("orderbook submit requires https unless insecure transport is explicit and 
     allowInsecure: true,
     insecureTransportTelemetryHook: (event) => events.push(event),
     fetchImpl: async () => { fetches += 1; return acceptedResponse(); },
-    __nativeBinding: nativeBinding(),
+    [TORII_TEST_NATIVE_BINDING]: nativeBinding(),
     localSigningContext: new LocalSigningContext(NETWORK_ID, 369),
   });
   optedIn._ensureDataModelValidation = async () => {};
@@ -209,7 +210,7 @@ test("orderbook submit requires https unless insecure transport is explicit and 
   ]) {
     const sdk = new ToriiClient(baseUrl, {
       allowInsecure: true, fetchImpl: async () => { fetches += 1; },
-      __nativeBinding: nativeBinding(), localSigningContext: new LocalSigningContext(NETWORK_ID, 369),
+      [TORII_TEST_NATIVE_BINDING]: nativeBinding(), localSigningContext: new LocalSigningContext(NETWORK_ID, 369),
     });
     sdk._ensureDataModelValidation = async () => {};
     await assert.rejects(
@@ -410,6 +411,7 @@ test("orderbook submit marks every failure after dispatch as non-resubmittable a
         assert.equal(error.route, "order");
         assert.deepEqual(error.expectedIdentity, IDENTITY);
         assert.equal(Object.isFrozen(error.expectedIdentity), true);
+        assert.ok(error.cause instanceof Error, label);
         assert.equal("body" in error, false);
         return true;
       },

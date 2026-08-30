@@ -829,8 +829,10 @@ console.log(formats.i105Warning);
 ```
 
 Every V1 controller family is deterministic and always available in the
-address codec: `ed25519`, `secp256k1`, `ml-dsa`, `gost256a`, `gost256b`,
-`gost256c`, `gost512a`, `gost512b`, `sm2`, `bls_normal`, and `bls_small`.
+address codec: `ed25519`, `secp256k1`, `ml-dsa`,
+`gost3410-2012-256-paramset-a`, `gost3410-2012-256-paramset-b`,
+`gost3410-2012-256-paramset-c`, `gost3410-2012-512-paramset-a`,
+`gost3410-2012-512-paramset-b`, `sm2`, `bls_normal`, and `bls_small`.
 There is no process-wide curve toggle. Pass exactly one of these canonical
 labels; aliases and case-folded spellings are rejected before encoding.
 
