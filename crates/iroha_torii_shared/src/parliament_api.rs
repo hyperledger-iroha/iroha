@@ -8,8 +8,8 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::isi::governance::{
-    PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1, PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
-    ParliamentLifecycleTransitionKindV1, ParliamentLifecycleTransitionV1,
+    PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1, ParliamentLifecycleTransitionKindV1,
+    ParliamentLifecycleTransitionV1,
 };
 use iroha_data_model::{
     NetworkId,
@@ -18,9 +18,8 @@ use iroha_data_model::{
     governance::types::{
         BallotAttemptId, BallotAttemptStatusV1, BodyInstanceId, BodyInstanceStatusV1,
         GovernanceAttemptId, GovernanceAttemptV1, GovernanceCertificateV1,
-        GovernanceExpectedHeadV1, MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1,
-        PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, ParliamentBody, ParliamentNoResultKindV1,
-        ProposalContentId, ProposalKind, TleKeySessionId,
+        GovernanceExpectedHeadV1, MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1, ParliamentBody,
+        ParliamentNoResultKindV1, ProposalContentId, ProposalKind, TleKeySessionId,
     },
     parliament_casting::{
         ParliamentTimedOvnCastingContextBindingV1,
@@ -1290,10 +1289,18 @@ mod tests {
     use iroha_data_model::smart_contract::ContractAddress;
     use norito::json;
 
+    fn proposal_operator() -> iroha_data_model::account::AccountId {
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x10; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("derive checked Parliament API fixture operator");
+        iroha_data_model::account::AccountId::new(key_pair.public_key().clone())
+    }
+
     fn request() -> ParliamentAttemptDraftRequestV1 {
         ParliamentAttemptDraftRequestV1 {
             version: PARLIAMENT_API_VERSION_V1,
             proposal: ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: proposal_operator(),
                 contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                     .parse::<ContractAddress>()
                     .expect("parse Parliament API fixture address"),

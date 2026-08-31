@@ -1386,17 +1386,10 @@ fn authenticated_cancellation_client_fingerprint(
     app: &SharedAppState,
     headers: &HeaderMap,
 ) -> Option<[u8; 32]> {
-    if !app.require_api_token {
-        return None;
-    }
-    let mut values = headers.get_all(HEADER_X_API_TOKEN).iter();
-    let token = values.next()?.to_str().ok()?;
-    if values.next().is_some() || !app.api_tokens_set.contains(token) {
-        return None;
-    }
+    let principal = app.authenticated_api_token_principal(headers)?;
     let mut hasher = Blake3Hasher::new();
     hasher.update(MCP_CANCELLATION_FINGERPRINT_DOMAIN);
-    hasher.update(token.as_bytes());
+    hasher.update(principal.as_bytes());
     Some(*hasher.finalize().as_bytes())
 }
 
@@ -8206,15 +8199,10 @@ async fn dispatch_route_with_borrowed_headers(
             headers.insert(remote_addr_header, value);
         }
     }
-    let router = {
-        let guard = app
-            .mcp_dispatch_router
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard
-            .clone()
-            .ok_or_else(|| "mcp router unavailable".to_owned())?
-    };
+    let router = app
+        .mcp_dispatch_router
+        .load()
+        .ok_or_else(|| "mcp router unavailable".to_owned())?;
     let service = router
         .into_make_service_with_connect_info::<SocketAddr>()
         .oneshot(dispatched_connect_addr)

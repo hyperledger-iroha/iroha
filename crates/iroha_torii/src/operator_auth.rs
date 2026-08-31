@@ -34,7 +34,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -43,6 +43,8 @@ const HEADER_OPERATOR_SESSION: &str = "x-iroha-operator-session";
 const HEADER_OPERATOR_TOKEN: &str = "x-iroha-operator-token";
 const HEADER_MTLS_FORWARD: &str = "x-forwarded-client-cert";
 const CREDENTIALS_FILENAME: &str = "operator_webauthn.json";
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+const CREDENTIAL_LOCK_FILENAME: &str = ".operator_webauthn.lock";
 /// Maximum accepted JSON body size for one operator WebAuthn exchange request.
 pub(crate) const CREDENTIAL_EXCHANGE_BODY_LIMIT: usize = 64 * 1024;
 const CHALLENGE_BYTES: usize = 32;
@@ -54,6 +56,8 @@ const MAX_CREDENTIAL_ID_B64URL_BYTES: usize = (MAX_CREDENTIAL_ID_BYTES * 4 + 2) 
 const P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN: usize = 65;
 const MAX_CREDENTIAL_RECORD_JSON_BYTES: usize = 2_048;
 const CREDENTIAL_FILE_JSON_OVERHEAD_BYTES: usize = 128;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+const CREDENTIAL_TEMP_FILE_RETRIES: usize = 128;
 const ACTION_GATE: &str = "gate";
 const ACTION_REGISTER_OPTIONS: &str = "register_options";
 const ACTION_REGISTER_VERIFY: &str = "register_verify";
@@ -648,10 +652,12 @@ pub struct OperatorAuth {
     bootstrap_token_hashes: HashSet<[u8; 32]>,
     webauthn: Option<WebAuthnPolicy>,
     credentials: Arc<RwLock<Vec<StoredCredential>>>,
+    credential_state_available: AtomicBool,
     credential_capacity: usize,
     sessions: Mutex<BoundedExpiringStore<SessionEntry>>,
     challenges: Mutex<BoundedExpiringStore<ChallengeEntry>>,
     credential_revocation_generation: AtomicU64,
+    _credential_store_lock: Option<fs::File>,
     limiter: limits::RateLimiter,
     lockout: LockoutTracker,
     telemetry: MaybeTelemetry,
@@ -694,6 +700,12 @@ impl OperatorAuth {
         }
         let bootstrap_token_hashes = validate_bootstrap_tokens(config.enabled, &config.tokens)?;
         let credentials_path = operator_credentials_path(&data_dir);
+        let credential_store_lock = if config.enabled {
+            acquire_credential_store_lock(&credentials_path)
+                .map_err(OperatorAuthInitError::CredentialLoad)?
+        } else {
+            None
+        };
         let credentials = if config.enabled {
             let policy = webauthn
                 .as_ref()
@@ -724,10 +736,12 @@ impl OperatorAuth {
             bootstrap_token_hashes,
             webauthn,
             credentials: Arc::new(RwLock::new(credentials)),
+            credential_state_available: AtomicBool::new(true),
             credential_capacity: config.credential_capacity.get(),
             sessions: Mutex::new(BoundedExpiringStore::new(ephemeral_state_capacity)),
             challenges: Mutex::new(BoundedExpiringStore::new(ephemeral_state_capacity)),
             credential_revocation_generation: AtomicU64::new(0),
+            _credential_store_lock: credential_store_lock,
             limiter,
             lockout: LockoutTracker::new(config.lockout, ephemeral_state_capacity),
             telemetry,
@@ -745,18 +759,40 @@ impl OperatorAuth {
     fn credentials_read(
         &self,
     ) -> Result<RwLockReadGuard<'_, Vec<StoredCredential>>, OperatorAuthError> {
-        self.credentials.read().map_err(|_| {
+        if !self.credential_state_available.load(Ordering::Acquire) {
+            return Err(OperatorAuthError::credential_state_unavailable());
+        }
+        let credentials = self.credentials.read().map_err(|_| {
             iroha_logger::error!("operator credentials lock poisoned; failing closed");
             OperatorAuthError::credential_state_unavailable()
-        })
+        })?;
+        if !self.credential_state_available.load(Ordering::Acquire) {
+            return Err(OperatorAuthError::credential_state_unavailable());
+        }
+        Ok(credentials)
     }
     fn credentials_write(
         &self,
     ) -> Result<RwLockWriteGuard<'_, Vec<StoredCredential>>, OperatorAuthError> {
-        self.credentials.write().map_err(|_| {
+        if !self.credential_state_available.load(Ordering::Acquire) {
+            return Err(OperatorAuthError::credential_state_unavailable());
+        }
+        let credentials = self.credentials.write().map_err(|_| {
             iroha_logger::error!("operator credentials lock poisoned; failing closed");
             OperatorAuthError::credential_state_unavailable()
-        })
+        })?;
+        if !self.credential_state_available.load(Ordering::Acquire) {
+            return Err(OperatorAuthError::credential_state_unavailable());
+        }
+        Ok(credentials)
+    }
+    fn quarantine_credential_state(&self) {
+        self.credential_state_available
+            .store(false, Ordering::Release);
+        self.credential_revocation_generation
+            .fetch_add(1, Ordering::AcqRel);
+        self.sessions.lock().clear();
+        self.challenges.lock().clear();
     }
     fn has_credentials(&self) -> Result<bool, OperatorAuthError> {
         Ok(!self.credentials_read()?.is_empty())
@@ -1164,9 +1200,20 @@ impl OperatorAuth {
         }
         let mut updated = credentials.clone();
         updated[pos].sign_count = auth_data.sign_count;
-        persist_credentials(&self.credentials_path, &updated)
+        let persistence = persist_credentials(&self.credentials_path, &updated)
             .map_err(|err| self.record_error(ctx, ACTION_LOGIN_VERIFY, err))?;
+        let committed_error = match persistence {
+            CredentialPersistence::Durable => None,
+            CredentialPersistence::CommittedWithError(error) => Some(error),
+            CredentialPersistence::StateUncertain(error) => {
+                self.quarantine_credential_state();
+                return Err(self.record_error(ctx, ACTION_LOGIN_VERIFY, error));
+            }
+        };
         *credentials = updated;
+        if let Some(error) = committed_error {
+            return Err(self.record_error(ctx, ACTION_LOGIN_VERIFY, error));
+        }
         let outcome = self
             .issue_session_with_rng(&input.raw_id, policy.session_ttl, rng)
             .map_err(|err| self.record_error(ctx, ACTION_LOGIN_VERIFY, err))?;
@@ -1232,8 +1279,19 @@ impl OperatorAuth {
         }
         let mut updated = credentials.clone();
         updated.push(credential);
-        persist_credentials(&self.credentials_path, &updated)?;
+        let persistence = persist_credentials(&self.credentials_path, &updated)?;
+        let committed_error = match persistence {
+            CredentialPersistence::Durable => None,
+            CredentialPersistence::CommittedWithError(error) => Some(error),
+            CredentialPersistence::StateUncertain(error) => {
+                self.quarantine_credential_state();
+                return Err(error);
+            }
+        };
         *credentials = updated;
+        if let Some(error) = committed_error {
+            return Err(error);
+        }
         Ok(credentials.len())
     }
     fn credential_inventory(&self) -> Result<norito::json::Value, OperatorAuthError> {
@@ -1294,7 +1352,15 @@ impl OperatorAuth {
         }
         let mut updated = credentials.clone();
         let deleted = updated.remove(position);
-        persist_credentials(&self.credentials_path, &updated)?;
+        let persistence = persist_credentials(&self.credentials_path, &updated)?;
+        let committed_error = match persistence {
+            CredentialPersistence::Durable => None,
+            CredentialPersistence::CommittedWithError(error) => Some(error),
+            CredentialPersistence::StateUncertain(error) => {
+                self.quarantine_credential_state();
+                return Err(error);
+            }
+        };
         let credentials_total = updated.len();
         *credentials = updated;
         self.credential_revocation_generation
@@ -1306,6 +1372,9 @@ impl OperatorAuth {
         // and ceremony rather than leaving an attacker a session issued before the removal.
         self.sessions.lock().clear();
         self.challenges.lock().clear();
+        if let Some(error) = committed_error {
+            return Err(error);
+        }
         Ok(CredentialDeletionOutcome {
             credential_id: encode_b64url(&deleted.id),
             credentials_total,
@@ -1649,7 +1718,8 @@ fn session_from_headers(headers: &HeaderMap) -> SessionHeader<'_> {
     let Ok(decoded_len) = URL_SAFE_NO_PAD.decode_slice(value.as_bytes(), &mut decoded) else {
         return SessionHeader::Invalid;
     };
-    if decoded_len != SESSION_TOKEN_BYTES || URL_SAFE_NO_PAD.encode(&decoded[..decoded_len]) != value
+    if decoded_len != SESSION_TOKEN_BYTES
+        || URL_SAFE_NO_PAD.encode(&decoded[..decoded_len]) != value
     {
         return SessionHeader::Invalid;
     }
@@ -1691,33 +1761,12 @@ fn load_credentials(
     allowed_algorithms: &[OperatorWebAuthnAlgorithm],
     capacity: NonZeroUsize,
 ) -> Result<Vec<StoredCredential>, String> {
-    let mut file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err.to_string()),
-    };
     let max_file_bytes = max_credentials_file_bytes(capacity)?;
-    let metadata_len = file.metadata().map_err(|error| error.to_string())?.len();
-    if metadata_len > max_file_bytes {
-        return Err(format!(
-            "credentials payload is {metadata_len} bytes but the configured capacity permits at most {max_file_bytes}"
-        ));
-    }
-    let read_limit = max_file_bytes
-        .checked_add(1)
-        .ok_or_else(|| "credentials payload read bound overflow".to_owned())?;
-    let mut raw = String::new();
-    file.by_ref()
-        .take(read_limit)
-        .read_to_string(&mut raw)
-        .map_err(|error| error.to_string())?;
-    if u64::try_from(raw.len()).map_err(|_| "credentials payload length overflow")?
-        > max_file_bytes
-    {
-        return Err(format!(
-            "credentials payload exceeds the configured {max_file_bytes}-byte bound"
-        ));
-    }
+    let Some(raw) = read_credentials_file(path, max_file_bytes)? else {
+        return Ok(Vec::new());
+    };
+    let raw = String::from_utf8(raw)
+        .map_err(|_| "credentials payload must contain valid UTF-8".to_owned())?;
     let value: norito::json::Value = norito::json::from_str(&raw).map_err(|err| err.to_string())?;
     let obj = value
         .as_object()
@@ -1804,6 +1853,1029 @@ fn load_credentials(
     }
     Ok(result)
 }
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CredentialFileIdentity {
+    device: u64,
+    inode: u64,
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+struct CredentialStoreParent {
+    base: fs::File,
+    base_path: PathBuf,
+    base_identity: CredentialFileIdentity,
+    directory: fs::File,
+    directory_name: std::ffi::OsString,
+    identity: CredentialFileIdentity,
+    filename: std::ffi::OsString,
+}
+#[cfg(target_vendor = "apple")]
+#[allow(unsafe_code)]
+mod credential_acl {
+    use std::{
+        ffi::{c_int, c_void},
+        fs, io,
+        os::fd::AsRawFd as _,
+        path::Path,
+        ptr,
+    };
+
+    const ACL_TYPE_EXTENDED: c_int = 0x0000_0100;
+    const ACL_FIRST_ENTRY: c_int = 0;
+    const ACL_NEXT_ENTRY: c_int = -1;
+    const ACL_EXTENDED_DENY: c_int = 2;
+
+    type Acl = *mut c_void;
+    type AclEntry = *mut c_void;
+
+    unsafe extern "C" {
+        fn acl_free(object: *mut c_void) -> c_int;
+        fn acl_get_entry(acl: Acl, entry_id: c_int, entry: *mut AclEntry) -> c_int;
+        fn acl_get_tag_type(entry: AclEntry, tag_type: *mut c_int) -> c_int;
+        fn acl_get_fd_np(fd: c_int, acl_type: c_int) -> Acl;
+        fn acl_init(count: c_int) -> Acl;
+        fn acl_set_fd_np(fd: c_int, acl: Acl, acl_type: c_int) -> c_int;
+        fn acl_valid(acl: Acl) -> c_int;
+    }
+
+    struct AclGuard(Acl);
+
+    impl Drop for AclGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: The guard exclusively owns an ACL allocated by the macOS ACL API.
+                unsafe {
+                    acl_free(self.0);
+                }
+            }
+        }
+    }
+
+    fn acl_or_absent(acl: Acl, path: &Path) -> Result<Option<AclGuard>, String> {
+        if acl.is_null() {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::NotFound {
+                return Ok(None);
+            }
+            return Err(format!(
+                "failed to read macOS extended ACL for {}: {error}",
+                path.display()
+            ));
+        }
+        Ok(Some(AclGuard(acl)))
+    }
+
+    fn file_acl(file: &fs::File, path: &Path) -> Result<Option<AclGuard>, String> {
+        // SAFETY: The descriptor remains live for the duration of the ACL query.
+        let acl = unsafe { acl_get_fd_np(file.as_raw_fd(), ACL_TYPE_EXTENDED) };
+        acl_or_absent(acl, path)
+    }
+
+    fn require_valid(acl: &AclGuard, path: &Path) -> Result<(), String> {
+        // SAFETY: The guard owns a live ACL returned by the macOS ACL API.
+        if unsafe { acl_valid(acl.0) } == 0 {
+            return Ok(());
+        }
+        Err(format!(
+            "failed to validate macOS extended ACL for {}: {}",
+            path.display(),
+            io::Error::last_os_error()
+        ))
+    }
+
+    fn is_entry_exhaustion(error: &io::Error) -> bool {
+        // macOS reports EINVAL after the final ACL entry, including for an empty ACL.
+        error.kind() == io::ErrorKind::InvalidInput
+    }
+
+    pub(super) fn validate_ancestor(file: &fs::File, path: &Path) -> Result<(), String> {
+        let Some(acl) = file_acl(file, path)? else {
+            return Ok(());
+        };
+        require_valid(&acl, path)?;
+        let mut entry_id = ACL_FIRST_ENTRY;
+        loop {
+            let mut entry = ptr::null_mut();
+            // SAFETY: `acl` is live and `entry` is a valid out pointer.
+            if unsafe { acl_get_entry(acl.0, entry_id, &raw mut entry) } == 0 {
+                let mut tag_type = 0;
+                // SAFETY: A successful `acl_get_entry` returned a live ACL entry.
+                if unsafe { acl_get_tag_type(entry, &raw mut tag_type) } != 0 {
+                    return Err(format!(
+                        "failed to inspect macOS ancestor ACL for {}: {}",
+                        path.display(),
+                        io::Error::last_os_error()
+                    ));
+                }
+                if tag_type != ACL_EXTENDED_DENY {
+                    return Err(format!(
+                        "credential path ancestor must not have an extended allow ACL: {}",
+                        path.display()
+                    ));
+                }
+                entry_id = ACL_NEXT_ENTRY;
+            } else {
+                let error = io::Error::last_os_error();
+                if is_entry_exhaustion(&error) {
+                    return Ok(());
+                }
+                return Err(format!(
+                    "failed to inspect macOS ancestor ACL for {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    pub(super) fn validate_private(file: &fs::File, path: &Path) -> Result<(), String> {
+        let Some(acl) = file_acl(file, path)? else {
+            return Ok(());
+        };
+        require_valid(&acl, path)?;
+        let mut entry = ptr::null_mut();
+        // SAFETY: `acl` is live and `entry` is a valid out pointer.
+        if unsafe { acl_get_entry(acl.0, ACL_FIRST_ENTRY, &raw mut entry) } == 0 {
+            return Err(format!(
+                "private credential-store object must not have an extended ACL: {}",
+                path.display()
+            ));
+        }
+        let error = io::Error::last_os_error();
+        if is_entry_exhaustion(&error) {
+            Ok(())
+        } else {
+            Err(format!(
+                "failed to inspect macOS extended ACL for {}: {error}",
+                path.display()
+            ))
+        }
+    }
+
+    pub(super) fn clear_private(file: &fs::File, path: &Path) -> Result<(), String> {
+        // SAFETY: Zero requests a valid initialized ACL containing no entries.
+        let acl = unsafe { acl_init(0) };
+        if acl.is_null() {
+            return Err(format!(
+                "failed to initialize an empty macOS ACL for {}: {}",
+                path.display(),
+                io::Error::last_os_error()
+            ));
+        }
+        let acl = AclGuard(acl);
+        // SAFETY: The descriptor and initialized ACL remain live for the duration of the call.
+        if unsafe { acl_set_fd_np(file.as_raw_fd(), acl.0, ACL_TYPE_EXTENDED) } != 0 {
+            return Err(format!(
+                "failed to clear inherited macOS ACL for {}: {}",
+                path.display(),
+                io::Error::last_os_error()
+            ));
+        }
+        validate_private(file, path)
+    }
+}
+#[cfg(all(not(target_vendor = "apple"), target_os = "linux"))]
+mod credential_acl {
+    use std::{fs, path::Path};
+
+    pub(super) fn validate_ancestor(_file: &fs::File, _path: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
+    pub(super) fn validate_private(_file: &fs::File, _path: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
+    pub(super) fn clear_private(_file: &fs::File, _path: &Path) -> Result<(), String> {
+        Ok(())
+    }
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn credential_file_identity(
+    stat: &rustix::fs::Stat,
+    path: &Path,
+) -> Result<CredentialFileIdentity, String> {
+    Ok(CredentialFileIdentity {
+        device: u64::try_from(stat.st_dev)
+            .map_err(|_| format!("credential file device is invalid: {}", path.display()))?,
+        inode: u64::try_from(stat.st_ino)
+            .map_err(|_| format!("credential file inode is invalid: {}", path.display()))?,
+    })
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn inspect_credential_file(
+    parent: &fs::File,
+    filename: &std::ffi::OsStr,
+    path: &Path,
+    maximum_bytes: Option<u64>,
+) -> Result<Option<(rustix::fs::Stat, CredentialFileIdentity)>, String> {
+    let stat = match rustix::fs::statat(parent, filename, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => stat,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect credential file {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
+    let size = u64::try_from(stat.st_size).ok();
+    if file_type != rustix::fs::FileType::RegularFile
+        || stat.st_uid != rustix::process::geteuid().as_raw()
+        || stat.st_mode & 0o7077 != 0
+        || stat.st_nlink != 1
+        || maximum_bytes.is_some_and(|maximum| size.is_none_or(|size| size > maximum))
+    {
+        return Err(format!(
+            "credential file must be a private, current-user-owned, single-link bounded regular file: {}",
+            path.display()
+        ));
+    }
+    let identity = credential_file_identity(&stat, path)?;
+    Ok(Some((stat, identity)))
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn validate_existing_credential_file(
+    parent: &fs::File,
+    filename: &std::ffi::OsStr,
+    path: &Path,
+    expected_identity: CredentialFileIdentity,
+) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let file = fs::File::from(
+        rustix::fs::openat(
+            parent,
+            filename,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to pin existing credential file {}: {error}",
+                path.display()
+            )
+        })?,
+    );
+    let metadata = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect pinned credential file {}: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o7077 != 0
+        || metadata.nlink() != 1
+        || metadata.dev() != expected_identity.device
+        || metadata.ino() != expected_identity.inode
+    {
+        return Err(format!(
+            "existing credential file changed or became unsafe while opening: {}",
+            path.display()
+        ));
+    }
+    credential_acl::validate_private(&file, path)?;
+    let Some((_, current_identity)) = inspect_credential_file(parent, filename, path, None)? else {
+        return Err(format!(
+            "existing credential file disappeared while validating: {}",
+            path.display()
+        ));
+    };
+    if current_identity != expected_identity {
+        return Err(format!(
+            "existing credential file changed while validating: {}",
+            path.display()
+        ));
+    }
+    credential_acl::validate_private(&file, path)
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn open_credential_base_directory(path: &Path, create: bool) -> Result<Option<fs::File>, String> {
+    use std::{os::unix::fs::MetadataExt as _, path::Component};
+
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("failed to resolve credential directory: {error}"))?
+            .join(path)
+    };
+    let mut components = Vec::new();
+    for component in candidate.components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(component) => components.push(component.to_os_string()),
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "credential directory must not contain parent-directory components: {}",
+                    candidate.display()
+                ));
+            }
+        }
+    }
+    let mut directory = fs::File::from(
+        rustix::fs::open(
+            Path::new("/"),
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|error| format!("failed to open credential filesystem root: {error}"))?,
+    );
+    let effective_uid = rustix::process::geteuid().as_raw();
+    let root_metadata = directory
+        .metadata()
+        .map_err(|error| format!("failed to inspect credential filesystem root: {error}"))?;
+    if !root_metadata.is_dir()
+        || (root_metadata.uid() != 0 && root_metadata.uid() != effective_uid)
+        || root_metadata.mode() & 0o022 != 0
+    {
+        return Err("credential filesystem root is not a trusted directory".to_owned());
+    }
+    credential_acl::validate_ancestor(&directory, Path::new("/"))?;
+    let mut cursor = std::path::PathBuf::from("/");
+    for component in components {
+        cursor.push(&component);
+        let created = match rustix::fs::statat(
+            &directory,
+            &component,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(_) => false,
+            Err(rustix::io::Errno::NOENT) if !create => return Ok(None),
+            Err(rustix::io::Errno::NOENT) => {
+                match rustix::fs::mkdirat(&directory, &component, rustix::fs::Mode::RWXU) {
+                    Ok(()) => true,
+                    Err(rustix::io::Errno::EXIST) => false,
+                    Err(error) => {
+                        return Err(format!(
+                            "failed to create credential path ancestor {}: {error}",
+                            cursor.display()
+                        ));
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect credential path ancestor {}: {error}",
+                    cursor.display()
+                ));
+            }
+        };
+        let before = rustix::fs::statat(
+            &directory,
+            &component,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(|error| {
+            format!(
+                "failed to inspect credential path ancestor {}: {error}",
+                cursor.display()
+            )
+        })?;
+        let current = directory.metadata().map_err(|error| {
+            format!(
+                "failed to inspect credential path ancestor parent {}: {error}",
+                cursor.display()
+            )
+        })?;
+        let file_type = rustix::fs::FileType::from_raw_mode(before.st_mode);
+        // macOS exposes /var and /tmp as root-owned symlinks. Permit only such immutable
+        // system aliases; user-owned or writable-parent symlinks remain fatal.
+        let trusted_system_symlink = file_type == rustix::fs::FileType::Symlink
+            && before.st_uid == 0
+            && current.uid() == 0
+            && current.mode() & 0o022 == 0;
+        if file_type != rustix::fs::FileType::Directory && !trusted_system_symlink {
+            return Err(format!(
+                "credential path ancestor is a non-directory or untrusted symlink: {}",
+                cursor.display()
+            ));
+        }
+        let mut flags = rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC;
+        if !trusted_system_symlink {
+            flags |= rustix::fs::OFlags::NOFOLLOW;
+        }
+        let next = fs::File::from(
+            rustix::fs::openat(&directory, &component, flags, rustix::fs::Mode::empty()).map_err(
+                |error| {
+                    format!(
+                        "failed to pin credential path ancestor {}: {error}",
+                        cursor.display()
+                    )
+                },
+            )?,
+        );
+        if created {
+            credential_acl::clear_private(&next, &cursor)?;
+            rustix::fs::fchmod(&next, rustix::fs::Mode::RWXU).map_err(|error| {
+                format!(
+                    "failed to make credential path ancestor private {}: {error}",
+                    cursor.display()
+                )
+            })?;
+            next.sync_all().map_err(|error| {
+                format!(
+                    "failed to sync new credential path ancestor {}: {error}",
+                    cursor.display()
+                )
+            })?;
+            directory.sync_all().map_err(|error| {
+                format!(
+                    "failed to sync new credential path ancestor entry {}: {error}",
+                    cursor.display()
+                )
+            })?;
+        }
+        let opened = next.metadata().map_err(|error| {
+            format!(
+                "failed to inspect pinned credential path ancestor {}: {error}",
+                cursor.display()
+            )
+        })?;
+        let after = rustix::fs::statat(
+            &directory,
+            &component,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(|error| {
+            format!(
+                "failed to re-inspect credential path ancestor {}: {error}",
+                cursor.display()
+            )
+        })?;
+        let trusted_owner = opened.uid() == 0 || opened.uid() == effective_uid;
+        let trusted_sticky_root = opened.uid() == 0 && opened.mode() & 0o1000 != 0;
+        let stable_name = before.st_dev == after.st_dev
+            && before.st_ino == after.st_ino
+            && rustix::fs::FileType::from_raw_mode(after.st_mode) == file_type;
+        let opened_matches_name = trusted_system_symlink
+            || (u64::try_from(before.st_dev).ok() == Some(opened.dev())
+                && u64::try_from(before.st_ino).ok() == Some(opened.ino()));
+        if !opened.is_dir()
+            || !trusted_owner
+            || (opened.mode() & 0o022 != 0 && !trusted_sticky_root)
+            || !stable_name
+            || !opened_matches_name
+        {
+            return Err(format!(
+                "credential path ancestor is unsafe or changed while opening: {}",
+                cursor.display()
+            ));
+        }
+        credential_acl::validate_ancestor(&next, &cursor)?;
+        directory = next;
+    }
+    Ok(Some(directory))
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn open_credential_store_parent(
+    path: &Path,
+    create: bool,
+) -> Result<Option<CredentialStoreParent>, String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let filename = path
+        .file_name()
+        .ok_or_else(|| format!("credential path has no file name: {}", path.display()))?
+        .to_os_string();
+    let parent_path = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| format!("credential path has no private parent: {}", path.display()))?;
+    let parent_name = parent_path.file_name().ok_or_else(|| {
+        format!(
+            "credential path parent has no directory name: {}",
+            parent_path.display()
+        )
+    })?;
+    let configured_base_path = parent_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let base_path = if configured_base_path.is_absolute() {
+        configured_base_path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("failed to resolve credential directory: {error}"))?
+            .join(configured_base_path)
+    };
+    let Some(base) = open_credential_base_directory(&base_path, create)? else {
+        return Ok(None);
+    };
+    let base_metadata = base.metadata().map_err(|error| {
+        format!(
+            "failed to inspect credential directory base {}: {error}",
+            base_path.display()
+        )
+    })?;
+    if !base_metadata.is_dir()
+        || base_metadata.uid() != rustix::process::geteuid().as_raw()
+        || base_metadata.mode() & 0o022 != 0
+    {
+        return Err(format!(
+            "credential directory base must be current-user-owned without group/other write permission: {}",
+            base_path.display()
+        ));
+    }
+    let created =
+        match rustix::fs::statat(&base, parent_name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(_) => false,
+            Err(rustix::io::Errno::NOENT) if !create => return Ok(None),
+            Err(rustix::io::Errno::NOENT) => {
+                match rustix::fs::mkdirat(&base, parent_name, rustix::fs::Mode::RWXU) {
+                    Ok(()) => true,
+                    Err(rustix::io::Errno::EXIST) => false,
+                    Err(error) => {
+                        return Err(format!(
+                            "failed to create private credential directory {}: {error}",
+                            parent_path.display()
+                        ));
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect credential directory {}: {error}",
+                    parent_path.display()
+                ));
+            }
+        };
+    let before = rustix::fs::statat(&base, parent_name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|error| {
+            format!(
+                "failed to inspect credential directory {}: {error}",
+                parent_path.display()
+            )
+        })?;
+    if rustix::fs::FileType::from_raw_mode(before.st_mode) != rustix::fs::FileType::Directory {
+        return Err(format!(
+            "credential directory must be a non-symlink directory: {}",
+            parent_path.display()
+        ));
+    }
+    let directory = fs::File::from(
+        rustix::fs::openat(
+            &base,
+            parent_name,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to pin private credential directory {}: {error}",
+                parent_path.display()
+            )
+        })?,
+    );
+    if created {
+        credential_acl::clear_private(&directory, parent_path)?;
+        rustix::fs::fchmod(&directory, rustix::fs::Mode::RWXU).map_err(|error| {
+            format!(
+                "failed to make credential directory private {}: {error}",
+                parent_path.display()
+            )
+        })?;
+        directory.sync_all().map_err(|error| {
+            format!(
+                "failed to sync new credential directory {}: {error}",
+                parent_path.display()
+            )
+        })?;
+        base.sync_all().map_err(|error| {
+            format!(
+                "failed to sync new credential directory entry {}: {error}",
+                parent_path.display()
+            )
+        })?;
+    }
+    let mut opened = directory.metadata().map_err(|error| {
+        format!(
+            "failed to inspect pinned credential directory {}: {error}",
+            parent_path.display()
+        )
+    })?;
+    let mut after = rustix::fs::statat(&base, parent_name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|error| {
+        format!(
+            "failed to re-inspect credential directory {}: {error}",
+            parent_path.display()
+        )
+    })?;
+    if !opened.is_dir()
+        || opened.uid() != rustix::process::geteuid().as_raw()
+        || opened.mode() & 0o7022 != 0
+        || before.st_uid != rustix::process::geteuid().as_raw()
+        || before.st_mode & 0o7022 != 0
+        || after.st_uid != rustix::process::geteuid().as_raw()
+        || after.st_mode & 0o7022 != 0
+        || u64::try_from(before.st_dev).ok() != Some(opened.dev())
+        || u64::try_from(before.st_ino).ok() != Some(opened.ino())
+        || u64::try_from(after.st_dev).ok() != Some(opened.dev())
+        || u64::try_from(after.st_ino).ok() != Some(opened.ino())
+    {
+        return Err(format!(
+            "credential directory must be a private, current-user-owned directory which did not change while opening: {}",
+            parent_path.display()
+        ));
+    }
+    if opened.mode() & 0o7777 != 0o700 || after.st_mode & 0o7777 != 0o700 {
+        rustix::fs::fchmod(&directory, rustix::fs::Mode::RWXU).map_err(|error| {
+            format!(
+                "failed to tighten credential directory permissions {}: {error}",
+                parent_path.display()
+            )
+        })?;
+        directory.sync_all().map_err(|error| {
+            format!(
+                "failed to sync tightened credential directory {}: {error}",
+                parent_path.display()
+            )
+        })?;
+        opened = directory.metadata().map_err(|error| {
+            format!(
+                "failed to inspect tightened credential directory {}: {error}",
+                parent_path.display()
+            )
+        })?;
+        after = rustix::fs::statat(&base, parent_name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|error| {
+                format!(
+                    "failed to inspect tightened credential directory {}: {error}",
+                    parent_path.display()
+                )
+            })?;
+        if !opened.is_dir()
+            || opened.uid() != rustix::process::geteuid().as_raw()
+            || opened.mode() & 0o7777 != 0o700
+            || after.st_uid != rustix::process::geteuid().as_raw()
+            || after.st_mode & 0o7777 != 0o700
+            || u64::try_from(after.st_dev).ok() != Some(opened.dev())
+            || u64::try_from(after.st_ino).ok() != Some(opened.ino())
+        {
+            return Err(format!(
+                "credential directory did not become private while tightening: {}",
+                parent_path.display()
+            ));
+        }
+    }
+    credential_acl::validate_private(&directory, parent_path)?;
+    let identity = CredentialFileIdentity {
+        device: opened.dev(),
+        inode: opened.ino(),
+    };
+    let base_identity = CredentialFileIdentity {
+        device: base_metadata.dev(),
+        inode: base_metadata.ino(),
+    };
+    let parent = CredentialStoreParent {
+        base,
+        base_path,
+        base_identity,
+        directory,
+        directory_name: parent_name.to_os_string(),
+        identity,
+        filename,
+    };
+    validate_credential_store_parent(&parent, path)?;
+    Ok(Some(parent))
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn validate_credential_store_parent(
+    parent: &CredentialStoreParent,
+    path: &Path,
+) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let parent_path = path
+        .parent()
+        .ok_or_else(|| format!("credential path has no private parent: {}", path.display()))?;
+    let rebound_base = open_credential_base_directory(&parent.base_path, false)?
+        .ok_or_else(|| "credential directory base disappeared while validating".to_owned())?;
+    let rebound_base_metadata = rebound_base.metadata().map_err(|error| {
+        format!(
+            "failed to revalidate credential directory base {}: {error}",
+            parent.base_path.display()
+        )
+    })?;
+    if !rebound_base_metadata.is_dir()
+        || rebound_base_metadata.uid() != rustix::process::geteuid().as_raw()
+        || rebound_base_metadata.mode() & 0o022 != 0
+        || rebound_base_metadata.dev() != parent.base_identity.device
+        || rebound_base_metadata.ino() != parent.base_identity.inode
+    {
+        return Err(format!(
+            "credential directory base changed or became unsafe: {}",
+            parent.base_path.display()
+        ));
+    }
+    let named = rustix::fs::statat(
+        &parent.base,
+        &parent.directory_name,
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .map_err(|error| {
+        format!(
+            "failed to revalidate credential directory {}: {error}",
+            parent_path.display()
+        )
+    })?;
+    let opened = parent.directory.metadata().map_err(|error| {
+        format!(
+            "failed to revalidate pinned credential directory {}: {error}",
+            parent_path.display()
+        )
+    })?;
+    if rustix::fs::FileType::from_raw_mode(named.st_mode) != rustix::fs::FileType::Directory
+        || named.st_uid != rustix::process::geteuid().as_raw()
+        || named.st_mode & 0o7077 != 0
+        || credential_file_identity(&named, parent_path)? != parent.identity
+        || !opened.is_dir()
+        || opened.uid() != rustix::process::geteuid().as_raw()
+        || opened.mode() & 0o7077 != 0
+        || opened.dev() != parent.identity.device
+        || opened.ino() != parent.identity.inode
+    {
+        return Err(format!(
+            "credential directory changed or became unsafe: {}",
+            parent_path.display()
+        ));
+    }
+    credential_acl::validate_private(&parent.directory, parent_path)?;
+    Ok(())
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn acquire_credential_store_lock(path: &Path) -> Result<Option<fs::File>, String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let parent = open_credential_store_parent(path, true)?
+        .ok_or_else(|| "failed to create the private credential directory".to_owned())?;
+    validate_credential_store_parent(&parent, path)?;
+    let lock_name = std::ffi::OsStr::new(CREDENTIAL_LOCK_FILENAME);
+    let flags = rustix::fs::OFlags::RDWR
+        | rustix::fs::OFlags::NOFOLLOW
+        | rustix::fs::OFlags::NONBLOCK
+        | rustix::fs::OFlags::CLOEXEC;
+    let lock_path = path.with_file_name(lock_name);
+    let (lock, created) = match rustix::fs::openat(
+        &parent.directory,
+        lock_name,
+        flags | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    ) {
+        Ok(lock) => (fs::File::from(lock), true),
+        Err(rustix::io::Errno::EXIST) => (
+            fs::File::from(
+                rustix::fs::openat(
+                    &parent.directory,
+                    lock_name,
+                    flags,
+                    rustix::fs::Mode::empty(),
+                )
+                .map_err(|error| format!("failed to open credential-store lock: {error}"))?,
+            ),
+            false,
+        ),
+        Err(error) => return Err(format!("failed to create credential-store lock: {error}")),
+    };
+    if created {
+        if let Err(error) = credential_acl::clear_private(&lock, &lock_path) {
+            let _ =
+                rustix::fs::unlinkat(&parent.directory, lock_name, rustix::fs::AtFlags::empty());
+            return Err(error);
+        }
+        if let Err(error) =
+            rustix::fs::fchmod(&lock, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)
+        {
+            let _ =
+                rustix::fs::unlinkat(&parent.directory, lock_name, rustix::fs::AtFlags::empty());
+            return Err(format!(
+                "failed to make credential-store lock private: {error}"
+            ));
+        }
+    }
+    let metadata = lock
+        .metadata()
+        .map_err(|error| format!("failed to inspect credential-store lock: {error}"))?;
+    credential_acl::validate_private(&lock, &lock_path)?;
+    let Some((named, identity)) =
+        inspect_credential_file(&parent.directory, lock_name, &lock_path, Some(0))?
+    else {
+        return Err("credential-store lock disappeared while opening".to_owned());
+    };
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o7777 != 0o600
+        || metadata.nlink() != 1
+        || metadata.len() != 0
+        || metadata.dev() != identity.device
+        || metadata.ino() != identity.inode
+        || named.st_mode & 0o7777 != 0o600
+        || named.st_size != 0
+    {
+        return Err("credential-store lock failed its private-file invariant".to_owned());
+    }
+    if created {
+        lock.sync_all()
+            .map_err(|error| format!("failed to sync credential-store lock: {error}"))?;
+        parent
+            .directory
+            .sync_all()
+            .map_err(|error| format!("failed to sync credential-store lock entry: {error}"))?;
+    }
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(
+        |error| format!("credential store is already owned by another process: {error}"),
+    )?;
+    let Some((_, locked_identity)) =
+        inspect_credential_file(&parent.directory, lock_name, &lock_path, Some(0))?
+    else {
+        return Err("credential-store lock disappeared after locking".to_owned());
+    };
+    if locked_identity != identity {
+        return Err("credential-store lock changed while locking".to_owned());
+    }
+    credential_acl::validate_private(&lock, &lock_path)?;
+    validate_credential_store_parent(&parent, path)?;
+    Ok(Some(lock))
+}
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn acquire_credential_store_lock(_path: &Path) -> Result<Option<fs::File>, String> {
+    Ok(None)
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn read_credentials_file(path: &Path, maximum_bytes: u64) -> Result<Option<Vec<u8>>, String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let read_limit = maximum_bytes
+        .checked_add(1)
+        .ok_or_else(|| "credentials payload read bound overflow".to_owned())?;
+    let Some(parent) = open_credential_store_parent(path, false)? else {
+        return Ok(None);
+    };
+    rustix::fs::flock(
+        &parent.directory,
+        rustix::fs::FlockOperation::NonBlockingLockShared,
+    )
+    .map_err(|error| format!("credential store is locked by another process: {error}"))?;
+    validate_credential_store_parent(&parent, path)?;
+    let Some((before, identity)) = inspect_credential_file(
+        &parent.directory,
+        &parent.filename,
+        path,
+        Some(maximum_bytes),
+    )?
+    else {
+        validate_credential_store_parent(&parent, path)?;
+        return Ok(None);
+    };
+    let mut file = fs::File::from(
+        rustix::fs::openat(
+            &parent.directory,
+            &parent.filename,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to open credential file {} without following symlinks: {error}",
+                path.display()
+            )
+        })?,
+    );
+    let opened = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect opened credential file {}: {error}",
+            path.display()
+        )
+    })?;
+    if !opened.is_file()
+        || opened.uid() != rustix::process::geteuid().as_raw()
+        || opened.mode() & 0o7077 != 0
+        || opened.nlink() != 1
+        || opened.dev() != identity.device
+        || opened.ino() != identity.inode
+        || opened.len() > maximum_bytes
+    {
+        return Err(format!(
+            "credential file changed or became unsafe while opening: {}",
+            path.display()
+        ));
+    }
+    credential_acl::validate_private(&file, path)?;
+    let initial_capacity = usize::try_from(opened.len()).map_err(|_| {
+        format!(
+            "credential file size does not fit this platform: {}",
+            path.display()
+        )
+    })?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(initial_capacity)
+        .map_err(|error| format!("failed to reserve bounded credential read: {error}"))?;
+    (&mut file)
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read credential file {}: {error}", path.display()))?;
+    if u64::try_from(bytes.len())
+        .ok()
+        .is_none_or(|length| length > maximum_bytes)
+    {
+        return Err(format!(
+            "credentials payload exceeds the configured {maximum_bytes}-byte bound"
+        ));
+    }
+    let after_opened = file.metadata().map_err(|error| {
+        format!(
+            "failed to re-inspect opened credential file {}: {error}",
+            path.display()
+        )
+    })?;
+    let Some((after, after_identity)) = inspect_credential_file(
+        &parent.directory,
+        &parent.filename,
+        path,
+        Some(maximum_bytes),
+    )?
+    else {
+        return Err(format!(
+            "credential file disappeared while being read: {}",
+            path.display()
+        ));
+    };
+    if after_identity != identity
+        || after.st_size != before.st_size
+        || after.st_mtime != before.st_mtime
+        || after.st_mtime_nsec != before.st_mtime_nsec
+        || after.st_ctime != before.st_ctime
+        || after.st_ctime_nsec != before.st_ctime_nsec
+        || after_opened.dev() != identity.device
+        || after_opened.ino() != identity.inode
+        || after_opened.uid() != rustix::process::geteuid().as_raw()
+        || after_opened.mode() & 0o7077 != 0
+        || after_opened.nlink() != 1
+        || after_opened.len() != opened.len()
+        || u64::try_from(bytes.len()).ok() != Some(opened.len())
+    {
+        return Err(format!(
+            "credential file changed while being read: {}",
+            path.display()
+        ));
+    }
+    credential_acl::validate_private(&file, path)?;
+    validate_credential_store_parent(&parent, path)?;
+    Ok(Some(bytes))
+}
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn read_credentials_file(path: &Path, maximum_bytes: u64) -> Result<Option<Vec<u8>>, String> {
+    let read_limit = maximum_bytes
+        .checked_add(1)
+        .ok_or_else(|| "credentials payload read bound overflow".to_owned())?;
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum_bytes {
+        return Err(format!(
+            "credential file must be a bounded regular non-symlink file: {}",
+            path.display()
+        ));
+    }
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    let capacity = usize::try_from(metadata.len())
+        .map_err(|_| "credentials payload length does not fit this platform".to_owned())?;
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|error| format!("failed to reserve bounded credential read: {error}"))?;
+    (&mut file)
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if u64::try_from(bytes.len())
+        .ok()
+        .is_none_or(|length| length > maximum_bytes)
+    {
+        return Err(format!(
+            "credentials payload exceeds the configured {maximum_bytes}-byte bound"
+        ));
+    }
+    Ok(Some(bytes))
+}
 fn max_credentials_file_bytes(capacity: NonZeroUsize) -> Result<u64, String> {
     let bytes = capacity
         .get()
@@ -1858,10 +2930,16 @@ fn validate_stored_credential(
     validate_credential_public_key(credential.alg, &credential.public_key)
         .map_err(|error| error.message)
 }
+#[derive(Debug)]
+enum CredentialPersistence {
+    Durable,
+    CommittedWithError(OperatorAuthError),
+    StateUncertain(OperatorAuthError),
+}
 fn persist_credentials(
     path: &Path,
     credentials: &[StoredCredential],
-) -> Result<(), OperatorAuthError> {
+) -> Result<CredentialPersistence, OperatorAuthError> {
     let mut entries = Vec::with_capacity(credentials.len());
     for credential in credentials {
         let entry = json_object(vec![
@@ -1880,60 +2958,338 @@ fn persist_credentials(
     let body = norito::json::to_json_pretty(&payload).map_err(|err| {
         OperatorAuthError::persistence_failure(format!("failed to serialize credentials: {err}"))
     })?;
-    let Some(parent) = path.parent() else {
-        return Err(OperatorAuthError::persistence_failure(
-            "credentials path has no parent directory",
+    persist_credentials_file(path, body.as_bytes())
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn create_credential_temp_file(
+    parent: &fs::File,
+    destination: &std::ffi::OsStr,
+) -> Result<(fs::File, std::ffi::OsString), String> {
+    for _ in 0..CREDENTIAL_TEMP_FILE_RETRIES {
+        let mut nonce = [0_u8; 16];
+        let mut rng = rand::rngs::OsRng;
+        rng.try_fill_bytes(&mut nonce).map_err(|error| {
+            format!("failed to generate a credential temporary-file name: {error}")
+        })?;
+        let name = std::ffi::OsString::from(format!(
+            ".{}.{}.tmp",
+            destination.to_string_lossy(),
+            hex::encode(nonce)
         ));
+        match rustix::fs::openat(
+            parent,
+            &name,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        ) {
+            Ok(file) => {
+                let file = fs::File::from(file);
+                let temporary_path = Path::new(&name);
+                if let Err(error) = credential_acl::clear_private(&file, temporary_path) {
+                    let _ = rustix::fs::unlinkat(parent, &name, rustix::fs::AtFlags::empty());
+                    return Err(error);
+                }
+                if let Err(error) =
+                    rustix::fs::fchmod(&file, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)
+                {
+                    let _ = rustix::fs::unlinkat(parent, &name, rustix::fs::AtFlags::empty());
+                    return Err(format!(
+                        "failed to make credential temporary file private: {error}"
+                    ));
+                }
+                return Ok((file, name));
+            }
+            Err(rustix::io::Errno::EXIST) => continue,
+            Err(error) => {
+                return Err(format!(
+                    "failed to create credential temporary file: {error}"
+                ));
+            }
+        }
+    }
+    Err("failed to allocate a collision-free credential temporary file".to_owned())
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn validate_credential_temp_file(
+    parent: &fs::File,
+    name: &std::ffi::OsStr,
+    path: &Path,
+    file: &fs::File,
+    expected_size: usize,
+) -> Result<CredentialFileIdentity, String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect credential temporary file: {error}"))?;
+    let temporary_path = path.with_file_name(name);
+    let Some((named, identity)) =
+        inspect_credential_file(parent, name, &temporary_path, Some(expected_size as u64))?
+    else {
+        return Err("credential temporary file disappeared before publication".to_owned());
     };
-    fs::create_dir_all(parent).map_err(|err| {
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o7777 != 0o600
+        || metadata.nlink() != 1
+        || metadata.dev() != identity.device
+        || metadata.ino() != identity.inode
+        || metadata.len() != expected_size as u64
+        || named.st_mode & 0o7777 != 0o600
+        || u64::try_from(named.st_size).ok() != Some(metadata.len())
+    {
+        return Err("credential temporary file failed its private-file invariant".to_owned());
+    }
+    credential_acl::validate_private(file, &temporary_path)?;
+    Ok(identity)
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn publish_new_credential_file(
+    parent: &fs::File,
+    source: &std::ffi::OsStr,
+    destination: &std::ffi::OsStr,
+) -> Result<(), String> {
+    rustix::fs::renameat_with(
+        parent,
+        source,
+        parent,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(|error| format!("failed atomic no-clobber credential publication: {error}"))
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn publish_replacement_credential_file(
+    parent: &fs::File,
+    source: &std::ffi::OsStr,
+    destination: &std::ffi::OsStr,
+) -> Result<(), String> {
+    rustix::fs::renameat(parent, source, parent, destination)
+        .map_err(|error| format!("failed atomic credential replacement: {error}"))
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn persist_credentials_file(
+    path: &Path,
+    body: &[u8],
+) -> Result<CredentialPersistence, OperatorAuthError> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let parent = open_credential_store_parent(path, true)
+        .map_err(OperatorAuthError::persistence_failure)?
+        .ok_or_else(|| {
+            OperatorAuthError::persistence_failure(
+                "failed to create the private credential directory",
+            )
+        })?;
+    rustix::fs::flock(
+        &parent.directory,
+        rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    )
+    .map_err(|error| {
         OperatorAuthError::persistence_failure(format!(
-            "failed to create operator auth directory: {err}"
+            "credential store is locked by another process: {error}"
         ))
     })?;
-    let parent_directory = open_parent_directory_for_sync(parent)?;
-    let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|err| {
-        OperatorAuthError::persistence_failure(format!("failed to create temp file: {err}"))
+    validate_credential_store_parent(&parent, path)
+        .map_err(OperatorAuthError::persistence_failure)?;
+    parent.directory.sync_all().map_err(|error| {
+        OperatorAuthError::persistence_failure(format!(
+            "credential directory does not support durable publication: {error}"
+        ))
     })?;
-    tmp.write_all(body.as_bytes()).map_err(|err| {
-        OperatorAuthError::persistence_failure(format!("failed to write credentials: {err}"))
-    })?;
-    tmp.flush().map_err(|err| {
-        OperatorAuthError::persistence_failure(format!("failed to flush credentials: {err}"))
-    })?;
-    tmp.as_file().sync_all().map_err(|err| {
-        OperatorAuthError::persistence_failure(format!("failed to sync credentials: {err}"))
-    })?;
-    let _persisted = tmp.persist(path).map_err(|err| {
-        OperatorAuthError::persistence_failure(format!("failed to persist credentials: {err}"))
-    })?;
-    // The rename above is the logical commit point. The file's data and metadata were synced
-    // before it, so a later directory-fsync error must not be returned as an apparent rollback:
-    // callers would otherwise retain an older in-memory credential set than the visible file.
-    if let Some(directory) = parent_directory
-        && let Err(error) = directory.sync_all()
-    {
-        iroha_logger::error!(
-            ?error,
-            path = %parent.display(),
-            "operator credential rename committed but directory sync failed"
-        );
+    let expected_destination =
+        inspect_credential_file(&parent.directory, &parent.filename, path, None)
+            .map_err(OperatorAuthError::persistence_failure)?
+            .map(|(_, identity)| identity);
+    if let Some(identity) = expected_destination {
+        validate_existing_credential_file(&parent.directory, &parent.filename, path, identity)
+            .map_err(OperatorAuthError::persistence_failure)?;
     }
-    Ok(())
-}
-fn open_parent_directory_for_sync(parent: &Path) -> Result<Option<fs::File>, OperatorAuthError> {
-    #[cfg(unix)]
-    {
-        fs::File::open(parent).map(Some).map_err(|err| {
+    let (mut temporary, temporary_name) =
+        create_credential_temp_file(&parent.directory, &parent.filename)
+            .map_err(OperatorAuthError::persistence_failure)?;
+    let prepared = (|| {
+        temporary
+            .write_all(body)
+            .map_err(|error| format!("failed to write credentials: {error}"))?;
+        temporary
+            .sync_all()
+            .map_err(|error| format!("failed to sync credentials: {error}"))?;
+        let temporary_identity = validate_credential_temp_file(
+            &parent.directory,
+            &temporary_name,
+            path,
+            &temporary,
+            body.len(),
+        )?;
+        let current_destination =
+            inspect_credential_file(&parent.directory, &parent.filename, path, None)?
+                .map(|(_, identity)| identity);
+        if current_destination != expected_destination {
+            return Err(format!(
+                "credential destination changed before publication: {}",
+                path.display()
+            ));
+        }
+        if let Some(identity) = expected_destination {
+            validate_existing_credential_file(&parent.directory, &parent.filename, path, identity)?;
+        }
+        validate_credential_store_parent(&parent, path)?;
+        match expected_destination {
+            Some(_) => publish_replacement_credential_file(
+                &parent.directory,
+                &temporary_name,
+                &parent.filename,
+            )?,
+            None => {
+                publish_new_credential_file(&parent.directory, &temporary_name, &parent.filename)?
+            }
+        }
+        Ok(temporary_identity)
+    })();
+    let published_identity = match prepared {
+        Ok(identity) => identity,
+        Err(error) => {
+            let temporary_is_ours = inspect_credential_file(
+                &parent.directory,
+                &temporary_name,
+                &path.with_file_name(&temporary_name),
+                None,
+            )
+            .ok()
+            .flatten()
+            .is_some_and(|(_, identity)| {
+                temporary.metadata().ok().is_some_and(|metadata| {
+                    metadata.dev() == identity.device && metadata.ino() == identity.inode
+                })
+            });
+            if temporary_is_ours {
+                let _ = rustix::fs::unlinkat(
+                    &parent.directory,
+                    &temporary_name,
+                    rustix::fs::AtFlags::empty(),
+                );
+            }
+            return Err(OperatorAuthError::persistence_failure(error));
+        }
+    };
+    let expected_size = body.len() as u64;
+    let validate_publication = || -> Result<(), String> {
+        let published = inspect_credential_file(
+            &parent.directory,
+            &parent.filename,
+            path,
+            Some(expected_size),
+        )?
+        .ok_or_else(|| "credential publication disappeared after atomic replace".to_owned())?;
+        if published.1 != published_identity
+            || u64::try_from(published.0.st_size).ok() != Some(expected_size)
+        {
+            return Err("credential publication changed after atomic replace".to_owned());
+        }
+        credential_acl::validate_private(&temporary, path)?;
+        Ok(())
+    };
+    let mut state_errors = Vec::new();
+    if let Err(error) = validate_publication() {
+        state_errors.push(error);
+    }
+    if let Err(error) = validate_credential_store_parent(&parent, path) {
+        state_errors.push(error);
+    }
+    let sync_error = parent.directory.sync_all().err();
+    if let Err(error) = validate_credential_store_parent(&parent, path) {
+        state_errors.push(error);
+    }
+    if let Err(error) = validate_publication() {
+        state_errors.push(error);
+    }
+    if !state_errors.is_empty() {
+        Ok(CredentialPersistence::StateUncertain(
             OperatorAuthError::persistence_failure(format!(
-                "failed to open operator auth directory for durable sync: {err}"
-            ))
-        })
+                "credential publication committed, but credential-store identity became uncertain: {}",
+                state_errors.join("; ")
+            )),
+        ))
+    } else if let Some(error) = sync_error {
+        Ok(CredentialPersistence::CommittedWithError(
+            OperatorAuthError::persistence_failure(format!(
+                "credential publication is visible and confirmed, but its durable commit is uncertain: {error}"
+            )),
+        ))
+    } else {
+        Ok(CredentialPersistence::Durable)
     }
-    #[cfg(not(unix))]
-    {
-        let _ = parent;
-        Ok(None)
+}
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn persist_credentials_file(
+    path: &Path,
+    body: &[u8],
+) -> Result<CredentialPersistence, OperatorAuthError> {
+    let parent = path.parent().ok_or_else(|| {
+        OperatorAuthError::persistence_failure("credentials path has no parent directory")
+    })?;
+    match fs::symlink_metadata(parent) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(OperatorAuthError::persistence_failure(
+                "credential parent must be a non-symlink directory",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(parent).map_err(|error| {
+                OperatorAuthError::persistence_failure(format!(
+                    "failed to create operator auth directory: {error}"
+                ))
+            })?;
+        }
+        Err(error) => {
+            return Err(OperatorAuthError::persistence_failure(format!(
+                "failed to inspect operator auth directory: {error}"
+            )));
+        }
     }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(OperatorAuthError::persistence_failure(
+                "credential destination must be a regular non-symlink file",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(OperatorAuthError::persistence_failure(format!(
+                "failed to inspect credential destination: {error}"
+            )));
+        }
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+        OperatorAuthError::persistence_failure(format!(
+            "failed to create credential temporary file: {error}"
+        ))
+    })?;
+    temporary.write_all(body).map_err(|error| {
+        OperatorAuthError::persistence_failure(format!("failed to write credentials: {error}"))
+    })?;
+    temporary.as_file().sync_all().map_err(|error| {
+        OperatorAuthError::persistence_failure(format!("failed to sync credentials: {error}"))
+    })?;
+    let _persisted = temporary.persist(path).map_err(|error| {
+        OperatorAuthError::persistence_failure(format!("failed to persist credentials: {error}"))
+    })?;
+    #[cfg(unix)]
+    if let Err(error) = fs::File::open(parent).and_then(|directory| directory.sync_all()) {
+        return Ok(CredentialPersistence::StateUncertain(
+            OperatorAuthError::persistence_failure(format!(
+                "credential publication committed without descriptor-relative confirmation and its durable commit is uncertain: {error}"
+            )),
+        ));
+    }
+    Ok(CredentialPersistence::Durable)
 }
 fn parse_registration_payload(
     payload: &norito::json::Value,
@@ -2482,9 +3838,10 @@ pub async fn handle_operator_register_options(
         .operator_auth
         .authorize_bootstrap(&headers, Some(remote.ip()), ACTION_REGISTER_OPTIONS)
         .await?;
-    require_empty_options_body(body)
-        .await
-        .map_err(|error| app.operator_auth.record_error(&ctx, ACTION_REGISTER_OPTIONS, error))?;
+    require_empty_options_body(body).await.map_err(|error| {
+        app.operator_auth
+            .record_error(&ctx, ACTION_REGISTER_OPTIONS, error)
+    })?;
     let payload = app.operator_auth.webauthn_registration_options(&ctx)?;
     Ok(JsonBody(payload))
 }
@@ -2542,9 +3899,10 @@ pub async fn handle_operator_login_options(
         .operator_auth
         .authorize_login(&headers, Some(remote.ip()), ACTION_LOGIN_OPTIONS)
         .await?;
-    require_empty_options_body(body)
-        .await
-        .map_err(|error| app.operator_auth.record_error(&ctx, ACTION_LOGIN_OPTIONS, error))?;
+    require_empty_options_body(body).await.map_err(|error| {
+        app.operator_auth
+            .record_error(&ctx, ACTION_LOGIN_OPTIONS, error)
+    })?;
     let payload = app.operator_auth.webauthn_authentication_options(&ctx)?;
     Ok(JsonBody(payload))
 }
@@ -2581,6 +3939,7 @@ mod tests {
     };
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use rand::rngs::OsRng as FallibleOsRng;
+    use std::io::Write as _;
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -2666,17 +4025,28 @@ mod tests {
     }
     fn session_authority(auth: &OperatorAuth) -> EnrollmentAuthority {
         EnrollmentAuthority::Session(
-            auth.credential_revocation_generation.load(Ordering::Acquire),
+            auth.credential_revocation_generation
+                .load(Ordering::Acquire),
         )
     }
     fn credential_management_authority(auth: &OperatorAuth) -> u64 {
-        auth.credential_revocation_generation.load(Ordering::Acquire)
+        auth.credential_revocation_generation
+            .load(Ordering::Acquire)
     }
     fn write_credentials_fixture(data_dir: &Path, body: &str) {
         let path = operator_credentials_path(data_dir);
-        fs::create_dir_all(path.parent().expect("credentials parent"))
-            .expect("create credentials directory");
-        fs::write(path, body).expect("write credentials fixture");
+        let parent = path.parent().expect("credentials parent");
+        fs::create_dir_all(parent).expect("create credentials directory");
+        fs::write(&path, body).expect("write credentials fixture");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+                .expect("make credentials fixture directory private");
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .expect("make credentials fixture private");
+        }
     }
     fn es256_credential(id: &[u8], sign_count: u32, created_at_ms: u64) -> StoredCredential {
         let signing_key = SigningKey::random(&mut OsRng);
@@ -2765,11 +4135,8 @@ mod tests {
             session_authority(&auth),
         )
         .expect("insert credential to delete");
-        auth.insert_credential(
-            es256_credential(b"keep-me", 0, 2),
-            session_authority(&auth),
-        )
-        .expect("insert credential to keep");
+        auth.insert_credential(es256_credential(b"keep-me", 0, 2), session_authority(&auth))
+            .expect("insert credential to keep");
 
         for malformed in [
             String::new(),
@@ -2864,11 +4231,8 @@ mod tests {
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         let auth = build_operator_auth(config, tempdir.path());
-        auth.insert_credential(
-            es256_credential(b"removed", 0, 1),
-            session_authority(&auth),
-        )
-        .expect("insert removed credential");
+        auth.insert_credential(es256_credential(b"removed", 0, 1), session_authority(&auth))
+            .expect("insert removed credential");
         auth.insert_credential(
             es256_credential(b"retained", 0, 2),
             session_authority(&auth),
@@ -2906,11 +4270,8 @@ mod tests {
             session_authority(&auth),
         )
         .expect("insert deleted credential");
-        auth.insert_credential(
-            es256_credential(b"keep-me", 0, 2),
-            session_authority(&auth),
-        )
-        .expect("insert retained credential");
+        auth.insert_credential(es256_credential(b"keep-me", 0, 2), session_authority(&auth))
+            .expect("insert retained credential");
         let persisted_path = auth.credentials_path.clone();
         let persisted_before = fs::read(&persisted_path).expect("persisted credentials");
         let ctx = AuthContext {
@@ -2942,7 +4303,8 @@ mod tests {
         assert_eq!(auth.challenges.lock().len(), 1);
         assert!(auth.session_valid(&session.session_token));
         assert_eq!(
-            auth.credential_revocation_generation.load(Ordering::Acquire),
+            auth.credential_revocation_generation
+                .load(Ordering::Acquire),
             generation_before
         );
     }
@@ -2955,11 +4317,8 @@ mod tests {
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         let auth = build_operator_auth(config, tempdir.path());
-        auth.insert_credential(
-            es256_credential(b"revoked", 0, 1),
-            session_authority(&auth),
-        )
-        .expect("insert revoked credential");
+        auth.insert_credential(es256_credential(b"revoked", 0, 1), session_authority(&auth))
+            .expect("insert revoked credential");
         auth.insert_credential(
             es256_credential(b"remaining", 0, 2),
             session_authority(&auth),
@@ -3094,11 +4453,8 @@ mod tests {
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         let auth = build_operator_auth(config, tempdir.path());
-        auth.insert_credential(
-            es256_credential(b"revoked", 0, 1),
-            session_authority(&auth),
-        )
-        .expect("insert revoked credential");
+        auth.insert_credential(es256_credential(b"revoked", 0, 1), session_authority(&auth))
+            .expect("insert revoked credential");
         auth.insert_credential(
             es256_credential(b"remaining", 0, 2),
             session_authority(&auth),
@@ -3253,6 +4609,46 @@ mod tests {
         assert_eq!(err.code, "operator_webauthn_state_unavailable");
     }
     #[test]
+    fn credential_store_uncertainty_quarantines_memory_and_authorizations() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, tempdir.path());
+        auth.credentials_write()
+            .expect("credential lock")
+            .push(es256_credential(b"quarantine", 0, 1));
+        let ctx = AuthContext {
+            key: "quarantine".to_owned(),
+            enrollment_authority: EnrollmentAuthority::None,
+        };
+        auth.webauthn_authentication_options(&ctx)
+            .expect("challenge");
+        let mut rng = FallibleOsRng;
+        let session = auth
+            .issue_session_with_rng(b"quarantine", Duration::from_secs(60), &mut rng)
+            .expect("session");
+        let generation = auth
+            .credential_revocation_generation
+            .load(Ordering::Acquire);
+
+        auth.quarantine_credential_state();
+
+        let error = auth
+            .credentials_read()
+            .expect_err("quarantined credential memory must fail closed");
+        assert_eq!(error.code, "operator_webauthn_state_unavailable");
+        assert_eq!(auth.challenges.lock().len(), 0);
+        assert!(!auth.session_valid(&session.session_token));
+        assert_eq!(
+            auth.credential_revocation_generation
+                .load(Ordering::Acquire),
+            generation + 1
+        );
+    }
+    #[test]
     fn operator_auth_rejects_zero_ephemeral_duration() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let mut config = base_operator_auth_config(
@@ -3309,7 +4705,8 @@ mod tests {
         }
 
         let mut too_many_tokens = Vec::new();
-        for index in 0..=iroha_config::parameters::defaults::torii::operator_auth::MAX_BOOTSTRAP_TOKENS
+        for index in
+            0..=iroha_config::parameters::defaults::torii::operator_auth::MAX_BOOTSTRAP_TOKENS
         {
             too_many_tokens.push(test_bootstrap_token(&format!("token-{index}")));
         }
@@ -3652,11 +5049,7 @@ mod tests {
         let mut malformed_bootstrap = bootstrap;
         malformed_bootstrap.insert(HEADER_OPERATOR_SESSION, HeaderValue::from_static(""));
         let error = auth
-            .authorize_bootstrap(
-                &malformed_bootstrap,
-                loopback_ip(),
-                ACTION_REGISTER_OPTIONS,
-            )
+            .authorize_bootstrap(&malformed_bootstrap, loopback_ip(), ACTION_REGISTER_OPTIONS)
             .await
             .expect_err("bootstrap must not hide a supplied malformed session");
         assert_eq!(error.code, "operator_session_invalid");
@@ -4175,6 +5568,343 @@ mod tests {
             Err(OperatorAuthInitError::CredentialLoad(_))
         ));
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_store_rejects_symlink_file_without_clobbering_target() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = operator_credentials_path(tempdir.path());
+        let parent = path.parent().expect("credential parent");
+        fs::create_dir(parent).expect("credential parent");
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .expect("private credential parent");
+        let target = tempdir.path().join("symlink-target.json");
+        let sentinel = b"do not replace";
+        fs::write(&target, sentinel).expect("symlink target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
+            .expect("private symlink target");
+        symlink(&target, &path).expect("credential symlink");
+        let capacity = NonZeroUsize::new(1).expect("capacity");
+
+        assert!(load_credentials(&path, &[OperatorWebAuthnAlgorithm::Es256], capacity).is_err());
+        let error = persist_credentials(&path, &[]).expect_err("symlink destination must fail");
+        assert_eq!(error.code, "operator_webauthn_persist_failed");
+        assert_eq!(fs::read(target).expect("unchanged target"), sentinel);
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_store_rejects_non_regular_destination() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = operator_credentials_path(tempdir.path());
+        let parent = path.parent().expect("credential parent");
+        fs::create_dir(parent).expect("credential parent");
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .expect("private credential parent");
+        fs::create_dir(&path).expect("directory at credential destination");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+            .expect("private non-regular destination");
+        let sentinel = path.join("sentinel");
+        fs::write(&sentinel, b"do not replace").expect("sentinel");
+        let capacity = NonZeroUsize::new(1).expect("capacity");
+
+        assert!(load_credentials(&path, &[OperatorWebAuthnAlgorithm::Es256], capacity).is_err());
+        assert!(persist_credentials(&path, &[]).is_err());
+        assert_eq!(
+            fs::read(sentinel).expect("unchanged sentinel"),
+            b"do not replace"
+        );
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_store_rejects_symlink_parent_without_clobbering_target() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let external = tempdir.path().join("external-operator-auth");
+        fs::create_dir(&external).expect("external directory");
+        fs::set_permissions(&external, fs::Permissions::from_mode(0o700))
+            .expect("private external directory");
+        let target = external.join(CREDENTIALS_FILENAME);
+        let sentinel = b"do not replace";
+        fs::write(&target, sentinel).expect("external credential target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
+            .expect("private external target");
+        let parent = operator_credentials_path(tempdir.path())
+            .parent()
+            .expect("credential parent")
+            .to_path_buf();
+        symlink(&external, &parent).expect("credential parent symlink");
+        let path = parent.join(CREDENTIALS_FILENAME);
+        let capacity = NonZeroUsize::new(1).expect("capacity");
+
+        assert!(load_credentials(&path, &[OperatorWebAuthnAlgorithm::Es256], capacity).is_err());
+        let error = persist_credentials(&path, &[]).expect_err("symlink parent must fail");
+        assert_eq!(error.code, "operator_webauthn_persist_failed");
+        assert_eq!(fs::read(target).expect("unchanged target"), sentinel);
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_store_rejects_public_directory_and_file_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let capacity = NonZeroUsize::new(1).expect("capacity");
+        let public_directory = tempfile::tempdir().expect("tempdir");
+        write_credentials_fixture(public_directory.path(), r#"{"version":1,"credentials":[]}"#);
+        let directory_path = operator_credentials_path(public_directory.path());
+        fs::set_permissions(
+            directory_path.parent().expect("credential parent"),
+            fs::Permissions::from_mode(0o770),
+        )
+        .expect("group-writable credential parent");
+        assert!(
+            load_credentials(
+                &directory_path,
+                &[OperatorWebAuthnAlgorithm::Es256],
+                capacity,
+            )
+            .is_err()
+        );
+        assert!(persist_credentials(&directory_path, &[]).is_err());
+
+        let public_file = tempfile::tempdir().expect("tempdir");
+        write_credentials_fixture(public_file.path(), r#"{"version":1,"credentials":[]}"#);
+        let file_path = operator_credentials_path(public_file.path());
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o644))
+            .expect("public credential file");
+        assert!(
+            load_credentials(&file_path, &[OperatorWebAuthnAlgorithm::Es256], capacity,).is_err()
+        );
+        assert!(persist_credentials(&file_path, &[]).is_err());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn credential_store_rejects_extended_allow_acl_without_clobbering() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        write_credentials_fixture(tempdir.path(), r#"{"version":1,"credentials":[]}"#);
+        let path = operator_credentials_path(tempdir.path());
+        let before = fs::read(&path).expect("credential contents");
+        let status = std::process::Command::new("/bin/chmod")
+            .arg("+a")
+            .arg("everyone allow read")
+            .arg(&path)
+            .status()
+            .expect("run chmod to add an extended ACL");
+        assert!(status.success(), "chmod failed with {status}");
+        let capacity = NonZeroUsize::new(1).expect("capacity");
+
+        assert!(load_credentials(&path, &[OperatorWebAuthnAlgorithm::Es256], capacity).is_err());
+        assert!(persist_credentials(&path, &[]).is_err());
+        assert_eq!(fs::read(path).expect("unchanged credential file"), before);
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_store_tightens_legacy_readable_directory_permissions() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        write_credentials_fixture(tempdir.path(), r#"{"version":1,"credentials":[]}"#);
+        let path = operator_credentials_path(tempdir.path());
+        let parent = path.parent().expect("credential parent");
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o755))
+            .expect("legacy credential parent mode");
+        let capacity = NonZeroUsize::new(1).expect("capacity");
+
+        let credentials = load_credentials(&path, &[OperatorWebAuthnAlgorithm::Es256], capacity)
+            .expect("legacy readable directory is safely tightened");
+        assert!(credentials.is_empty());
+        assert_eq!(
+            fs::metadata(parent).expect("tightened parent").mode() & 0o7777,
+            0o700
+        );
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_store_rejects_hard_link_destination() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        write_credentials_fixture(tempdir.path(), r#"{"version":1,"credentials":[]}"#);
+        let path = operator_credentials_path(tempdir.path());
+        let alias = tempdir.path().join("credential-hard-link.json");
+        fs::hard_link(&path, &alias).expect("credential hard link");
+        let before = fs::read(&alias).expect("hard-link contents");
+        let capacity = NonZeroUsize::new(1).expect("capacity");
+
+        assert!(load_credentials(&path, &[OperatorWebAuthnAlgorithm::Es256], capacity).is_err());
+        assert!(persist_credentials(&path, &[]).is_err());
+        assert_eq!(fs::read(alias).expect("unchanged hard link"), before);
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_store_creates_private_single_link_entries() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = operator_credentials_path(tempdir.path());
+        persist_credentials(&path, &[]).expect("persist empty credential store");
+
+        let directory = fs::metadata(path.parent().expect("credential parent"))
+            .expect("credential parent metadata");
+        let file = fs::metadata(path).expect("credential metadata");
+        assert_eq!(directory.mode() & 0o7777, 0o700);
+        assert_eq!(file.mode() & 0o7777, 0o600);
+        assert_eq!(file.nlink(), 1);
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_store_rejects_a_second_live_owner() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let owner = build_operator_auth(config.clone(), tempdir.path());
+
+        let error = match OperatorAuth::new(
+            config.clone(),
+            tempdir.path().to_path_buf(),
+            MaybeTelemetry::disabled(),
+        ) {
+            Ok(_) => panic!("a second credential-store owner must be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, OperatorAuthInitError::CredentialLoad(_)));
+
+        drop(owner);
+        OperatorAuth::new(
+            config,
+            tempdir.path().to_path_buf(),
+            MaybeTelemetry::disabled(),
+        )
+        .expect("credential-store ownership is released on drop");
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_no_clobber_publication_preserves_racing_destination() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = operator_credentials_path(tempdir.path());
+        let parent = open_credential_store_parent(&path, true)
+            .expect("open credential parent")
+            .expect("created credential parent");
+        assert!(
+            inspect_credential_file(&parent.directory, &parent.filename, &path, None)
+                .expect("inspect absent destination")
+                .is_none()
+        );
+        let (mut temporary, temporary_name) =
+            create_credential_temp_file(&parent.directory, &parent.filename)
+                .expect("credential temporary file");
+        temporary
+            .write_all(b"new credentials")
+            .expect("write temporary");
+        temporary.sync_all().expect("sync temporary");
+        validate_credential_temp_file(
+            &parent.directory,
+            &temporary_name,
+            &path,
+            &temporary,
+            b"new credentials".len(),
+        )
+        .expect("valid temporary");
+        drop(temporary);
+
+        let racing = b"racing destination";
+        fs::write(&path, racing).expect("racing destination");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("private racing destination");
+        assert!(
+            publish_new_credential_file(&parent.directory, &temporary_name, &parent.filename)
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).expect("racing destination remains"), racing);
+        rustix::fs::unlinkat(
+            &parent.directory,
+            &temporary_name,
+            rustix::fs::AtFlags::empty(),
+        )
+        .expect("remove unpublished temporary");
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_store_rejects_intermediate_symlink_ancestor() {
+        use std::os::unix::fs::symlink;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let real_data = tempdir.path().join("real-data");
+        write_credentials_fixture(&real_data, r#"{"version":1,"credentials":[]}"#);
+        let linked_data = tempdir.path().join("linked-data");
+        symlink(&real_data, &linked_data).expect("intermediate symlink");
+        let path = operator_credentials_path(&linked_data);
+        let target = operator_credentials_path(&real_data);
+        let before = fs::read(&target).expect("target credentials");
+        let capacity = NonZeroUsize::new(1).expect("capacity");
+
+        assert!(load_credentials(&path, &[OperatorWebAuthnAlgorithm::Es256], capacity).is_err());
+        assert!(persist_credentials(&path, &[]).is_err());
+        assert_eq!(fs::read(target).expect("unchanged target"), before);
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_parent_binding_rejects_absent_file_after_directory_swap() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = operator_credentials_path(tempdir.path());
+        let parent = open_credential_store_parent(&path, true)
+            .expect("open credential parent")
+            .expect("created credential parent");
+        assert!(
+            inspect_credential_file(&parent.directory, &parent.filename, &path, None)
+                .expect("inspect absent file")
+                .is_none()
+        );
+
+        let configured_parent = path.parent().expect("credential parent");
+        let displaced_parent = tempdir.path().join("displaced-operator-auth");
+        fs::rename(configured_parent, &displaced_parent).expect("displace credential parent");
+        fs::create_dir(configured_parent).expect("replacement credential parent");
+        fs::set_permissions(configured_parent, fs::Permissions::from_mode(0o700))
+            .expect("private replacement parent");
+        fs::write(&path, r#"{"version":1,"credentials":[]}"#).expect("replacement credential file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("private replacement file");
+
+        assert!(validate_credential_store_parent(&parent, &path).is_err());
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn credential_base_binding_rejects_data_directory_swap() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let data_dir = tempdir.path().join("data");
+        fs::create_dir(&data_dir).expect("data directory");
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))
+            .expect("private data directory");
+        let path = operator_credentials_path(&data_dir);
+        let parent = open_credential_store_parent(&path, true)
+            .expect("open credential parent")
+            .expect("created credential parent");
+
+        let displaced_data_dir = tempdir.path().join("displaced-data");
+        fs::rename(&data_dir, &displaced_data_dir).expect("displace data directory");
+        fs::create_dir(&data_dir).expect("replacement data directory");
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))
+            .expect("private replacement data directory");
+        let replacement_parent = operator_credentials_path(&data_dir)
+            .parent()
+            .expect("replacement credential parent")
+            .to_path_buf();
+        fs::create_dir(&replacement_parent).expect("replacement credential parent");
+        fs::set_permissions(&replacement_parent, fs::Permissions::from_mode(0o700))
+            .expect("private replacement credential parent");
+
+        assert!(validate_credential_store_parent(&parent, &path).is_err());
+    }
     #[test]
     fn credential_capacity_is_enforced_for_load_and_rollover() {
         let signing_key = SigningKey::random(&mut OsRng);
@@ -4239,10 +5969,7 @@ mod tests {
         let duplicate = auth
             .insert_credential(credential(1), session_authority(&auth))
             .expect_err("duplicate credential identifiers must not replace keys or counters");
-        assert_eq!(
-            duplicate.code,
-            "operator_webauthn_credential_duplicate"
-        );
+        assert_eq!(duplicate.code, "operator_webauthn_credential_duplicate");
         let error = auth
             .insert_credential(credential(2), session_authority(&auth))
             .expect_err("rollover beyond capacity must fail");

@@ -71,7 +71,7 @@ impl HedgingBillingRuntimeDependenciesV1 {
             journal_verifier: journal_verifier
                 .ok_or_else(|| eyre::eyre!("missing consensus billing journal verifier"))?,
             statement_signer: statement_signer
-                .ok_or_else(|| eyre::eyre!("missing billing statement HSM/KMS signer"))?,
+                .ok_or_else(|| eyre::eyre!("missing billing statement signer"))?,
             statement_publisher: statement_publisher
                 .ok_or_else(|| eyre::eyre!("missing immutable billing statement publisher"))?,
             acknowledgement_authority: acknowledgement_authority
@@ -693,7 +693,7 @@ fn qualify_dependencies(
             ),
             statement_signer,
         )
-        .wrap_err("qualify billing statement HSM/KMS signer")?,
+        .wrap_err("qualify billing statement signer")?,
     );
     let statement_publisher: Arc<dyn BillingStatementPublisher> = Arc::new(
         QualifiedHedgingBillingRuntimeProviderV1::try_new(
@@ -1923,7 +1923,7 @@ mod tests {
         for (provider, expected_context) in [
             ("finalized-query", "qualify finalized"),
             ("journal-verifier", "qualify consensus"),
-            ("statement-signer", "qualify billing statement HSM/KMS"),
+            ("statement-signer", "qualify billing statement signer"),
             ("statement-publisher", "qualify immutable"),
             (
                 "acknowledgement-authority",

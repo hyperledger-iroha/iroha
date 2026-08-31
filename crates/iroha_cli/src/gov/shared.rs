@@ -89,6 +89,7 @@ pub(super) fn decode_hex32(hex_str: &str) -> Result<[u8; 32]> {
 }
 /// Compute the exact deploy-contract `ProposalKind` fingerprint stored by Core.
 pub(super) fn compute_proposal_id(
+    proposal_operator: &iroha::data_model::account::AccountId,
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &[u8; 32],
     abi_hash: &[u8; 32],
@@ -98,6 +99,7 @@ pub(super) fn compute_proposal_id(
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
     };
     ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: proposal_operator.clone(),
         contract_address: contract_address.clone(),
         code_hash: ContractCodeHash::new(*code_hash),
         abi_hash: ContractAbiHash::new(*abi_hash),
@@ -232,6 +234,7 @@ mod tests {
     }
     #[test]
     fn compute_proposal_id_matches_proposal_kind_fingerprint() {
+        use iroha_test_samples::ALICE_ID;
         use iroha::data_model::governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
         };
@@ -242,6 +245,7 @@ mod tests {
         let code = [0x11u8; 32];
         let abi = [0x22u8; 32];
         let expected = ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: ALICE_ID.clone(),
             contract_address: contract_address.clone(),
             code_hash: ContractCodeHash::new(code),
             abi_hash: ContractAbiHash::new(abi),
@@ -249,7 +253,7 @@ mod tests {
             manifest_provenance: None,
         })
         .fingerprint();
-        let candidate = compute_proposal_id(&contract_address, &code, &abi, None);
+        let candidate = compute_proposal_id(&ALICE_ID, &contract_address, &code, &abi, None);
         assert_eq!(candidate, expected);
     }
 }

@@ -5633,32 +5633,6 @@
         ],
         "type": "object"
       },
-      "ConsensusKeyHsmBinding": {
-        "additionalProperties": false,
-        "properties": {
-          "key_label": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "provider": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "slot": {
-            "format": "uint16",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "provider",
-          "key_label"
-        ],
-        "type": "object"
-      },
       "ConsensusKeyId": {
         "additionalProperties": false,
         "properties": {
@@ -5690,16 +5664,6 @@
             "type": [
               "integer",
               "null"
-            ]
-          },
-          "hsm": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ConsensusKeyHsmBinding"
-              },
-              {
-                "type": "null"
-              }
             ]
           },
           "id": {
@@ -8183,6 +8147,9 @@
           "code_hash": {
             "$ref": "#/components/schemas/GovernanceProposalHex32V1"
           },
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
           "contract_address": {
             "oneOf": [
               {
@@ -8232,6 +8199,7 @@
           }
         },
         "required": [
+          "proposal_operator",
           "abi_version",
           "code_hash",
           "abi_hash"
@@ -12509,9 +12477,13 @@
             "maximum": 9007199254740991,
             "minimum": 1,
             "type": "integer"
+          },
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           }
         },
         "required": [
+          "proposal_operator",
           "contract_address",
           "expected_revision",
           "action"
@@ -12547,9 +12519,13 @@
                 "type": "null"
               }
             ]
+          },
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           }
         },
         "required": [
+          "proposal_operator",
           "contract_address",
           "code_hash",
           "abi_hash",
@@ -12877,9 +12853,13 @@
         "properties": {
           "manifest": {
             "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeManifestV1"
+          },
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           }
         },
         "required": [
+          "proposal_operator",
           "manifest"
         ],
         "type": "object"
@@ -24389,6 +24369,7 @@
         "type": "string"
       },
       "OfflineBranchClaim": {
+        "additionalProperties": false,
         "properties": {
           "path": {
             "$ref": "#/components/schemas/OfflineBranchPath"
@@ -24405,6 +24386,7 @@
         "type": "object"
       },
       "OfflineBranchPath": {
+        "additionalProperties": false,
         "properties": {
           "depth": {
             "format": "uint8",
@@ -24444,6 +24426,12 @@
         },
         "maxItems": 65,
         "minItems": 65,
+        "prefixItems": [
+          {
+            "const": 4,
+            "type": "integer"
+          }
+        ],
         "type": "array"
       },
       "OfflineFixed32Bytes": {
@@ -24548,6 +24536,7 @@
         "type": "array"
       },
       "OfflineLanePrivacyMerkleWitness": {
+        "additionalProperties": false,
         "properties": {
           "leaf": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
@@ -24563,6 +24552,7 @@
         "type": "object"
       },
       "OfflineLanePrivacyProof": {
+        "additionalProperties": false,
         "properties": {
           "commitment_id": {
             "$ref": "#/components/schemas/OfflineLaneCommitmentId"
@@ -24583,6 +24573,7 @@
         },
         "oneOf": [
           {
+            "additionalProperties": false,
             "properties": {
               "kind": {
                 "enum": [
@@ -24603,6 +24594,7 @@
         ]
       },
       "OfflineMerkleProof": {
+        "additionalProperties": false,
         "properties": {
           "audit_path": {
             "description": "Complete leaf-to-root path. Lane privacy proofs require at least one sibling and reject omitted/null siblings.",
@@ -24626,13 +24618,17 @@
         "type": "object"
       },
       "OfflineOpaqueProof": {
+        "additionalProperties": false,
         "properties": {
           "backend": {
+            "maxLength": 256,
             "minLength": 1,
             "type": "string"
           },
           "bytes": {
-            "$ref": "#/components/schemas/OfflineByteArray"
+            "$ref": "#/components/schemas/OfflineByteArray",
+            "maxItems": 393216,
+            "minItems": 1
           }
         },
         "required": [
@@ -24642,6 +24638,7 @@
         "type": "object"
       },
       "OfflineOperationApplied": {
+        "additionalProperties": false,
         "properties": {
           "state": {
             "enum": [
@@ -24660,6 +24657,7 @@
         "type": "object"
       },
       "OfflineOperationAppliedValue": {
+        "additionalProperties": false,
         "properties": {
           "operation_id": {
             "$ref": "#/components/schemas/OfflineOperationId"
@@ -24748,6 +24746,7 @@
         "type": "object"
       },
       "OfflineOperationPending": {
+        "additionalProperties": false,
         "properties": {
           "state": {
             "enum": [
@@ -24766,6 +24765,7 @@
         "type": "object"
       },
       "OfflineOperationPendingValue": {
+        "additionalProperties": false,
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/OfflineOperationKind"
@@ -24776,7 +24776,7 @@
           "submitted_at_ms": {
             "description": "Signed request issuance time in Unix epoch milliseconds, emitted as a lossless unquoted JSON integer.",
             "format": "uint64",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "transaction_hash": {
@@ -24792,6 +24792,7 @@
         "type": "object"
       },
       "OfflineOperationReference": {
+        "additionalProperties": false,
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/OfflineOperationKind"
@@ -24810,7 +24811,7 @@
           "submitted_at_ms": {
             "description": "Signed request issuance time in Unix epoch milliseconds, emitted as a lossless unquoted JSON integer.",
             "format": "uint64",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "transaction_hash": {
@@ -24828,6 +24829,7 @@
         "type": "object"
       },
       "OfflineOperationRejected": {
+        "additionalProperties": false,
         "properties": {
           "state": {
             "enum": [
@@ -24846,6 +24848,7 @@
         "type": "object"
       },
       "OfflineOperationRejectedValue": {
+        "additionalProperties": false,
         "properties": {
           "error": {
             "$ref": "#/components/schemas/ErrorEnvelope"
@@ -24973,8 +24976,8 @@
           },
           "version": {
             "format": "uint16",
-            "maximum": 4,
-            "minimum": 4,
+            "maximum": 5,
+            "minimum": 5,
             "type": "integer"
           }
         },
@@ -24998,6 +25001,7 @@
         "type": "object"
       },
       "OfflinePeerSplitTransition": {
+        "additionalProperties": false,
         "properties": {
           "binding_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
@@ -25035,8 +25039,10 @@
         "type": "object"
       },
       "OfflineProofAttachment": {
+        "additionalProperties": false,
         "properties": {
           "backend": {
+            "maxLength": 256,
             "minLength": 1,
             "type": "string"
           },
@@ -25080,7 +25086,10 @@
         "required": [
           "backend",
           "proof",
-          "vk_ref"
+          "vk_ref",
+          "vk_commitment",
+          "envelope_hash",
+          "lane_privacy"
         ],
         "type": "object"
       },
@@ -25256,6 +25265,7 @@
         "type": "object"
       },
       "OfflineRedeemChangeBranch": {
+        "additionalProperties": false,
         "properties": {
           "branch_claims": {
             "items": {
@@ -25280,6 +25290,7 @@
         "type": "object"
       },
       "OfflineRedeemOperationResult": {
+        "additionalProperties": false,
         "properties": {
           "kind": {
             "enum": [
@@ -25357,19 +25368,16 @@
           "redemption",
           "block_height",
           "operation_id",
-          "authorization"
+          "authorization",
+          "offline_change"
         ],
         "type": "object",
         "x-iroha-norito-schema": "iroha.torii.v1.offline.redeem.request"
       },
       "OfflineRedeemResult": {
+        "additionalProperties": false,
         "properties": {
           "finalized_block_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "server_time_ms": {
             "format": "uint64",
             "minimum": 1,
             "type": "integer"
@@ -25380,12 +25388,12 @@
         },
         "required": [
           "transaction_hash",
-          "finalized_block_height",
-          "server_time_ms"
+          "finalized_block_height"
         ],
         "type": "object"
       },
       "OfflineRedemptionChangeTransition": {
+        "additionalProperties": false,
         "properties": {
           "binding_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
@@ -25419,6 +25427,7 @@
         "type": "object"
       },
       "OfflineRedemptionIntent": {
+        "additionalProperties": false,
         "properties": {
           "asset": {
             "type": "string"
@@ -25513,7 +25522,9 @@
           "public_amount",
           "unshield_public_inputs",
           "unshield_public_inputs_digest",
-          "operation_id"
+          "operation_id",
+          "change_output",
+          "change_artifact_binding"
         ],
         "type": "object"
       },
@@ -25528,13 +25539,14 @@
             "type": "string"
           },
           "device_id": {
+            "maxLength": 128,
             "minLength": 1,
             "type": "string"
           },
           "expires_at_ms": {
             "description": "Exclusive Unix expiry in milliseconds.",
             "format": "uint64",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "hardware_assertion": {
@@ -25542,7 +25554,7 @@
           },
           "issued_at_ms": {
             "format": "uint64",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "nonce": {
@@ -25573,6 +25585,7 @@
         "type": "object"
       },
       "OfflineScaledAmount": {
+        "additionalProperties": false,
         "properties": {
           "atomic_units": {
             "description": "Positive u128 emitted as an unquoted Norito-JSON integer.",
@@ -25594,8 +25607,9 @@
         "type": "object"
       },
       "OfflineSignature": {
-        "description": "Canonical uppercase hexadecimal signature payload.",
-        "minLength": 2,
+        "description": "Canonical fixed-width raw low-S P-256 signature (r || s) as uppercase hexadecimal.",
+        "maxLength": 128,
+        "minLength": 128,
         "pattern": "^(?:[0-9A-F]{2})+$",
         "type": "string"
       },
@@ -25621,6 +25635,7 @@
         "type": "object"
       },
       "OfflineSpendBundle": {
+        "additionalProperties": false,
         "properties": {
           "operation": {
             "$ref": "#/components/schemas/OfflineRecursiveOperationVector"
@@ -25640,6 +25655,7 @@
         "type": "object"
       },
       "OfflineSpendProof": {
+        "additionalProperties": false,
         "properties": {
           "proof_envelope": {
             "$ref": "#/components/schemas/OfflinePastaCycleProofEnvelope"
@@ -25659,6 +25675,7 @@
         "type": "object"
       },
       "OfflineSpendStatement": {
+        "additionalProperties": false,
         "properties": {
           "artifact_binding": {
             "$ref": "#/components/schemas/OfflineArtifactBinding"
@@ -25740,7 +25757,8 @@
           "current_note",
           "branch_claims",
           "artifact_binding",
-          "verifier_key_id"
+          "verifier_key_id",
+          "transition"
         ],
         "type": "object"
       },
@@ -25750,6 +25768,7 @@
         },
         "oneOf": [
           {
+            "additionalProperties": false,
             "properties": {
               "transition": {
                 "enum": [
@@ -25768,6 +25787,7 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "transition": {
                 "enum": [
@@ -25788,6 +25808,7 @@
         ]
       },
       "OfflineSpendableNoteDescriptor": {
+        "additionalProperties": false,
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/OfflineScaledAmount"
@@ -25850,6 +25871,7 @@
         "type": "object"
       },
       "OfflineTopUpAnchor": {
+        "additionalProperties": false,
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/OfflineScaledAmount"
@@ -25968,6 +25990,7 @@
         "type": "object"
       },
       "OfflineTopUpAnchorRef": {
+        "additionalProperties": false,
         "properties": {
           "anchor_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
@@ -26035,13 +26058,27 @@
             "$ref": "#/components/schemas/Hash"
           },
           "next_epoch_snapshot": {
-            "$ref": "#/components/schemas/SumeragiV2FinalizedNextEpochSnapshot"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SumeragiV2FinalizedNextEpochSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "nexus_amx_context_hash": {
             "$ref": "#/components/schemas/Hash"
           },
           "parent_commit_qc": {
-            "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "protocol_version": {
             "enum": [
@@ -26049,6 +26086,16 @@
             ],
             "format": "uint16",
             "type": "integer"
+          },
+          "snapshot_bootstrap": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -26058,7 +26105,10 @@
           "height",
           "epoch",
           "epoch_end_height",
+          "next_epoch_snapshot",
           "mode",
+          "parent_commit_qc",
+          "snapshot_bootstrap",
           "nexus_amx_context_hash",
           "execution_policy_hash",
           "da_layout",
@@ -26096,6 +26146,7 @@
         "type": "object"
       },
       "OfflineTopUpOperationResult": {
+        "additionalProperties": false,
         "properties": {
           "kind": {
             "enum": [
@@ -26164,6 +26215,7 @@
         "x-iroha-norito-schema": "iroha.torii.v1.offline.top_up.request"
       },
       "OfflineTopUpResult": {
+        "additionalProperties": false,
         "properties": {
           "anchor": {
             "$ref": "#/components/schemas/OfflineTopUpAnchor",
@@ -26178,11 +26230,6 @@
             "minimum": 1,
             "type": "integer"
           },
-          "server_time_ms": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
           "transaction_hash": {
             "$ref": "#/components/schemas/OfflineTransactionHash"
           }
@@ -26190,7 +26237,6 @@
         "required": [
           "transaction_hash",
           "finalized_block_height",
-          "server_time_ms",
           "anchor",
           "finality_proof"
         ],
@@ -26321,6 +26367,7 @@
         "type": "object"
       },
       "OfflineUnshieldPublicInputs": {
+        "additionalProperties": false,
         "properties": {
           "asset_tag": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
@@ -26388,6 +26435,7 @@
         "type": "object"
       },
       "OfflineVerifyingKeyId": {
+        "additionalProperties": false,
         "properties": {
           "backend": {
             "maxLength": 256,
@@ -61122,7 +61170,7 @@
     },
     "/v1/evidence/erasure": {
       "post": {
-        "description": "Require the explicit legal-reviewer role and exact finalized legal authorization. Active legal hold precedence is checked and signed before denial; otherwise the injected KMS/erasure boundary must report a definite irreversible commit before the service appends the signed erasure receipt and revokes all matching sessions.",
+        "description": "Require the explicit legal-reviewer role and exact finalized legal authorization. Active legal hold precedence is checked and signed before denial; otherwise the deployment-selected erasure provider must report a definite irreversible commit before the service appends the signed erasure receipt and revokes all matching sessions. Software, remote-service, and hardware-backed providers are supported; no provider class is mandatory.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -66077,7 +66125,7 @@
     },
     "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release": {
       "post": {
-        "description": "Request this node's proof-carrying public TLE partial for one Core-authorized committed Opening ballot. The request has exactly zero body bytes and accepts no caller-selected identity, height, key session, participant index, transcript, or secret material. A bounded heavy-work admission permit remains held until the physical signer/HSM task completes, including after client cancellation.",
+        "description": "Request this node's proof-carrying public TLE partial for one Core-authorized committed Opening ballot. The request has exactly zero body bytes and accepts no caller-selected identity, height, key session, participant index, transcript, or secret material. A bounded heavy-work admission permit remains held until the signing task completes, including after client cancellation.",
         "operationId": "governanceParliamentTlePartialReleaseV1",
         "parameters": [
           {
@@ -74833,16 +74881,33 @@
           "required": true
         },
         "responses": {
-          "202": {
+          "408": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TransactionSubmissionReceipt"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               },
               "application/x-norito": {
                 "schema": {
-                  "$ref": "#/components/schemas/TransactionSubmissionReceipt"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bounded signed-transaction body did not complete before the absolute route deadline (request_timeout)."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionSubmissionReceipt",
+                  "x-iroha-max-bytes": 65536
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionSubmissionReceipt",
+                  "x-iroha-max-bytes": 65536
                 }
               }
             },
@@ -74850,6 +74915,7 @@
             "headers": {
               "x-iroha-entrypoint-hash": {
                 "description": "Mandatory singleton lowercase hexadecimal hash of the admitted external transaction entrypoint.",
+                "required": true,
                 "schema": {
                   "pattern": "^[0-9a-f]{64}$",
                   "type": "string"
@@ -74857,8 +74923,17 @@
               },
               "x-iroha-signed-transaction-hash": {
                 "description": "Mandatory singleton lowercase hexadecimal hash of the unchanged caller-signed transaction wire.",
+                "required": true,
                 "schema": {
                   "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "required": true,
+                "schema": {
+                  "const": "Accept",
                   "type": "string"
                 }
               }
@@ -75074,7 +75149,7 @@
               "Retry-After": {
                 "description": "Whole-second retry delay when supplied by canonical queue backpressure.",
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
@@ -75185,11 +75260,11 @@
     },
     "/v1/offline/operations/{operation_id}": {
       "get": {
-        "description": "Return the current tagged state of an accepted top-up or redemption. Pending responses include Retry-After. Pending state can be recovered from the transaction queue, and committed terminal state is resolved through Kura's bounded operation-id index and exact canonical carrier, including its validated merge entry when applicable. The process-local admission registry retains only fixed-size canonical request bindings, shares configured count/byte capacity with in-flight reservations, never capacity-evicts an unexpired binding, and prunes accepted bindings 24 hours after signed authorization expiry. A 503 response means that admission capacity, index reconstruction, or indexed block/merge history is temporarily unavailable.",
+        "description": "Return the current tagged state of an accepted top-up or redemption. Pending responses include Retry-After. Pending state is recovered from the transaction queue; if Queue startup recovery or an in-flight durability transition prevents an exact ownership snapshot, Torii returns offline_operation_pending_unavailable instead of guessing absent or pending. Committed success is resolved first from the consensus-persisted global Applied record keyed solely by operation id. Only when no global Applied record exists may Torii return the configured submission authority's Rejected attempt, and a newer exact admitted, queued, or pipeline attempt supersedes that older rejection. Exact terminal evidence locates one ordinary or merge carrier and result. The process-local admission registry retains only fixed-size canonical request bindings, shares configured count/byte capacity with in-flight reservations, never capacity-evicts an unexpired binding, and prunes accepted bindings 24 hours after signed authorization expiry. A 503 response means that pending Queue ownership, referenced block/merge history, or finality proof material is unavailable, or that canonical operation evidence is inconsistent.",
         "operationId": "offlineOperationStatus",
         "parameters": [
           {
-            "description": "Canonical non-zero lowercase hexadecimal identifier from the global offline operation namespace.",
+            "description": "Canonical non-zero lowercase hexadecimal identifier from the configured Kagemusha submission authority's offline operation namespace.",
             "in": "path",
             "name": "operation_id",
             "required": true,
@@ -75204,12 +75279,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineOperationStatus"
+                  "$ref": "#/components/schemas/OfflineOperationStatus",
+                  "x-iroha-max-bytes": 16777216
                 }
               },
               "application/x-norito": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineOperationStatus"
+                  "$ref": "#/components/schemas/OfflineOperationStatus",
+                  "x-iroha-max-bytes": 4194304
                 }
               }
             },
@@ -75217,6 +75294,7 @@
             "headers": {
               "Cache-Control": {
                 "description": "Operation responses are not cacheable.",
+                "required": true,
                 "schema": {
                   "example": "no-store",
                   "type": "string"
@@ -75225,12 +75303,13 @@
               "Retry-After": {
                 "description": "Recommended polling delay in seconds while the operation is pending.",
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
               "Vary": {
                 "description": "Negotiated response dimension.",
+                "required": true,
                 "schema": {
                   "example": "Accept",
                   "type": "string"
@@ -75360,7 +75439,7 @@
               "Retry-After": {
                 "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
@@ -75401,7 +75480,7 @@
                 }
               }
             },
-            "description": "The offline operation index or indexed block body is temporarily unavailable.",
+            "description": "Pending Queue ownership, canonical offline operation outcome evidence, or referenced block or merge history is unavailable or inconsistent.",
             "headers": {
               "Cache-Control": {
                 "description": "Retryable failures are not cacheable.",
@@ -75413,7 +75492,7 @@
               "Retry-After": {
                 "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
@@ -75429,9 +75508,9 @@
                 "schema": {
                   "enum": [
                     "offline_service_unavailable",
-                    "offline_operation_index_unavailable",
+                    "offline_operation_pending_unavailable",
                     "offline_operation_history_unavailable",
-                    "offline_operation_index_inconsistent",
+                    "offline_operation_evidence_inconsistent",
                     "offline_topup_finality_proof_unavailable"
                   ],
                   "example": "offline_service_unavailable",
@@ -75468,12 +75547,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineStatus"
+                  "$ref": "#/components/schemas/OfflineStatus",
+                  "x-iroha-max-bytes": 4096
                 }
               },
               "application/x-norito": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineStatus"
+                  "$ref": "#/components/schemas/OfflineStatus",
+                  "x-iroha-max-bytes": 4096
                 }
               }
             },
@@ -75481,6 +75562,7 @@
             "headers": {
               "Cache-Control": {
                 "description": "Readiness responses require revalidation.",
+                "required": true,
                 "schema": {
                   "example": "private, max-age=0, must-revalidate",
                   "type": "string"
@@ -75488,12 +75570,14 @@
               },
               "ETag": {
                 "description": "Strong readiness validator bound to the complete selected representation and evaluated block.",
+                "required": true,
                 "schema": {
                   "type": "string"
                 }
               },
               "Vary": {
                 "description": "Negotiated response dimension.",
+                "required": true,
                 "schema": {
                   "example": "Accept",
                   "type": "string"
@@ -75506,6 +75590,7 @@
             "headers": {
               "Cache-Control": {
                 "description": "Capability revalidation policy.",
+                "required": true,
                 "schema": {
                   "example": "private, max-age=0, must-revalidate",
                   "type": "string"
@@ -75513,12 +75598,14 @@
               },
               "ETag": {
                 "description": "Strong validator for the selected capability representation.",
+                "required": true,
                 "schema": {
                   "type": "string"
                 }
               },
               "Vary": {
                 "description": "Negotiated response dimension.",
+                "required": true,
                 "schema": {
                   "example": "Accept",
                   "type": "string"
@@ -75594,7 +75681,7 @@
               "Retry-After": {
                 "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
@@ -75617,14 +75704,13 @@
     },
     "/v1/offline/receiver-lineage": {
       "post": {
-        "description": "Validate one canonical device-signed KagemushaRecipientPaymentRequestV2 and return the unique current-policy, unexpired on-chain P-256 registration together with its exact committed transaction, bounded entrypoint/result Merkle proofs, admission block header, and independently verifiable historical Sumeragi-v2 finality artifact. Policy rotation, expiry, ambiguous registrations, incomplete history, and proof gaps fail closed.",
+        "description": "Resolve one request-independent receiver tuple against an immutable end-of-block active-receiver snapshot. The response authenticates the exact active registration with bounded membership and execution-witness proofs plus a consecutive Sumeragi-v2 finality chain beginning at the caller's durable checkpoint.",
         "operationId": "offlineRecipientLineage",
         "requestBody": {
           "content": {
             "application/x-norito": {
               "schema": {
-                "format": "binary",
-                "type": "string",
+                "$ref": "#/components/schemas/OfflineRecipientLineageRequest",
                 "x-iroha-max-bytes": 32768,
                 "x-iroha-norito-schema": "iroha.torii.v1.offline.recipient_lineage.request"
               }
@@ -75637,13 +75723,13 @@
             "content": {
               "application/x-norito": {
                 "schema": {
-                  "description": "Canonical Norito encoding of `OfflineRecipientRegistrationLineage`.",
-                  "format": "binary",
-                  "type": "string"
+                  "$ref": "#/components/schemas/OfflineRecipientRegistrationLineage",
+                  "x-iroha-max-bytes": 4194304,
+                  "x-iroha-norito-schema": "iroha.torii.v1.offline.recipient_lineage.response"
                 }
               }
             },
-            "description": "The active receiver registration and its admission proofs.",
+            "description": "The active receiver snapshot proof and its bounded consecutive finality chain.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -75668,7 +75754,7 @@
                 }
               }
             },
-            "description": "The signed receiver request is malformed, expired, or targets another network.",
+            "description": "The canonical lineage query is malformed, targets another network, or names an invalid checkpoint.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -75682,8 +75768,9 @@
                 "description": "Exact receiver-lineage request validation code.",
                 "schema": {
                   "enum": [
-                    "offline_receiver_lineage_request_invalid",
-                    "offline_receiver_lineage_network_mismatch"
+                    "offline_receiver_lineage_checkpoint_invalid",
+                    "offline_receiver_lineage_network_mismatch",
+                    "offline_receiver_lineage_request_invalid"
                   ],
                   "example": "offline_receiver_lineage_request_invalid",
                   "type": "string"
@@ -75736,7 +75823,7 @@
                 }
               }
             },
-            "description": "No exact on-chain registration matches the signed receiver request.",
+            "description": "No exact active receiver entry or committed block is available for the tuple.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -75750,6 +75837,7 @@
                 "description": "Exact receiver-registration resource code.",
                 "schema": {
                   "enum": [
+                    "offline_receiver_lineage_unavailable",
                     "offline_receiver_not_registered"
                   ],
                   "example": "offline_receiver_not_registered",
@@ -75798,7 +75886,7 @@
                 }
               }
             },
-            "description": "The matching registration is expired or was admitted under a superseded policy.",
+            "description": "The tuple is ambiguous or the checkpoint is outside the bounded advancement window.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -75809,16 +75897,47 @@
                 }
               },
               "x-iroha-reject-code": {
-                "description": "Exact inactive-registration code.",
+                "description": "Exact checkpoint-window or receiver-ambiguity code.",
                 "schema": {
                   "enum": [
-                    "offline_receiver_registration_inactive"
+                    "offline_receiver_lineage_checkpoint_too_old",
+                    "offline_receiver_registration_ambiguous"
                   ],
-                  "example": "offline_receiver_registration_inactive",
+                  "example": "offline_receiver_registration_ambiguous",
                   "type": "string"
                 }
               }
             }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The canonical receiver-lineage request exceeds the 32,768-byte schema limit."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The request content type is missing or is not parameter-free application/x-norito."
           },
           "429": {
             "content": {
@@ -75846,7 +75965,7 @@
               "Retry-After": {
                 "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
@@ -75872,7 +75991,7 @@
                 }
               }
             },
-            "description": "Canonical registration state, transaction history, or finality proof is unavailable or inconsistent.",
+            "description": "The active-receiver snapshot, execution witness, or finality chain is unavailable or inconsistent.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -75885,7 +76004,7 @@
               "Retry-After": {
                 "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
@@ -75922,7 +76041,7 @@
         "operationId": "offlineRedeem",
         "parameters": [
           {
-            "description": "Non-zero lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is globally single-use across offline command routes and binds the complete signed authorization and canonical typed request. Identical replays return the original operation; any other reuse conflicts while the original queue, process-cache, or retained-block record is recoverable. Clients must never recycle an id after a 404.",
+            "description": "Non-zero lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is the globally unique economic identity across offline command routes and Kagemusha submission authorities and binds the complete signed authorization and canonical typed request. A global Applied replay returns the original operation and any different request reuse conflicts. The same exact request under the configured authority may retry a Rejected attempt with the next deterministic non-zero transaction nonce; a newer exact pending attempt supersedes the older rejection. Clients must never recycle an id after a 404.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
@@ -75950,12 +76069,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineOperationReference"
+                  "$ref": "#/components/schemas/OfflineOperationReference",
+                  "x-iroha-max-bytes": 4096
                 }
               },
               "application/x-norito": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineOperationReference"
+                  "$ref": "#/components/schemas/OfflineOperationReference",
+                  "x-iroha-max-bytes": 4096
                 }
               }
             },
@@ -75963,6 +76084,7 @@
             "headers": {
               "Cache-Control": {
                 "description": "Operation responses are not cacheable.",
+                "required": true,
                 "schema": {
                   "example": "no-store",
                   "type": "string"
@@ -75970,6 +76092,7 @@
               },
               "Location": {
                 "description": "Canonical operation status resource.",
+                "required": true,
                 "schema": {
                   "format": "uri-reference",
                   "pattern": "^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$",
@@ -75978,13 +76101,15 @@
               },
               "Retry-After": {
                 "description": "Recommended polling delay in seconds while the operation is pending.",
+                "required": true,
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
               "Vary": {
                 "description": "Negotiated response dimension.",
+                "required": true,
                 "schema": {
                   "example": "Accept",
                   "type": "string"
@@ -76005,7 +76130,7 @@
                 }
               }
             },
-            "description": "The typed request is malformed.",
+            "description": "The typed request or resulting singleton Kagemusha carrier is non-canonical.",
             "headers": {
               "x-iroha-reject-code": {
                 "description": "Exact Torii application-validation or transaction-admission code; Content-Type, body-decoding, and body-read failures sharing HTTP 400 omit this header.",
@@ -76031,6 +76156,7 @@
                     "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
                     "PRTRY:TX_SIGNATURE_INSUFFICIENT",
                     "ED07",
+                    "PRTRY:KAGEMUSHA_OPERATION_CARRIER_REJECTED",
                     "PRTRY:ROUTE_UNRESOLVED"
                   ],
                   "example": "idempotency_key_invalid",
@@ -76114,6 +76240,21 @@
               }
             }
           },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bounded request body did not complete before the absolute route deadline (request_timeout)."
+          },
           "409": {
             "content": {
               "application/json": {
@@ -76127,7 +76268,7 @@
                 }
               }
             },
-            "description": "The idempotency key or operation id conflicts with another request.",
+            "description": "The idempotency key or operation id conflicts with another request, or deterministic retry nonce space is exhausted.",
             "headers": {
               "x-iroha-reject-code": {
                 "description": "Exact operation-binding or duplicate transaction-admission code.",
@@ -76135,8 +76276,10 @@
                   "enum": [
                     "idempotency_key_conflict",
                     "operation_id_conflict",
+                    "offline_operation_retry_exhausted",
                     "PRTRY:ALREADY_COMMITTED",
-                    "PRTRY:ALREADY_ENQUEUED"
+                    "PRTRY:ALREADY_ENQUEUED",
+                    "PRTRY:KAGEMUSHA_OPERATION_ID_CONFLICT"
                   ],
                   "example": "idempotency_key_conflict",
                   "type": "string"
@@ -76199,7 +76342,7 @@
               "Retry-After": {
                 "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
@@ -76264,7 +76407,7 @@
               "Retry-After": {
                 "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
@@ -76281,11 +76424,19 @@
                   "enum": [
                     "offline_service_unavailable",
                     "offline_not_ready",
+                    "offline_command_authority_not_ready",
+                    "offline_command_fee_asset_not_ready",
+                    "offline_command_authority_unfunded",
+                    "offline_command_body_admission_saturated",
+                    "offline_command_memory_admission_saturated",
+                    "offline_command_admission_configuration_invalid",
                     "offline_operation_capacity_exhausted",
                     "offline_operation_admission_inconsistent",
-                    "offline_operation_index_unavailable",
+                    "offline_operation_pending_unavailable",
                     "offline_operation_history_unavailable",
-                    "offline_operation_index_inconsistent"
+                    "offline_operation_evidence_inconsistent",
+                    "offline_recursive_release_invalid",
+                    "offline_recursive_release_outside_issuance_window"
                   ],
                   "example": "offline_service_unavailable",
                   "type": "string"
@@ -76307,7 +76458,7 @@
         "operationId": "offlineTopUp",
         "parameters": [
           {
-            "description": "Non-zero lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is globally single-use across offline command routes and binds the complete signed authorization and canonical typed request. Identical replays return the original operation; any other reuse conflicts while the original queue, process-cache, or retained-block record is recoverable. Clients must never recycle an id after a 404.",
+            "description": "Non-zero lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is the globally unique economic identity across offline command routes and Kagemusha submission authorities and binds the complete signed authorization and canonical typed request. A global Applied replay returns the original operation and any different request reuse conflicts. The same exact request under the configured authority may retry a Rejected attempt with the next deterministic non-zero transaction nonce; a newer exact pending attempt supersedes the older rejection. Clients must never recycle an id after a 404.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
@@ -76331,16 +76482,33 @@
           "required": true
         },
         "responses": {
-          "202": {
+          "408": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineOperationReference"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               },
               "application/x-norito": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineOperationReference"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bounded request body did not complete before the absolute route deadline (request_timeout)."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineOperationReference",
+                  "x-iroha-max-bytes": 4096
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineOperationReference",
+                  "x-iroha-max-bytes": 4096
                 }
               }
             },
@@ -76348,6 +76516,7 @@
             "headers": {
               "Cache-Control": {
                 "description": "Operation responses are not cacheable.",
+                "required": true,
                 "schema": {
                   "example": "no-store",
                   "type": "string"
@@ -76355,6 +76524,7 @@
               },
               "Location": {
                 "description": "Canonical operation status resource.",
+                "required": true,
                 "schema": {
                   "format": "uri-reference",
                   "pattern": "^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$",
@@ -76363,13 +76533,15 @@
               },
               "Retry-After": {
                 "description": "Recommended polling delay in seconds while the operation is pending.",
+                "required": true,
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
               "Vary": {
                 "description": "Negotiated response dimension.",
+                "required": true,
                 "schema": {
                   "example": "Accept",
                   "type": "string"
@@ -76390,7 +76562,7 @@
                 }
               }
             },
-            "description": "The typed request is malformed.",
+            "description": "The typed request or resulting singleton Kagemusha carrier is non-canonical.",
             "headers": {
               "x-iroha-reject-code": {
                 "description": "Exact Torii application-validation or transaction-admission code; Content-Type, body-decoding, and body-read failures sharing HTTP 400 omit this header.",
@@ -76423,6 +76595,7 @@
                     "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
                     "PRTRY:TX_SIGNATURE_INSUFFICIENT",
                     "ED07",
+                    "PRTRY:KAGEMUSHA_OPERATION_CARRIER_REJECTED",
                     "PRTRY:ROUTE_UNRESOLVED"
                   ],
                   "example": "idempotency_key_invalid",
@@ -76519,7 +76692,7 @@
                 }
               }
             },
-            "description": "The idempotency key or operation id conflicts with another request.",
+            "description": "The idempotency key or operation id conflicts with another request, or deterministic retry nonce space is exhausted.",
             "headers": {
               "x-iroha-reject-code": {
                 "description": "Exact operation-binding or duplicate transaction-admission code.",
@@ -76527,8 +76700,10 @@
                   "enum": [
                     "idempotency_key_conflict",
                     "operation_id_conflict",
+                    "offline_operation_retry_exhausted",
                     "PRTRY:ALREADY_COMMITTED",
-                    "PRTRY:ALREADY_ENQUEUED"
+                    "PRTRY:ALREADY_ENQUEUED",
+                    "PRTRY:KAGEMUSHA_OPERATION_ID_CONFLICT"
                   ],
                   "example": "idempotency_key_conflict",
                   "type": "string"
@@ -76591,7 +76766,7 @@
               "Retry-After": {
                 "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
@@ -76656,7 +76831,7 @@
               "Retry-After": {
                 "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
                 "schema": {
-                  "minimum": 0,
+                  "minimum": 1,
                   "type": "integer"
                 }
               },
@@ -76673,11 +76848,19 @@
                   "enum": [
                     "offline_service_unavailable",
                     "offline_not_ready",
+                    "offline_command_authority_not_ready",
+                    "offline_command_fee_asset_not_ready",
+                    "offline_command_authority_unfunded",
+                    "offline_command_body_admission_saturated",
+                    "offline_command_memory_admission_saturated",
+                    "offline_command_admission_configuration_invalid",
                     "offline_operation_capacity_exhausted",
                     "offline_operation_admission_inconsistent",
-                    "offline_operation_index_unavailable",
+                    "offline_operation_pending_unavailable",
                     "offline_operation_history_unavailable",
-                    "offline_operation_index_inconsistent"
+                    "offline_operation_evidence_inconsistent",
+                    "offline_recursive_release_invalid",
+                    "offline_recursive_release_outside_issuance_window"
                   ],
                   "example": "offline_service_unavailable",
                   "type": "string"
@@ -78189,6 +78372,7 @@
                     "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
                     "PRTRY:TX_SIGNATURE_INSUFFICIENT",
                     "ED07",
+                    "PRTRY:KAGEMUSHA_OPERATION_CARRIER_REJECTED",
                     "PRTRY:ROUTE_UNRESOLVED"
                   ],
                   "example": "invalid_transaction_payload",
@@ -78256,14 +78440,15 @@
                 }
               }
             },
-            "description": "The exact transaction is already committed or already present in the queue.",
+            "description": "The exact transaction is already committed or already present in the queue, or the same authority and Kagemusha operation id already belong to another pending carrier.",
             "headers": {
               "x-iroha-reject-code": {
                 "description": "Exact duplicate-transaction state. This response does not prove non-admission; clients must reconcile the existing transaction.",
                 "schema": {
                   "enum": [
                     "PRTRY:ALREADY_COMMITTED",
-                    "PRTRY:ALREADY_ENQUEUED"
+                    "PRTRY:ALREADY_ENQUEUED",
+                    "PRTRY:KAGEMUSHA_OPERATION_ID_CONFLICT"
                   ],
                   "example": "PRTRY:ALREADY_COMMITTED",
                   "type": "string"
@@ -78380,7 +78565,7 @@
                 }
               }
             },
-            "description": "The admission worker, authoritative Torii route, or durable queue-plan journal is unavailable. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the transaction. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that outcome-unknown response carries singleton x-iroha-entrypoint-hash and x-iroha-signed-transaction-hash headers plus the same exact values in ErrorEnvelope.details.entrypoint_hash and ErrorEnvelope.details.tx_hash; it does not fabricate queue-pressure details or headers.",
+            "description": "The admission worker, authoritative Torii route, durable queue-plan journal, or Kagemusha pending-operation ownership index is unavailable or inconsistent. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the transaction. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. PRTRY:KAGEMUSHA_OPERATION_INDEX_INCONSISTENT means Queue ownership requires recovery before another Kagemusha carrier can be admitted. Only the journal outcome-unknown response carries singleton x-iroha-entrypoint-hash and x-iroha-signed-transaction-hash headers plus the same exact values in ErrorEnvelope.details.entrypoint_hash and ErrorEnvelope.details.tx_hash; it does not fabricate queue-pressure details or headers.",
             "headers": {
               "Retry-After": {
                 "description": "Whole-second retry delay when authoritative backpressure supplies one; journal outcome-unknown responses omit it.",
@@ -78403,7 +78588,8 @@
                     "transaction_admission_worker_failed",
                     "route_unavailable",
                     "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
-                    "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"
+                    "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+                    "PRTRY:KAGEMUSHA_OPERATION_INDEX_INCONSISTENT"
                   ],
                   "example": "transaction_admission_worker_failed",
                   "type": "string"
@@ -85878,7 +86064,7 @@
     },
     "/v1/sorafs/appeals/finance/deposits/submit-settlement": {
       "post": {
-        "description": "Recompute the expected settlement from one finalized committed view and durably enqueue exactly one next DrawdownAssetLock or CancelAssetLock operation before any HSM signing. The supervised worker verifies the active opaque-handle provider, returned payload, authority, key, and signature; persists exact signed bytes; submits and reconciles committed state; and publishes an appeal_finance_settlement_receipt only after finality. The response includes operation_id_hex and reconciliation state; tx_hash_hex remains unavailable until signing. Canonical X-Iroha app authentication is required.",
+        "description": "Recompute the expected settlement from one finalized committed view and durably enqueue exactly one next DrawdownAssetLock or CancelAssetLock operation before any external signing. The supervised worker verifies the active opaque-handle provider, returned payload, authority, key, and signature; persists exact signed bytes; submits and reconciles committed state; and publishes an appeal_finance_settlement_receipt only after finality. The response includes operation_id_hex and reconciliation state; tx_hash_hex remains unavailable until signing. Canonical X-Iroha app authentication is required.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -86443,7 +86629,7 @@
     },
     "/v1/sorafs/appeals/pricing/status": {
       "get": {
-        "description": "Fetch SoraFS appeal finance API readiness for the local quote, native deposit lifecycle, durable finalized-ledger transaction forwarder, runtime-only signer providers, post-finality receipt/report/rollup publication, reconciliation, and dashboard readback paths; a real HSM provider, hosted dashboard, and four-peer rollout evidence remain promotion gates.",
+        "description": "Fetch SoraFS appeal finance API readiness for the local quote, native deposit lifecycle, durable finalized-ledger transaction forwarder, runtime-only signer providers, post-finality receipt/report/rollup publication, reconciliation, and dashboard readback paths; production signer qualification, a hosted dashboard, and four-peer rollout evidence remain promotion gates.",
         "responses": {
           "200": {
             "content": {
@@ -96002,7 +96188,7 @@
     },
     "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object": {
       "get": {
-        "description": "Read and decrypt one local SFM-4a quarantine payload object from a chunked iroha_crypto ChaCha20-Poly1305 envelope whose per-object DEK is wrapped by the runtime-only PKCS#11/KMS provider. The endpoint verifies the canonical envelope, every selected chunk and immutable AAD, returns the payload as standard base64 for authorized operators, marks the response private/no-store with Vary over canonical auth headers, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "description": "Read and decrypt one local SFM-4a quarantine payload object from a chunked iroha_crypto ChaCha20-Poly1305 envelope whose per-object DEK is wrapped by the deployment-selected runtime custody provider. Software, remote-service, and hardware-backed providers are supported; no provider class is mandatory. The endpoint verifies the canonical envelope, every selected chunk and immutable AAD, returns the payload as standard base64 for authorized operators, marks the response private/no-store with Vary over canonical auth headers, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
         "parameters": [
           {
             "description": "16-byte local quarantine id encoded as hexadecimal.",
@@ -96043,7 +96229,7 @@
         "x-iroha-tool-effect": "read"
       },
       "post": {
-        "description": "Seal one base64 quarantined payload into independently authenticated chunked iroha_crypto ChaCha20-Poly1305 ciphertext using a fresh random per-object DEK and unique nonce prefix/chunk index. The runtime PKCS#11/KMS provider wraps the context-bound DEK; the plaintext BLAKE3 digest must match the quarantine record subject digest; private notes are forbidden outside the encrypted payload; and envelope/index persistence is atomic. The endpoint requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "description": "Seal one base64 quarantined payload into independently authenticated chunked iroha_crypto ChaCha20-Poly1305 ciphertext using a fresh random per-object DEK and unique nonce prefix/chunk index. The deployment-selected runtime custody provider wraps the context-bound DEK; software, remote-service, and hardware-backed providers are supported, and no provider class is mandatory. The plaintext BLAKE3 digest must match the quarantine record subject digest; private notes are forbidden outside the encrypted payload; and envelope/index persistence is atomic. The endpoint requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
         "parameters": [
           {
             "description": "16-byte local quarantine id encoded as hexadecimal.",
@@ -97103,7 +97289,7 @@
     },
     "/v1/sorafs/pop/issue": {
       "post": {
-        "description": "Trigger server-resolved private issuance material by public request id. The HTTP request never contains a credential, witness, holder secret, or attestation; signing uses the injected governed HSM.",
+        "description": "Trigger server-resolved private issuance material by public request id. The HTTP request never contains a credential, witness, holder secret, or attestation; signing uses the injected governed signer.",
         "parameters": [
           {
             "description": "Required `PopV1 <base64url-no-pad>` opaque credential. The deployment authenticator cryptographically binds authorization to the exact PoP action and canonical request body.",
@@ -97275,7 +97461,7 @@
     },
     "/v1/sorafs/pop/revocations": {
       "post": {
-        "description": "Validate, HSM-sign, and durably enqueue an exact canonical strict-successor revocation snapshot.",
+        "description": "Validate, sign, and durably enqueue an exact canonical strict-successor revocation snapshot.",
         "parameters": [
           {
             "description": "Required `PopV1 <base64url-no-pad>` opaque credential. The deployment authenticator cryptographically binds authorization to the exact PoP action and canonical request body.",
@@ -97447,7 +97633,7 @@
     },
     "/v1/sorafs/pop/wallet/import": {
       "post": {
-        "description": "Decrypt and import one finalized delivery into local KMS/PKCS#11-wrapped wallet custody by request id.",
+        "description": "Decrypt and import one finalized delivery into local wallet custody backed by the deployment-selected runtime provider, by request id. Software, remote-service, and hardware-backed providers are supported; no provider class is mandatory.",
         "parameters": [
           {
             "description": "Required `PopV1 <base64url-no-pad>` opaque credential. The deployment authenticator cryptographically binds authorization to the exact PoP action and canonical request body.",

@@ -310,9 +310,7 @@ struct ProductionDecidedLaneRecoveryDrainCommitter<'a> {
     lane_work: &'a mut V2LaneWorkAdapter,
     active_view: wire::View,
     decided_subject: wire::BlockSubject,
-    output_guard: &'a ConsensusOutputGuard,
     kura: &'a Kura,
-    local_key: &'a KeyPair,
     block_sync_server: &'a mut V2BlockSyncServer,
     mode: DecidedLaneRecoveryIngressDrainMode,
 }
@@ -341,6 +339,7 @@ impl ProductionDecidedLaneRecoveryDrainCommitter<'_> {
     ) -> Result<(), V2RunnerError> {
         let inbound = self.take_inbound()?;
         let ingress_ownership = self.take_bound_leader_wire()?;
+        let authenticated_via = inbound.via().clone();
         let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
         let BlockMessage::V2(message) = message else {
             return Err(V2RunnerError::Service(
@@ -373,45 +372,32 @@ impl ProductionDecidedLaneRecoveryDrainCommitter<'_> {
             mark_leader_wire_volatile(self.receiver, &ingress_ownership)?;
             return Ok(());
         }
-        let response_peer = sender.clone();
         let terminal_ownership = ingress_ownership.clone();
-        let output_guard = self.output_guard;
-        let block_sync_server = &mut *self.block_sync_server;
-        let kura = self.kura;
-        let local_key = self.local_key;
-        let services = &mut *self.services;
-        let served = serve_block_sync_while_guarded(
-            output_guard,
-            || block_sync_server.serve_historical_body(kura, request, &sender, local_key),
-            |response, permit| {
-                services.post_durable_history_response_on_reply_routes_with_permit(
-                    response_peer,
-                    reply_routes,
-                    ingress_ownership,
-                    response,
-                    permit,
-                )
-            },
+        let task = HistoricalBodyServeTask::from_bound_ingress(
+            request,
+            sender,
+            authenticated_via,
+            reply_routes,
+            ingress_ownership,
         );
-        match finalize_bound_block_sync_serve(
-            served,
-            || mark_leader_wire_volatile(self.receiver, &terminal_ownership),
-            |error| {
+        match task.and_then(|task| self.block_sync_server.try_enqueue_historical_body(task)) {
+            Ok(HistoricalBodyServeAdmission::Queued) => {}
+            Ok(HistoricalBodyServeAdmission::RateLimited | HistoricalBodyServeAdmission::Busy) => {
+                iroha_logger::debug!(
+                    ?scope,
+                    "retired certified body request at bounded terminal-recovery worker admission"
+                );
+                mark_leader_wire_volatile(self.receiver, &terminal_ownership)?;
+            }
+            Err(error) if is_remote_block_sync_rejection(&error) => {
                 iroha_logger::debug!(
                     ?scope,
                     %error,
                     "rejected certified body request during terminal recovery"
                 );
-            },
-        )? {
-            BoundBlockSyncServeOutcome::Posted
-            | BoundBlockSyncServeOutcome::VolatileRemoteRejection => {}
-            BoundBlockSyncServeOutcome::VolatileNoResponse => {
-                iroha_logger::debug!(
-                    ?scope,
-                    "retired terminal-recovery certified body request without a local response"
-                );
+                mark_leader_wire_volatile(self.receiver, &terminal_ownership)?;
             }
+            Err(error) => return Err(error.into()),
         }
         Ok(())
     }
@@ -489,9 +475,7 @@ fn drain_decided_lane_recovery_ingress(
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
     active_view: wire::View,
-    output_guard: &ConsensusOutputGuard,
     kura: &Kura,
-    local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
     mode: DecidedLaneRecoveryIngressDrainMode,
 ) -> Result<Option<DecidedLaneRecoveryDrainCommitOutcome>, V2RunnerError> {
@@ -544,9 +528,7 @@ fn drain_decided_lane_recovery_ingress(
         lane_work,
         active_view,
         decided_subject,
-        output_guard,
         kura,
-        local_key,
         block_sync_server,
         mode,
     };

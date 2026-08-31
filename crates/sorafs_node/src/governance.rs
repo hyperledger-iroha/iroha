@@ -1700,7 +1700,7 @@ impl Default for GovernanceDagRequestAuthenticationReplayCacheV1 {
         Self::new()
     }
 }
-/// Public HSM-signed authentication envelope for one canonical request.
+/// Public provider-signed authentication envelope for one canonical request.
 ///
 /// The envelope deliberately exposes only fixed public authentication fields. It contains no bearer
 /// token, cookie, mTLS identity, private key, or backend diagnostic. The signature binds the
@@ -1751,7 +1751,7 @@ impl GovernanceDagRequestAuthenticationEnvelopeV1 {
             signature,
         })
     }
-    /// Build the exact domain-separated bytes an HSM must sign.
+    /// Build the exact domain-separated bytes the configured provider must sign.
     #[must_use]
     pub fn signing_payload(
         descriptor: &GovernanceDagCanonicalRequestV1,
@@ -1801,7 +1801,7 @@ impl GovernanceDagRequestAuthenticationEnvelopeV1 {
     pub const fn request_digest(&self) -> [u8; 32] {
         self.request_digest
     }
-    /// Raw Ed25519 public key used by the runtime HSM.
+    /// Raw Ed25519 public key used by the runtime signing provider.
     #[must_use]
     pub const fn public_key(&self) -> [u8; 32] {
         self.public_key
@@ -2042,8 +2042,8 @@ fn append_governance_request_auth_field(bytes: &mut Vec<u8>, field: &[u8]) {
 }
 /// Rotation-aware, receiver-qualified runtime authenticator for Governance DAG publication.
 ///
-/// Implementations own an Ed25519 HSM signing boundary and return only the public signed envelope
-/// for a complete canonical request. The adapter never receives a `reqwest` client, builder, body
+/// Implementations own an isolated Ed25519 signing boundary and return only the public signed
+/// envelope for a complete canonical request. The adapter never receives a `reqwest` client, builder, body
 /// owner, or mutable header map and therefore cannot inject bearer tokens, cookies, mTLS
 /// credentials, or other opaque request authority. First-release providers must additionally own
 /// the live deployment proof that the exact backend endpoint is exclusively receiver-fronted and
@@ -2821,7 +2821,7 @@ impl FilesystemGovernancePublisher {
     }
     /// Authenticate and install one explicit signer/store qualification rotation.
     ///
-    /// Every change advances one canonical authority segment. Both outgoing and incoming HSM
+    /// Every change advances one canonical authority segment. Both outgoing and incoming signing
     /// authorities sign the exact predecessor/current-head transition, so signer-key or
     /// publisher-identity rotation remains continuous with the already retained block chain.
     pub(crate) fn transition_qualified_runtime_dag_providers(

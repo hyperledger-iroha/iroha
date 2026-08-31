@@ -7,7 +7,8 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
         app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
         app_mut.fee_policy = FeePolicy::Disabled;
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::from(["entrypoint-token".to_owned()]));
+        app_mut.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["entrypoint-token"]));
     }
     let first_keypair =
         checked_torii_test_ed25519_keypair(0xc7, "derive first entrypoint API-token fixture key");
@@ -341,7 +342,8 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
         app_mut.high_load_tx_threshold = usize::MAX;
         app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-token".to_owned()]));
+        app_mut.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["batch-token"]));
     }
     let keypair =
         checked_torii_test_ed25519_keypair(0xcb, "derive post-transaction batch token fixture key");
@@ -378,10 +380,19 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
     assert!(
         !app
             .tx_preauth_rate_limiter
-            .allow(&transaction_api_token_preauth_key("batch-token"))
+            .allow(&transaction_api_token_preauth_key(
+                limits::ApiTokenPrincipal::from_token("batch-token"),
+            ))
             .await,
         "failed same-key batch should consume the token prefix that would have passed"
     );
+}
+#[test]
+fn transaction_api_token_preauth_key_never_contains_raw_token_text() {
+    let raw_token = "transaction-preauth-secret-material";
+    let key = transaction_api_token_preauth_key(limits::ApiTokenPrincipal::from_token(raw_token));
+    assert!(!key.contains(raw_token));
+    assert!(key.starts_with("v1/transaction:preauth:api-token:"));
 }
 #[tokio::test]
 async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_authorities() {
@@ -391,7 +402,9 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
         app_mut.high_load_tx_threshold = usize::MAX;
         app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-distinct-token".to_owned()]));
+        app_mut.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens([
+            "batch-distinct-token",
+        ]));
     }
     let network_id = *app.state.network_id_ref();
     let payloads = (0..3)
@@ -430,7 +443,9 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
     assert!(
         !app
             .tx_preauth_rate_limiter
-            .allow(&transaction_api_token_preauth_key("batch-distinct-token"))
+            .allow(&transaction_api_token_preauth_key(
+                limits::ApiTokenPrincipal::from_token("batch-distinct-token"),
+            ))
             .await,
         "distinct authorities should still consume the shared API-token key"
     );
@@ -571,7 +586,7 @@ async fn handler_policy_reports_required_token_even_when_configuration_is_unavai
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::new());
+        app_mut.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
         app_mut.api_rate_limit_bypass_nets = Arc::new(vec![
             limits::parse_cidr("127.0.0.0/8").expect("loopback CIDR"),
         ]);
@@ -601,7 +616,7 @@ async fn kaigi_signal_history_rate_bypass_still_requires_heavy_query_admission()
             limits::parse_cidr("127.0.0.0/8").expect("loopback CIDR"),
         ]);
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::new());
+        app_mut.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
         app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
         app_mut.query_queue_timeout = Duration::ZERO;
     }

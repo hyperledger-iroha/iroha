@@ -153,10 +153,10 @@ candidate-specific expectation fail closed.
 The ordered operation inventories are exact:
 
 - `offline-toolchain-sdk` (23; plan SHA-256
-  `ec23b831d3c9359fc94952bbda3cccb92e84a39645bb14e5c19f130d01ded95b`):
+  `a0dd1b1da72f46b4484c05b6c0597d27bde7322ba047f7661a677d2e3b8879d3`):
   `offline-rustc-version`,
   `offline-cargo-version`, `offline-workspace-build`,
-  `g-unit-production-864`, `g-unit-focused-522`,
+  `g-unit-production-867`, `g-unit-focused-522`,
   `offline-workspace-clippy`, `offline-workspace-format`,
   `offline-no-legacy-codec`, `sdk-rust-regeneration-first`,
   `sdk-rust-regeneration-second`, `sdk-regeneration-byte-identity`,

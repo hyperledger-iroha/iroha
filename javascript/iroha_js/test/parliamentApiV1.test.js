@@ -379,6 +379,17 @@ test("attempt drafts admit all ten exact proposal wire variants", () => {
   assert.deepEqual(retrospective.payload.action.payload.retrospective_finding_root, Array(32).fill(0x45));
 });
 
+test("effect-bound proposal drafts require an explicit canonical operator", () => {
+  for (const index of [0, 1, 7]) {
+    const proposal = structuredClone(parliamentProposalFixtures()[index]);
+    delete proposal.payload.proposal_operator;
+    assert.throws(
+      () => buildParliamentAttemptDraftRequestV1(proposal, 0),
+      /missing required fields/u,
+    );
+  }
+});
+
 test("Parliament declarations expose the closed wire union and tuple newtypes", () => {
   const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
   const start = declarations.indexOf("export interface ParliamentMusubiPackageIdV1");
@@ -1134,6 +1145,24 @@ test("ToriiClient typed proposal reads use the strict local V1 parser", async ()
     client.getGovernanceProposalTyped(PROPOSAL_ID),
     /unsupported fields/u,
   );
+
+  for (const index of [0, 1, 7]) {
+    const operatorBoundKind = parliamentProposalFixtures()[index];
+    client.getGovernanceProposal = async () => ({
+      found: true,
+      proposal: {
+        proposer: ACCOUNTS[1],
+        kind: operatorBoundKind,
+        created_height: 1,
+        status: "Proposed",
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      client.getGovernanceProposalTyped(PROPOSAL_ID),
+      /operator must match the retained proposer/u,
+    );
+  }
 });
 
 function fixtureAccountId(label) {
@@ -1177,6 +1206,7 @@ function parliamentProposalFixtures() {
     {
       kind: "DeployContract",
       payload: {
+        proposal_operator: treasury,
         contract_address: CONTRACT_ADDRESS,
         code_hash: "aa".repeat(32),
         abi_hash: "bb".repeat(32),
@@ -1191,6 +1221,7 @@ function parliamentProposalFixtures() {
     {
       kind: "RuntimeUpgrade",
       payload: {
+        proposal_operator: treasury,
         manifest: {
           name: "runtime-v1-refresh",
           description: "Canonical V1 runtime image",
@@ -1278,6 +1309,7 @@ function parliamentProposalFixtures() {
     {
       kind: "ContractLifecycleGovernance",
       payload: {
+        proposal_operator: treasury,
         contract_address: CONTRACT_ADDRESS,
         expected_revision: 3,
         action: {

@@ -92,6 +92,7 @@ struct HedgingBillingApiErrorResponseV1 {
 enum QueryInputError {
     TooLong,
     TooManyParameters,
+    NonCanonical,
     UnknownParameter,
     DuplicateParameter,
     MissingParameter,
@@ -105,6 +106,7 @@ impl QueryInputError {
         match self {
             Self::TooLong => "query_too_long",
             Self::TooManyParameters => "too_many_query_parameters",
+            Self::NonCanonical => "noncanonical_query",
             Self::UnknownParameter => "unknown_query_parameter",
             Self::DuplicateParameter => "duplicate_query_parameter",
             Self::MissingParameter => "required_query_parameter_missing",
@@ -770,15 +772,30 @@ fn server_time_unix() -> Result<u64, Response> {
     Ok(now)
 }
 fn bounded_query_pairs(raw: Option<&str>) -> Result<Vec<(String, String)>, QueryInputError> {
-    let raw = raw.unwrap_or_default();
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
     if raw.len() > MAX_QUERY_BYTES_V1 {
         return Err(QueryInputError::TooLong);
     }
-    let pairs: Vec<(String, String)> = url::form_urlencoded::parse(raw.as_bytes())
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    if pairs.len() > MAX_QUERY_PARAMETERS_V1 {
-        return Err(QueryInputError::TooManyParameters);
+    if raw.is_empty() || raw.bytes().any(|byte| matches!(byte, b'%' | b'+')) {
+        return Err(QueryInputError::NonCanonical);
+    }
+    let mut pairs = Vec::new();
+    for (index, segment) in raw.split('&').enumerate() {
+        if index >= MAX_QUERY_PARAMETERS_V1 {
+            return Err(QueryInputError::TooManyParameters);
+        }
+        if segment.is_empty() {
+            return Err(QueryInputError::NonCanonical);
+        }
+        let Some((key, value)) = segment.split_once('=') else {
+            return Err(QueryInputError::NonCanonical);
+        };
+        if key.is_empty() || value.is_empty() || value.contains('=') {
+            return Err(QueryInputError::NonCanonical);
+        }
+        pairs.push((key.to_owned(), value.to_owned()));
     }
     Ok(pairs)
 }
@@ -952,6 +969,26 @@ mod tests {
             OwnerStatementPageQueryV1::parse(Some(&duplicate)),
             Err(QueryInputError::DuplicateParameter)
         );
+        let noncanonical = [
+            "",
+            "limit",
+            "limit=",
+            "=1",
+            "limit=1&",
+            "&limit=1",
+            "limit=1&&after_statement_id=abc",
+            "limit=%31",
+            "lim%69t=1",
+            "limit=+1",
+            "limit=1=1",
+        ];
+        for raw in noncanonical {
+            assert_eq!(
+                bounded_query_pairs(Some(raw)),
+                Err(QueryInputError::NonCanonical),
+                "query unexpectedly accepted: {raw:?}"
+            );
+        }
     }
     #[test]
     fn page_limit_requires_canonical_decimal_in_exact_range() {

@@ -1904,14 +1904,13 @@ mod tests {
 
         assert_eq!(
             sidecar
-                .observe_completion(&Completion::LifecycleValidateSidecarSuperseded { ordinal: 41 })
+                .observe_completion(&Completion::LifecycleValidateSidecarSuperseded)
                 .expect("durable supersession releases the missing-sidecar barrier"),
             LifecycleProducerClaimDispositionV1::Eligible
         );
         assert_eq!(
-            LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion.observe_completion(
-                &Completion::LifecycleValidateSidecarSuperseded { ordinal: 41 },
-            ),
+            LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
+                .observe_completion(&Completion::LifecycleValidateSidecarSuperseded,),
             Err(LifecycleProducerClaimTransitionErrorV1::Completion),
             "supersession cannot clear a Decision-bound Apply barrier"
         );

@@ -44,7 +44,7 @@ fn scan_and_report_single_attachment() {
     )
     .unwrap();
     // Run one scan
-    let stats = super::block_on_scan();
+    let stats = super::block_on_scan().expect("run prover scan");
     assert_eq!(stats.processed_reports, 1, "one report created");
     assert_eq!(stats.budget_exhausted, None);
     let rep = load_report(&id).expect("report exists");
@@ -68,7 +68,7 @@ fn report_capacity_eviction_does_not_requeue_completed_attachment() {
     let body = fixture_attachment_bytes();
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
 
-    let first = block_on_scan();
+    let first = block_on_scan().expect("run first prover scan");
     assert_eq!(first.processed_reports, 1);
     let initial_report = load_report(&id).expect("initial report");
     assert!(initial_report.ok);
@@ -108,7 +108,7 @@ fn report_capacity_eviction_does_not_requeue_completed_attachment() {
         "report eviction must finalize the committed disposition first"
     );
 
-    let second = block_on_scan();
+    let second = block_on_scan().expect("run second prover scan");
     assert_eq!(
         second.processed_reports, 0,
         "a durable receipt must suppress verification after report eviction"
@@ -126,9 +126,8 @@ fn report_persistence_failure_leaves_a_retryable_provisional_receipt() {
     fs::create_dir_all(prover_dir()).expect("create prover directory");
     fs::write(reports_dir(), b"not a directory").expect("block report-directory creation");
 
-    let report = process_attachment_once(&id).expect("verification attempt returns its report");
-    assert!(report.ok);
-    assert!(load_report(&id).is_none(), "report persistence must fail");
+    process_attachment_once(&id).expect_err("report persistence failure must be visible");
+    try_load_report(&id).expect_err("blocked report directory must remain a visible failure");
     assert_eq!(
         prover_processing_decision(&id, now_ms()),
         ProverProcessingDecision::Suppress,
@@ -148,7 +147,10 @@ fn successful_report_finalizes_a_suppressed_provisional_receipt_without_reverifi
     let tenant_key = anon_tenant_key();
     let body = fixture_attachment_bytes();
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
-    assert_eq!(block_on_scan().processed_reports, 1);
+    assert_eq!(
+        block_on_scan().expect("run prover scan").processed_reports,
+        1
+    );
     let report = load_report(&id).expect("successful report");
     assert!(report.ok);
     assert!(
@@ -167,7 +169,7 @@ fn successful_report_finalizes_a_suppressed_provisional_receipt_without_reverifi
     let location = AttachmentLocation { tenant_key, id };
 
     assert!(
-        !attachment_needs_processing(&location),
+        !attachment_needs_processing(&location).expect("inspect processing disposition"),
         "a persisted successful report must finalize the receipt without verification"
     );
     assert_eq!(
@@ -177,7 +179,7 @@ fn successful_report_finalizes_a_suppressed_provisional_receipt_without_reverifi
 }
 
 #[test]
-fn failed_report_with_explicit_null_disposition_is_retried() {
+fn failed_report_with_explicit_null_disposition_is_rejected() {
     let _env = TestDataDirGuard::new();
     configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
@@ -191,41 +193,31 @@ fn failed_report_with_explicit_null_disposition_is_retried() {
         now_ms(),
     );
     report.processing = None;
-    save_report(&report).expect("persist explicit-null report fixture");
-    let persisted = fs::read_to_string(report_path_from_sanitized(&id))
-        .expect("read explicit-null report fixture");
-    let persisted: json::Value =
-        json::from_json(&persisted).expect("decode explicit-null report fixture");
-    assert!(
-        persisted
-            .get("processing")
-            .is_some_and(norito::json::Value::is_null),
-        "the first-release report schema must persist an explicit null disposition"
-    );
-
-    let scan = block_on_scan();
     assert_eq!(
-        scan.processed_reports, 1,
-        "a failure with an explicit null disposition must not suppress a fresh attempt"
+        save_report(&report)
+            .expect_err("a report without a processing disposition must not persist")
+            .kind(),
+        IoErrorKind::InvalidData
     );
-    let repaired = load_report(&id).expect("retried report");
-    assert!(repaired.ok);
-    assert!(repaired.processing.is_some());
 }
 
 #[test]
-fn malformed_report_file_does_not_suppress_processing() {
+fn malformed_report_file_stops_processing_fail_closed() {
     let _env = TestDataDirGuard::new();
     configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     let body = fixture_attachment_bytes();
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
-    ensure_dirs();
+    ensure_dirs().expect("create prover directories");
     fs::write(report_path_from_sanitized(&id), b"{not a report")
         .expect("persist malformed report fixture");
 
-    assert_eq!(block_on_scan().processed_reports, 1);
-    assert!(load_report(&id).expect("replacement report").ok);
+    let error = block_on_scan().expect_err("malformed report must be a persistence failure");
+    assert_eq!(error.kind(), IoErrorKind::InvalidData);
+    assert_eq!(
+        fs::read(report_path_from_sanitized(&id)).expect("malformed report remains quarantined"),
+        b"{not a report"
+    );
 }
 
 #[test]
@@ -239,7 +231,7 @@ fn committed_terminal_failure_repairs_a_due_provisional_receipt() {
         tenant_key,
         id: id.clone(),
     };
-    assert!(attachment_needs_processing(&location));
+    assert!(attachment_needs_processing(&location).expect("inspect processing disposition"));
     let terminal = sample_report(
         id.clone(),
         false,
@@ -263,7 +255,7 @@ fn committed_terminal_failure_repairs_a_due_provisional_receipt() {
     );
 
     assert!(
-        !attachment_needs_processing(&location),
+        !attachment_needs_processing(&location).expect("inspect processing disposition"),
         "the committed terminal disposition must suppress repeat verification"
     );
     assert_eq!(
@@ -285,7 +277,7 @@ fn cross_tenant_duplicate_uses_one_receipt_even_without_a_report() {
         id
     );
 
-    let first = block_on_scan();
+    let first = block_on_scan().expect("run first prover scan");
     assert_eq!(
         first.processed_reports, 1,
         "content identity must deduplicate tenant-local copies"
@@ -300,7 +292,7 @@ fn cross_tenant_duplicate_uses_one_receipt_even_without_a_report() {
     }
     assert!(load_report(&id).is_none());
 
-    let second = block_on_scan();
+    let second = block_on_scan().expect("run second prover scan");
     assert_eq!(
         second.processed_reports, 0,
         "the shared content receipt must remain authoritative without a report"
@@ -324,7 +316,7 @@ fn retryable_mixed_list_reuses_successful_proof_results() {
     configure_test_cfg_with_state_and_scan_bytes(Vec::new(), fixture_state(), max_scan_bytes);
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
 
-    let first = block_on_scan();
+    let first = block_on_scan().expect("run first prover scan");
     assert_eq!(first.processed_reports, 1);
     assert_eq!(
         proof_verification_attempt_count(),
@@ -355,7 +347,9 @@ fn retryable_mixed_list_reuses_successful_proof_results() {
         .expect("persist an older provisional receipt")
     );
     assert_eq!(
-        completed_proof_cache_for_retry(&id).indices,
+        completed_proof_cache_for_retry(&id)
+            .expect("load the completed proof cache")
+            .indices,
         vec![0],
         "a committed retry report must win over its older provisional receipt"
     );
@@ -374,7 +368,8 @@ fn retryable_mixed_list_reuses_successful_proof_results() {
         .expect("persist a newer in-flight checkpoint")
     );
     assert_eq!(
-        committed_report_processing_decision(&id, u64::MAX),
+        committed_report_processing_decision(&id, u64::MAX)
+            .expect("load the committed report processing decision"),
         Some(ProverProcessingDecision::Due { retry_count: 2 }),
         "an older committed retry report must not roll back a newer checkpoint"
     );
@@ -402,7 +397,7 @@ fn retryable_mixed_list_reuses_successful_proof_results() {
         .expect("make the mixed-list retry immediately due")
     );
 
-    let second = block_on_scan();
+    let second = block_on_scan().expect("run second prover scan");
     assert_eq!(second.processed_reports, 1);
     assert_eq!(
         proof_verification_attempt_count(),
@@ -452,7 +447,7 @@ fn retryable_mixed_list_reuses_successful_proof_results() {
     configure_test_cfg_with_state_and_scan_bytes(Vec::new(), changed_state, max_scan_bytes);
     set_proof_verification_attempt_count(attempts_before_reconfigure);
 
-    let third = block_on_scan();
+    let third = block_on_scan().expect("run third prover scan");
     assert_eq!(third.processed_reports, 1);
     assert_eq!(
         proof_verification_attempt_count(),
@@ -515,15 +510,9 @@ fn attachment_file_loading_is_bounded_and_metadata_size_is_not_trusted() {
         norito::json::to_json_pretty(&meta).expect("metadata JSON"),
     )
     .expect("write mismatched metadata");
-    let report = process_attachment_once(&id).expect("mismatch produces a rejection report");
-    assert!(!report.ok);
-    assert_eq!(report.size, body.len() as u64);
-    assert!(
-        report
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("metadata size"))
-    );
+    let error = process_attachment_once(&id)
+        .expect_err("persisted metadata/body size mismatch must be a storage failure");
+    assert!(error.to_string().contains("metadata size"));
 }
 #[test]
 fn nonregular_attachment_body_produces_a_zero_read_rejection_report() {
@@ -560,15 +549,9 @@ fn nonregular_attachment_body_produces_a_zero_read_rejection_report() {
             .expect_err("nonregular body must be rejected")
             .contains("securely open")
     );
-    let report = process_attachment_once(&id).expect("nonregular body produces a report");
-    assert!(!report.ok);
-    assert_eq!(report.size, 0);
-    assert!(
-        report
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("securely open"))
-    );
+    let error = process_attachment_once(&id)
+        .expect_err("nonregular persisted body must be a storage failure");
+    assert!(error.to_string().contains("securely open"));
 }
 #[cfg(unix)]
 #[test]
@@ -721,6 +704,7 @@ fn immutable_snapshot_survives_path_replacement_without_reread() {
     ensure_prover_processing_reference(&tenant_key, &id)
         .expect("scanner creates a durable live-content reference before snapshotting");
     let snapshot = match load_attachment_snapshot(&loc, body.len() as u64)
+        .expect("load snapshot")
         .expect("snapshot files are present")
     {
         AttachmentSnapshotLoad::Ready(snapshot) => snapshot,
@@ -735,6 +719,7 @@ fn immutable_snapshot_survives_path_replacement_without_reread() {
     )
     .expect("replace path after immutable snapshot acquisition");
     let report = process_attachment_snapshot_at(&loc, snapshot)
+        .expect("process immutable snapshot")
         .expect("immutable snapshot produces a report");
     assert!(report.ok, "path replacement affected snapshot: {report:?}");
     assert_eq!(report.size, body.len() as u64);
@@ -766,15 +751,11 @@ fn same_size_body_substitution_is_rejected_by_content_address() {
         norito::json::to_json_pretty(&meta).expect("metadata JSON"),
     )
     .expect("write original content-address metadata");
-    let report = process_attachment_once(&id).expect("substitution produces rejection report");
-    assert!(!report.ok);
+    let error = process_attachment_once(&id)
+        .expect_err("content-address substitution must be a storage failure");
     assert!(
-        report
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("body digest")),
-        "substitution rejected for the wrong reason: {:?}",
-        report.error
+        error.to_string().contains("body digest"),
+        "substitution rejected for the wrong reason: {error}"
     );
 }
 #[test]
@@ -807,6 +788,7 @@ fn snapshot_metadata_and_provenance_invariants_fail_closed() {
     assert!(
         validate_attachment_snapshot(&loc, &forged, &body_load)
             .expect_err("metadata id mismatch must reject")
+            .to_string()
             .contains("metadata id")
     );
     let mut forged = base.clone();
@@ -814,6 +796,7 @@ fn snapshot_metadata_and_provenance_invariants_fail_closed() {
     assert!(
         validate_attachment_snapshot(&loc, &forged, &body_load)
             .expect_err("metadata tenant mismatch must reject")
+            .to_string()
             .contains("metadata tenant")
     );
     let mut forged = base.clone();
@@ -821,6 +804,7 @@ fn snapshot_metadata_and_provenance_invariants_fail_closed() {
     assert!(
         validate_attachment_snapshot(&loc, &forged, &body_load)
             .expect_err("missing provenance must reject")
+            .to_string()
             .contains("provenance is required")
     );
     let mut forged = base.clone();
@@ -833,6 +817,7 @@ fn snapshot_metadata_and_provenance_invariants_fail_closed() {
     assert!(
         validate_attachment_snapshot(&loc, &forged, &body_load)
             .expect_err("non-accepted sanitizer verdict must reject")
+            .to_string()
             .contains("verdict")
     );
     let mut forged = base.clone();
@@ -846,6 +831,7 @@ fn snapshot_metadata_and_provenance_invariants_fail_closed() {
     assert!(
         validate_attachment_snapshot(&loc, &forged, &body_load)
             .expect_err("expanded-size mismatch must reject")
+            .to_string()
             .contains("expanded size")
     );
     let mut forged = base.clone();
@@ -858,6 +844,7 @@ fn snapshot_metadata_and_provenance_invariants_fail_closed() {
     assert!(
         validate_attachment_snapshot(&loc, &forged, &body_load)
             .expect_err("provenance Blake2b mismatch must reject")
+            .to_string()
             .contains("Blake2b-256")
     );
     let mut forged = base.clone();
@@ -870,6 +857,7 @@ fn snapshot_metadata_and_provenance_invariants_fail_closed() {
     assert!(
         validate_attachment_snapshot(&loc, &forged, &body_load)
             .expect_err("provenance SHA-256 mismatch must reject")
+            .to_string()
             .contains("SHA-256")
     );
     let mut forged = base.clone();
@@ -881,6 +869,7 @@ fn snapshot_metadata_and_provenance_invariants_fail_closed() {
     assert!(
         validate_attachment_snapshot(&loc, &forged, &body_load)
             .expect_err("provenance media mismatch must reject")
+            .to_string()
             .contains("media type")
     );
     let mut forged = base;
@@ -893,11 +882,12 @@ fn snapshot_metadata_and_provenance_invariants_fail_closed() {
     assert!(
         validate_attachment_snapshot(&loc, &forged, &body_load)
             .expect_err("forged matching media labels must not override body sniffing")
+            .to_string()
             .contains("media type")
     );
 }
 #[test]
-fn first_release_scanner_ignores_retired_root_attachment_layout() {
+fn first_release_scanner_rejects_retired_root_attachment_layout() {
     let _env = TestDataDirGuard::new();
     init_test_cfg();
     fs::create_dir_all(attachments_root_dir()).expect("create attachment root");
@@ -921,7 +911,7 @@ fn first_release_scanner_ignores_retired_root_attachment_layout() {
     .expect("write retired root metadata");
     let mut stream = AttachmentDirectoryStream::open(attachments_root_dir())
         .expect("open attachment discovery stream");
-    let discovery = discover_attachment_window(
+    let error = discover_attachment_window(
         &mut stream,
         AttachmentDiscoveryGeometry {
             max_locations: 4,
@@ -929,12 +919,22 @@ fn first_release_scanner_ignores_retired_root_attachment_layout() {
         },
         std::time::Instant::now(),
         1_000,
-        |_| true,
+        |_| Ok(true),
+    )
+    .expect_err("retired root layout must fail closed");
+    assert!(error.to_string().contains("non-canonical tenant"));
+    assert!(
+        find_attachment_location(&id)
+            .expect_err("direct lookup must reject retired root layout")
+            .to_string()
+            .contains("non-canonical tenant")
     );
-    assert!(discovery.locations.is_empty());
-    assert!(discovery.sweep_complete);
-    assert!(find_attachment_location(&id).is_none());
-    assert!(process_attachment_once(&id).is_none());
+    assert!(
+        process_attachment_once(&id)
+            .expect_err("direct processing must reject retired root layout")
+            .to_string()
+            .contains("non-canonical tenant")
+    );
 }
 #[test]
 fn attachment_discovery_geometry_has_exact_boundaries_and_saturates() {
@@ -997,8 +997,9 @@ fn complete_attachment_discovery_window_is_canonically_ordered() {
         },
         std::time::Instant::now(),
         1_000,
-        |_| true,
-    );
+        |_| Ok(true),
+    )
+    .expect("discover canonical window");
     assert!(discovery.sweep_complete);
     assert_eq!(discovery.budget_reason(), None);
     assert_eq!(discovery.locations, expected);
@@ -1028,6 +1029,37 @@ fn attachment_discovery_retry_queue_is_canonical_and_hard_bounded() {
     assert_eq!(queued[0].tenant_key, format!("{:064x}", 4_u8));
     assert_eq!(queued[0].id, format!("{:064x}", hard_cap - 1));
     drop(state_guard);
+    *attachment_discovery_state().lock() = None;
+}
+#[test]
+fn discovery_tolerates_completed_deletion_without_restarting_a_retained_cursor() {
+    let _env = TestDataDirGuard::new();
+    let root = attachments_root_dir();
+    let tenant_key = format!("{:064x}", 6_u8);
+    let tenant_dir = root.join(&tenant_key);
+    fs::create_dir_all(&tenant_dir).expect("create tenant directory");
+    fs::write(tenant_dir.join(format!("{:064x}.json", 1_u8)), b"{}")
+        .expect("write retained-cursor fixture");
+    let stream = AttachmentDirectoryStream::open(root.clone()).expect("open retained cursor");
+    *attachment_discovery_state().lock() = Some(AttachmentDiscoveryState {
+        root: root.clone(),
+        stream: Some(stream),
+        retry_locations: Vec::new(),
+    });
+
+    fs::remove_dir_all(&tenant_dir).expect("simulate a completed tenant deletion");
+
+    let discovery = discover_pending_attachment_locations(
+        AttachmentDiscoveryGeometry {
+            max_locations: 4,
+            max_work_items: 16,
+        },
+        std::time::Instant::now(),
+        1_000,
+    )
+    .expect("a completed deletion must not invalidate the retained directory cursor");
+    assert!(discovery.sweep_complete);
+    assert!(discovery.locations.is_empty());
     *attachment_discovery_state().lock() = None;
 }
 #[test]
@@ -1062,8 +1094,9 @@ fn bounded_attachment_discovery_cursor_reaches_every_later_entry() {
             geometry,
             std::time::Instant::now(),
             1_000,
-            |_| true,
-        );
+            |_| Ok(true),
+        )
+        .expect("discover bounded window");
         assert!(window.locations.len() <= geometry.max_locations);
         assert!(window.locations.windows(2).all(|pair| pair[0] < pair[1]));
         completed = window.sweep_complete;
@@ -1096,8 +1129,9 @@ fn attachment_discovery_work_and_time_boundaries_do_not_consume_later_entries() 
         },
         std::time::Instant::now(),
         0,
-        |_| true,
-    );
+        |_| Ok(true),
+    )
+    .expect("observe time boundary");
     assert_eq!(timed_out.work_items, 0);
     assert_eq!(timed_out.budget_reason(), Some("time"));
     assert_eq!(timed_out.pending_estimate(), 1);
@@ -1109,8 +1143,9 @@ fn attachment_discovery_work_and_time_boundaries_do_not_consume_later_entries() 
         },
         std::time::Instant::now(),
         1_000,
-        |_| true,
-    );
+        |_| Ok(true),
+    )
+    .expect("observe work boundary");
     assert_eq!(work_limited.work_items, 1);
     assert!(work_limited.locations.is_empty());
     assert_eq!(work_limited.budget_reason(), Some("work"));
@@ -1123,8 +1158,9 @@ fn attachment_discovery_work_and_time_boundaries_do_not_consume_later_entries() 
         },
         std::time::Instant::now(),
         1_000,
-        |_| true,
-    );
+        |_| Ok(true),
+    )
+    .expect("resume bounded discovery");
     assert!(resumed.sweep_complete);
     assert_eq!(
         resumed.locations,
@@ -1137,8 +1173,8 @@ fn oversized_first_attachment_cannot_starve_later_valid_work() {
     configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
-    let oversized_id = "0".repeat(ATTACHMENT_ID_HEX_LEN);
     let oversized_body = vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize + 1];
+    let oversized_id = attachment_body_id(&oversized_body);
     let oversized_meta = super::super::zk_attachments::AttachmentMeta {
         id: oversized_id.clone(),
         content_type: "application/x-norito".to_owned(),
@@ -1182,19 +1218,20 @@ fn oversized_first_attachment_cannot_starve_later_valid_work() {
         norito::json::to_json_pretty(&valid_meta).expect("valid metadata JSON"),
     )
     .expect("write later valid metadata");
-    let stats = super::block_on_scan();
-    assert_eq!(stats.processed_reports, 2);
-    assert_eq!(stats.bytes_processed, valid_body.len() as u64);
-    assert_eq!(stats.remaining_pending, 0);
-    assert_eq!(stats.budget_exhausted, None);
+    let error = super::block_on_scan()
+        .expect_err("an oversized persisted body must fail the storage scan closed");
     assert!(
-        load_report(&oversized_id)
-            .expect("oversized rejection report")
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("first-release limit"))
+        error.to_string().contains("first-release limit"),
+        "unexpected oversized-body error: {error}"
     );
-    assert!(load_report(&valid_id).expect("valid later report").ok);
+    assert!(
+        load_report(&oversized_id).is_none(),
+        "storage corruption must not be committed as an application report"
+    );
+    assert!(
+        load_report(&valid_id).expect("drained valid report").ok,
+        "already-scheduled valid work must be drained before the scan returns its first error"
+    );
 }
 #[test]
 fn attachment_metadata_loading_rejects_oversized_files_before_parsing() {
@@ -1208,10 +1245,9 @@ fn attachment_metadata_loading_rejects_oversized_files_before_parsing() {
         vec![b' '; ATTACHMENT_META_FILE_MAX_BYTES as usize + 1],
     )
     .expect("write oversized metadata fixture");
-    assert!(
-        load_attachment_meta(&AttachmentLocation { tenant_key, id }).is_none(),
-        "oversized metadata must fail before JSON parsing"
-    );
+    let error = load_attachment_meta(&AttachmentLocation { tenant_key, id })
+        .expect_err("oversized metadata must fail before JSON parsing");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
 #[test]
 fn scan_respects_byte_budget() {
@@ -1224,16 +1260,20 @@ fn scan_respects_byte_budget() {
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     // Create two attachments totalling more than the configured byte budget.
-    for (idx, size) in sizes.into_iter().enumerate() {
-        let id = format!("{:064x}", idx + 1);
-        let body = vec![b'A'; size];
+    for (index, size) in sizes.into_iter().enumerate() {
+        let mut body = vec![b' '; size];
+        body[0] = b'0' + u8::try_from(index).expect("small fixture index");
+        let id = attachment_body_id(&body);
         let meta = super::super::zk_attachments::AttachmentMeta {
             id: id.clone(),
-            content_type: "application/json".to_string(),
+            content_type: "application/octet-stream".to_string(),
             size: body.len() as u64,
             created_ms: now_ms(),
             tenant: Some(tenant_key.clone()),
-            provenance: Some(fixture_attachment_provenance(&body, "application/json")),
+            provenance: Some(fixture_attachment_provenance(
+                &body,
+                "application/octet-stream",
+            )),
             zk1_tags: None,
         };
         fs::write(attachment_bin_path(&tenant_key, &id), body).unwrap();
@@ -1243,14 +1283,16 @@ fn scan_respects_byte_budget() {
         )
         .unwrap();
     }
-    let stats = super::block_on_scan();
+    let stats = super::block_on_scan().expect("run prover scan");
     assert_eq!(
         stats.processed_reports, 1,
         "only first attachment fits budget"
     );
     assert_eq!(stats.budget_exhausted, Some("bytes"));
     assert_eq!(stats.remaining_pending, 1);
-    assert_eq!(stats.bytes_processed, first_size as u64);
+    assert!(sizes.contains(
+        &usize::try_from(stats.bytes_processed).expect("processed byte count fits usize")
+    ));
 }
 #[test]
 fn deferred_attachment_cannot_head_of_line_block_later_fitting_work() {
@@ -1259,40 +1301,90 @@ fn deferred_attachment_cannot_head_of_line_block_later_fitting_work() {
     let budget = cfg_max_scan_bytes();
     assert!(budget > 8, "test scan budget must leave a tail");
     let first_size = usize::try_from(budget - 4).expect("test budget fits usize");
-    let sizes = [first_size, 5, 4];
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
-    for (index, size) in sizes.into_iter().enumerate() {
-        let id = format!("{:064x}", index + 1);
-        let body = vec![b'C' + u8::try_from(index).expect("small index"); size];
+    let mut first_body = vec![b'a'; first_size];
+    first_body[0] = b'"';
+    *first_body.last_mut().expect("non-empty first body") = b'"';
+    let first_id = (0_u32..=u32::MAX)
+        .find_map(|nonce| {
+            first_body[1..5].copy_from_slice(&nonce.to_le_bytes());
+            for byte in &mut first_body[1..5] {
+                *byte = b'a' + (*byte % 26);
+            }
+            let id = attachment_body_id(&first_body);
+            (id.as_bytes()[0] <= b'7').then_some(id)
+        })
+        .expect("find a lower-half content id for the leading body");
+    const JSON_ALPHABET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let (second_id, second_body, third_id, third_body) = (0_u32..=u32::MAX)
+        .find_map(|nonce| {
+            let alphabet_len =
+                u32::try_from(JSON_ALPHABET.len()).expect("alphabet length fits u32");
+            let index = |shift: u32| {
+                usize::try_from((nonce.rotate_left(shift) % alphabet_len) as u64)
+                    .expect("alphabet index fits usize")
+            };
+            let second_body = vec![
+                b'"',
+                JSON_ALPHABET[index(0)],
+                JSON_ALPHABET[index(7)],
+                JSON_ALPHABET[index(13)],
+                b'"',
+            ];
+            let third_body = vec![
+                b'"',
+                JSON_ALPHABET[index(19)],
+                JSON_ALPHABET[index(25)],
+                b'"',
+            ];
+            let second_id = attachment_body_id(&second_body);
+            let third_id = attachment_body_id(&third_body);
+            (first_id < second_id && second_id < third_id).then_some((
+                second_id,
+                second_body,
+                third_id,
+                third_body,
+            ))
+        })
+        .expect("find ordered small content-addressed fixtures");
+    let fixtures = [
+        (first_id.clone(), first_body),
+        (second_id.clone(), second_body),
+        (third_id.clone(), third_body),
+    ];
+    for (id, body) in fixtures {
         let meta = super::super::zk_attachments::AttachmentMeta {
             id: id.clone(),
-            content_type: "application/json".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
             size: body.len() as u64,
             created_ms: now_ms(),
             tenant: Some(tenant_key.clone()),
-            provenance: Some(fixture_attachment_provenance(&body, "application/json")),
+            provenance: Some(fixture_attachment_provenance(
+                &body,
+                "application/octet-stream",
+            )),
             zk1_tags: None,
         };
-        fs::write(attachment_bin_path(&tenant_key, &id), body).expect("write budget-order body");
+        fs::write(attachment_bin_path(&tenant_key, &id), &body).expect("write budget-order body");
         fs::write(
             attachment_meta_path(&tenant_key, &id),
             norito::json::to_json_pretty(&meta).expect("budget-order metadata JSON"),
         )
         .expect("write budget-order metadata");
     }
-    let stats = block_on_scan();
+    let stats = block_on_scan().expect("run prover scan");
     assert_eq!(stats.processed_reports, 2);
     assert_eq!(stats.bytes_processed, budget);
     assert_eq!(stats.remaining_pending, 1);
     assert_eq!(stats.budget_exhausted, Some("bytes"));
-    assert!(load_report(&format!("{:064x}", 1)).is_some());
+    assert!(load_report(&first_id).is_some());
     assert!(
-        load_report(&format!("{:064x}", 2)).is_none(),
+        load_report(&second_id).is_none(),
         "the body that does not fit must remain pending without being read"
     );
     assert!(
-        load_report(&format!("{:064x}", 3)).is_some(),
+        load_report(&third_id).is_some(),
         "a later body that fits the remaining budget must still be processed"
     );
 }
@@ -1324,7 +1416,7 @@ fn snapshot_that_crosses_time_budget_is_charged_and_completed_once() {
     .expect("write delayed snapshot metadata");
     super::TEST_MAX_SCAN_MILLIS_OVERRIDE.store(max_scan_millis, AtomicOrdering::SeqCst);
     super::TEST_SNAPSHOT_LOAD_DELAY_MS.store(150, AtomicOrdering::SeqCst);
-    let stats = block_on_scan();
+    let stats = block_on_scan().expect("run prover scan");
     assert_eq!(stats.processed_reports, 1);
     assert_eq!(stats.bytes_processed, body_size);
     assert_eq!(stats.remaining_pending, 0);
@@ -1343,16 +1435,20 @@ fn scan_bounds_concurrency() {
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     // Create four small attachments to trigger overlapping work.
-    for idx in 0..4 {
-        let id = format!("{:064x}", idx + 10);
-        let body = vec![b'B'; 16];
+    for idx in 0_u8..4 {
+        let mut body = vec![b' '; 16];
+        body[0] = b'0' + idx;
+        let id = attachment_body_id(&body);
         let meta = super::super::zk_attachments::AttachmentMeta {
             id: id.clone(),
-            content_type: "application/json".to_string(),
+            content_type: "application/octet-stream".to_string(),
             size: body.len() as u64,
             created_ms: now_ms(),
             tenant: Some(tenant_key.clone()),
-            provenance: Some(fixture_attachment_provenance(&body, "application/json")),
+            provenance: Some(fixture_attachment_provenance(
+                &body,
+                "application/octet-stream",
+            )),
             zk1_tags: None,
         };
         fs::write(attachment_bin_path(&tenant_key, &id), body).unwrap();
@@ -1362,9 +1458,11 @@ fn scan_bounds_concurrency() {
         )
         .unwrap();
     }
-    let stats = super::block_on_scan();
+    let stats = super::block_on_scan().expect("run prover scan");
     assert_eq!(stats.budget_exhausted, None);
+    assert_eq!(stats.processed_reports, 4);
     let observed = super::MAX_INFLIGHT_OBSERVED.load(AtomicOrdering::SeqCst);
+    assert!(observed > 1, "the fixture must exercise overlapping work");
     assert!(
         observed <= super::cfg_max_inflight(),
         "observed inflight {} exceeds cap",
@@ -1376,7 +1474,7 @@ fn scan_bounds_concurrency() {
 async fn scan_once_handles_current_thread_runtime() {
     let _env = TestDataDirGuard::new();
     init_test_cfg();
-    assert_eq!(super::scan_once(), 0);
+    assert_eq!(super::scan_once().expect("run one prover scan"), 0);
 }
 #[test]
 fn zk1_extracts_tags_prof_and_ipak() {
@@ -1445,13 +1543,13 @@ async fn background_worker_processes_pending_attachments() {
     fs::write(attachment_bin_path(&tenant_key, &err_id), &err_body).expect("write err body");
     let err_meta = super::super::zk_attachments::AttachmentMeta {
         id: err_id.clone(),
-        content_type: "application/x-norito".to_string(),
+        content_type: "application/x-zk1".to_string(),
         size: err_body.len() as u64,
         created_ms: super::now_ms(),
         tenant: Some(tenant_key.clone()),
         provenance: Some(fixture_attachment_provenance(
             &err_body,
-            "application/x-norito",
+            "application/x-zk1",
         )),
         zk1_tags: None,
     };
@@ -1461,7 +1559,7 @@ async fn background_worker_processes_pending_attachments() {
     )
     .expect("write err meta");
     let shutdown = ShutdownSignal::new();
-    super::start_worker(shutdown.clone());
+    let worker = super::start_worker(shutdown.clone()).expect("start prover worker");
     use tokio::time::{Duration, Instant, sleep};
     let deadline = Instant::now() + Duration::from_secs(6);
     let mut ok_report_ready = false;
@@ -1481,13 +1579,20 @@ async fn background_worker_processes_pending_attachments() {
         sleep(Duration::from_millis(100)).await;
     }
     shutdown.send();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), worker)
+            .await
+            .expect("prover worker observes shutdown")
+            .expect("prover worker joins"),
+        crate::ToriiCriticalWorkerExit::StoppedByShutdown
+    );
     assert!(ok_report_ready, "Proof attachment should produce a report");
     assert!(
         err_ready,
         "Malformed Norito attachment should produce an error report"
     );
     assert_eq!(
-        super::scan_once(),
+        super::scan_once().expect("run final prover scan"),
         0,
         "worker should drain pending attachments"
     );

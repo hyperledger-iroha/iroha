@@ -2085,15 +2085,16 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((attempt_id, _)) = state_transaction
+            if state_transaction
                 .world
-                .parliament_attempts
-                .iter()
-                .find(|(_, attempt)| attempt.references_parliament_member(&account_id))
+                .parliament_member_reference_counts
+                .get(&account_id)
+                .copied()
+                .is_some_and(crate::state::ParliamentMemberReferenceCountsV1::has_references)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is present in Parliament attempt state (attempt {attempt_id}); retain account for governance audit references"
+                        "cannot unregister account {account_id}: it is present in Parliament attempt state; retain account for governance audit references"
                     )
                     .into(),
                 )
@@ -8454,6 +8455,7 @@ mod tests {
                 let proposal_id = [0xA5; 32];
                 let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
                     iroha_data_model::governance::types::DeployContractProposal {
+                        proposal_operator: account_id.clone(),
                         contract_address:
                             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                                 .parse()

@@ -32,7 +32,7 @@ use thiserror::Error;
 /// Fixed, payload-free failure classes returned by a runtime signing service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PotrSignerServiceError {
-    /// The HSM, KMS, or remote signer is temporarily unavailable.
+    /// The configured signing provider is temporarily unavailable.
     #[error("runtime signer unavailable")]
     Unavailable,
     /// The signer refused the exact canonical payload.
@@ -567,8 +567,8 @@ pub enum PotrFinalizedAdmissionReaderConfigError {
 }
 /// Runtime-only Ed25519 signer for the gateway role of a PoTR receipt.
 ///
-/// Implementations may delegate to PKCS#11, an HSM, or a remote signing service. `signer_id` is a
-/// non-secret stable deployment identity for the signer instance, not a key handle or credential.
+/// Implementations use a qualified deployment-owned signing provider. `signer_id` is a non-secret
+/// stable deployment identity for the signer instance, not a key handle or credential.
 pub trait PotrGatewaySignerV1: Send + Sync {
     /// Stable opaque production provider handle.
     fn handle(&self) -> &str;
@@ -1391,7 +1391,7 @@ pub(crate) enum PotrReceiptRuntimeSigningError {
     /// The live admission binding regressed or conflicted with its exact floor.
     #[error("PoTR live admission policy conflicts with the retained floor")]
     AdmissionPolicyProgress(PotrAdmissionPolicyProgressError),
-    /// Admission changed or was revoked while HSM signatures were being made.
+    /// Admission changed or was revoked while provider signatures were being made.
     #[error("PoTR admission changed during receipt signing")]
     AdmissionChangedDuringSigning,
     /// The admission record did not establish council trust.
@@ -2886,7 +2886,7 @@ mod tests {
         assert_eq!(
             provider_calls.load(Ordering::SeqCst),
             0,
-            "provider HSM must not sign after an invalid gateway result"
+            "provider signer must not sign after an invalid gateway result"
         );
     }
     #[test]

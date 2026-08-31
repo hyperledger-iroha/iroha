@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use iroha_config::parameters::user::{Root as UserConfig, ToriiPush};
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+use toml::{Table, Value};
 
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
@@ -12,12 +13,30 @@ fn base_reader() -> ConfigReader {
         .expect("base config should load")
 }
 
-fn ram_lfe_reader() -> ConfigReader {
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/torii_ram_lfe.toml");
-    ConfigReader::new()
-        .read_toml_with_extends(fixture)
-        .expect("RAM-LFE fixture should load")
+fn ram_lfe_overlay() -> Table {
+    let mut table = include_str!("fixtures/torii_ram_lfe.toml")
+        .parse::<Table>()
+        .expect("RAM-LFE fixture should be valid TOML");
+    table.remove("extends");
+    table
+}
+
+fn ram_lfe_programs_mut(table: &mut Table) -> &mut Vec<Value> {
+    table
+        .get_mut("torii")
+        .and_then(Value::as_table_mut)
+        .and_then(|torii| torii.get_mut("ram_lfe"))
+        .and_then(Value::as_table_mut)
+        .and_then(|ram_lfe| ram_lfe.get_mut("programs"))
+        .and_then(Value::as_array_mut)
+        .expect("RAM-LFE fixture programs")
+}
+
+fn decode_ram_lfe_overlay(table: Table) -> UserConfig {
+    base_reader()
+        .with_toml_source(TomlSource::inline(table))
+        .read_and_complete::<UserConfig>()
+        .expect("mutated RAM-LFE fixture should decode")
 }
 
 fn canonical_push_json(extra_field: &str) -> String {
@@ -170,46 +189,30 @@ signer_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B38954416
 
 #[test]
 fn ram_lfe_rejects_empty_duplicate_and_malformed_program_lists() {
-    let mut empty = ram_lfe_reader()
-        .read_and_complete::<UserConfig>()
-        .expect("canonical RAM-LFE fixture should decode");
-    empty
-        .torii
-        .ram_lfe
-        .as_mut()
-        .expect("fixture RAM-LFE table")
-        .programs
-        .clear();
-    let error = empty
+    let mut empty = ram_lfe_overlay();
+    ram_lfe_programs_mut(&mut empty).clear();
+    let error = decode_ram_lfe_overlay(empty)
         .parse()
         .expect_err("configured RAM-LFE runtime must not silently disable itself");
     assert!(format!("{error:?}").contains("must contain at least one program"));
 
-    let mut duplicate = ram_lfe_reader()
-        .read_and_complete::<UserConfig>()
-        .expect("canonical RAM-LFE fixture should decode");
-    let runtime = duplicate
-        .torii
-        .ram_lfe
-        .as_mut()
-        .expect("fixture RAM-LFE table");
-    runtime.programs.push(runtime.programs[0].clone());
-    let error = duplicate
+    let mut duplicate = ram_lfe_overlay();
+    let programs = ram_lfe_programs_mut(&mut duplicate);
+    programs.push(programs[0].clone());
+    let error = decode_ram_lfe_overlay(duplicate)
         .parse()
         .expect_err("duplicate program ids must not overwrite runtime material");
     assert!(format!("{error:?}").contains("program_id duplicates"));
 
-    let mut malformed = ram_lfe_reader()
-        .read_and_complete::<UserConfig>()
-        .expect("canonical RAM-LFE fixture should decode");
-    malformed
-        .torii
-        .ram_lfe
-        .as_mut()
-        .expect("fixture RAM-LFE table")
-        .programs[0]
-        .hidden_program_hex = "0xnot-hex".to_owned();
-    let error = malformed
+    let mut malformed = ram_lfe_overlay();
+    ram_lfe_programs_mut(&mut malformed)[0]
+        .as_table_mut()
+        .expect("RAM-LFE program table")
+        .insert(
+            "hidden_program_hex".to_owned(),
+            Value::String("0xnot-hex".to_owned()),
+        );
+    let error = decode_ram_lfe_overlay(malformed)
         .parse()
         .expect_err("malformed hidden-program material must be a parse error");
     assert!(format!("{error:?}").contains("hidden_program_hex"));

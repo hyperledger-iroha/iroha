@@ -214,9 +214,12 @@ fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
         OnlinePeersProvider::new(peers_rx),
         None,
         MaybeTelemetry::disabled(),
-    );
+    )
+    .expect("valid Torii bridge-finality fixture");
     EndpointFixture {
-        app: torii.api_router_for_tests(),
+        app: torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
         network_id,
         block,
         artifact,

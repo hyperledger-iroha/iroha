@@ -361,6 +361,23 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
     uint8_t** out_capabilities_ptr,
     unsigned long* out_capabilities_len);
 
+// Canonical-decodes a shared `OfflineOperationStatus` and validates every
+// structural and mutual binding before an Apple SDK projects any nested
+// fields. Applied top-ups include balanced Merkle inclusion against the
+// Commit-QC execution commitment. Returns zero only for a valid status.
+int32_t connect_norito_kagemusha_offline_operation_status_validate_v1(
+    const uint8_t* status_norito_ptr,
+    unsigned long status_norito_len);
+
+// Strict-decodes the bounded Norito JSON representation of a shared
+// `OfflineOperationStatus` and validates the same structural and mutual
+// bindings before a maintained SDK projects any nested fields. This does not
+// authenticate the embedded Commit-QC signature; that requires a separately
+// trusted validator roster. Returns zero only for a valid status.
+int32_t connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+    const uint8_t* status_json_ptr,
+    unsigned long status_json_len);
+
 // Verifies canonical Norito `KagemushaTopUpFinalityProofV2` against the
 // complete canonical `KagemushaRecursiveSpendTopUpAnchorV4` and a canonical,
 // pre-fetched `KagemushaTopUpFinalityRosterArtifactV2`. The canonical V4

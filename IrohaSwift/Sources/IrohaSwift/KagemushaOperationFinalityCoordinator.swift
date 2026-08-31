@@ -1,8 +1,8 @@
 import Foundation
 
-/// Bounded, presentation-safe terminal failure returned by a canonical
-/// Kagemusha operation status resource.
-public struct KagemushaOperationTerminalFailure: Equatable, Sendable {
+/// Bounded, presentation-safe failure for one rejected Kagemusha carrier
+/// attempt. The same operation may advance to a deterministic retry carrier.
+public struct KagemushaOperationAttemptFailure: Equatable, Sendable {
     public static let maximumCodeUTF8Bytes = 64
     public static let maximumMessageUTF8Bytes = 1_024
 
@@ -312,6 +312,7 @@ public enum KagemushaSubmissionFailureClassifier {
         transactionForbiddenRejectCodes.union(["offline_auth_header_unsupported"])
     private static let definitiveConflictRejectCodes: Set<String> = [
         "idempotency_key_conflict",
+        "offline_operation_retry_exhausted",
         "operation_id_conflict",
     ]
 
@@ -505,10 +506,11 @@ public struct KagemushaOperationFinalityConfiguration: Equatable, Sendable {
 
 /// Explicit durable acceptance continuity supplied on every resolution.
 /// `.unaccepted` permits the exact authoritative-404 submission gate;
-/// `.accepted` permanently disables that gate and binds all later status.
+/// `.accepted` disables the not-found gate. A canonical Rejected attempt may
+/// still authorize one deterministic same-request retry.
 public enum KagemushaOperationContinuity: Equatable, Sendable {
     case unaccepted
-    case accepted(transactionHash: String, submittedAtMs: UInt64?)
+    case accepted(KagemushaOperationReference)
 }
 
 /// The request whose embedded operation identity controls the complete
@@ -559,19 +561,19 @@ extension ToriiClient: KagemushaOperationFinalityTransport {
     }
 }
 
-/// Bounded terminal rejection metadata. The raw Torii error envelope is never
-/// exposed through finality resolution.
-public struct KagemushaOperationFinalRejection: Equatable, Sendable {
+/// Bounded retryable rejection metadata. The raw Torii error envelope is never
+/// exposed through operation resolution.
+public struct KagemushaOperationRejectedAttempt: Equatable, Sendable {
     public let operationId: String
     public let kind: KagemushaOperationKind
     public let transactionHash: String
-    public let failure: KagemushaOperationTerminalFailure
+    public let failure: KagemushaOperationAttemptFailure
 
     fileprivate init(
         operationId: String,
         kind: KagemushaOperationKind,
         transactionHash: String,
-        failure: KagemushaOperationTerminalFailure
+        failure: KagemushaOperationAttemptFailure
     ) {
         self.operationId = operationId
         self.kind = kind
@@ -580,16 +582,16 @@ public struct KagemushaOperationFinalRejection: Equatable, Sendable {
     }
 }
 
-/// A bounded terminal result from the status resource or a definitive
-/// pre-admission HTTP client failure.
+/// A bounded operation-resolution result. Applied is globally final; a
+/// rejected attempt can be retried with the same exact economic request.
 public enum KagemushaOperationFinalityOutcome: Equatable, Sendable {
     case applied(KagemushaOperationStatus.Applied)
-    case rejected(KagemushaOperationFinalRejection)
+    case rejectedAttempt(KagemushaOperationRejectedAttempt)
     case definitiveSubmissionFailure(KagemushaDefinitiveSubmissionFailure)
 }
 
-/// The authoritative terminal result paired with the caller's latest durable
-/// state. The SDK never creates a competing journal or artifact store.
+/// The authoritative resolution paired with the caller's latest durable state.
+/// The SDK never creates a competing journal or artifact store.
 public struct KagemushaOperationFinalityResolution<State> {
     public let outcome: KagemushaOperationFinalityOutcome
     public let state: State
@@ -605,9 +607,10 @@ public struct KagemushaOperationFinalityResolution<State> {
 ///
 /// Callers retain ownership of durable state through the persistence closures.
 /// A submission is permitted only after the canonical status resource returns
-/// an authoritative HTTP 404, command prerequisites have been revalidated, and
-/// the exact operation's attempt marker has been persisted. Ambiguous POST responses are
-/// resolved exclusively through the status resource.
+/// an authoritative HTTP 404 or a retryable Rejected attempt, command
+/// prerequisites have been revalidated, and the exact operation's attempt
+/// marker has been persisted. Ambiguous POST responses are resolved exclusively
+/// through the status resource.
 public enum KagemushaOperationFinalityCoordinator {
     typealias Sleeper = (_ nanoseconds: UInt64) async throws -> Void
     typealias MonotonicNow = () -> UInt64
@@ -631,7 +634,7 @@ public enum KagemushaOperationFinalityCoordinator {
         ) throws -> State,
         recordRejection: (
             _ transactionHash: String,
-            _ failure: KagemushaOperationTerminalFailure,
+            _ failure: KagemushaOperationAttemptFailure,
             _ state: State
         ) throws -> State,
         recordDefinitiveSubmissionFailure: (
@@ -720,7 +723,7 @@ public enum KagemushaOperationFinalityCoordinator {
         ) throws -> State,
         recordRejection: (
             _ transactionHash: String,
-            _ failure: KagemushaOperationTerminalFailure,
+            _ failure: KagemushaOperationAttemptFailure,
             _ state: State
         ) throws -> State,
         recordDefinitiveSubmissionFailure: (
@@ -742,6 +745,8 @@ public enum KagemushaOperationFinalityCoordinator {
         var boundSubmittedAtMs: UInt64?
         try initializeContinuitySeed(
             continuity: continuity,
+            operationId: operationId,
+            expectedKind: expectedKind,
             boundTransactionHash: &boundTransactionHash,
             boundSubmittedAtMs: &boundSubmittedAtMs
         )
@@ -805,6 +810,9 @@ public enum KagemushaOperationFinalityCoordinator {
             case let .pending(observedState):
                 state = observedState
                 shouldDelayBeforePolling = true
+            case let .rejectedAttempt(resolution):
+                state = resolution.state
+                maySubmit = true
             }
         }
 
@@ -917,6 +925,8 @@ public enum KagemushaOperationFinalityCoordinator {
             ) {
             case let .terminal(resolution):
                 return resolution
+            case let .rejectedAttempt(resolution):
+                return resolution
             case let .pending(observedState):
                 state = observedState
                 if poll < configuration.maximumPollAttempts - 1 {
@@ -1022,7 +1032,7 @@ public enum KagemushaOperationFinalityCoordinator {
     }
 
     /// Retry policy for the idempotent operation status resource. Rate limits
-    /// and only the canonical operation-index/history/proof availability
+    /// and canonical pending/outcome/history/proof availability
     /// signals are retriable; they never authorize submission.
     public static func statusFailureIsRetryable(_ error: Error) -> Bool {
         if error is CancellationError { return false }
@@ -1044,6 +1054,7 @@ public enum KagemushaOperationFinalityCoordinator {
     private enum Observation<State> {
         case pending(State)
         case terminal(KagemushaOperationFinalityResolution<State>)
+        case rejectedAttempt(KagemushaOperationFinalityResolution<State>)
     }
 
     private static func observe<State>(
@@ -1060,7 +1071,7 @@ public enum KagemushaOperationFinalityCoordinator {
         ) throws -> State,
         recordRejection: (
             _ transactionHash: String,
-            _ failure: KagemushaOperationTerminalFailure,
+            _ failure: KagemushaOperationAttemptFailure,
             _ state: State
         ) throws -> State
     ) throws -> Observation<State> {
@@ -1139,7 +1150,7 @@ public enum KagemushaOperationFinalityCoordinator {
                 nil,
                 state
             )
-            let failure = KagemushaOperationTerminalFailure(
+            let failure = KagemushaOperationAttemptFailure(
                 code: rejected.error.code,
                 message: rejected.error.message
             )
@@ -1148,10 +1159,10 @@ public enum KagemushaOperationFinalityCoordinator {
                 failure,
                 observedState
             )
-            return .terminal(
+            return .rejectedAttempt(
                 KagemushaOperationFinalityResolution(
-                    outcome: .rejected(
-                        KagemushaOperationFinalRejection(
+                    outcome: .rejectedAttempt(
+                        KagemushaOperationRejectedAttempt(
                             operationId: rejected.operationId,
                             kind: rejected.kind,
                             transactionHash: rejected.transactionHash,
@@ -1192,11 +1203,10 @@ public enum KagemushaOperationFinalityCoordinator {
                 "transaction hash"
             )
         }
-        if let boundTransactionHash,
-           boundTransactionHash != transactionHash {
-            throw KagemushaOperationFinalityError.continuityViolation(
-                "transaction hash"
-            )
+        let hashChanged = boundTransactionHash.map { $0 != transactionHash }
+            ?? false
+        if hashChanged {
+            boundSubmittedAtMs = nil
         }
         boundTransactionHash = transactionHash
         if let submittedAtMs {
@@ -1217,18 +1227,22 @@ public enum KagemushaOperationFinalityCoordinator {
 
     private static func initializeContinuitySeed(
         continuity: KagemushaOperationContinuity,
+        operationId: String,
+        expectedKind: KagemushaOperationKind,
         boundTransactionHash: inout String?,
         boundSubmittedAtMs: inout UInt64?
     ) throws {
-        guard case let .accepted(
-            expectedTransactionHash,
-            expectedSubmittedAtMs
-        ) = continuity else {
+        guard case let .accepted(reference) = continuity else {
             return
         }
+        try validate(
+            reference,
+            operationId: operationId,
+            expectedKind: expectedKind
+        )
         try bind(
-            expectedTransactionHash,
-            submittedAtMs: expectedSubmittedAtMs,
+            reference.transactionHash,
+            submittedAtMs: reference.submittedAtMs,
             to: &boundTransactionHash,
             and: &boundSubmittedAtMs
         )

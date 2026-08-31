@@ -2596,13 +2596,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 864
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 867
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 85
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df"
+    "49312043ca34bd4a1857ef64d21bd858c4f9af1e4f39d02e5338e57bc6494a8a"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "e294395f0bdb4997e396e3ea876fd26f578c51c6afc3845b71779286d46ed494"
+    "229230acff7fe96a45a5ab7e607c0c9c7c5eec0f7c75ae4974b95bc4846dddac"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2724,7 +2724,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-v2-certified-serve-payload-store",
         "sumeragi::v2_certified_serve_payload_store::tests",
-        11,
+        13,
     ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
@@ -2741,7 +2741,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-v2-lifecycle-coordinator",
         "sumeragi::v2_lifecycle_coordinator",
-        42,
+        43,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
     (
@@ -3260,10 +3260,12 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_predicate_scan_does_not_create_queue_local_serve_gate",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
     "sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_stays_behind_an_earlier_certified_request_carrier",
-    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner",
+    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_has_one_exclusive_store_owner",
+    "sumeragi::v2_certified_serve_payload_store::tests::production_open_consumes_the_exact_kura_directory_authority",
+    "sumeragi::v2_certified_serve_payload_store::tests::emergency_fast_payload_store_skips_inventory_and_rejects_retirement",
     "sumeragi::v2_certified_serve_payload_store::tests::capacity_is_checked_before_a_second_file_is_published",
     "sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_certified_responder_authority",
-    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_symlink_replacement",
+    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_inode_replacement",
     "sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_durable_body_receipt_and_bytes",
     "sumeragi::v2_certified_serve_payload_store::tests::negative_terminal_is_idempotent_and_cannot_be_replaced",
     "sumeragi::v2_certified_serve_payload_store::tests::only_the_call_that_created_pending_owns_preledger_abort_authority",
@@ -3303,6 +3305,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_runtime::tests::pre_dequeue_probe_validates_unfrozen_leader_wire_identity",
     "sumeragi::v2_runtime::tests::busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation",
     "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::fresh_certified_serve_rejects_foreign_target_and_rolls_back_capacity_wait",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_corrupt_payload_rejects_before_live_apply_ledger_repair",
     "sumeragi::v2_effects::tests::fetch_retransmissions_reuse_one_work_slot_and_one_signed_request",
     "sumeragi::v2_effects::tests::apply_retransmissions_reuse_one_work_slot",
     "sumeragi::v2_runtime::tests::distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner",

@@ -1,6 +1,6 @@
 //! This module provides the [`State`] — an in-memory representation of the current blockchain state.
 #![allow(clippy::items_after_statements, clippy::used_underscore_binding)]
-use crate::governance::parliament::ParliamentReducerErrorV1;
+use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
 use crate::private_settlement::{
     carrier::{PrivateSettlementCarrierBindingErrorV1, PrivateSettlementCarrierBindingV1},
     global_state::{
@@ -91,8 +91,8 @@ use iroha_data_model::{
     fastpq::{TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle},
     governance::types::{
         BallotAttemptId, BallotAttemptStatusV1, BeaconSessionId, BodyInstanceStatusV1,
-        GovernanceAttemptId, GovernanceAttemptStatusV1, MAX_PARLIAMENT_CITIZENS_V1, ProposalKind,
-        TleKeySessionId,
+        GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceStageV1,
+        MAX_PARLIAMENT_CITIZENS_V1, ProposalKind, TleKeySessionId,
     },
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierPolicyId},
     isi::{
@@ -513,6 +513,31 @@ pub(crate) fn validate_tle_key_session_roster_binding_v1(
         return Err(TleReleaseAdapterError::TranscriptMismatch);
     }
     Ok(())
+}
+
+fn validate_tle_key_session_lifecycle_head_v1(
+    ordered_lifecycles: &[TleKeySessionLifecycleV1],
+    active_key_session_id: Option<TleKeySessionId>,
+) -> Result<(), &'static str> {
+    let Some((latest, history)) = ordered_lifecycles.split_last() else {
+        return active_key_session_id.map_or(Ok(()), |_| {
+            Err("active TLE session pointer exists without a lifecycle head")
+        });
+    };
+    if history
+        .iter()
+        .any(|lifecycle| !lifecycle.selection_is_closed())
+    {
+        return Err("a non-latest TLE key-session lifecycle remains open");
+    }
+    match (latest.selection_is_closed(), active_key_session_id) {
+        (false, Some(active_key_session_id)) if active_key_session_id == latest.key_session_id => {
+            Ok(())
+        }
+        (false, _) => Err("the open latest lifecycle head lacks its exact active TLE pointer"),
+        (true, None) => Ok(()),
+        (true, Some(_)) => Err("a closed latest lifecycle head still has an active TLE pointer"),
+    }
 }
 
 /// Closed failures for the committed Parliament TLE key-session lifecycle.
@@ -1328,9 +1353,14 @@ macro_rules! with_world_overlay_fields {
             governance_last_unlock_sweep_height,
             governance_unlock_stats,
             parliament_attempts,
+            parliament_attempt_counts,
+            parliament_member_reference_counts,
+            parliament_timed_ovn_casting_candidates,
             parliament_required_beacon_pulse_slots,
             parliament_certified_enactments,
             parliament_unavailable_beacon_pulse_slots,
+            parliament_tle_key_session_retention_deadlines,
+            tle_key_session_selection_intervals,
             tle_key_sessions,
             tle_key_session_rosters,
             tle_key_session_lifecycles,
@@ -3959,12 +3989,258 @@ impl mv::json::JsonKeyCodec for MusubiResolverIndexRevisionV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct ParliamentTimedOvnResourceReservationV1 {
     governance_attempt_id: GovernanceAttemptId,
     resource_windows: [(u64, u64); 2],
     cast_capable: bool,
 }
+
+/// One active hidden-ballot phase window eligible for the compact casting snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
+pub(crate) struct ParliamentTimedOvnCastingCandidateV1 {
+    pub(crate) governance_attempt_id: GovernanceAttemptId,
+    pub(crate) valid_from_height: u64,
+    pub(crate) valid_until_height_exclusive: u64,
+}
+
+/// Counts of distinct Parliament attempts that reference one account.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode)]
+pub(crate) struct ParliamentMemberReferenceCountsV1 {
+    /// Attempts with a live candidate snapshot or immutable sealed assignment.
+    pub(crate) reference_attempt_count: u64,
+    /// Active or certified attempts whose references retain the citizenship bond.
+    pub(crate) bond_retaining_attempt_count: u64,
+}
+
+impl ParliamentMemberReferenceCountsV1 {
+    const fn is_valid_stored_row(self) -> bool {
+        self.reference_attempt_count != 0
+            && self.bond_retaining_attempt_count <= self.reference_attempt_count
+    }
+
+    /// Return whether at least one attempt retains an account reference.
+    pub(crate) const fn has_references(self) -> bool {
+        self.reference_attempt_count != 0
+    }
+
+    /// Return whether at least one attempt currently retains the citizenship bond.
+    pub(crate) const fn retains_citizenship_bond(self) -> bool {
+        self.bond_retaining_attempt_count != 0
+    }
+}
+
+/// Exact counts of canonical Parliament attempts by status and current stage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode)]
+pub(crate) struct ParliamentAttemptCountsV1 {
+    status_counts: [u64; 6],
+    stage_counts: [u64; 13],
+}
+
+impl ParliamentAttemptCountsV1 {
+    const fn status_index(status: GovernanceAttemptStatusV1) -> usize {
+        match status {
+            GovernanceAttemptStatusV1::Active => 0,
+            GovernanceAttemptStatusV1::Certified => 1,
+            GovernanceAttemptStatusV1::Rejected => 2,
+            GovernanceAttemptStatusV1::Enacted => 3,
+            GovernanceAttemptStatusV1::Superseded => 4,
+            GovernanceAttemptStatusV1::ExecutionFailed => 5,
+        }
+    }
+
+    const fn stage_index(stage: GovernanceStageV1) -> usize {
+        match stage {
+            GovernanceStageV1::Qualification => 0,
+            GovernanceStageV1::Rules => 1,
+            GovernanceStageV1::Agenda => 2,
+            GovernanceStageV1::Interest => 3,
+            GovernanceStageV1::Review => 4,
+            GovernanceStageV1::Coordination => 5,
+            GovernanceStageV1::Mpc => 6,
+            GovernanceStageV1::Fma => 7,
+            GovernanceStageV1::Oversight => 8,
+            GovernanceStageV1::PolicyJury => 9,
+            GovernanceStageV1::ConfirmationJury => 10,
+            GovernanceStageV1::Certification => 11,
+            GovernanceStageV1::Enactment => 12,
+        }
+    }
+
+    fn validate(self) -> Result<(), ParliamentReducerErrorV1> {
+        let status_total = self
+            .status_counts
+            .into_iter()
+            .try_fold(0_u64, u64::checked_add)
+            .ok_or(ParliamentReducerErrorV1::AttemptCountOverflow)?;
+        let stage_total = self
+            .stage_counts
+            .into_iter()
+            .try_fold(0_u64, u64::checked_add)
+            .ok_or(ParliamentReducerErrorV1::AttemptCountOverflow)?;
+        if status_total != stage_total {
+            return Err(ParliamentReducerErrorV1::AttemptCountProjectionMismatch);
+        }
+        Ok(())
+    }
+
+    fn checked_increment(
+        &mut self,
+        status: GovernanceAttemptStatusV1,
+        stage: GovernanceStageV1,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        let status_index = Self::status_index(status);
+        let stage_index = Self::stage_index(stage);
+        let status_count = self.status_counts[status_index]
+            .checked_add(1)
+            .ok_or(ParliamentReducerErrorV1::AttemptCountOverflow)?;
+        let stage_count = self.stage_counts[stage_index]
+            .checked_add(1)
+            .ok_or(ParliamentReducerErrorV1::AttemptCountOverflow)?;
+        self.status_counts[status_index] = status_count;
+        self.stage_counts[stage_index] = stage_count;
+        Ok(())
+    }
+
+    fn checked_decrement(
+        &mut self,
+        status: GovernanceAttemptStatusV1,
+        stage: GovernanceStageV1,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        let status_index = Self::status_index(status);
+        let stage_index = Self::stage_index(stage);
+        let status_count = self.status_counts[status_index]
+            .checked_sub(1)
+            .ok_or(ParliamentReducerErrorV1::AttemptCountProjectionMismatch)?;
+        let stage_count = self.stage_counts[stage_index]
+            .checked_sub(1)
+            .ok_or(ParliamentReducerErrorV1::AttemptCountProjectionMismatch)?;
+        self.status_counts[status_index] = status_count;
+        self.stage_counts[stage_index] = stage_count;
+        Ok(())
+    }
+
+    fn checked_replacing(
+        mut self,
+        previous: Option<&ParliamentAttemptStateV1>,
+        next: Option<&ParliamentAttemptStateV1>,
+    ) -> Result<Self, ParliamentReducerErrorV1> {
+        self.validate()?;
+        if let Some(previous) = previous {
+            let attempt = previous.attempt();
+            self.checked_decrement(attempt.status, attempt.stage)?;
+        }
+        if let Some(next) = next {
+            let attempt = next.attempt();
+            self.checked_increment(attempt.status, attempt.stage)?;
+        }
+        self.validate()?;
+        Ok(self)
+    }
+
+    fn from_attempts(
+        attempts: &[(&GovernanceAttemptId, &ParliamentAttemptStateV1)],
+    ) -> Result<Self, ParliamentReducerErrorV1> {
+        let mut counts = Self::default();
+        for (_, attempt) in attempts {
+            let attempt = attempt.attempt();
+            counts.checked_increment(attempt.status, attempt.stage)?;
+        }
+        counts.validate()?;
+        Ok(counts)
+    }
+
+    #[cfg(feature = "telemetry")]
+    const fn telemetry_counts(self) -> ([u64; 6], [u64; 13]) {
+        (self.status_counts, self.stage_counts)
+    }
+}
+
+fn parliament_member_reference_counts_v1<'a>(
+    attempts: impl IntoIterator<Item = (&'a GovernanceAttemptId, &'a ParliamentAttemptStateV1)>,
+) -> Result<BTreeMap<AccountId, ParliamentMemberReferenceCountsV1>, ParliamentReducerErrorV1> {
+    let mut counts = BTreeMap::<AccountId, ParliamentMemberReferenceCountsV1>::new();
+    for (stored_id, attempt) in attempts {
+        attempt.validate()?;
+        if attempt.attempt().id != *stored_id {
+            return Err(ParliamentReducerErrorV1::AttemptBindingMismatch);
+        }
+        let (referenced, bond_retaining) = attempt.parliament_member_reference_sets_v1();
+        if !bond_retaining.is_subset(&referenced) {
+            return Err(ParliamentReducerErrorV1::MemberReferenceProjectionMismatch);
+        }
+        for member in referenced {
+            let row = counts.entry(member).or_default();
+            row.reference_attempt_count = row
+                .reference_attempt_count
+                .checked_add(1)
+                .ok_or(ParliamentReducerErrorV1::MemberReferenceCountOverflow)?;
+        }
+        for member in bond_retaining {
+            let row = counts
+                .get_mut(&member)
+                .ok_or(ParliamentReducerErrorV1::MemberReferenceProjectionMismatch)?;
+            row.bond_retaining_attempt_count = row
+                .bond_retaining_attempt_count
+                .checked_add(1)
+                .ok_or(ParliamentReducerErrorV1::MemberReferenceCountOverflow)?;
+        }
+    }
+    Ok(counts)
+}
+
+fn parliament_member_reference_count_updates_v1(
+    previous: Option<&ParliamentAttemptStateV1>,
+    next: Option<&ParliamentAttemptStateV1>,
+    mut current: impl FnMut(&AccountId) -> Option<ParliamentMemberReferenceCountsV1>,
+) -> Result<Vec<(AccountId, Option<ParliamentMemberReferenceCountsV1>)>, ParliamentReducerErrorV1> {
+    let (previous_referenced, previous_bond_retaining) = previous
+        .map(ParliamentAttemptStateV1::parliament_member_reference_sets_v1)
+        .unwrap_or_default();
+    let (next_referenced, next_bond_retaining) = next
+        .map(ParliamentAttemptStateV1::parliament_member_reference_sets_v1)
+        .unwrap_or_default();
+    let affected = previous_referenced
+        .iter()
+        .chain(previous_bond_retaining.iter())
+        .chain(next_referenced.iter())
+        .chain(next_bond_retaining.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut updates = Vec::with_capacity(affected.len());
+    for member in affected {
+        let persisted = current(&member);
+        if persisted.is_some_and(|row| !row.is_valid_stored_row()) {
+            return Err(ParliamentReducerErrorV1::MemberReferenceProjectionMismatch);
+        }
+        let current = persisted.unwrap_or_default();
+        let reference_attempt_count = current
+            .reference_attempt_count
+            .checked_sub(u64::from(previous_referenced.contains(&member)))
+            .ok_or(ParliamentReducerErrorV1::MemberReferenceProjectionMismatch)?
+            .checked_add(u64::from(next_referenced.contains(&member)))
+            .ok_or(ParliamentReducerErrorV1::MemberReferenceCountOverflow)?;
+        let bond_retaining_attempt_count = current
+            .bond_retaining_attempt_count
+            .checked_sub(u64::from(previous_bond_retaining.contains(&member)))
+            .ok_or(ParliamentReducerErrorV1::MemberReferenceProjectionMismatch)?
+            .checked_add(u64::from(next_bond_retaining.contains(&member)))
+            .ok_or(ParliamentReducerErrorV1::MemberReferenceCountOverflow)?;
+        if bond_retaining_attempt_count > reference_attempt_count {
+            return Err(ParliamentReducerErrorV1::MemberReferenceProjectionMismatch);
+        }
+        let next = ParliamentMemberReferenceCountsV1 {
+            reference_attempt_count,
+            bond_retaining_attempt_count,
+        };
+        updates.push((member, (reference_attempt_count != 0).then_some(next)));
+    }
+    Ok(updates)
+}
+
+/// Opening deadlines grouped by the exact Parliament attempts retaining one TLE key session.
+pub(crate) type ParliamentTleKeySessionRetentionIndexV1 =
+    BTreeMap<u64, BTreeSet<GovernanceAttemptId>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ParliamentTimedOvnResourceReservationErrorV1 {
@@ -4615,22 +4891,39 @@ pub struct World {
     /// Canonical attempt-local Parliament reducer state keyed by governance attempt id.
     pub(crate) parliament_attempts:
         Storage<iroha_data_model::governance::types::GovernanceAttemptId, ParliamentAttemptStateV1>,
+    /// Exact derived Parliament attempt counts by lifecycle status and stage.
+    #[norito(skip)]
+    pub(crate) parliament_attempt_counts: Cell<ParliamentAttemptCountsV1>,
+    /// Derived distinct-attempt reference counts for each Parliament member account.
+    #[norito(skip)]
+    pub(crate) parliament_member_reference_counts:
+        Storage<AccountId, ParliamentMemberReferenceCountsV1>,
     /// Active timed-OVN resource reservations derived from Parliament attempts.
     #[norito(skip)]
     parliament_timed_ovn_resource_reservations:
         Storage<BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
+    /// Active hidden-ballot phase windows eligible for compact casting snapshots.
+    #[norito(skip)]
+    pub(crate) parliament_timed_ovn_casting_candidates:
+        Storage<BallotAttemptId, ParliamentTimedOvnCastingCandidateV1>,
     /// Governance attempts that currently require a logical beacon slot.
     #[norito(skip)]
     pub(crate) parliament_required_beacon_pulse_slots:
         Storage<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
     /// Certified governance attempts keyed by their exact enactment height.
     #[norito(skip)]
-    pub(crate) parliament_certified_enactments:
-        Storage<u64, BTreeSet<GovernanceAttemptId>>,
+    pub(crate) parliament_certified_enactments: Storage<u64, BTreeSet<GovernanceAttemptId>>,
     /// Governance attempts that terminally classified a logical beacon slot as unavailable.
     #[norito(skip)]
     pub(crate) parliament_unavailable_beacon_pulse_slots:
         Storage<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Exact attempt contributors grouped by TLE key session and opening deadline.
+    #[norito(skip)]
+    pub(crate) parliament_tle_key_session_retention_deadlines:
+        Storage<TleKeySessionId, ParliamentTleKeySessionRetentionIndexV1>,
+    /// TLE key-session selection windows keyed by activation height.
+    #[norito(skip)]
+    pub(crate) tle_key_session_selection_intervals: Storage<u64, (u64, TleKeySessionId)>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions: Storage<TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Frozen ordered validator roster bound to each finalized TLE key session.
@@ -5384,10 +5677,21 @@ pub struct WorldBlock<'world> {
         iroha_data_model::governance::types::GovernanceAttemptId,
         ParliamentAttemptStateV1,
     >,
+    /// Exact derived Parliament attempt counts by lifecycle status and stage.
+    #[norito(skip)]
+    pub(crate) parliament_attempt_counts: CellBlock<'world, ParliamentAttemptCountsV1>,
+    /// Derived distinct-attempt reference counts for each Parliament member account.
+    #[norito(skip)]
+    pub(crate) parliament_member_reference_counts:
+        StorageBlock<'world, AccountId, ParliamentMemberReferenceCountsV1>,
     /// Active timed-OVN resource reservations derived from Parliament attempts.
     #[norito(skip)]
     parliament_timed_ovn_resource_reservations:
         StorageBlock<'world, BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
+    /// Active hidden-ballot phase windows eligible for compact casting snapshots.
+    #[norito(skip)]
+    pub(crate) parliament_timed_ovn_casting_candidates:
+        StorageBlock<'world, BallotAttemptId, ParliamentTimedOvnCastingCandidateV1>,
     /// Governance attempts that currently require a logical beacon slot.
     #[norito(skip)]
     pub(crate) parliament_required_beacon_pulse_slots:
@@ -5400,6 +5704,14 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) parliament_unavailable_beacon_pulse_slots:
         StorageBlock<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Exact attempt contributors grouped by TLE key session and opening deadline.
+    #[norito(skip)]
+    pub(crate) parliament_tle_key_session_retention_deadlines:
+        StorageBlock<'world, TleKeySessionId, ParliamentTleKeySessionRetentionIndexV1>,
+    /// TLE key-session selection windows keyed by activation height.
+    #[norito(skip)]
+    pub(crate) tle_key_session_selection_intervals:
+        StorageBlock<'world, u64, (u64, TleKeySessionId)>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions: StorageBlock<'world, TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Frozen ordered validator roster bound to each finalized TLE key session.
@@ -5745,6 +6057,7 @@ impl WorldBlock<'_> {
             soradns_history_len,
             governance_last_unlock_sweep_height,
             governance_unlock_stats,
+            parliament_attempt_counts,
             sccp_registry,
             sccp_outbound_pending_usage,
             privacy_consensus_policy,
@@ -5975,6 +6288,14 @@ impl WorldBlock<'_> {
             validation_fee_proposal_index,
             governance_slashes,
             parliament_attempts,
+            parliament_member_reference_counts,
+            parliament_timed_ovn_resource_reservations,
+            parliament_timed_ovn_casting_candidates,
+            parliament_required_beacon_pulse_slots,
+            parliament_certified_enactments,
+            parliament_unavailable_beacon_pulse_slots,
+            parliament_tle_key_session_retention_deadlines,
+            tle_key_session_selection_intervals,
             tle_key_sessions,
             tle_key_session_rosters,
             tle_key_session_lifecycles,
@@ -6792,6 +7113,12 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::governance::types::GovernanceAttemptId,
         ParliamentAttemptStateV1,
     >,
+    /// Exact derived Parliament attempt counts by lifecycle status and stage.
+    pub(crate) parliament_attempt_counts:
+        CellTransaction<'block, 'world, ParliamentAttemptCountsV1>,
+    /// Derived distinct-attempt reference counts for each Parliament member account.
+    pub(crate) parliament_member_reference_counts:
+        StorageTransaction<'block, 'world, AccountId, ParliamentMemberReferenceCountsV1>,
     /// Active timed-OVN resource reservations derived from Parliament attempts.
     parliament_timed_ovn_resource_reservations: StorageTransaction<
         'block,
@@ -6799,6 +7126,9 @@ pub struct WorldTransaction<'block, 'world> {
         BallotAttemptId,
         ParliamentTimedOvnResourceReservationV1,
     >,
+    /// Active hidden-ballot phase windows eligible for compact casting snapshots.
+    pub(crate) parliament_timed_ovn_casting_candidates:
+        StorageTransaction<'block, 'world, BallotAttemptId, ParliamentTimedOvnCastingCandidateV1>,
     /// Governance attempts that currently require a logical beacon slot.
     pub(crate) parliament_required_beacon_pulse_slots:
         StorageTransaction<'block, 'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
@@ -6808,6 +7138,16 @@ pub struct WorldTransaction<'block, 'world> {
     /// Governance attempts that terminally classified a logical beacon slot as unavailable.
     pub(crate) parliament_unavailable_beacon_pulse_slots:
         StorageTransaction<'block, 'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Exact attempt contributors grouped by TLE key session and opening deadline.
+    pub(crate) parliament_tle_key_session_retention_deadlines: StorageTransaction<
+        'block,
+        'world,
+        TleKeySessionId,
+        ParliamentTleKeySessionRetentionIndexV1,
+    >,
+    /// TLE key-session selection windows keyed by activation height.
+    pub(crate) tle_key_session_selection_intervals:
+        StorageTransaction<'block, 'world, u64, (u64, TleKeySessionId)>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions:
         StorageTransaction<'block, 'world, TleKeySessionId, TleKeySessionPublicStateV1>,
@@ -8783,6 +9123,14 @@ pub struct WorldView<'world> {
         iroha_data_model::governance::types::GovernanceAttemptId,
         ParliamentAttemptStateV1,
     >,
+    /// Exact derived Parliament attempt counts by lifecycle status and stage.
+    pub(crate) parliament_attempt_counts: CellView<'world, ParliamentAttemptCountsV1>,
+    /// Derived distinct-attempt reference counts for each Parliament member account.
+    pub(crate) parliament_member_reference_counts:
+        StorageView<'world, AccountId, ParliamentMemberReferenceCountsV1>,
+    /// Active hidden-ballot phase windows eligible for compact casting snapshots.
+    pub(crate) parliament_timed_ovn_casting_candidates:
+        StorageView<'world, BallotAttemptId, ParliamentTimedOvnCastingCandidateV1>,
     /// Governance attempts that currently require a logical beacon slot.
     pub(crate) parliament_required_beacon_pulse_slots:
         StorageView<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
@@ -8792,6 +9140,12 @@ pub struct WorldView<'world> {
     /// Governance attempts that terminally classified a logical beacon slot as unavailable.
     pub(crate) parliament_unavailable_beacon_pulse_slots:
         StorageView<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Exact attempt contributors grouped by TLE key session and opening deadline.
+    pub(crate) parliament_tle_key_session_retention_deadlines:
+        StorageView<'world, TleKeySessionId, ParliamentTleKeySessionRetentionIndexV1>,
+    /// TLE key-session selection windows keyed by activation height.
+    pub(crate) tle_key_session_selection_intervals:
+        StorageView<'world, u64, (u64, TleKeySessionId)>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions: StorageView<'world, TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Frozen ordered validator roster bound to each finalized TLE key session.
@@ -9710,7 +10064,15 @@ fn update_oracle_change_pipeline(
 }
 /// Referendum record for governance (status and schedule)
 #[derive(
-    Copy, Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
 )]
 pub struct GovernanceReferendumRecord {
     /// Enactment window start height (inclusive)
@@ -10871,6 +11233,12 @@ pub struct State {
     view_generation: AtomicU64,
     /// Aggregates repeated view-generation contention warnings to avoid log spam under write pressure.
     view_lock_contention_log: parking_lot::Mutex<ViewLockContentionLog>,
+    /// Bounded process-local exact equivocation proofs awaiting block admission.
+    ///
+    /// This cache is deliberately outside [`World`]: private gossip timing must
+    /// never change consensus state or a snapshot/state-root projection.
+    pub(crate) sumeragi_v2_pending_evidence:
+        parking_lot::Mutex<BTreeMap<Vec<u8>, crate::sumeragi::evidence::LocalV2EvidenceRecord>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ReplayMergeCarrier {
@@ -11735,6 +12103,17 @@ pub struct StateBlock<'state> {
     parliament_timed_ovn_casting_bindings: Option<
         Vec<iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1>,
     >,
+    /// Parliament lifecycle projections waiting for the canonical commit boundary.
+    ///
+    /// The external event buffer is drained before [`StateBlock::commit_inner`].
+    /// Retaining only the two closed metric labels lets commit publish counters
+    /// after world and block metadata succeed without retaining sensitive event
+    /// payloads or leaking metrics from an abandoned block overlay.
+    #[cfg(feature = "telemetry")]
+    pending_parliament_telemetry_events: Vec<(
+        iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1,
+        Option<iroha_data_model::governance::types::ParliamentNoResultKindV1>,
+    )>,
     /// Gas used so far by accepted transactions in this block.
     pub gas_used_in_block: u64,
     /// Confidential gas charged so far in this block.
@@ -12994,6 +13373,12 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) privacy_transaction_intent_binding: Option<PrivacyTransactionIntentBindingV1>,
     /// One-shot binding to the exact direct private-settlement carrier.
     pub(crate) private_settlement_carrier_binding: Option<PrivateSettlementCarrierBindingV1>,
+    /// One-shot binding to the exact direct Kagemusha operation carrier.
+    pub(crate) kagemusha_operation_carrier_binding:
+        Option<crate::kagemusha_operation::KagemushaOperationCarrierBindingV4>,
+    /// Canonical block-scheduler slot allowed to consume a Kagemusha reservation.
+    pub(crate) kagemusha_operation_execution_locator:
+        Option<crate::kagemusha_operation::KagemushaOperationExecutionLocatorV4>,
     /// Complete signed-wire identity of an exact direct Kagemusha Taira canary transaction.
     pub(crate) kagemusha_taira_canary_wire_identity: Option<KagemushaExactBytesDigestV1>,
     /// Exact direct Kagemusha release-lifecycle carrier, absent for batches and nested execution.
@@ -14142,7 +14527,6 @@ mod stake_snapshot_tests {
             pop: None,
             activation_height,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status,
         };
@@ -14227,7 +14611,6 @@ mod stake_snapshot_tests {
             pop: Some(pop.clone()),
             activation_height: 0,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };
@@ -15355,7 +15738,6 @@ mod stake_snapshot_tests {
             pop: None,
             activation_height: 0,
             expiry_height: Some(0),
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };
@@ -16792,6 +17174,258 @@ where
     }
     rebuilt
 }
+
+/// Reconstruct a skipped derived cell together with its latest-block undo projection.
+fn rebuild_derived_cell_with_previous<V>(current: V, previous: V) -> Cell<V>
+where
+    V: MvValue + PartialEq,
+{
+    let rebuilt = Cell::new(previous);
+    if rebuilt.view().get() != &current {
+        let mut block = rebuilt.block();
+        *block.get_mut() = current;
+        block.commit();
+    }
+    rebuilt
+}
+
+fn governance_lock_expiry_index_v1<'a>(
+    locks: impl IntoIterator<Item = (&'a String, &'a GovernanceLocksForReferendum)>,
+    mut referendum_mode: impl FnMut(&String) -> Option<GovernanceReferendumMode>,
+) -> Result<BTreeMap<u64, BTreeSet<(String, AccountId)>>, String> {
+    let mut lock_expiries = BTreeMap::<u64, BTreeSet<(String, AccountId)>>::new();
+    for (referendum_id, locks) in locks {
+        let enforce_plain_tally_domain = !matches!(
+            referendum_mode(referendum_id),
+            Some(GovernanceReferendumMode::Zk)
+        );
+        if enforce_plain_tally_domain
+            && locks.locks.len()
+                > crate::smartcontracts::isi::world::isi::MAX_STANDALONE_PLAIN_BALLOTS_V1
+        {
+            return Err(format!(
+                "governance locks for referendum {referendum_id} exceed the first-release standalone PLAIN ballot corpus limit of {}",
+                crate::smartcontracts::isi::world::isi::MAX_STANDALONE_PLAIN_BALLOTS_V1
+            ));
+        }
+        for (owner, lock) in &locks.locks {
+            if lock.owner != *owner {
+                return Err(format!(
+                    "governance lock for referendum {referendum_id} is stored under an owner different from its record"
+                ));
+            }
+            if lock.direction > 2 {
+                return Err(format!(
+                    "governance lock for referendum {referendum_id} has invalid direction {}; expected 0 (Aye), 1 (Nay), or 2 (Abstain)",
+                    lock.direction
+                ));
+            }
+            if enforce_plain_tally_domain
+                && (lock.amount.scale() != 0
+                    || lock.amount.as_numeric().try_mantissa_u128().is_none())
+            {
+                return Err(format!(
+                    "governance lock for referendum {referendum_id} has an amount outside the exact integer u128 tally domain"
+                ));
+            }
+            lock_expiries
+                .entry(lock.expiry_height)
+                .or_default()
+                .insert((referendum_id.clone(), owner.clone()));
+        }
+    }
+    Ok(lock_expiries)
+}
+
+fn validation_fee_proposal_index_v1<'a>(
+    proposals: impl IntoIterator<Item = (&'a [u8; 32], &'a GovernanceProposalRecord)>,
+) -> BTreeMap<(u64, [u8; 32]), ()> {
+    proposals
+        .into_iter()
+        .filter(|(_, proposal)| {
+            matches!(
+                &proposal.kind,
+                ProposalKind::ValidationFeePolicy(_)
+                    | ProposalKind::ValidationFeePayoutLifecycle(_)
+            )
+        })
+        .map(|(proposal_id, proposal)| ((proposal.created_height, *proposal_id), ()))
+        .collect()
+}
+
+fn tle_key_session_selection_intervals_v1<'a>(
+    lifecycles: impl IntoIterator<Item = (&'a TleKeySessionId, &'a TleKeySessionLifecycleV1)>,
+    active_key_sessions: impl IntoIterator<Item = (&'a u64, &'a TleKeySessionId)>,
+) -> Result<BTreeMap<u64, (u64, TleKeySessionId)>, String> {
+    let mut intervals = BTreeMap::new();
+    let mut lifecycles_by_activation = BTreeMap::new();
+    for (key_session_id, lifecycle) in lifecycles {
+        let lifecycle = lifecycle.validate().map_err(|error| {
+            format!(
+                "invalid TLE key-session lifecycle {key_session_id} while rebuilding derived indexes: {error}"
+            )
+        })?;
+        if lifecycle.key_session_id != *key_session_id {
+            return Err(format!(
+                "TLE key-session lifecycle {key_session_id} is stored under a noncanonical id"
+            ));
+        }
+        if intervals
+            .insert(
+                lifecycle.activation_height,
+                (lifecycle.selectable_through_height, *key_session_id),
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "multiple TLE key-session lifecycles activate at height {}",
+                lifecycle.activation_height
+            ));
+        }
+        lifecycles_by_activation.insert(lifecycle.activation_height, lifecycle);
+    }
+    let mut previous_interval = None;
+    for (activation_height, (selectable_through_height, key_session_id)) in &intervals {
+        if let Some((previous_through_height, previous_key_session_id)) = previous_interval
+            && *activation_height <= previous_through_height
+        {
+            return Err(format!(
+                "TLE key-session selection intervals for {previous_key_session_id} and {key_session_id} overlap"
+            ));
+        }
+        previous_interval = Some((*selectable_through_height, *key_session_id));
+    }
+    let mut active_key_session_id = None;
+    for (singleton_key, key_session_id) in active_key_sessions {
+        if *singleton_key != TLE_KEY_SESSION_SINGLETON_KEY {
+            return Err("active TLE session pointer uses a noncanonical singleton key".to_owned());
+        }
+        if active_key_session_id.replace(*key_session_id).is_some() {
+            return Err("multiple active TLE session pointers are persisted".to_owned());
+        }
+    }
+    let ordered_lifecycles = lifecycles_by_activation.into_values().collect::<Vec<_>>();
+    validate_tle_key_session_lifecycle_head_v1(&ordered_lifecycles, active_key_session_id)
+        .map_err(str::to_owned)?;
+    Ok(intervals)
+}
+
+struct ParliamentDerivedReadIndexesV1 {
+    attempt_counts: ParliamentAttemptCountsV1,
+    member_reference_counts: BTreeMap<AccountId, ParliamentMemberReferenceCountsV1>,
+    timed_ovn_resource_reservations:
+        BTreeMap<BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
+    timed_ovn_casting_candidates: BTreeMap<BallotAttemptId, ParliamentTimedOvnCastingCandidateV1>,
+    required_beacon_pulse_slots: BTreeMap<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    certified_enactments: BTreeMap<u64, BTreeSet<GovernanceAttemptId>>,
+    unavailable_beacon_pulse_slots: BTreeMap<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    tle_key_session_retention_deadlines:
+        BTreeMap<TleKeySessionId, ParliamentTleKeySessionRetentionIndexV1>,
+}
+
+fn parliament_derived_read_indexes_v1<'a>(
+    attempts: impl IntoIterator<Item = (&'a GovernanceAttemptId, &'a ParliamentAttemptStateV1)>,
+    finalized_beacon_pulse_slots: &BTreeSet<(BeaconSessionId, u64)>,
+) -> Result<ParliamentDerivedReadIndexesV1, String> {
+    let attempts = attempts.into_iter().collect::<Vec<_>>();
+    let member_reference_counts = parliament_member_reference_counts_v1(attempts.iter().copied())
+        .map_err(|error| {
+            format!(
+                "invalid Parliament member-reference projection while rebuilding derived indexes: {error}"
+            )
+        })?;
+    let attempt_counts = ParliamentAttemptCountsV1::from_attempts(&attempts).map_err(|error| {
+        format!(
+            "invalid Parliament attempt-count projection while rebuilding derived indexes: {error}"
+        )
+    })?;
+    let mut timed_ovn_resource_reservations = BTreeMap::new();
+    let mut timed_ovn_casting_candidates = BTreeMap::new();
+    let mut required_beacon_pulse_slots =
+        BTreeMap::<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>::new();
+    let mut certified_enactments = BTreeMap::<u64, BTreeSet<GovernanceAttemptId>>::new();
+    let mut unavailable_beacon_pulse_slots =
+        BTreeMap::<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>::new();
+    let mut tle_key_session_retention_deadlines =
+        BTreeMap::<TleKeySessionId, ParliamentTleKeySessionRetentionIndexV1>::new();
+    for (governance_attempt_id, attempt) in attempts {
+        if let Some(enact_at_height) = attempt.certified_enactment_height_v1() {
+            certified_enactments
+                .entry(enact_at_height)
+                .or_default()
+                .insert(*governance_attempt_id);
+        }
+        for pulse_slot in attempt.required_beacon_pulse_slots_v1() {
+            required_beacon_pulse_slots
+                .entry(pulse_slot)
+                .or_default()
+                .insert(*governance_attempt_id);
+        }
+        for pulse_slot in attempt.unavailable_beacon_pulse_slots_v1() {
+            if finalized_beacon_pulse_slots.contains(&pulse_slot) {
+                return Err(format!(
+                    "Parliament attempt {governance_attempt_id:?} classifies finalized logical beacon slot {pulse_slot:?} as unavailable"
+                ));
+            }
+            unavailable_beacon_pulse_slots
+                .entry(pulse_slot)
+                .or_default()
+                .insert(*governance_attempt_id);
+        }
+        for (key_session_id, opening_deadline) in
+            attempt.tle_key_session_retention_contributions_v1()
+        {
+            tle_key_session_retention_deadlines
+                .entry(key_session_id)
+                .or_default()
+                .entry(opening_deadline)
+                .or_default()
+                .insert(*governance_attempt_id);
+        }
+        for (ballot_attempt_id, _) in attempt.ballot_attempts() {
+            if let Some((ballot_attempt_id, reservation)) =
+                parliament_timed_ovn_resource_reservation_v1(
+                    *governance_attempt_id,
+                    attempt,
+                    *ballot_attempt_id,
+                )
+            {
+                insert_parliament_timed_ovn_resource_reservation_v1(
+                    &mut timed_ovn_resource_reservations,
+                    ballot_attempt_id,
+                    reservation,
+                )
+                .map_err(|error| {
+                    format!(
+                        "invalid Parliament timed-OVN reservation {governance_attempt_id:?}/{ballot_attempt_id:?}: {error:?}"
+                    )
+                })?;
+            }
+            if let Some((ballot_attempt_id, candidate)) = parliament_timed_ovn_casting_candidate_v1(
+                *governance_attempt_id,
+                attempt,
+                *ballot_attempt_id,
+            ) && timed_ovn_casting_candidates
+                .insert(ballot_attempt_id, candidate)
+                .is_some()
+            {
+                return Err(format!(
+                    "duplicate Parliament timed-OVN casting candidate {ballot_attempt_id:?} while rebuilding derived indexes"
+                ));
+            }
+        }
+    }
+    Ok(ParliamentDerivedReadIndexesV1 {
+        attempt_counts,
+        member_reference_counts,
+        timed_ovn_resource_reservations,
+        timed_ovn_casting_candidates,
+        required_beacon_pulse_slots,
+        certified_enactments,
+        unavailable_beacon_pulse_slots,
+        tle_key_session_retention_deadlines,
+    })
+}
 impl World {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Insert or replace an account rekey fixture while maintaining its reverse index.
@@ -16969,7 +17603,6 @@ impl World {
             pop: Some(pop),
             activation_height: 0,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };
@@ -17873,65 +18506,19 @@ impl World {
                 "Parliament citizen registry exceeds the first-release limit of {MAX_PARLIAMENT_CITIZENS_V1}"
             ));
         }
-        let mut lock_expiries =
-            BTreeMap::<u64, BTreeSet<(String, iroha_data_model::account::AccountId)>>::new();
-        for (referendum_id, locks) in self.governance_locks.view().iter() {
-            let enforce_plain_tally_domain = !matches!(
-                self.governance_referenda
-                    .view()
+        let lock_expiries = {
+            let locks = self.governance_locks.view();
+            let referenda = self.governance_referenda.view();
+            governance_lock_expiry_index_v1(locks.iter(), |referendum_id| {
+                referenda
                     .get(referendum_id)
-                    .map(|referendum| referendum.mode),
-                Some(GovernanceReferendumMode::Zk)
-            );
-            if enforce_plain_tally_domain
-                && locks.locks.len()
-                    > crate::smartcontracts::isi::world::isi::MAX_STANDALONE_PLAIN_BALLOTS_V1
-            {
-                return Err(format!(
-                    "governance locks for referendum {referendum_id} exceed the first-release standalone PLAIN ballot corpus limit of {}",
-                    crate::smartcontracts::isi::world::isi::MAX_STANDALONE_PLAIN_BALLOTS_V1
-                ));
-            }
-            for (owner, lock) in &locks.locks {
-                if lock.owner != *owner {
-                    return Err(format!(
-                        "governance lock for referendum {referendum_id} is stored under an owner different from its record"
-                    ));
-                }
-                if lock.direction > 2 {
-                    return Err(format!(
-                        "governance lock for referendum {referendum_id} has invalid direction {}; expected 0 (Aye), 1 (Nay), or 2 (Abstain)",
-                        lock.direction
-                    ));
-                }
-                if enforce_plain_tally_domain
-                    && (lock.amount.scale() != 0
-                        || lock.amount.as_numeric().try_mantissa_u128().is_none())
-                {
-                    return Err(format!(
-                        "governance lock for referendum {referendum_id} has an amount outside the exact integer u128 tally domain"
-                    ));
-                }
-                lock_expiries
-                    .entry(lock.expiry_height)
-                    .or_default()
-                    .insert((referendum_id.clone(), owner.clone()));
-            }
-        }
-        self.governance_lock_expiry_index = lock_expiries.into_iter().collect();
-        self.validation_fee_proposal_index = self
-            .governance_proposals
-            .view()
-            .iter()
-            .filter(|(_, proposal)| {
-                matches!(
-                    &proposal.kind,
-                    ProposalKind::ValidationFeePolicy(_)
-                        | ProposalKind::ValidationFeePayoutLifecycle(_)
-                )
-            })
-            .map(|(proposal_id, proposal)| ((proposal.created_height, *proposal_id), ()))
-            .collect();
+                    .map(|referendum| referendum.mode)
+            })?
+        };
+        let validation_fee_proposal_index = {
+            let proposals = self.governance_proposals.view();
+            validation_fee_proposal_index_v1(proposals.iter())
+        };
         let finalized_beacon_pulse_slots = {
             let pulses = self.global_beacon_pulses.view();
             pulses
@@ -17944,77 +18531,144 @@ impl World {
                 })
                 .collect::<BTreeSet<_>>()
         };
-        let mut timed_ovn_resource_reservations = BTreeMap::new();
-        let mut required_beacon_pulse_slots =
-            BTreeMap::<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>::new();
-        let mut certified_enactments =
-            BTreeMap::<u64, BTreeSet<GovernanceAttemptId>>::new();
-        let mut unavailable_beacon_pulse_slots =
-            BTreeMap::<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>::new();
-        for (governance_attempt_id, attempt) in self.parliament_attempts.view().iter() {
-            attempt.validate().map_err(|error| {
-                format!(
-                    "invalid Parliament attempt {governance_attempt_id:?} while rebuilding derived indexes: {error}"
-                )
-            })?;
-            if attempt.attempt().id != *governance_attempt_id {
+        let current_parliament = {
+            let attempts = self.parliament_attempts.view();
+            parliament_derived_read_indexes_v1(attempts.iter(), &finalized_beacon_pulse_slots)?
+        };
+        let tle_key_session_selection_intervals = {
+            let lifecycles = self.tle_key_session_lifecycles.view();
+            let active_key_sessions = self.tle_active_key_session.view();
+            tle_key_session_selection_intervals_v1(lifecycles.iter(), active_key_sessions.iter())?
+        };
+        let (
+            previous_lock_expiries,
+            previous_validation_fee_proposal_index,
+            previous_parliament,
+            previous_tle_key_session_selection_intervals,
+        ) = {
+            let reverted_citizens = self.citizens.block_and_revert();
+            let reverted_locks = self.governance_locks.block_and_revert();
+            let reverted_referenda = self.governance_referenda.block_and_revert();
+            let reverted_proposals = self.governance_proposals.block_and_revert();
+            let reverted_attempts = self.parliament_attempts.block_and_revert();
+            let reverted_lifecycles = self.tle_key_session_lifecycles.block_and_revert();
+            let reverted_active_key_sessions = self.tle_active_key_session.block_and_revert();
+            let reverted_pulses = self.global_beacon_pulses.block_and_revert();
+
+            if reverted_citizens.len() > maximum_citizens {
                 return Err(format!(
-                    "Parliament attempt {governance_attempt_id:?} is stored under a noncanonical id"
+                    "previous Parliament citizen registry exceeds the first-release limit of {MAX_PARLIAMENT_CITIZENS_V1}"
                 ));
             }
-            if let Some(enact_at_height) = attempt.certified_enactment_height_v1() {
-                certified_enactments
-                    .entry(enact_at_height)
-                    .or_default()
-                    .insert(*governance_attempt_id);
-            }
-            for pulse_slot in attempt.required_beacon_pulse_slots_v1() {
-                required_beacon_pulse_slots
-                    .entry(pulse_slot)
-                    .or_default()
-                    .insert(*governance_attempt_id);
-            }
-            for pulse_slot in attempt.unavailable_beacon_pulse_slots_v1() {
-                if finalized_beacon_pulse_slots.contains(&pulse_slot) {
-                    return Err(format!(
-                        "Parliament attempt {governance_attempt_id:?} classifies finalized logical beacon slot {pulse_slot:?} as unavailable"
-                    ));
-                }
-                unavailable_beacon_pulse_slots
-                    .entry(pulse_slot)
-                    .or_default()
-                    .insert(*governance_attempt_id);
-            }
-            for (ballot_attempt_id, _) in attempt.ballot_attempts() {
-                let Some((ballot_attempt_id, reservation)) =
-                    parliament_timed_ovn_resource_reservation_v1(
-                        *governance_attempt_id,
-                        attempt,
-                        *ballot_attempt_id,
-                    )
-                else {
-                    continue;
-                };
-                insert_parliament_timed_ovn_resource_reservation_v1(
-                    &mut timed_ovn_resource_reservations,
-                    ballot_attempt_id,
-                    reservation,
-                )
-                .map_err(|error| {
-                    format!(
-                        "invalid Parliament timed-OVN reservation {governance_attempt_id:?}/{ballot_attempt_id:?}: {error:?}"
-                    )
+            let previous_lock_expiries =
+                governance_lock_expiry_index_v1(reverted_locks.iter(), |referendum_id| {
+                    reverted_referenda
+                        .get(referendum_id)
+                        .map(|referendum| referendum.mode)
                 })?;
-            }
-        }
-        self.parliament_timed_ovn_resource_reservations =
-            timed_ovn_resource_reservations.into_iter().collect();
-        self.parliament_required_beacon_pulse_slots =
-            required_beacon_pulse_slots.into_iter().collect();
-        self.parliament_certified_enactments = certified_enactments.into_iter().collect();
-        self.parliament_unavailable_beacon_pulse_slots =
-            unavailable_beacon_pulse_slots.into_iter().collect();
+            let previous_validation_fee_proposal_index =
+                validation_fee_proposal_index_v1(reverted_proposals.iter());
+            let previous_finalized_beacon_pulse_slots = reverted_pulses
+                .iter()
+                .map(|(_, pulse)| {
+                    (
+                        BeaconSessionId::for_network_v1(&pulse.network_id),
+                        pulse.height,
+                    )
+                })
+                .collect::<BTreeSet<_>>();
+            let previous_parliament = parliament_derived_read_indexes_v1(
+                reverted_attempts.iter(),
+                &previous_finalized_beacon_pulse_slots,
+            )?;
+            let previous_tle_key_session_selection_intervals =
+                tle_key_session_selection_intervals_v1(
+                    reverted_lifecycles.iter(),
+                    reverted_active_key_sessions.iter(),
+                )?;
+
+            drop(reverted_pulses);
+            drop(reverted_active_key_sessions);
+            drop(reverted_lifecycles);
+            drop(reverted_attempts);
+            drop(reverted_proposals);
+            drop(reverted_referenda);
+            drop(reverted_locks);
+            drop(reverted_citizens);
+            (
+                previous_lock_expiries,
+                previous_validation_fee_proposal_index,
+                previous_parliament,
+                previous_tle_key_session_selection_intervals,
+            )
+        };
+        let ParliamentDerivedReadIndexesV1 {
+            attempt_counts,
+            member_reference_counts,
+            timed_ovn_resource_reservations,
+            timed_ovn_casting_candidates,
+            required_beacon_pulse_slots,
+            certified_enactments,
+            unavailable_beacon_pulse_slots,
+            tle_key_session_retention_deadlines,
+        } = current_parliament;
+        let ParliamentDerivedReadIndexesV1 {
+            attempt_counts: previous_attempt_counts,
+            member_reference_counts: previous_member_reference_counts,
+            timed_ovn_resource_reservations: previous_timed_ovn_resource_reservations,
+            timed_ovn_casting_candidates: previous_timed_ovn_casting_candidates,
+            required_beacon_pulse_slots: previous_required_beacon_pulse_slots,
+            certified_enactments: previous_certified_enactments,
+            unavailable_beacon_pulse_slots: previous_unavailable_beacon_pulse_slots,
+            tle_key_session_retention_deadlines: previous_tle_key_session_retention_deadlines,
+        } = previous_parliament;
+
+        self.governance_lock_expiry_index =
+            rebuild_derived_storage_with_previous(lock_expiries, previous_lock_expiries);
+        self.validation_fee_proposal_index = rebuild_derived_storage_with_previous(
+            validation_fee_proposal_index,
+            previous_validation_fee_proposal_index,
+        );
+        self.parliament_attempt_counts =
+            rebuild_derived_cell_with_previous(attempt_counts, previous_attempt_counts);
+        self.parliament_member_reference_counts = rebuild_derived_storage_with_previous(
+            member_reference_counts,
+            previous_member_reference_counts,
+        );
+        self.parliament_timed_ovn_resource_reservations = rebuild_derived_storage_with_previous(
+            timed_ovn_resource_reservations,
+            previous_timed_ovn_resource_reservations,
+        );
+        self.parliament_timed_ovn_casting_candidates = rebuild_derived_storage_with_previous(
+            timed_ovn_casting_candidates,
+            previous_timed_ovn_casting_candidates,
+        );
+        self.parliament_required_beacon_pulse_slots = rebuild_derived_storage_with_previous(
+            required_beacon_pulse_slots,
+            previous_required_beacon_pulse_slots,
+        );
+        self.parliament_certified_enactments = rebuild_derived_storage_with_previous(
+            certified_enactments,
+            previous_certified_enactments,
+        );
+        self.parliament_unavailable_beacon_pulse_slots = rebuild_derived_storage_with_previous(
+            unavailable_beacon_pulse_slots,
+            previous_unavailable_beacon_pulse_slots,
+        );
+        self.parliament_tle_key_session_retention_deadlines = rebuild_derived_storage_with_previous(
+            tle_key_session_retention_deadlines,
+            previous_tle_key_session_retention_deadlines,
+        );
+        self.tle_key_session_selection_intervals = rebuild_derived_storage_with_previous(
+            tle_key_session_selection_intervals,
+            previous_tle_key_session_selection_intervals,
+        );
         Ok(())
+    }
+    /// Rebuild governance-derived indexes after directly seeding canonical test state.
+    #[cfg(test)]
+    pub(crate) fn rebuild_governance_read_indexes_for_testing(&mut self) -> Result<(), String> {
+        self.rebuild_governance_read_indexes()
     }
     fn validate_plain_governance_tally_capacity(
         &self,
@@ -18048,13 +18702,19 @@ impl World {
     /// Rebuild the unique logical-beacon height lookup for finalized global-beacon pulses.
     ///
     /// # Errors
-    /// Returns an error when an authoritative pulse is stored under a noncanonical id or two
-    /// distinct pulse records claim the same consensus slot.
+    /// Returns an error when either the current or latest-block-previous authoritative pulse view
+    /// stores a pulse under a noncanonical id or lets two records claim the same consensus slot.
     pub(crate) fn rebuild_global_beacon_pulse_slots(&mut self) -> Result<(), String> {
-        let rebuilt = {
-            let pulses = self.global_beacon_pulses.view();
+        fn pulse_slot_index<'a>(
+            pulses: impl IntoIterator<
+                Item = (
+                    &'a [u8; 32],
+                    &'a iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+                ),
+            >,
+        ) -> Result<BTreeMap<(BeaconSessionId, u64), [u8; 32]>, String> {
             let mut rebuilt = BTreeMap::new();
-            for (stored_pulse_id, pulse) in pulses.iter() {
+            for (stored_pulse_id, pulse) in pulses {
                 if pulse.pulse_id != *stored_pulse_id {
                     return Err(format!(
                         "global beacon pulse {} is stored under noncanonical id {}",
@@ -18074,9 +18734,18 @@ impl World {
                     ));
                 }
             }
-            rebuilt
+            Ok(rebuilt)
+        }
+
+        let current = {
+            let pulses = self.global_beacon_pulses.view();
+            pulse_slot_index(pulses.iter())?
         };
-        self.global_beacon_pulse_slots = rebuilt.into_iter().collect();
+        let previous = {
+            let reverted_pulses = self.global_beacon_pulses.block_and_revert();
+            pulse_slot_index(reverted_pulses.iter())?
+        };
+        self.global_beacon_pulse_slots = rebuild_derived_storage_with_previous(current, previous);
         Ok(())
     }
     fn rebuild_confidential_policy_transition_index(&mut self) -> core::result::Result<(), String> {
@@ -19340,6 +20009,12 @@ macro_rules! world_ro_accessors {
             storage parliament_attempts:
                 iroha_data_model::governance::types::GovernanceAttemptId =>
                 ParliamentAttemptStateV1;
+            /// Exact retention-deadline contributors grouped by TLE key session.
+            storage parliament_tle_key_session_retention_deadlines:
+                TleKeySessionId => ParliamentTleKeySessionRetentionIndexV1;
+            /// TLE key-session selection windows keyed by activation height.
+            storage tle_key_session_selection_intervals:
+                u64 => (u64, TleKeySessionId);
             /// Finalized public-only adaptive TLE key sessions.
             storage tle_key_sessions:
                 TleKeySessionId => TleKeySessionPublicStateV1;
@@ -19565,6 +20240,14 @@ pub trait WorldReadOnly {
         policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
     ) -> core::result::Result<iroha_data_model::privacy::BootleLanternIssuerPolicyV1, String>;
     world_ro_accessors!(governance, declaration);
+    /// Iterate the compact public bindings for active Parliament casting windows.
+    ///
+    /// This projection keeps snapshot-skipped index implementation types out of
+    /// the public read-only trait while supporting bounded internal consumers.
+    #[doc(hidden)]
+    fn parliament_timed_ovn_casting_candidates(
+        &self,
+    ) -> impl Iterator<Item = (BallotAttemptId, GovernanceAttemptId, u64, u64)> + '_;
     /// Return the singleton global threshold-beacon key session selected for
     /// new consensus pulses.
     fn active_global_beacon_key_session(&self) -> Option<[u8; 32]> {
@@ -19603,18 +20286,16 @@ pub trait WorldReadOnly {
         &self,
         height: u64,
     ) -> Option<TleKeySessionId> {
-        let mut selected = None;
-        for (key_session_id, lifecycle) in self.tle_key_session_lifecycles().iter() {
-            if lifecycle.validate().is_err() {
-                return None;
-            }
-            if lifecycle.permits_fresh_ballot_at(height) {
-                if selected.replace(*key_session_id).is_some() {
-                    return None;
-                }
-            }
-        }
-        selected
+        let (activation_height, (selectable_through_height, key_session_id)) = self
+            .tle_key_session_selection_intervals()
+            .range(..=height)
+            .next_back()?;
+        let lifecycle = self.tle_key_session_lifecycles().get(key_session_id)?;
+        (lifecycle.key_session_id == *key_session_id
+            && lifecycle.activation_height == *activation_height
+            && lifecycle.selectable_through_height == *selectable_through_height
+            && lifecycle.permits_fresh_ballot_at(height))
+        .then_some(*key_session_id)
     }
     /// Return whether `key_session_id` is eligible for a fresh ballot at `height`.
     fn tle_key_session_eligible_for_new_ballots(
@@ -19626,23 +20307,17 @@ pub trait WorldReadOnly {
     }
     /// Return the greatest committed opening deadline retaining one TLE key session.
     ///
-    /// Every Parliament attempt is validated before its ballot history
-    /// contributes to the maximum. Historical retries remain authoritative;
-    /// `Some(u64::MAX)` deliberately makes the session unretirable.
+    /// The snapshot-skipped index is rebuilt from validated Parliament attempts
+    /// and updated atomically with each attempt replacement. Historical retries
+    /// remain authoritative; `Some(u64::MAX)` deliberately makes the session
+    /// unretirable.
     fn tle_key_session_retention_deadline_v1(
         &self,
         key_session_id: TleKeySessionId,
-    ) -> core::result::Result<Option<u64>, crate::governance::parliament::ParliamentReducerErrorV1>
-    {
-        let mut retain_through = None;
-        for (_, attempt) in self.parliament_attempts().iter() {
-            attempt.validate()?;
-            if let Some(deadline) = attempt.tle_key_session_retention_deadline(key_session_id) {
-                retain_through =
-                    Some(retain_through.map_or(deadline, |current: u64| current.max(deadline)));
-            }
-        }
-        Ok(retain_through)
+    ) -> Option<u64> {
+        self.parliament_tle_key_session_retention_deadlines()
+            .get(&key_session_id)
+            .and_then(|deadlines| deadlines.keys().next_back().copied())
     }
     /// Return every TLE key session whose runtime custody is still required.
     ///
@@ -19653,8 +20328,8 @@ pub trait WorldReadOnly {
     ///
     /// # Errors
     ///
-    /// Returns the first reducer validation error from committed Parliament
-    /// state. Each attempt is validated exactly once during this projection.
+    /// Attempt validation occurs when the derived index is rebuilt or updated,
+    /// so reading a committed world cannot encounter a reducer error.
     fn tle_key_sessions_required_for_runtime_custody_v1(
         &self,
         committed_height: u64,
@@ -19670,25 +20345,17 @@ pub trait WorldReadOnly {
             required.insert(active_key_session_id);
         }
 
-        let mut retention_deadlines = BTreeMap::<TleKeySessionId, u64>::new();
-        for (_, attempt) in self.parliament_attempts().iter() {
-            attempt.validate()?;
-            for (_, ballot) in attempt.ballot_attempts() {
-                let Some(key_session_id) = ballot.tle_key_session_id() else {
-                    continue;
-                };
-                let opening_deadline = ballot.opening_deadline_height();
-                retention_deadlines
-                    .entry(key_session_id)
-                    .and_modify(|deadline| {
-                        *deadline = (*deadline).max(opening_deadline);
-                    })
-                    .or_insert(opening_deadline);
-            }
-        }
-        required.extend(retention_deadlines.into_iter().filter_map(
-            |(key_session_id, deadline)| (committed_height <= deadline).then_some(key_session_id),
-        ));
+        required.extend(
+            self.parliament_tle_key_session_retention_deadlines()
+                .iter()
+                .filter_map(|(key_session_id, deadlines)| {
+                    deadlines
+                        .keys()
+                        .next_back()
+                        .is_some_and(|deadline| committed_height <= *deadline)
+                        .then_some(*key_session_id)
+                }),
+        );
         Ok(required)
     }
     /// Return the single ABI version accepted by the first release runtime.
@@ -20358,6 +21025,20 @@ macro_rules! impl_world_ro {
                 )
             }
             world_ro_accessors!(governance, implementation);
+            fn parliament_timed_ovn_casting_candidates(
+                &self,
+            ) -> impl Iterator<Item = (BallotAttemptId, GovernanceAttemptId, u64, u64)> + '_ {
+                self.parliament_timed_ovn_casting_candidates
+                    .iter()
+                    .map(|(ballot_attempt_id, candidate)| {
+                        (
+                            *ballot_attempt_id,
+                            candidate.governance_attempt_id,
+                            candidate.valid_from_height,
+                            candidate.valid_until_height_exclusive,
+                        )
+                    })
+            }
         }
     )*};
 }
@@ -20906,10 +21587,15 @@ impl<'world> WorldBlock<'world> {
             governance_last_unlock_sweep_height,
             governance_unlock_stats,
             parliament_attempts,
+            parliament_attempt_counts,
+            parliament_member_reference_counts,
             parliament_timed_ovn_resource_reservations,
+            parliament_timed_ovn_casting_candidates,
             parliament_required_beacon_pulse_slots,
             parliament_certified_enactments,
             parliament_unavailable_beacon_pulse_slots,
+            parliament_tle_key_session_retention_deadlines,
+            tle_key_session_selection_intervals,
             tle_key_sessions,
             tle_key_session_rosters,
             tle_key_session_lifecycles,
@@ -21075,10 +21761,15 @@ impl<'world> WorldBlock<'world> {
         governance_last_unlock_sweep_height.commit();
         governance_unlock_stats.commit();
         parliament_attempts.commit();
+        parliament_attempt_counts.commit();
+        parliament_member_reference_counts.commit();
         parliament_timed_ovn_resource_reservations.commit();
+        parliament_timed_ovn_casting_candidates.commit();
         parliament_required_beacon_pulse_slots.commit();
         parliament_certified_enactments.commit();
         parliament_unavailable_beacon_pulse_slots.commit();
+        parliament_tle_key_session_retention_deadlines.commit();
+        tle_key_session_selection_intervals.commit();
         tle_key_sessions.commit();
         tle_key_session_rosters.commit();
         tle_key_session_lifecycles.commit();
@@ -21229,6 +21920,66 @@ fn parliament_timed_ovn_resource_reservation_v1(
                     | BallotAttemptStatusV1::SurvivorFreeze
                     | BallotAttemptStatusV1::TimedCommitment
             ),
+        },
+    ))
+}
+
+/// Derive one active hidden-ballot phase window for compact casting snapshots.
+fn parliament_timed_ovn_casting_candidate_v1(
+    governance_attempt_id: GovernanceAttemptId,
+    attempt: &ParliamentAttemptStateV1,
+    ballot_attempt_id: BallotAttemptId,
+) -> Option<(BallotAttemptId, ParliamentTimedOvnCastingCandidateV1)> {
+    if attempt.attempt().id != governance_attempt_id
+        || attempt.attempt().status != GovernanceAttemptStatusV1::Active
+    {
+        return None;
+    }
+    let ballot = attempt.ballot(&ballot_attempt_id)?;
+    let body_instance_id = ballot.attempt().body_instance_id;
+    let body = attempt.body(&body_instance_id)?;
+    if body.instance().status != BodyInstanceStatusV1::Balloting
+        || attempt
+            .active_ballot_for_body(&body_instance_id)
+            .is_none_or(|active| active.attempt().id != ballot_attempt_id)
+        || attempt
+            .sealed_body_for_role(body.instance().body)
+            .is_none_or(|active| active.instance().id != body_instance_id)
+        || attempt
+            .required_bodies()
+            .iter()
+            .find(|required| required.body == body.instance().body)
+            .is_none_or(|required| {
+                required.decision_mode != ParliamentDecisionModeV1::HiddenBindingBallot
+            })
+    {
+        return None;
+    }
+    let (valid_from_height, valid_until_height_exclusive) = match ballot.attempt().status {
+        BallotAttemptStatusV1::Registration => (
+            ballot.registered_at_height(),
+            ballot.registration_close_height(),
+        ),
+        BallotAttemptStatusV1::SurvivorFreeze => (
+            ballot.registration_close_height(),
+            ballot.survivor_freeze_height(),
+        ),
+        BallotAttemptStatusV1::TimedCommitment => (
+            ballot.survivor_freeze_height(),
+            ballot.commitment_close_height(),
+        ),
+        BallotAttemptStatusV1::AwaitingRelease
+        | BallotAttemptStatusV1::Opening
+        | BallotAttemptStatusV1::Finalized
+        | BallotAttemptStatusV1::NoResult
+        | BallotAttemptStatusV1::Superseded => return None,
+    };
+    Some((
+        ballot_attempt_id,
+        ParliamentTimedOvnCastingCandidateV1 {
+            governance_attempt_id,
+            valid_from_height,
+            valid_until_height_exclusive,
         },
     ))
 }
@@ -22203,8 +22954,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ///
     /// # Errors
     ///
-    /// Returns a stable invariant reason when a number-encoded proposal value cannot be represented
-    /// exactly by every first-release SDK JSON runtime.
+    /// Returns a stable invariant reason when the proposal operator differs from its retained
+    /// proposer or a number-encoded value cannot be represented exactly by every first-release
+    /// SDK JSON runtime.
     pub(crate) fn put_governance_proposal(
         &mut self,
         proposal_id: [u8; 32],
@@ -22212,6 +22964,13 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> Result<(), &'static str> {
         if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
             return Err(reason);
+        }
+        if proposal
+            .kind
+            .proposal_operator_v1()
+            .is_some_and(|operator| operator != &proposal.proposer)
+        {
+            return Err("governance proposal operator differs from its retained proposer");
         }
         if let Some(previous) = self.governance_proposals.get(&proposal_id)
             && matches!(
@@ -22238,6 +22997,65 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<'block, 'world, String, GovernanceSlashLedger> {
         &mut self.governance_slashes
+    }
+    fn remove_parliament_tle_retention_contribution(
+        &mut self,
+        governance_attempt_id: GovernanceAttemptId,
+        key_session_id: TleKeySessionId,
+        opening_deadline: u64,
+    ) {
+        let Some(mut deadlines) = self
+            .parliament_tle_key_session_retention_deadlines
+            .get(&key_session_id)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(mut contributors) = deadlines.remove(&opening_deadline) else {
+            return;
+        };
+        contributors.remove(&governance_attempt_id);
+        if !contributors.is_empty() {
+            deadlines.insert(opening_deadline, contributors);
+        }
+        if deadlines.is_empty() {
+            self.parliament_tle_key_session_retention_deadlines
+                .remove(key_session_id);
+        } else {
+            self.parliament_tle_key_session_retention_deadlines
+                .insert(key_session_id, deadlines);
+        }
+    }
+    fn insert_parliament_tle_retention_contribution(
+        &mut self,
+        governance_attempt_id: GovernanceAttemptId,
+        key_session_id: TleKeySessionId,
+        opening_deadline: u64,
+    ) {
+        let mut deadlines = self
+            .parliament_tle_key_session_retention_deadlines
+            .get(&key_session_id)
+            .cloned()
+            .unwrap_or_default();
+        deadlines
+            .entry(opening_deadline)
+            .or_default()
+            .insert(governance_attempt_id);
+        self.parliament_tle_key_session_retention_deadlines
+            .insert(key_session_id, deadlines);
+    }
+    fn apply_parliament_member_reference_count_updates(
+        &mut self,
+        updates: Vec<(AccountId, Option<ParliamentMemberReferenceCountsV1>)>,
+    ) {
+        for (member, counts) in updates {
+            if let Some(counts) = counts {
+                self.parliament_member_reference_counts
+                    .insert(member, counts);
+            } else {
+                self.parliament_member_reference_counts.remove(member);
+            }
+        }
     }
     /// Validate and persist one canonical attempt-local Parliament reducer snapshot.
     pub(crate) fn put_parliament_attempt(
@@ -22292,20 +23110,33 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let previous_required_slots = previous_attempt
             .map(ParliamentAttemptStateV1::required_beacon_pulse_slots_v1)
             .unwrap_or_default();
-        let previous_enactment_height = previous_attempt
-            .and_then(ParliamentAttemptStateV1::certified_enactment_height_v1);
+        let previous_enactment_height =
+            previous_attempt.and_then(ParliamentAttemptStateV1::certified_enactment_height_v1);
         let previous_unavailable_slots = previous_attempt
             .map(ParliamentAttemptStateV1::unavailable_beacon_pulse_slots_v1)
+            .unwrap_or_default();
+        let previous_tle_retention_contributions = previous_attempt
+            .map(ParliamentAttemptStateV1::tle_key_session_retention_contributions_v1)
             .unwrap_or_default();
         let next_required_slots = attempt.required_beacon_pulse_slots_v1();
         let next_enactment_height = attempt.certified_enactment_height_v1();
         let next_unavailable_slots = attempt.unavailable_beacon_pulse_slots_v1();
+        let next_tle_retention_contributions = attempt.tle_key_session_retention_contributions_v1();
         if next_unavailable_slots
             .iter()
             .any(|slot| self.global_beacon_pulse_slots.get(slot).is_some())
         {
             return Err(ParliamentReducerErrorV1::BeaconPulseAlreadyAvailable);
         }
+        let member_reference_updates = parliament_member_reference_count_updates_v1(
+            previous_attempt,
+            Some(&attempt),
+            |member| self.parliament_member_reference_counts.get(member).copied(),
+        )?;
+        let attempt_counts = self
+            .parliament_attempt_counts
+            .get()
+            .checked_replacing(previous_attempt, Some(&attempt))?;
         let stale_reservations = self
             .parliament_timed_ovn_resource_reservations
             .iter()
@@ -22319,6 +23150,29 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 parliament_timed_ovn_resource_reservation_v1(id, &attempt, *ballot_attempt_id)
             })
             .collect::<Vec<_>>();
+        let stale_casting_candidates = self
+            .parliament_timed_ovn_casting_candidates
+            .iter()
+            .filter_map(|(ballot_attempt_id, candidate)| {
+                (candidate.governance_attempt_id == id).then_some(*ballot_attempt_id)
+            })
+            .collect::<Vec<_>>();
+        let active_casting_candidates = attempt
+            .ballot_attempts()
+            .filter_map(|(ballot_attempt_id, _)| {
+                parliament_timed_ovn_casting_candidate_v1(id, &attempt, *ballot_attempt_id)
+            })
+            .collect::<Vec<_>>();
+        if active_casting_candidates
+            .iter()
+            .any(|(ballot_attempt_id, _)| {
+                self.parliament_timed_ovn_casting_candidates
+                    .get(ballot_attempt_id)
+                    .is_some_and(|candidate| candidate.governance_attempt_id != id)
+            })
+        {
+            return Err(ParliamentReducerErrorV1::AttemptBindingMismatch);
+        }
         let mut next_reservations = BTreeMap::new();
         for (ballot_attempt_id, reservation) in
             self.parliament_timed_ovn_resource_reservations.iter()
@@ -22343,6 +23197,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
         for ballot_attempt_id in stale_reservations {
             self.parliament_timed_ovn_resource_reservations
+                .remove(ballot_attempt_id);
+        }
+        for ballot_attempt_id in stale_casting_candidates {
+            self.parliament_timed_ovn_casting_candidates
                 .remove(ballot_attempt_id);
         }
         for slot in previous_required_slots.difference(&next_required_slots) {
@@ -22389,10 +23247,19 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                     .insert(*slot, attempts);
             }
         }
+        for (key_session_id, opening_deadline) in previous_tle_retention_contributions {
+            self.remove_parliament_tle_retention_contribution(id, key_session_id, opening_deadline);
+        }
         self.parliament_attempts.insert(id, attempt);
+        *self.parliament_attempt_counts.get_mut() = attempt_counts;
+        self.apply_parliament_member_reference_count_updates(member_reference_updates);
         for (ballot_attempt_id, reservation) in active_reservations {
             self.parliament_timed_ovn_resource_reservations
                 .insert(ballot_attempt_id, reservation);
+        }
+        for (ballot_attempt_id, candidate) in active_casting_candidates {
+            self.parliament_timed_ovn_casting_candidates
+                .insert(ballot_attempt_id, candidate);
         }
         for slot in next_required_slots.difference(&previous_required_slots) {
             let mut attempts = self
@@ -22425,6 +23292,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             attempts.insert(id);
             self.parliament_unavailable_beacon_pulse_slots
                 .insert(*slot, attempts);
+        }
+        for (key_session_id, opening_deadline) in next_tle_retention_contributions {
+            self.insert_parliament_tle_retention_contribution(id, key_session_id, opening_deadline);
         }
         Ok(())
     }
@@ -22490,7 +23360,30 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         {
             return Err(TleKeySessionLifecycleErrorV1::UnknownSession);
         }
-        if let Some(previous_key_session_id) = self
+        let activation_height = current_height
+            .checked_add(1)
+            .ok_or(TleKeySessionLifecycleErrorV1::HeightOverflow)?;
+        let lifecycle = TleKeySessionLifecycleV1::new(
+            key_session_id,
+            activation_height,
+            policy.session_lifetime_blocks,
+            policy.max_fresh_ballots_per_session,
+        )
+        .map_err(|_| TleKeySessionLifecycleErrorV1::HeightOverflow)?;
+        if self
+            .tle_key_session_selection_intervals
+            .range(activation_height..)
+            .next()
+            .is_some()
+        {
+            return Err(TleKeySessionLifecycleErrorV1::UnknownSession);
+        }
+        let latest_predecessor = self
+            .tle_key_session_selection_intervals
+            .range(..activation_height)
+            .next_back()
+            .map(|(height, interval)| (*height, *interval));
+        let previous_update = if let Some(previous_key_session_id) = self
             .tle_active_key_session
             .get(&TLE_KEY_SESSION_SINGLETON_KEY)
             .copied()
@@ -22508,24 +23401,58 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             if previous.activation_height > current_height {
                 return Err(TleKeySessionLifecycleErrorV1::ActivationPending);
             }
+            if self
+                .tle_key_session_selection_intervals
+                .get(&previous.activation_height)
+                != Some(&(previous.selectable_through_height, previous_key_session_id))
+                || latest_predecessor
+                    != Some((
+                        previous.activation_height,
+                        (previous.selectable_through_height, previous_key_session_id),
+                    ))
+            {
+                return Err(TleKeySessionLifecycleErrorV1::UnknownSession);
+            }
             previous
                 .cut_over_after(current_height)
                 .map_err(|_| TleKeySessionLifecycleErrorV1::UnknownSession)?;
+            Some((previous_key_session_id, previous))
+        } else {
+            if let Some((previous_activation_height, (selectable_through_height, key_session_id))) =
+                latest_predecessor
+            {
+                let previous = self
+                    .tle_key_session_lifecycles
+                    .get(&key_session_id)
+                    .copied()
+                    .ok_or(TleKeySessionLifecycleErrorV1::UnknownSession)?
+                    .validate()
+                    .map_err(|_| TleKeySessionLifecycleErrorV1::UnknownSession)?;
+                if previous.key_session_id != key_session_id
+                    || previous.activation_height != previous_activation_height
+                    || previous.selectable_through_height != selectable_through_height
+                    || !previous.selection_is_closed()
+                    || selectable_through_height >= activation_height
+                {
+                    return Err(TleKeySessionLifecycleErrorV1::UnknownSession);
+                }
+            }
+            None
+        };
+        if let Some((previous_key_session_id, previous)) = previous_update {
             self.tle_key_session_lifecycles
                 .insert(previous_key_session_id, previous);
+            self.tle_key_session_selection_intervals.insert(
+                previous.activation_height,
+                (previous.selectable_through_height, previous_key_session_id),
+            );
         }
-        let activation_height = current_height
-            .checked_add(1)
-            .ok_or(TleKeySessionLifecycleErrorV1::HeightOverflow)?;
-        let lifecycle = TleKeySessionLifecycleV1::new(
-            key_session_id,
-            activation_height,
-            policy.session_lifetime_blocks,
-            policy.max_fresh_ballots_per_session,
-        )
-        .map_err(|_| TleKeySessionLifecycleErrorV1::HeightOverflow)?;
         self.tle_key_session_lifecycles
             .insert(key_session_id, lifecycle);
+        self.tle_key_session_selection_intervals.insert(
+            activation_height,
+            (lifecycle.selectable_through_height, key_session_id),
+        );
         self.tle_active_key_session
             .insert(TLE_KEY_SESSION_SINGLETON_KEY, key_session_id);
         Ok(())
@@ -22554,11 +23481,22 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if lifecycle.activation_height > current_height {
             return Err(TleKeySessionLifecycleErrorV1::ActivationPending);
         }
+        if self
+            .tle_key_session_selection_intervals
+            .get(&lifecycle.activation_height)
+            != Some(&(lifecycle.selectable_through_height, key_session_id))
+        {
+            return Err(TleKeySessionLifecycleErrorV1::UnknownSession);
+        }
         lifecycle
             .cut_over_after(current_height)
             .map_err(|_| TleKeySessionLifecycleErrorV1::UnknownSession)?;
         self.tle_key_session_lifecycles
             .insert(key_session_id, lifecycle);
+        self.tle_key_session_selection_intervals.insert(
+            lifecycle.activation_height,
+            (lifecycle.selectable_through_height, key_session_id),
+        );
         self.tle_active_key_session
             .remove(TLE_KEY_SESSION_SINGLETON_KEY);
         Ok(())
@@ -22863,6 +23801,17 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
         id: &iroha_data_model::governance::types::GovernanceAttemptId,
     ) -> Option<ParliamentAttemptStateV1> {
+        let removed = self.parliament_attempts.get(id)?.clone();
+        let member_reference_updates =
+            parliament_member_reference_count_updates_v1(Some(&removed), None, |member| {
+                self.parliament_member_reference_counts.get(member).copied()
+            })
+            .ok()?;
+        let attempt_counts = self
+            .parliament_attempt_counts
+            .get()
+            .checked_replacing(Some(&removed), None)
+            .ok()?;
         let stale_reservations = self
             .parliament_timed_ovn_resource_reservations
             .iter()
@@ -22874,7 +23823,22 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             self.parliament_timed_ovn_resource_reservations
                 .remove(ballot_attempt_id);
         }
-        let removed = self.parliament_attempts.remove(*id)?;
+        let stale_casting_candidates = self
+            .parliament_timed_ovn_casting_candidates
+            .iter()
+            .filter_map(|(ballot_attempt_id, candidate)| {
+                (candidate.governance_attempt_id == *id).then_some(*ballot_attempt_id)
+            })
+            .collect::<Vec<_>>();
+        for ballot_attempt_id in stale_casting_candidates {
+            self.parliament_timed_ovn_casting_candidates
+                .remove(ballot_attempt_id);
+        }
+        self.parliament_attempts
+            .remove(*id)
+            .expect("the preflighted Parliament attempt still exists");
+        *self.parliament_attempt_counts.get_mut() = attempt_counts;
+        self.apply_parliament_member_reference_count_updates(member_reference_updates);
         if let Some(height) = removed.certified_enactment_height_v1()
             && let Some(mut attempts) = self.parliament_certified_enactments.get(&height).cloned()
         {
@@ -22917,6 +23881,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 self.parliament_unavailable_beacon_pulse_slots
                     .insert(slot, attempts);
             }
+        }
+        for (key_session_id, opening_deadline) in
+            removed.tle_key_session_retention_contributions_v1()
+        {
+            self.remove_parliament_tle_retention_contribution(
+                *id,
+                key_session_id,
+                opening_deadline,
+            );
         }
         Some(removed)
     }
@@ -23257,10 +24230,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             governance_last_unlock_sweep_height,
             governance_unlock_stats,
             parliament_attempts,
+            parliament_attempt_counts,
+            parliament_member_reference_counts,
             parliament_timed_ovn_resource_reservations,
+            parliament_timed_ovn_casting_candidates,
             parliament_required_beacon_pulse_slots,
             parliament_certified_enactments,
             parliament_unavailable_beacon_pulse_slots,
+            parliament_tle_key_session_retention_deadlines,
+            tle_key_session_selection_intervals,
             tle_key_sessions,
             tle_key_session_rosters,
             tle_key_session_lifecycles,
@@ -23278,7 +24256,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             merge_hint_roots,
             merge_global_state_root,
             #[cfg(feature = "telemetry")]
-            telemetry,
+                telemetry: _,
             internal_event_buf: _,
             axt_lane_config: _,
             axt_current_slot: _,
@@ -23287,42 +24265,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             axt_authorization_transitioned: _,
             current_dataspace_id: _,
         } = self;
-        #[cfg(feature = "telemetry")]
-        let (parliament_telemetry_events, parliament_attempt_snapshot) = {
-            let mut state_changed = false;
-            let mut events = Vec::new();
-            for event in &external_event_buf {
-                let EventBox::Data(event) = event else {
-                    continue;
-                };
-                let iroha_data_model::events::data::DataEvent::Governance(event) = event.as_ref()
-                else {
-                    continue;
-                };
-                if matches!(
-                    event,
-                    governance_events::GovernanceEvent::ParliamentAttemptCreated(_)
-                ) {
-                    state_changed = true;
-                }
-                if let Some(projection) =
-                    crate::telemetry::parliament_lifecycle_metric_projection(event)
-                {
-                    state_changed = true;
-                    events.push(projection);
-                }
-            }
-            let snapshot = state_changed.then(|| {
-                parliament_attempts
-                    .iter()
-                    .map(|(_, state)| {
-                        let attempt = state.attempt();
-                        (attempt.status, attempt.stage)
-                    })
-                    .collect::<Vec<_>>()
-            });
-            (events, snapshot)
-        };
         if !external_event_buf.is_empty() {
             external_event_sink.append(&mut external_event_buf);
         }
@@ -23476,10 +24418,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         governance_last_unlock_sweep_height.apply();
         governance_unlock_stats.apply();
         parliament_attempts.apply();
+        parliament_attempt_counts.apply();
+        parliament_member_reference_counts.apply();
         parliament_timed_ovn_resource_reservations.apply();
+        parliament_timed_ovn_casting_candidates.apply();
         parliament_required_beacon_pulse_slots.apply();
         parliament_certified_enactments.apply();
         parliament_unavailable_beacon_pulse_slots.apply();
+        parliament_tle_key_session_retention_deadlines.apply();
+        tle_key_session_selection_intervals.apply();
         tle_key_sessions.apply();
         tle_key_session_rosters.apply();
         tle_key_session_lifecycles.apply();
@@ -23581,15 +24528,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         kaigi_account_dependencies.apply();
         peers.apply();
         parameters.apply();
-        #[cfg(feature = "telemetry")]
-        if let Some(telemetry) = telemetry {
-            for (transition, no_result_kind) in parliament_telemetry_events {
-                telemetry.record_committed_parliament_transition(transition, no_result_kind);
-            }
-            if let Some(snapshot) = parliament_attempt_snapshot {
-                telemetry.seed_parliament_attempts(snapshot);
-            }
-        }
     }
     /// Get `Domain` with an ability to modify it.
     ///
@@ -24025,8 +24963,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 /// Snapshot of consensus-key policy copied into runtime state.
 #[derive(Clone)]
 pub struct SumeragiPolicyConfig {
-    /// Whether consensus keys must carry an admitted HSM binding.
-    pub key_require_hsm: bool,
     /// Lead-time (in blocks) required before a new consensus key activates.
     pub key_activation_lead_blocks: u64,
     /// Overlap/grace window (in blocks) permitting dual-signing during rotation.
@@ -24035,30 +24971,24 @@ pub struct SumeragiPolicyConfig {
     pub key_expiry_grace_blocks: u64,
     /// Allowed consensus key algorithms.
     pub key_allowed_algorithms: BTreeSet<iroha_crypto::Algorithm>,
-    /// Allowed HSM providers for consensus keys.
-    pub key_allowed_hsm_providers: BTreeSet<String>,
 }
 impl From<&iroha_config::parameters::actual::Sumeragi> for SumeragiPolicyConfig {
     fn from(cfg: &iroha_config::parameters::actual::Sumeragi) -> Self {
         Self {
-            key_require_hsm: cfg.keys.require_hsm,
             key_activation_lead_blocks: cfg.keys.activation_lead_blocks,
             key_overlap_grace_blocks: cfg.keys.overlap_grace_blocks,
             key_expiry_grace_blocks: cfg.keys.expiry_grace_blocks,
             key_allowed_algorithms: cfg.keys.allowed_algorithms.clone(),
-            key_allowed_hsm_providers: cfg.keys.allowed_hsm_providers.clone(),
         }
     }
 }
 impl From<&iroha_data_model::parameter::system::SumeragiParameters> for SumeragiPolicyConfig {
     fn from(cfg: &iroha_data_model::parameter::system::SumeragiParameters) -> Self {
         Self {
-            key_require_hsm: cfg.key_require_hsm,
             key_activation_lead_blocks: cfg.key_activation_lead_blocks,
             key_overlap_grace_blocks: cfg.key_overlap_grace_blocks,
             key_expiry_grace_blocks: cfg.key_expiry_grace_blocks,
             key_allowed_algorithms: cfg.key_allowed_algorithms.iter().copied().collect(),
-            key_allowed_hsm_providers: cfg.key_allowed_hsm_providers.iter().cloned().collect(),
         }
     }
 }
@@ -26467,6 +27397,10 @@ impl State {
                 max_conviction: 6,
                 min_enactment_delay: 20,
                 window_span: 100,
+                max_active_referenda:
+                    iroha_config::parameters::defaults::governance::MAX_ACTIVE_REFERENDA,
+                max_lock_owners_per_referendum:
+                    iroha_config::parameters::defaults::governance::MAX_LOCK_OWNERS_PER_REFERENDUM,
                 plain_voting_enabled:
                     iroha_config::parameters::defaults::governance::PLAIN_VOTING_ENABLED,
                 approval_threshold_q_num: 1,
@@ -26569,6 +27503,7 @@ impl State {
             state_write_lock: parking_lot::Mutex::new(()),
             view_generation: AtomicU64::new(0),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
+            sumeragi_v2_pending_evidence: parking_lot::Mutex::new(BTreeMap::new()),
             sccp_registry_cache: parking_lot::Mutex::new(SccpRegistryCache::default()),
         };
         #[cfg(feature = "telemetry")]
@@ -26587,13 +27522,15 @@ impl State {
             let view = s.world.governance_proposals.view();
             let records: Vec<_> = view.iter().map(|(id, rec)| (*id, rec.status)).collect();
             telemetry_seed.seed_governance_proposals(records);
-            let parliament_view = s.world.parliament_attempts.view();
-            telemetry_seed.seed_parliament_attempts(parliament_view.iter().map(|(_, state)| {
-                let attempt = state.attempt();
-                (attempt.status, attempt.stage)
-            }));
-            let citizens_total =
-                u64::try_from(s.world.citizens.view().iter().count()).unwrap_or(u64::MAX);
+            let (status_counts, stage_counts) = s
+                .world
+                .parliament_attempt_counts
+                .view()
+                .get()
+                .telemetry_counts();
+            telemetry_seed.set_parliament_attempt_counts(status_counts, stage_counts);
+            let citizens_total = u64::try_from(s.world.citizens.view().iter().count())
+                .expect("Parliament citizen count must fit into u64");
             telemetry_seed.record_citizens_total(citizens_total);
             {
                 let nexus = s.nexus.read();
@@ -27083,6 +28020,40 @@ impl State {
         state.install_active_lane_markers_for_tests();
         state
     }
+    /// Bind an already configured test Kura to its exact pre-genesis Nexus geometry.
+    ///
+    /// The caller must have opened Kura with the same configured catalog. This
+    /// follows the production fresh-start sequence and therefore cannot replace
+    /// committed State or durable Kura history.
+    #[cfg(test)]
+    pub(crate) fn install_pre_genesis_nexus_for_testing(
+        &mut self,
+        mut nexus: iroha_config::parameters::actual::Nexus,
+    ) {
+        assert_eq!(
+            self.committed_height(),
+            0,
+            "a pre-genesis Nexus fixture cannot replace committed state"
+        );
+        assert_eq!(
+            self.kura
+                .exact_durable_blocks_count()
+                .expect("read test Kura durable height"),
+            0,
+            "a pre-genesis Nexus fixture cannot replace durable Kura state"
+        );
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        let configured_lane_catalog = nexus.configured_lane_catalog.clone();
+        self.prepare_configured_primary_geometry_anchor(&configured_lane_catalog)
+            .expect("anchor configured primary geometry for pre-genesis fixture");
+        self.restore_kura_lane_segments_before_startup_replay()
+            .expect("restore configured primary geometry for pre-genesis fixture");
+        self.set_nexus_from_config(nexus)
+            .expect("install configured Nexus geometry for pre-genesis fixture");
+        self.install_active_lane_markers_for_tests();
+    }
     /// Create a test State whose isolated Kura is opened at the supplied pre-genesis Nexus
     /// geometry and whose remaining runtime settings use unit-test defaults.
     #[cfg(test)]
@@ -27317,6 +28288,8 @@ impl State {
             axt_policy_transition_ratchets_finalized: false,
             exec_witness: None,
             parliament_timed_ovn_casting_bindings: None,
+            #[cfg(feature = "telemetry")]
+            pending_parliament_telemetry_events: Vec::new(),
             gas_used_in_block: 0,
             confidential_gas_used_in_block: 0,
             zk_confidential_ops_in_block: 0,
@@ -27983,6 +28956,8 @@ impl State {
             axt_policy_transition_ratchets_finalized: false,
             exec_witness: None,
             parliament_timed_ovn_casting_bindings: None,
+            #[cfg(feature = "telemetry")]
+            pending_parliament_telemetry_events: Vec::new(),
             gas_used_in_block: 0,
             confidential_gas_used_in_block: 0,
             zk_confidential_ops_in_block: 0,
@@ -28098,6 +29073,8 @@ impl State {
             axt_policy_transition_ratchets_finalized: false,
             exec_witness: None,
             parliament_timed_ovn_casting_bindings: None,
+            #[cfg(feature = "telemetry")]
+            pending_parliament_telemetry_events: Vec::new(),
             gas_used_in_block: 0,
             confidential_gas_used_in_block: 0,
             zk_confidential_ops_in_block: 0,
@@ -31035,6 +32012,13 @@ impl State {
         let mut pending_obligations = Vec::new();
         let mut authenticated_signed_replay_identities = BTreeSet::new();
         let mut executions = Vec::with_capacity(sources.len());
+        let kagemusha_carrier_height = state_block._curr_block.height().get();
+        let mut kagemusha_operation_reservations =
+            crate::kagemusha_operation::KagemushaOperationReservationBatchV4::new(
+                kagemusha_carrier_height,
+                crate::kagemusha_operation::KagemushaOperationExecutionPhaseV4::Merge,
+            );
+        let mut merge_phase_index_base = 0_u64;
         for source in sources {
             crate::kura::Kura::validate_certified_lane_block_artifact(&source.certified).map_err(
                 |message| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned()),
@@ -31192,10 +32176,35 @@ impl State {
                     })?;
                 }
             }
+            let source_entrypoint_count =
+                u64::try_from(source.input.entrypoints.len()).map_err(|_| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "Kagemusha merge phase index exceeds u64".to_owned(),
+                    )
+                })?;
+            let next_merge_phase_index_base = merge_phase_index_base
+                .checked_add(source_entrypoint_count)
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "Kagemusha merge phase index exceeds u64".to_owned(),
+                    )
+                })?;
+            crate::kagemusha_operation::reserve_kagemusha_operation_outcomes_v4(
+                state_block,
+                &mut kagemusha_operation_reservations,
+                merge_phase_index_base,
+                &source.input.entrypoints,
+            )
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "failed to reserve Kagemusha merge outcomes: {error}"
+                ))
+            })?;
             let raw_results = state_block
-                .validate_lane_block_execution_input_with_routing_context(
+                .validate_lane_block_execution_input_with_routing_and_kagemusha_context(
                     &source.input,
                     &mut ivm_cache,
+                    merge_phase_index_base,
                 )
                 .map_err(|message| {
                     MergeLedgerCommitError::ExecutionDivergence(message.to_owned())
@@ -31345,12 +32354,46 @@ impl State {
             execution.settlement_hash = canonical_merge_settlement_hash(&commitment)?;
             execution.settlement_commitment = commitment;
             executions.push(execution);
+            merge_phase_index_base = next_merge_phase_index_base;
         }
         state_block.resolve_required_queue_plan_pending_obligations(
             pending_obligations,
             authenticated_signed_replay_identities,
         )?;
         state_block.stage_merge_execution_nexus_fee_settlement(&executions)?;
+        let mut finalization_phase_index_base = 0_u64;
+        let mut kagemusha_result_segments = Vec::with_capacity(executions.len());
+        for execution in &executions {
+            kagemusha_result_segments.push(
+                crate::kagemusha_operation::KagemushaOperationResultSegmentV4::new(
+                    finalization_phase_index_base,
+                    &execution.entrypoints,
+                    &execution.results,
+                ),
+            );
+            let entrypoint_count = u64::try_from(execution.entrypoints.len()).map_err(|_| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "Kagemusha merge phase index exceeds u64".to_owned(),
+                )
+            })?;
+            finalization_phase_index_base = finalization_phase_index_base
+                .checked_add(entrypoint_count)
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "Kagemusha merge phase index exceeds u64".to_owned(),
+                    )
+                })?;
+        }
+        crate::kagemusha_operation::finalize_kagemusha_operation_outcomes_v4(
+            state_block,
+            kagemusha_operation_reservations,
+            kagemusha_result_segments,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "failed to finalize Kagemusha merge outcomes: {error}"
+            ))
+        })?;
         Ok(executions)
     }
     #[cfg(test)]
@@ -40265,9 +41308,7 @@ impl State {
         sys.key_activation_lead_blocks = policy.key_activation_lead_blocks;
         sys.key_overlap_grace_blocks = policy.key_overlap_grace_blocks;
         sys.key_expiry_grace_blocks = policy.key_expiry_grace_blocks;
-        sys.key_require_hsm = policy.key_require_hsm;
         sys.key_allowed_algorithms = policy.key_allowed_algorithms.iter().copied().collect();
-        sys.key_allowed_hsm_providers = policy.key_allowed_hsm_providers.iter().cloned().collect();
         params_block.sumeragi = sys;
         params_block.commit();
     }
@@ -42834,9 +43875,15 @@ impl State {
         if forest.leaf_count == 0 {
             return Err("test SCCP replay forest must contain at least one leaf".to_owned());
         }
-        if self.sccp_registry_snapshot().route(&id.route_key).is_none() {
-            return Err("test SCCP replay accumulator route is not governed".to_owned());
-        }
+        let registry = self.sccp_registry_snapshot();
+        let route = registry
+            .route(&id.route_key)
+            .ok_or_else(|| "test SCCP replay accumulator route is not governed".to_owned())?;
+        let domain = sccp_sora_replay_domain_for_route(route, id.boundary)?;
+        id.validate_domain(&domain).map_err(|_| {
+            "test SCCP replay accumulator identity differs from its governed route domain"
+                .to_owned()
+        })?;
         let mut world = self.world.block();
         if world.sccp_replay_forests.get(&id).is_some() {
             return Err("test SCCP replay accumulator already exists".to_owned());
@@ -45876,6 +46923,33 @@ fn validate_sccp_ton_breaker_observations_v1(
     }
     Ok(())
 }
+
+fn sccp_sora_replay_domain_for_route(
+    route: &iroha_data_model::bridge::SccpGovernedRouteV1,
+    boundary: iroha_data_model::bridge::SccpReplayBoundaryV1,
+) -> core::result::Result<iroha_data_model::bridge::SccpReplayDomainV1, String> {
+    use iroha_data_model::bridge::{
+        SccpNetworkV1, SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDomainV1,
+    };
+
+    let (source_network, target_network) = match boundary {
+        SccpReplayBoundaryV1::SoraOutboundLock => (SccpNetworkV1::SoraTaira, route.lane_id.source),
+        SccpReplayBoundaryV1::SoraInboundRelease => (route.lane_id.source, route.lane_id.target),
+        _ => return Err("SCCP replay boundary is not SORA-native".to_owned()),
+    };
+    let route_configuration_hash = route
+        .route_configuration_hash()
+        .map_err(|error| format!("invalid retained SCCP replay route: {error}"))?;
+    Ok(SccpReplayDomainV1 {
+        source_network,
+        target_network,
+        boundary,
+        route_revision: route.revision,
+        route_configuration_hash,
+        actor: SccpReplayActorV1::Route,
+    })
+}
+
 fn validate_sccp_state_view(
     world: &impl WorldReadOnly,
     registry: &ValidatedSccpRegistryV1,
@@ -45978,6 +47052,10 @@ fn validate_sccp_state_view(
                     .to_owned(),
             );
         }
+        let domain = sccp_sora_replay_domain_for_route(route, id.boundary)?;
+        id.validate_domain(&domain).map_err(|_| {
+            "restored SCCP replay forest identity differs from its governed route domain".to_owned()
+        })?;
     }
     for (key, height) in world.sccp_inbound_anchor_high_water().iter() {
         if *height == 0
@@ -48152,6 +49230,8 @@ impl<'state> StateBlock<'state> {
             deferred_governance_ballot_penalties: Vec::new(),
             privacy_transaction_intent_binding: None,
             private_settlement_carrier_binding: None,
+            kagemusha_operation_carrier_binding: None,
+            kagemusha_operation_execution_locator: None,
             kagemusha_taira_canary_wire_identity: None,
             kagemusha_release_lifecycle_entrypoint: None,
             kagemusha_taira_canary_external_entrypoint: false,
@@ -49797,12 +50877,24 @@ impl<'state> StateBlock<'state> {
             mut canonical_wsv_merge_commit_authorization,
             mut canonical_carrier_commit_metadata_authorization,
             pending_nexus_fee_receipt_source_ids,
+            #[cfg(feature = "telemetry")]
+            pending_parliament_telemetry_events,
             merge_carrier_entrypoints,
             _curr_block,
             #[cfg(feature = "zk-preverify")]
                 zk_dedup: _,
             ..
         } = self;
+        #[cfg(feature = "telemetry")]
+        let committed_parliament_attempt_counts = world
+            .parliament_attempt_counts
+            .is_dirty()
+            .then(|| *world.parliament_attempt_counts.get());
+        #[cfg(feature = "telemetry")]
+        let committed_citizens_total = world.citizens.is_dirty().then(|| {
+            u64::try_from(world.citizens.len())
+                .expect("committed Parliament citizen count must fit into u64")
+        });
         let exact_scale_in_binding = match pending_autoscale_lifecycle
             .as_ref()
             .map(PendingAutoscaleLaneLifecycle::exact_scale_in_binding)
@@ -50346,6 +51438,27 @@ impl<'state> StateBlock<'state> {
             }
         }
         drop(autoscale_lifecycle_guard);
+        #[cfg(feature = "telemetry")]
+        if block_metadata_committed && !replay_prevalidation {
+            // Canonical Kura replay rebuilds exact gauges but must not count a
+            // historical transition for a second time after node restart.
+            if !authenticated_replay_commit {
+                for (transition, no_result_kind) in pending_parliament_telemetry_events {
+                    state_ref
+                        .telemetry
+                        .record_committed_parliament_transition(transition, no_result_kind);
+                }
+            }
+            if let Some(counts) = committed_parliament_attempt_counts {
+                let (status_counts, stage_counts) = counts.telemetry_counts();
+                state_ref
+                    .telemetry
+                    .set_parliament_attempt_counts(status_counts, stage_counts);
+            }
+            if let Some(citizens_total) = committed_citizens_total {
+                state_ref.telemetry.record_citizens_total(citizens_total);
+            }
+        }
         if block_metadata_committed && !verified_lane_relay_records.is_empty() {
             let hydrated =
                 state_ref.hydrate_verified_lane_relay_records(verified_lane_relay_records);
@@ -50992,6 +52105,27 @@ impl<'state> StateBlock<'state> {
         } else {
             Ok(())
         };
+        #[cfg(feature = "telemetry")]
+        {
+            let parliament_transitions = self
+                .world
+                .external_event_buf
+                .iter()
+                .filter_map(|event| {
+                    let EventBox::Data(event) = event else {
+                        return None;
+                    };
+                    let iroha_data_model::events::data::DataEvent::Governance(event) =
+                        event.as_ref()
+                    else {
+                        return None;
+                    };
+                    crate::telemetry::parliament_lifecycle_metric_projection(event)
+                })
+                .collect::<Vec<_>>();
+            self.pending_parliament_telemetry_events
+                .extend(parliament_transitions);
+        }
         self.world.external_event_buf.push(
             BlockEvent {
                 header: block.as_ref().header(),
@@ -52671,6 +53805,18 @@ impl<'state> StateBlock<'state> {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     fn apply_transactions(&mut self, block: &CommittedBlock) {
         let block = block.as_ref();
+        let mut kagemusha_operation_reservations =
+            crate::kagemusha_operation::KagemushaOperationReservationBatchV4::new(
+                block.header().height().get(),
+                crate::kagemusha_operation::KagemushaOperationExecutionPhaseV4::Ordinary,
+            );
+        crate::kagemusha_operation::reserve_kagemusha_operation_outcomes_v4(
+            self,
+            &mut kagemusha_operation_reservations,
+            0,
+            block.external_entrypoints_slice(),
+        )
+        .expect("committed Kagemusha carriers must reserve exact outcome slots");
         for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
             let tx = match &entrypoint {
                 TransactionEntrypoint::External(tx) => tx.clone(),
@@ -52687,6 +53833,32 @@ impl<'state> StateBlock<'state> {
                     &entrypoint,
                     entrypoint_index,
                 );
+                let phase_index =
+                    u64::try_from(entrypoint_index).expect("entrypoint index must fit u64");
+                transaction.bind_kagemusha_operation_execution_locator_v4(Some(
+                    crate::kagemusha_operation::KagemushaOperationExecutionLocatorV4::new(
+                        crate::kagemusha_operation::KagemushaOperationExecutionPhaseV4::Ordinary,
+                        phase_index,
+                    ),
+                ));
+                let kagemusha_operation_carrier_binding = match &entrypoint {
+                    TransactionEntrypoint::External(transaction) => {
+                        crate::kagemusha_operation::signed_kagemusha_operation_carrier_binding_v4(
+                            transaction,
+                        )
+                        .expect("committed external Kagemusha carrier must be canonical")
+                    }
+                    TransactionEntrypoint::SealedReveal(_)
+                    | TransactionEntrypoint::SealedCommitment(_)
+                    | TransactionEntrypoint::Time(_) => None,
+                };
+                transaction
+                    .bind_kagemusha_operation_carrier_v4(kagemusha_operation_carrier_binding);
+                crate::kagemusha_operation::validate_kagemusha_operation_reservation_v4(
+                    &tx,
+                    &transaction,
+                )
+                .expect("committed Kagemusha carrier must match its exact outcome reservation");
                 let contract_deployment_bootstrap =
                     crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
                         &transaction.world,
@@ -52724,6 +53896,18 @@ impl<'state> StateBlock<'state> {
                 transaction.apply();
             }
         }
+        crate::kagemusha_operation::finalize_kagemusha_operation_outcomes_v4(
+            self,
+            kagemusha_operation_reservations,
+            [
+                crate::kagemusha_operation::KagemushaOperationResultSegmentV4::new(
+                    0,
+                    block.external_entrypoints_slice(),
+                    block.results().take(block.external_entrypoint_count()),
+                ),
+            ],
+        )
+        .expect("committed Kagemusha outcome reservations must all become terminal");
         self.resolve_queue_plan_pending_obligations_from_block(block)
             .expect("committed block must resolve exact QueuePlan pending application obligations");
     }
@@ -52927,6 +54111,171 @@ mod soracloud_sequence_watermark_state_tests {
         );
     }
 }
+#[cfg(all(test, feature = "telemetry"))]
+mod parliament_commit_telemetry_tests {
+    use super::*;
+    use crate::{kura::Kura, query::store::LiveQueryStore};
+    use iroha_data_model::{
+        block::BlockHeader,
+        governance::types::{GovernanceAttemptStatusV1 as Status, GovernanceStageV1 as Stage},
+        isi::governance::ParliamentLifecycleTransitionKindV1 as Transition,
+    };
+    use iroha_test_samples::ALICE_ID;
+    use nonzero_ext::nonzero;
+    use std::sync::Arc;
+
+    fn state_with_parliament_telemetry() -> (State, Arc<crate::telemetry::Metrics>) {
+        let metrics = Arc::new(crate::telemetry::Metrics::default());
+        let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
+        let state = State::with_telemetry(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            telemetry,
+        );
+        (state, metrics)
+    }
+
+    fn stage_parliament_projection(block: &mut StateBlock<'_>) {
+        let mut counts = ParliamentAttemptCountsV1::default();
+        counts
+            .checked_increment(Status::Active, Stage::Qualification)
+            .expect("one attempt count must fit");
+        let mut transaction = block.transaction();
+        *transaction.world.parliament_attempt_counts.get_mut() = counts;
+        transaction.world.citizens.insert(
+            ALICE_ID.clone(),
+            CitizenshipRecord::new(ALICE_ID.clone(), Quantity::zero(), 0),
+        );
+        transaction.apply();
+        block
+            .pending_parliament_telemetry_events
+            .push((Transition::CompleteQualification, None));
+    }
+
+    #[test]
+    fn parliament_metrics_publish_only_after_canonical_block_commit() {
+        let (state, metrics) = state_with_parliament_telemetry();
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            stage_parliament_projection(&mut block);
+            assert_eq!(
+                metrics
+                    .governance_parliament_attempts_by_status
+                    .with_label_values(&["active"])
+                    .get(),
+                0
+            );
+            assert_eq!(metrics.governance_citizens_total.get(), 0);
+            assert_eq!(
+                metrics
+                    .governance_parliament_transitions_total
+                    .with_label_values(&["complete_qualification"])
+                    .get(),
+                0
+            );
+        }
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_status
+                .with_label_values(&["active"])
+                .get(),
+            0
+        );
+        assert_eq!(metrics.governance_citizens_total.get(), 0);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        stage_parliament_projection(&mut block);
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit Parliament telemetry fixture");
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_status
+                .with_label_values(&["active"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_stage
+                .with_label_values(&["qualification"])
+                .get(),
+            1
+        );
+        assert_eq!(metrics.governance_citizens_total.get(), 1);
+        assert_eq!(
+            metrics
+                .governance_parliament_transitions_total
+                .with_label_values(&["complete_qualification"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn authenticated_replay_refreshes_gauges_without_recounting_transitions() {
+        let (state, metrics) = state_with_parliament_telemetry();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        stage_parliament_projection(&mut block);
+        block.authenticated_replay_commit = true;
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit authenticated replay telemetry fixture");
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_status
+                .with_label_values(&["active"])
+                .get(),
+            1
+        );
+        assert_eq!(metrics.governance_citizens_total.get(), 1);
+        assert_eq!(
+            metrics
+                .governance_parliament_transitions_total
+                .with_label_values(&["complete_qualification"])
+                .get(),
+            0
+        );
+    }
+}
+
+#[cfg(test)]
+mod parliament_attempt_count_tests {
+    use super::*;
+    use iroha_data_model::governance::types::{
+        GovernanceAttemptStatusV1 as Status, GovernanceStageV1 as Stage,
+    };
+
+    #[test]
+    fn attempt_count_updates_are_fail_atomic() {
+        let mut overflow = ParliamentAttemptCountsV1 {
+            status_counts: [u64::MAX, 0, 0, 0, 0, 0],
+            stage_counts: [u64::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        };
+        let before = overflow;
+        assert_eq!(
+            overflow.checked_increment(Status::Certified, Stage::Qualification),
+            Err(ParliamentReducerErrorV1::AttemptCountOverflow)
+        );
+        assert_eq!(overflow, before);
+
+        let mut mismatch = ParliamentAttemptCountsV1 {
+            status_counts: [1, 0, 0, 0, 0, 0],
+            stage_counts: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        };
+        let before = mismatch;
+        assert_eq!(
+            mismatch.checked_decrement(Status::Active, Stage::Qualification),
+            Err(ParliamentReducerErrorV1::AttemptCountProjectionMismatch)
+        );
+        assert_eq!(mismatch, before);
+    }
+}
+
 #[cfg(all(test, feature = "telemetry"))]
 mod musubi_replication_shortfall_telemetry_tests {
     use super::*;
@@ -54819,10 +56168,18 @@ mod tiered_snapshot_diff_tests {
     fn sccp_replay_snapshot_roundtrips_and_requires_each_replay_index() {
         let (mut inbound_world, high_water_key, high_water, route, _) =
             world_with_valid_sccp_inbound_history();
-        let accumulator_id = SccpReplayAccumulatorIdV1 {
-            route_key: route.key(),
+        let replay_domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+            source_network: route.lane_id.source,
+            target_network: route.lane_id.target,
             boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            route_revision: route.revision,
+            route_configuration_hash: route
+                .route_configuration_hash()
+                .expect("governed route configuration hashes"),
+            actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
         };
+        let accumulator_id = SccpReplayAccumulatorIdV1::from_domain(route.key(), &replay_domain)
+            .expect("governed inbound replay identity");
         let mut forest = SccpReplayForestV1::default();
         forest.nonempty_shard_roots.insert(7, [0xA1; 32]);
         forest.leaf_count = 1;
@@ -54891,10 +56248,18 @@ mod tiered_snapshot_diff_tests {
     fn sccp_replay_forest_snapshot_is_bound_to_governance_and_sora_boundary() {
         let fixture = || {
             let (mut world, _, _, route, _) = world_with_valid_sccp_inbound_history();
-            let id = SccpReplayAccumulatorIdV1 {
-                route_key: route.key(),
+            let replay_domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+                source_network: route.lane_id.source,
+                target_network: route.lane_id.target,
                 boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+                route_revision: route.revision,
+                route_configuration_hash: route
+                    .route_configuration_hash()
+                    .expect("governed route configuration hashes"),
+                actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
             };
+            let id = SccpReplayAccumulatorIdV1::from_domain(route.key(), &replay_domain)
+                .expect("governed inbound replay identity");
             let mut forest = SccpReplayForestV1::default();
             forest.nonempty_shard_roots.insert(7, [0xA1; 32]);
             forest.leaf_count = 1;
@@ -54906,6 +56271,24 @@ mod tiered_snapshot_diff_tests {
         let (valid, _, _) = fixture();
         hydrate_sccp_profile_test_state(valid, iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1)
             .expect("governed replay forest must hydrate");
+
+        let (mut mismatched_domain, mut id, forest) = fixture();
+        mismatched_domain.sccp_replay_forests = Storage::default();
+        id.domain_hash[0] ^= 0xFF;
+        mismatched_domain.sccp_replay_forests.insert(id, forest);
+        let error = match hydrate_sccp_profile_test_state(
+            mismatched_domain,
+            iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1,
+        ) {
+            Ok(_) => panic!("a mismatched replay domain hash must not pass hydration"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("identity differs from its governed route domain"),
+            "unexpected replay-domain error: {error}"
+        );
 
         let (mut unsupported, id, forest) = fixture();
         unsupported.sccp_replay_forests = Storage::default();
@@ -54947,7 +56330,7 @@ mod tiered_snapshot_diff_tests {
         orphan.sccp_replay_forests.insert(
             SccpReplayAccumulatorIdV1 {
                 route_key: orphan_key,
-                boundary: id.boundary,
+                ..id
             },
             forest,
         );
@@ -58087,6 +59470,23 @@ impl StateTransaction<'_, '_> {
     ) {
         self.private_settlement_carrier_binding = binding;
     }
+    /// Install the exact direct Kagemusha operation carrier derived from a signed payload.
+    ///
+    /// Passing `None` clears the prior transaction's binding. Nested execution
+    /// paths must never install or reset this value.
+    pub(crate) fn bind_kagemusha_operation_carrier_v4(
+        &mut self,
+        binding: Option<crate::kagemusha_operation::KagemushaOperationCarrierBindingV4>,
+    ) {
+        self.kagemusha_operation_carrier_binding = binding;
+    }
+    /// Bind the canonical scheduler slot for one Kagemusha carrier execution.
+    pub(crate) fn bind_kagemusha_operation_execution_locator_v4(
+        &mut self,
+        locator: Option<crate::kagemusha_operation::KagemushaOperationExecutionLocatorV4>,
+    ) {
+        self.kagemusha_operation_execution_locator = locator;
+    }
     /// Install the exact standalone governance ballot derived from a signed payload.
     ///
     /// Passing `None` clears the binding. Nested execution paths must never install
@@ -58148,6 +59548,19 @@ impl StateTransaction<'_, '_> {
                 instruction_digest,
                 max_signed_transaction_bytes,
             )
+    }
+    /// Consume the exact signed Kagemusha operation carrier once.
+    pub(crate) fn consume_kagemusha_operation_carrier_binding_v4(
+        &mut self,
+        request: iroha_data_model::offline::KagemushaOperationRequestV4<'_>,
+    ) -> core::result::Result<(), crate::kagemusha_operation::KagemushaOperationCarrierBindingErrorV4>
+    {
+        self.kagemusha_operation_carrier_binding
+            .as_mut()
+            .ok_or(
+                crate::kagemusha_operation::KagemushaOperationCarrierBindingErrorV4::MissingBinding,
+            )?
+            .consume(request)
     }
     /// Consume the exact signed direct privacy submission once.
     ///
@@ -58309,19 +59722,12 @@ impl StateTransaction<'_, '_> {
                 ),
             ));
         }
-        let lane = accumulator_id.route_key.lane_id;
-        let domain_matches_key = accumulator_id.boundary == domain.boundary
+        let domain_matches_key = accumulator_id.validate_domain(domain).is_ok()
             && record.operation == accumulator_id.boundary
-            && accumulator_id.route_key.revision == domain.route_revision
-            && match accumulator_id.boundary {
-                SoraOutboundLock => {
-                    domain.source_network == lane.target && domain.target_network == lane.source
-                }
-                SoraInboundRelease => {
-                    domain.source_network == lane.source && domain.target_network == lane.target
-                }
-                _ => false,
-            };
+            && matches!(
+                accumulator_id.boundary,
+                SoraOutboundLock | SoraInboundRelease
+            );
         if !domain_matches_key {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(

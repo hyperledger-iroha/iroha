@@ -1,6 +1,6 @@
 #[test]
-fn narrow_policy_requires_two_fresh_confirmation_candidates_before_commit() {
-    for eligible_confirmation_candidates in [0, 1] {
+fn narrow_policy_requires_the_anonymity_floor_of_fresh_confirmation_candidates() {
+    for eligible_confirmation_candidates in 0..MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1 {
         let mut fixture = opened_policy_ballot(100, 100);
         let governance_attempt_id = fixture.state.attempt.id;
         let result_height = fixture
@@ -104,7 +104,13 @@ fn narrow_policy_at_randomness_redraw_ceiling_persists_terminal_no_result() {
         .expect("fixture opening height");
 
     assert_eq!(
-        finalize_policy_with_confirmation_capacity(&mut fixture, 51, 49, 0, 2),
+        finalize_policy_with_confirmation_capacity(
+            &mut fixture,
+            51,
+            49,
+            0,
+            MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+        ),
         ParliamentAggregateOutcomeV1::NoResult
     );
     assert_eq!(
@@ -140,7 +146,10 @@ fn narrow_policy_at_randomness_redraw_ceiling_persists_terminal_no_result() {
         ballot.failure_kind,
         Some(ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted)
     );
-    assert_eq!(ballot.eligible_confirmation_candidates, Some(2));
+    assert_eq!(
+        ballot.eligible_confirmation_candidates,
+        Some(MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
+    );
     assert_eq!(ballot.failure_height, Some(result_height));
     assert_eq!(
         ballot.failure_root,
@@ -198,7 +207,7 @@ fn narrow_policy_at_randomness_redraw_ceiling_persists_terminal_no_result() {
     assert_eq!(
         disguised_as_capacity.validate(),
         Err(ParliamentReducerErrorV1::BallotFailureKindMismatch),
-        "two eligible candidates cannot be reclassified as capacity unavailable"
+        "a floor-sized eligible set cannot be reclassified as capacity unavailable"
     );
 }
 
@@ -294,22 +303,28 @@ fn sealed_and_released_cross_store_bindings_fail_closed_on_substitution() {
 fn hidden_ballot_corpus_bound_covers_every_original_seat() {
     let BodyFixture {
         mut state, body_id, ..
-    } = sealed_policy_body(3);
+    } = sealed_policy_body(4);
     advance_to_vote(&mut state, body_id);
     let governance_attempt_id = state.attempt.id;
     let ballot_id = BallotAttemptId::derive_v1(body_id, 0);
     let release_beacon_session_id = beacon_session(24);
     let tle_key_session_id = tle_key_session(23);
-    let release_height = 40;
+    let release_height = 42;
     let tle_session_id = TleSessionId::derive_v1(
         ballot_id,
         tle_key_session_id,
         release_beacon_session_id,
         release_height,
     );
-    let undersized = ParliamentTimedOvn {
-        max_corpus_entries: 2,
+    let four_seat_policy = ParliamentTimedOvn {
+        registration_phase_blocks: 5,
+        survivor_freeze_phase_blocks: 4,
+        max_corpus_entries: 4,
         ..timed_ovn_policy()
+    };
+    let subfloor_policy = ParliamentTimedOvn {
+        max_corpus_entries: 2,
+        ..four_seat_policy
     };
     assert_eq!(
         state.register_ballot_attempt(
@@ -321,7 +336,7 @@ fn hidden_ballot_corpus_bound_covers_every_original_seat() {
             tle_key_session_id,
             release_beacon_session_id,
             27,
-            undersized,
+            subfloor_policy,
             release_height,
         ),
         Err(ParliamentReducerErrorV1::InvalidBallotSchedule)
@@ -337,7 +352,7 @@ fn hidden_ballot_corpus_bound_covers_every_original_seat() {
             tle_key_session_id,
             release_beacon_session_id,
             27,
-            timed_ovn_policy(),
+            four_seat_policy,
             release_height,
         )
         .expect("register ballot with capacity for every original seat");
@@ -346,7 +361,7 @@ fn hidden_ballot_corpus_bound_covers_every_original_seat() {
         .ballots
         .get_mut(&ballot_id)
         .expect("registered ballot")
-        .registration_phase_blocks = 3;
+        .registration_phase_blocks = 4;
     assert_eq!(
         registration_window_too_short.validate(),
         Err(ParliamentReducerErrorV1::InvalidBallotSchedule),
@@ -357,7 +372,7 @@ fn hidden_ballot_corpus_bound_covers_every_original_seat() {
         .ballots
         .get_mut(&ballot_id)
         .expect("registered ballot")
-        .survivor_freeze_phase_blocks = 2;
+        .survivor_freeze_phase_blocks = 3;
     assert_eq!(
         survivor_window_too_short.validate(),
         Err(ParliamentReducerErrorV1::InvalidBallotSchedule),
@@ -367,7 +382,7 @@ fn hidden_ballot_corpus_bound_covers_every_original_seat() {
         .ballots
         .get_mut(&ballot_id)
         .expect("registered ballot")
-        .max_corpus_entries = 2;
+        .max_corpus_entries = 3;
     assert_eq!(
         state.validate(),
         Err(ParliamentReducerErrorV1::InvalidBallotCount),
@@ -579,7 +594,7 @@ fn sortition_request_requires_the_exact_frozen_pulse_delay_without_overflow() {
 }
 
 #[test]
-fn hidden_ballot_sortition_requires_two_candidates() {
+fn hidden_ballot_sortition_requires_the_anonymity_floor() {
     let mut state = policy_only_state();
     let id = state.attempt.id;
     state
@@ -633,9 +648,26 @@ fn hidden_ballot_sortition_requires_two_candidates() {
         beacon_session(116),
         None,
     );
+    assert_eq!(
+        state.register_sortition_request(id, 0, request, two_candidates),
+        Err(ParliamentReducerErrorV1::InvalidCandidateSnapshot)
+    );
+
+    let (request, three_candidates) = sortition_request(
+        id,
+        0,
+        ParliamentBody::PolicyJury,
+        118,
+        3,
+        3,
+        10,
+        20,
+        beacon_session(116),
+        None,
+    );
     state
-        .register_sortition_request(id, 0, request, two_candidates)
-        .expect("two candidates can produce non-identity timed-OVN masks");
+        .register_sortition_request(id, 0, request, three_candidates)
+        .expect("the anonymity-floor candidate set can enter hidden sortition");
     state.validate().expect("minimum hidden capacity persists");
 }
 
@@ -827,6 +859,66 @@ fn live_sortition_candidates_retain_bonds_until_terminal_or_superseded() {
 }
 
 #[test]
+fn terminal_attempt_drops_transient_candidates_but_retains_sealed_member_references() {
+    let mut transient = policy_only_state();
+    let transient_id = transient.attempt.id;
+    transient
+        .complete_qualification(transient_id)
+        .expect("enter Policy Jury stage");
+    let (request, candidates) = sortition_request(
+        transient_id,
+        0,
+        ParliamentBody::PolicyJury,
+        124,
+        3,
+        3,
+        10,
+        20,
+        beacon_session(125),
+        None,
+    );
+    transient
+        .register_sortition_request(transient_id, 0, request, candidates.clone())
+        .expect("register a transient candidate snapshot");
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| transient.references_parliament_member(candidate))
+    );
+    transient.attempt.status = GovernanceAttemptStatusV1::Rejected;
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| !transient.references_parliament_member(candidate)),
+        "terminal outer attempts must release every unseated candidate reference"
+    );
+
+    let BodyFixture {
+        mut state, body_id, ..
+    } = sealed_policy_body(3);
+    let sealed_members = state
+        .body(&body_id)
+        .expect("sealed body fixture")
+        .assignments()
+        .iter()
+        .map(|assignment| assignment.member.clone())
+        .collect::<Vec<_>>();
+    state.attempt.status = GovernanceAttemptStatusV1::Rejected;
+    assert!(
+        sealed_members
+            .iter()
+            .all(|member| state.references_parliament_member(member)),
+        "sealed assignments remain immutable historical references"
+    );
+    assert!(
+        sealed_members
+            .iter()
+            .all(|member| !state.retains_citizenship_bond(member)),
+        "terminal historical references do not retain citizenship bonds"
+    );
+}
+
+#[test]
 fn retryable_singleton_capacity_failure_retains_only_its_live_candidate_bond() {
     let mut state = policy_only_state();
     let id = state.attempt.id;
@@ -884,7 +976,7 @@ fn retryable_singleton_capacity_failure_retains_only_its_live_candidate_bond() {
 }
 
 #[test]
-fn single_member_hidden_roster_is_an_objective_no_roster_retry() {
+fn subfloor_hidden_roster_is_an_objective_no_roster_retry() {
     let mut state = policy_only_state();
     let id = state.attempt.id;
     state
@@ -895,8 +987,8 @@ fn single_member_hidden_roster_is_an_objective_no_roster_retry() {
         0,
         ParliamentBody::PolicyJury,
         117,
-        2,
-        2,
+        3,
+        3,
         10,
         20,
         beacon_session(116),
@@ -906,7 +998,7 @@ fn single_member_hidden_roster_is_an_objective_no_roster_retry() {
     let request_id = request.id;
     state
         .register_sortition_request(id, 0, request, candidates)
-        .expect("register two-candidate hidden draw");
+        .expect("register anonymity-floor hidden draw");
     consume_sortition(
         &mut state,
         id,
@@ -915,7 +1007,7 @@ fn single_member_hidden_roster_is_an_objective_no_roster_retry() {
         20,
         pulse_id(118),
     )
-    .expect("draw two hidden seats");
+    .expect("draw three hidden seats");
     state
         .begin_invitation_acceptance(id, election_id, 20, 1)
         .expect("open one-block invitation window");
@@ -931,14 +1023,17 @@ fn single_member_hidden_roster_is_an_objective_no_roster_retry() {
         .expect("accept one hidden seat");
     state
         .record_invitation_response(id, election_id, &members[1], false, 20)
-        .expect("decline the other hidden seat");
+        .expect("decline one hidden seat");
+    state
+        .record_invitation_response(id, election_id, &members[2], true, 20)
+        .expect("accept a second hidden seat");
     assert_eq!(
         state.seal_body_roster(id, election_id, 21),
         Err(ParliamentReducerErrorV1::InvalidRoster)
     );
     state
         .fail_body_election_no_roster(id, election_id, false, 21)
-        .expect("one hidden seat cannot form a timed-OVN body");
+        .expect("two hidden seats cannot form an exact-tally body");
     let election = state.election(&election_id).expect("failed election");
     assert_eq!(
         election.failure_kind,
@@ -1232,7 +1327,7 @@ fn invitation_responses_seal_only_the_ranked_accepted_roster() {
         ParliamentBody::PolicyJury,
         70,
         5,
-        2,
+        3,
         10,
         20,
         beacon_session(71),
@@ -1258,6 +1353,7 @@ fn invitation_responses_seal_only_the_ranked_accepted_roster() {
     let election = state.election(&election_id).expect("drawn election");
     let first_primary = election.primary_assignments()[0].clone();
     let second_primary = election.primary_assignments()[1].clone();
+    let third_primary = election.primary_assignments()[2].clone();
     let first_alternate = election.alternate_assignments()[0].clone();
     let late_alternate = election.alternate_assignments()[1].clone();
 
@@ -1274,8 +1370,11 @@ fn invitation_responses_seal_only_the_ranked_accepted_roster() {
     state
         .record_invitation_response(id, election_id, &first_alternate.member, true, 21)
         .expect("first ranked alternate accepts");
+    state
+        .record_invitation_response(id, election_id, &late_alternate.member, true, 21)
+        .expect("second ranked alternate accepts");
     assert_eq!(
-        state.record_invitation_response(id, election_id, &late_alternate.member, true, 22),
+        state.record_invitation_response(id, election_id, &third_primary.member, true, 22),
         Err(ParliamentReducerErrorV1::InvitationWindowClosed)
     );
     assert_eq!(
@@ -1286,9 +1385,13 @@ fn invitation_responses_seal_only_the_ranked_accepted_roster() {
         .seal_body_roster(id, election_id, 22)
         .expect("seal derived accepted roster after close");
     let body = state.body(&body_id).expect("sealed body");
-    let expected_members: BTreeSet<_> = [first_primary.member, first_alternate.member]
-        .into_iter()
-        .collect();
+    let expected_members: BTreeSet<_> = [
+        first_primary.member,
+        first_alternate.member,
+        late_alternate.member,
+    ]
+    .into_iter()
+    .collect();
     assert_eq!(
         body.assignments()
             .iter()

@@ -6071,6 +6071,7 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         state_transaction.bind_privacy_transaction_intent_v1(None);
         state_transaction.bind_private_settlement_carrier_v1(None);
+        state_transaction.bind_kagemusha_operation_carrier_v4(None);
         state_transaction.bind_governance_ballot_entrypoint_v1(None);
         state_transaction.kagemusha_taira_canary_wire_identity = None;
         state_transaction.kagemusha_release_lifecycle_entrypoint = None;
@@ -6079,6 +6080,10 @@ impl Executor {
                 "signed authority mismatch".into(),
             ));
         }
+        crate::kagemusha_operation::validate_kagemusha_operation_reservation_v4(
+            &transaction,
+            state_transaction,
+        )?;
         trace!("Running transaction execution");
         let privacy_intent_binding =
             crate::privacy::signed_privacy_transaction_intent_binding_v1(&transaction)?;
@@ -6088,6 +6093,11 @@ impl Executor {
                 &transaction,
             )?;
         state_transaction.bind_private_settlement_carrier_v1(private_settlement_carrier_binding);
+        let kagemusha_operation_carrier_binding =
+            crate::kagemusha_operation::signed_kagemusha_operation_carrier_binding_v4(
+                &transaction,
+            )?;
+        state_transaction.bind_kagemusha_operation_carrier_v4(kagemusha_operation_carrier_binding);
         let governance_ballot_binding =
             crate::state::standalone_governance_ballot_instruction_v1(transaction.instructions())
                 .map_err(|message| ValidationFail::NotPermitted(message.to_owned()))?;

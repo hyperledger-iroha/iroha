@@ -95,6 +95,8 @@ pub mod iso_bridge;
 pub mod jurisdiction;
 /// Kiso: storage primitives and data layout.
 pub mod kiso;
+/// Canonical Kagemusha operation carriers and consensus-persisted outcomes.
+pub mod kagemusha_operation;
 /// Persistent block storage (Kura) backend.
 pub mod kura;
 /// Lane-local block vote validation and QC aggregation helpers.

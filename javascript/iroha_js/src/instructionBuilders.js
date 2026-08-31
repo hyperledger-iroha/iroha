@@ -5421,6 +5421,7 @@ export function buildProposeDeployContractInstruction(options) {
   assertAllowedFields(
     source,
     new Set([
+      "proposalOperator",
       "contractAddress",
       "codeHash",
       "abiHash",
@@ -5429,7 +5430,7 @@ export function buildProposeDeployContractInstruction(options) {
     ]),
     "proposeDeployContract",
   );
-  for (const field of ["contractAddress", "codeHash", "abiHash"]) {
+  for (const field of ["proposalOperator", "contractAddress", "codeHash", "abiHash"]) {
     if (!Object.prototype.hasOwnProperty.call(source, field)) {
       fail(
         ValidationErrorCode.INVALID_OBJECT,
@@ -5449,6 +5450,10 @@ export function buildProposeDeployContractInstruction(options) {
     );
   }
   const payload = {
+    proposal_operator: ensureCanonicalAccountId(
+      source.proposalOperator,
+      "proposeDeployContract.proposalOperator",
+    ),
     contract_address: normalizeGovernanceContractAddress(
       source.contractAddress,
       "proposeDeployContract.contractAddress",

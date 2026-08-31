@@ -2108,13 +2108,12 @@ pub(crate) mod taikai_ingest {
             "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
         ));
         match fs::symlink_metadata(&sentinel_path) {
-            Ok(metadata) if metadata.file_type().is_file() => {
-                // A durable acknowledgement wins over a replayed ingest. This
-                // closes the race between source retirement and later spool
-                // writes while the acknowledgement is inside the retention
-                // window.
-                return Ok(None);
-            }
+            // Only the anchor worker has the governed public key required to
+            // authenticate this receipt. A regular file here is therefore
+            // not sufficient evidence that the ingest was acknowledged: keep
+            // materializing the replay so the worker can either verify and
+            // retire it or quarantine the invalid receipt and upload it.
+            Ok(metadata) if metadata.file_type().is_file() => {}
             Ok(_) => {
                 return Err(io::Error::new(
                     ErrorKind::InvalidData,
@@ -2363,33 +2362,29 @@ pub(crate) mod taikai_ingest {
         }
         encoded
     }
-    pub fn spawn_anchor_worker(
+    /// Validate and start the configured Taikai anchor worker.
+    pub(crate) async fn spawn_anchor_worker(
         manifest_store_dir: PathBuf,
         anchor_cfg: DaTaikaiAnchor,
         shutdown: ShutdownSignal,
-    ) {
+    ) -> Result<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>, String> {
         if anchor_cfg.poll_interval.is_zero() {
-            iroha_logger::warn!("Taikai anchor poll interval is zero; using 1 second");
+            return Err("Taikai anchor poll interval must be greater than zero".to_owned());
         }
-        let poll_interval = if anchor_cfg.poll_interval.is_zero() {
-            Duration::from_secs(1)
-        } else {
-            anchor_cfg.poll_interval
-        };
+        let poll_interval = anchor_cfg.poll_interval;
         let spool_dir = manifest_store_dir.join(TAIKAI_SPOOL_SUBDIR);
-        let sender = match HttpAnchorSender::new(anchor_cfg.request_timeout) {
-            Ok(sender) => sender,
-            Err(err) => {
-                iroha_logger::error!(?err, "failed to initialise Taikai anchor HTTP client");
-                return;
-            }
-        };
-        tokio::spawn(async move {
-            if let Err(err) = create_taikai_spool_dir_no_follow_async(&spool_dir).await {
-                iroha_logger::warn!(?err, ?spool_dir, "failed to prepare Taikai spool directory");
-            }
+        let sender = HttpAnchorSender::new(anchor_cfg.request_timeout)
+            .map_err(|err| format!("failed to initialise Taikai anchor HTTP client: {err}"))?;
+        create_taikai_spool_dir_no_follow_async(&spool_dir).await?;
+        let worker_shutdown = shutdown.clone();
+        Ok(tokio::spawn(async move {
             run_anchor_worker(spool_dir, anchor_cfg, sender, shutdown, poll_interval).await;
-        });
+            if worker_shutdown.is_sent() {
+                crate::ToriiCriticalWorkerExit::StoppedByShutdown
+            } else {
+                crate::ToriiCriticalWorkerExit::UnexpectedExit
+            }
+        }))
     }
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use tokio::{
@@ -3552,12 +3547,66 @@ pub(crate) mod taikai_ingest {
     #[cfg(test)]
     mod tests {
         use super::*;
+        fn anchor_worker_config(poll_interval: Duration) -> DaTaikaiAnchor {
+            DaTaikaiAnchor {
+                endpoint: reqwest::Url::parse("https://anchor.example")
+                    .expect("valid anchor endpoint"),
+                api_token: None,
+                receipt_public_key: test_anchor_receipt_public_key(),
+                poll_interval,
+                request_timeout: Duration::from_secs(1),
+            }
+        }
         fn anchor_test_base_id(sequence: usize) -> String {
             format!(
                 "00000001-0000000000000002-{sequence:016x}-\
                  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-\
                  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             )
+        }
+        #[tokio::test]
+        async fn anchor_worker_startup_is_fallible_and_shutdown_owned() {
+            let directory = tempfile::tempdir().expect("tempdir");
+            let shutdown = ShutdownSignal::new();
+            let zero_interval = spawn_anchor_worker(
+                directory.path().to_path_buf(),
+                anchor_worker_config(Duration::ZERO),
+                shutdown.clone(),
+            )
+            .await
+            .err()
+            .expect("zero interval must fail startup");
+            assert!(zero_interval.contains("greater than zero"));
+
+            fs::write(
+                directory.path().join(TAIKAI_SPOOL_SUBDIR),
+                b"not a directory",
+            )
+            .expect("block spool directory");
+            let invalid_store = spawn_anchor_worker(
+                directory.path().to_path_buf(),
+                anchor_worker_config(Duration::from_secs(1)),
+                shutdown,
+            )
+            .await
+            .err()
+            .expect("unsafe spool path must fail startup");
+            assert!(invalid_store.contains("Taikai spool directory"));
+
+            let directory = tempfile::tempdir().expect("valid worker tempdir");
+            let shutdown = ShutdownSignal::new();
+            let worker = spawn_anchor_worker(
+                directory.path().to_path_buf(),
+                anchor_worker_config(Duration::from_secs(1)),
+                shutdown.clone(),
+            )
+            .await
+            .expect("valid worker starts");
+            shutdown.send();
+            assert_eq!(
+                worker.await.expect("worker joins"),
+                crate::ToriiCriticalWorkerExit::StoppedByShutdown
+            );
         }
         #[test]
         fn taikai_artifact_size_accepts_boundary_and_rejects_overflow() {
@@ -3588,6 +3637,41 @@ pub(crate) mod taikai_ingest {
             assert!(
                 !dir.path().join(TAIKAI_SPOOL_SUBDIR).exists(),
                 "oversized append must not create the spool directory"
+            );
+        }
+        #[test]
+        fn unverified_anchor_sentinel_does_not_suppress_replayed_artifact() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage_ticket = StorageTicketId::new([0xAA; 32]);
+            let fingerprint = ReplayFingerprint::from_hash(blake3_hash(b"replayed-envelope"));
+            let base_id =
+                taikai_artifact_base_id(LaneId::new(1), 2, 3, &storage_ticket, &fingerprint);
+            let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+            fs::create_dir(&spool_dir).expect("create spool directory");
+            fs::write(
+                spool_dir.join(format!(
+                    "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+                )),
+                b"unverified receipt",
+            )
+            .expect("write unverified receipt");
+
+            let persisted = persist_envelope(
+                dir.path(),
+                LaneId::new(1),
+                2,
+                3,
+                &storage_ticket,
+                &fingerprint,
+                b"envelope",
+            )
+            .expect("replay must remain materialized for receipt verification");
+
+            assert!(persisted.is_some());
+            assert_eq!(
+                fs::read(spool_dir.join(format!("taikai-envelope-{base_id}.norito")))
+                    .expect("read replayed envelope"),
+                b"envelope"
             );
         }
         #[tokio::test]
@@ -3794,7 +3878,7 @@ pub(crate) mod taikai_ingest {
         }
     }
 }
-pub use taikai_ingest::spawn_anchor_worker;
+pub(crate) use taikai_ingest::spawn_anchor_worker;
 /// Extract the Taikai stream label from metadata for telemetry tagging.
 pub(crate) fn stream_label_from_metadata(metadata: &ExtraMetadata) -> Option<String> {
     metadata

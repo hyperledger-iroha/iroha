@@ -7245,7 +7245,7 @@ impl Iroha {
     /// The standard daemon entry point does not adapt the validator node key
     /// into `SoraFS` proof-outcome, repair, reserve/rent, orderbook, moderation,
     /// or Soracloud mutation/provenance authority roles. Those signers, moderation durable
-    /// handoffs, and all hedging/billing query, verification, HSM,
+    /// handoffs, and all hedging/billing query, verification, signing,
     /// publication, acknowledgement, and witness adapters must be supplied by
     /// an injecting launcher; enabling the dependent path without one fails
     /// closed. A private Musubi publication runner is likewise assembled only
@@ -7392,7 +7392,7 @@ impl Iroha {
                     .clone()
                     .ok_or_else(|| {
                         Report::new(StartError::StartTorii).attach(
-                            "enabled SoraFS provider-ingest runtime requires an injected governance-aware HSM/KMS signer resolver",
+                            "enabled SoraFS provider-ingest runtime requires an injected governance-aware signer resolver",
                         )
                     })?;
             let checkpoint_runtime = runtime_deps
@@ -10320,7 +10320,11 @@ impl Iroha {
             online_peers_provider,
             Some(sumeragi.clone()),
             runtime_deps,
-        );
+        )
+        .map_err(|error| {
+            Report::new(StartError::StartTorii)
+                .attach(format!("failed to construct Torii: {error}"))
+        })?;
         let torii = if emergency_fast {
             torii
         } else {
@@ -13340,10 +13344,9 @@ pub fn main_entry() {
 /// Run the standard CLI launcher with a deployment-owned provider registry.
 ///
 /// An external deployment binary can call this function after constructing a
-/// registry backed by PKCS#11, managed KMS, `WebAuthn`, authenticated HTTPS, or
-/// another reviewed runtime. Registry selection is an explicit launcher
-/// decision; no environment or config value dynamically loads executable
-/// provider code.
+/// registry backed by a reviewed deployment-owned runtime. Registry selection
+/// is an explicit launcher decision; no environment or config value
+/// dynamically loads executable provider code.
 ///
 /// Inrou V1 hosting is intentionally unavailable through external wrapper
 /// executables because its child self-exec dispatcher must run as the wrapper's
@@ -19695,8 +19698,12 @@ mod tests {
         #[test]
         fn manifest_crypto_applies_without_genesis_block() -> eyre::Result<()> {
             let genesis_keys = KeyPair::random();
-            let mut config_table = config_factory(genesis_keys.public_key());
+            let mut config_table = sample_config_table();
             iroha_config::base::toml::Writer::new(&mut config_table)
+                .write(
+                    ["genesis", "public_key"],
+                    genesis_keys.public_key().to_string(),
+                )
                 .write(["kura", "store_dir"], "./storage")
                 .write(["snapshot", "store_dir"], "./snapshots")
                 .write(["dev_telemetry", "out_file"], "./telemetry.log");

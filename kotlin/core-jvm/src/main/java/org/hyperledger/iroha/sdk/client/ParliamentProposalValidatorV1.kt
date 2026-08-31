@@ -48,9 +48,17 @@ internal object ParliamentProposalValidatorV1 {
     private fun deployContract(value: Map<String, Any?>) {
         exact(
             value,
-            setOf("contract_address", "code_hash", "abi_hash", "abi_version", "manifest_provenance"),
+            setOf(
+                "proposal_operator",
+                "contract_address",
+                "code_hash",
+                "abi_hash",
+                "abi_version",
+                "manifest_provenance",
+            ),
             "DeployContract",
         )
+        account(value["proposal_operator"], "proposal_operator")
         requireCanonicalV1ContractAddress(text(value["contract_address"], "contract_address"))
         lowerHex32(value["code_hash"], "code_hash")
         lowerHex32(value["abi_hash"], "abi_hash")
@@ -69,7 +77,8 @@ internal object ParliamentProposalValidatorV1 {
     }
 
     private fun runtimeUpgrade(value: Map<String, Any?>) {
-        exact(value, setOf("manifest"), "RuntimeUpgrade")
+        exact(value, setOf("proposal_operator", "manifest"), "RuntimeUpgrade")
+        account(value["proposal_operator"], "RuntimeUpgrade.proposal_operator")
         val manifest = objectValue(value["manifest"], "RuntimeUpgrade.manifest")
         exact(
             manifest,
@@ -375,8 +384,12 @@ internal object ParliamentProposalValidatorV1 {
     private fun contractLifecycle(value: Map<String, Any?>) {
         exact(
             value,
-            setOf("contract_address", "expected_revision", "action"),
+            setOf("proposal_operator", "contract_address", "expected_revision", "action"),
             "ContractLifecycleGovernance",
+        )
+        account(
+            value["proposal_operator"],
+            "ContractLifecycleGovernance.proposal_operator",
         )
         requireCanonicalV1ContractAddress(
             text(value["contract_address"], "ContractLifecycleGovernance.contract_address"),

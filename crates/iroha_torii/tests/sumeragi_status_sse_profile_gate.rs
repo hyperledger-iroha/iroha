@@ -50,11 +50,14 @@ fn build_torii(profile: TelemetryProfile) -> Torii {
         None,
         telemetry,
     )
+    .expect("valid Torii Sumeragi-SSE fixture")
 }
 #[tokio::test]
 async fn status_sse_allowed_under_extended_profile() {
     let torii = build_torii(TelemetryProfile::Extended);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let resp = app
         .oneshot(
             Request::builder()
@@ -75,7 +78,9 @@ async fn status_sse_allowed_under_extended_profile() {
 #[tokio::test]
 async fn status_sse_restricted_under_operator_profile() {
     let torii = build_torii(TelemetryProfile::Operator);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let resp = app
         .oneshot(
             Request::builder()

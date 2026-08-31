@@ -2,8 +2,9 @@
 //!
 //! The controller deliberately owns no credentials and performs no ambient DNS or HTTP access. Feed
 //! transport and catalog signatures cross explicit runtime boundaries so production embeddings can
-//! keep authentication material in their KMS/HSM and pin the exact addresses used for each
-//! connection. Enabled feed transports attest a stable V1 handle, revision, and canonical
+//! keep authentication material inside a qualified deployment-owned provider and pin the exact
+//! addresses used for each connection. Enabled feed transports attest a stable V1
+//! handle, revision, and canonical
 //! hostname/SPKI policy digest before checkpoint state is opened and again before and after every
 //! feed operation.
 use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};

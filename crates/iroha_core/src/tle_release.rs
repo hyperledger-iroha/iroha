@@ -86,6 +86,9 @@ pub enum TleKeySessionLifecycleValidationErrorV1 {
     /// Activation, expiry, or rotation bounds are empty or inverted.
     #[error("TLE key-session lifecycle height bounds are invalid")]
     InvalidHeightBounds,
+    /// A lifecycle head already records its one certified closure.
+    #[error("TLE key-session lifecycle selection is already closed")]
+    SelectionAlreadyClosed,
     /// The configured fresh-ballot budget is zero.
     #[error("TLE key-session lifecycle fresh-ballot budget is zero")]
     ZeroFreshBallotBudget,
@@ -123,6 +126,14 @@ pub struct TleKeySessionLifecycleV1 {
     pub expiry_height: u64,
     /// Last finalized height before expiry or a certified rotation cutover.
     pub selectable_through_height: u64,
+    /// Height through which a certified rotation or retirement kept this session selectable.
+    ///
+    /// `None` identifies the unique open lifecycle head. Keeping this marker
+    /// separately from `selectable_through_height` makes the active-head state
+    /// reconstructible even when a session is closed at or after its natural
+    /// expiry, where shortening the interval alone would be ambiguous.
+    #[norito(required)]
+    pub selection_closed_at_height: Option<u64>,
     /// Number of committed fresh ballot attempts that selected this session.
     pub fresh_ballot_uses: u32,
     /// Immutable ceiling on committed fresh ballot attempts for this session.
@@ -160,6 +171,7 @@ impl TleKeySessionLifecycleV1 {
             activation_height,
             expiry_height,
             selectable_through_height: expiry_height,
+            selection_closed_at_height: None,
             fresh_ballot_uses: 0,
             max_fresh_ballot_uses,
         })
@@ -184,6 +196,19 @@ impl TleKeySessionLifecycleV1 {
             || self.selectable_through_height > self.expiry_height
         {
             return Err(TleKeySessionLifecycleValidationErrorV1::InvalidHeightBounds);
+        }
+        match self.selection_closed_at_height {
+            None if self.selectable_through_height != self.expiry_height => {
+                return Err(TleKeySessionLifecycleValidationErrorV1::InvalidHeightBounds);
+            }
+            Some(closed_at_height)
+                if closed_at_height < self.activation_height
+                    || self.selectable_through_height
+                        != self.expiry_height.min(closed_at_height) =>
+            {
+                return Err(TleKeySessionLifecycleValidationErrorV1::InvalidHeightBounds);
+            }
+            None | Some(_) => {}
         }
         if self.max_fresh_ballot_uses == 0 {
             return Err(TleKeySessionLifecycleValidationErrorV1::ZeroFreshBallotBudget);
@@ -214,9 +239,19 @@ impl TleKeySessionLifecycleV1 {
         if height < self.activation_height {
             return Err(TleKeySessionLifecycleValidationErrorV1::InvalidHeightBounds);
         }
+        if self.selection_closed_at_height.is_some() {
+            return Err(TleKeySessionLifecycleValidationErrorV1::SelectionAlreadyClosed);
+        }
         self.selectable_through_height = self.selectable_through_height.min(height);
+        self.selection_closed_at_height = Some(height);
         self.validate()?;
         Ok(())
+    }
+
+    /// Return whether a certified rotation or retirement closed this lifecycle head.
+    #[must_use]
+    pub const fn selection_is_closed(self) -> bool {
+        self.selection_closed_at_height.is_some()
     }
 
     /// Consume exactly one fresh-ballot use at an eligible finalized height.
@@ -1219,7 +1254,7 @@ pub trait TleProjectedPartialReleaseSignerV1: Send + Sync {
 ///
 /// This adapter is for deployments whose secure runtime unwraps a share into
 /// process memory. It deliberately has no `Clone`, `Debug`, byte export, or
-/// serialization implementation. In-process HSM/KMS integrations implement
+/// serialization implementation. In-process deployment-owned providers implement
 /// [`TlePartialReleaseSignerV1`] directly; backends reached through the
 /// authenticated runtime broker implement
 /// [`TleProjectedPartialReleaseSignerV1`].
@@ -1525,8 +1560,36 @@ pub(crate) mod tests {
         lifecycle
             .cut_over_after(24)
             .expect("cut over after an active height");
+        assert_eq!(lifecycle.selection_closed_at_height, Some(24));
+        assert!(lifecycle.selection_is_closed());
         assert!(lifecycle.permits_fresh_ballot_at(24));
         assert!(!lifecycle.permits_fresh_ballot_at(25));
+        assert_eq!(
+            lifecycle.cut_over_after(25),
+            Err(TleKeySessionLifecycleValidationErrorV1::SelectionAlreadyClosed)
+        );
+
+        let mut missing_marker = lifecycle;
+        missing_marker.selection_closed_at_height = None;
+        assert_eq!(
+            missing_marker.validate(),
+            Err(TleKeySessionLifecycleValidationErrorV1::InvalidHeightBounds)
+        );
+
+        let mut closed_after_natural_expiry =
+            TleKeySessionLifecycleV1::new(key_session_id, 20, 10, 1)
+                .expect("construct second bounded lifecycle");
+        closed_after_natural_expiry
+            .cut_over_after(40)
+            .expect("closure after natural expiry is still explicit");
+        assert_eq!(closed_after_natural_expiry.selectable_through_height, 29);
+        assert_eq!(
+            closed_after_natural_expiry.selection_closed_at_height,
+            Some(40)
+        );
+        closed_after_natural_expiry
+            .validate()
+            .expect("explicit post-expiry closure is reconstructible");
     }
 
     struct Fixture {
@@ -2237,6 +2300,9 @@ pub(crate) mod tests {
         world
             .tle_active_key_session
             .insert(TLE_KEY_SESSION_SINGLETON_KEY, second_key_session_id);
+        world
+            .rebuild_governance_read_indexes_for_testing()
+            .expect("rebuild active TLE selection interval");
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -2287,12 +2353,20 @@ pub(crate) mod tests {
         world
             .tle_key_sessions
             .insert(successor_id, successor.validated.public_state().clone());
+        world.tle_key_session_lifecycles.insert(
+            successor_id,
+            TleKeySessionLifecycleV1::new(successor_id, 1, 100, 1)
+                .expect("active successor lifecycle"),
+        );
         world
             .tle_active_key_session
             .insert(TLE_KEY_SESSION_SINGLETON_KEY, successor_id);
         world
             .parliament_attempts
             .insert(attempt_id, retaining_attempt);
+        world
+            .rebuild_governance_read_indexes_for_testing()
+            .expect("rebuild the committed TLE retention index");
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -2301,8 +2375,7 @@ pub(crate) mod tests {
         let view = state.query_view();
         assert_eq!(
             view.world()
-                .tle_key_session_retention_deadline_v1(retiring_id)
-                .expect("validate every committed Parliament attempt"),
+                .tle_key_session_retention_deadline_v1(retiring_id),
             Some(62)
         );
         assert_eq!(

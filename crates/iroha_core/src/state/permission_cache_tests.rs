@@ -300,8 +300,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
     };
     let state = State::new(make_world(), Arc::clone(&kura), live_query);
     {
-        let mut params_block = state.world.parameters.block();
-        params_block.sumeragi.key_require_hsm = false;
+        let params_block = state.world.parameters.block();
         params_block.commit();
     }
     let mut recorded_blocks: Vec<Arc<SignedBlock>> = Vec::new();
@@ -512,8 +511,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
     };
     let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
     {
-        let mut params_block = state.world.parameters.block();
-        params_block.sumeragi.key_require_hsm = false;
+        let params_block = state.world.parameters.block();
         params_block.commit();
     }
     replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
@@ -639,8 +637,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
     };
     let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
     {
-        let mut params_block = state.world.parameters.block();
-        params_block.sumeragi.key_require_hsm = false;
+        let params_block = state.world.parameters.block();
         params_block.commit();
     }
     replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
@@ -754,8 +751,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
     };
     let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
     {
-        let mut params_block = state.world.parameters.block();
-        params_block.sumeragi.key_require_hsm = false;
+        let params_block = state.world.parameters.block();
         params_block.commit();
     }
     replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
@@ -861,8 +857,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
     };
     let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
     {
-        let mut params_block = state.world.parameters.block();
-        params_block.sumeragi.key_require_hsm = false;
+        let params_block = state.world.parameters.block();
         params_block.commit();
     }
     replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())

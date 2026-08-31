@@ -2,7 +2,7 @@
 //!
 //! Authoritative assignments come only from the daemon-owned immutable archive
 //! captured inside the Sumeragi commit corridor. Runtime-only source
-//! authentication and governed HSM/KMS signing remain deployment-injected
+//! authentication and governed external signing remain deployment-injected
 //! boundaries: config contains only identity-pinned opaque handles and public
 //! revision/policy-digest qualifications.
 use crate::sorafs_provider_ingest_finalized_query::{
@@ -325,7 +325,7 @@ pub trait ProviderIngestGovernedSignerResolverRuntimeV1: Send + Sync + 'static {
         ProviderIngestCompletionSignerBindingV1,
         ProviderIngestCompletionSignerResolverErrorV1,
     >;
-    /// Non-mutating HSM/KMS and governance-readiness probe.
+    /// Non-mutating signer and governance-readiness probe.
     ///
     /// # Errors
     ///

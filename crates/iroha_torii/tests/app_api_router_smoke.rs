@@ -67,8 +67,11 @@ async fn app_api_router_smoke() {
         state,
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
-    );
-    let app = torii.api_router_for_tests();
+    )
+    .expect("valid Torii app API fixture");
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     for path in ["/v1/soracloud/status", "/v1/soracloud/apps/status"] {
         let response = app
             .clone()
@@ -441,10 +444,11 @@ async fn app_api_router_smoke() {
 }
 #[tokio::test]
 async fn contract_routes_honor_api_token_requirement() {
+    const API_TOKEN: &str = "test-token-0000000000000000000000";
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
     cfg.torii.require_api_token = true;
-    cfg.torii.api_tokens = vec!["test-token".to_owned()];
+    cfg.torii.api_tokens = vec![API_TOKEN.to_owned()].into();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -473,8 +477,11 @@ async fn contract_routes_honor_api_token_requirement() {
         state,
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
-    );
-    let app = torii.api_router_for_tests();
+    )
+    .expect("valid Torii app API fixture");
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     for (method, path) in [
         ("POST", "/v1/contracts/deploy"),
         ("POST", "/v1/contracts/deploy-bundle"),
@@ -489,7 +496,7 @@ async fn contract_routes_honor_api_token_requirement() {
                 Request::builder()
                     .method(method)
                     .uri(path)
-                    .header("x-api-token", "test-token")
+                    .header("x-api-token", API_TOKEN)
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(axum::body::Body::empty())
                     .unwrap(),
@@ -503,7 +510,7 @@ async fn contract_routes_honor_api_token_requirement() {
         Request::builder()
             .method("POST")
             .uri(Uri::from_static("/v1/contracts/call"))
-            .header("x-api-token", "test-token")
+            .header("x-api-token", API_TOKEN)
             .header(axum::http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from("{}"))
             .unwrap(),
@@ -514,7 +521,7 @@ async fn contract_routes_honor_api_token_requirement() {
         Request::builder()
             .method("POST")
             .uri(Uri::from_static("/v1/contracts/view"))
-            .header("x-api-token", "test-token")
+            .header("x-api-token", API_TOKEN)
             .header(axum::http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from("{}"))
             .unwrap(),
@@ -525,7 +532,7 @@ async fn contract_routes_honor_api_token_requirement() {
         Request::builder()
             .method("POST")
             .uri(Uri::from_static("/v1/contracts/view/batch"))
-            .header("x-api-token", "test-token")
+            .header("x-api-token", API_TOKEN)
             .header(axum::http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from("{}"))
             .unwrap(),
@@ -535,7 +542,7 @@ async fn contract_routes_honor_api_token_requirement() {
         app.clone(),
         Request::builder()
             .uri(Uri::from_static("/v1/contracts/state"))
-            .header("x-api-token", "test-token")
+            .header("x-api-token", API_TOKEN)
             .body(axum::body::Body::empty())
             .unwrap(),
     )

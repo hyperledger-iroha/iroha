@@ -4401,7 +4401,7 @@ pub struct ProofApiLimits {
     /// Retry hint advertised on throttling responses.
     pub retry_after: std::time::Duration,
     /// Maximum proof request payload size (bytes).
-    pub max_body_bytes: u64,
+    pub max_body_bytes: usize,
     /// Absolute deadline for reading one admitted proof request body.
     pub body_read_timeout: std::time::Duration,
 }
@@ -4412,7 +4412,7 @@ impl ProofApiLimits {
         request_timeout: std::time::Duration,
         cache_max_age: std::time::Duration,
         retry_after: std::time::Duration,
-        max_body_bytes: u64,
+        max_body_bytes: usize,
         body_read_timeout: std::time::Duration,
     ) -> Self {
         Self {
@@ -4436,7 +4436,8 @@ impl Default for ProofApiLimits {
                 defaults::torii::PROOF_CACHE_MAX_AGE_SECS,
             ),
             retry_after: std::time::Duration::from_secs(defaults::torii::PROOF_RETRY_AFTER_SECS),
-            max_body_bytes: defaults::torii::PROOF_MAX_BODY_BYTES.get(),
+            max_body_bytes: usize::try_from(defaults::torii::PROOF_MAX_BODY_BYTES.get())
+                .expect("default proof body limit fits the platform address space"),
             body_read_timeout: std::time::Duration::from_millis(
                 defaults::torii::PROOF_BODY_READ_TIMEOUT_MS,
             ),
@@ -5902,7 +5903,6 @@ mod consensus_key_response_bounds_tests {
                 pop: None,
                 activation_height: height as u64,
                 expiry_height: None,
-                hsm: None,
                 replaces: None,
                 status: ConsensusKeyStatus::Active,
             })
@@ -7110,10 +7110,6 @@ mod sccp_first_release_api_tests {
             )
             .expect("exact SCCP route registry"),
         );
-        let replay_accumulator_id = iroha_data_model::bridge::SccpReplayAccumulatorIdV1 {
-            route_key: fixture.route.key(),
-            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
-        };
         let replay_domain = iroha_data_model::bridge::SccpReplayDomainV1 {
             source_network: fixture.bundle.commitment.context.lane.source,
             target_network: fixture.bundle.commitment.context.lane.target,
@@ -7122,6 +7118,12 @@ mod sccp_first_release_api_tests {
             route_configuration_hash: fixture.bundle.commitment.context.route_configuration_hash,
             actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
         };
+        let replay_accumulator_id =
+            iroha_data_model::bridge::SccpReplayAccumulatorIdV1::from_domain(
+                fixture.route.key(),
+                &replay_domain,
+            )
+            .expect("exact SCCP replay domain matches the governed route");
         let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &fixture.bundle.payload;
         let sender_literal =
             core::str::from_utf8(&transfer.sender).expect("exact SCCP sender is canonical UTF-8");
@@ -11678,8 +11680,7 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
     map.insert("recorded_ms".into(), Value::from(rec.recorded_at_ms));
     map.insert(
         "consensus_admitted_height".into(),
-        rec.consensus_admitted_at_height
-            .map_or(Value::Null, Value::from),
+        Value::from(rec.recorded_at_height),
     );
     Value::Object(map)
 }
@@ -37173,27 +37174,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
         _ => None,
     };
     let entry_hash_typed = tx.entrypoint_hash().clone();
-    // Keep result_ok semantics consistent with projection: if External entrypoint
-    // carries an empty instruction list, treat it as ok for app-facing filters,
-    // even if the transaction hasn't been executed in tests.
-    let result_ok = {
-        let default_ok = match tx.entrypoint() {
-            iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
-                match signed.instructions() {
-                    iroha_data_model::transaction::executable::Executable::Instructions(v) => {
-                        v.as_ref().is_empty()
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        };
-        if default_ok {
-            true
-        } else {
-            tx.result().as_ref().is_ok()
-        }
-    };
+    let result_ok = tx.result().as_ref().is_ok();
     // String fallback is retained for entrypoint variants whose timestamp is
     // exposed by `tx_field_value` but is not available through `ts_ms_opt`.
     let ts_fallback = tx_field_value(tx, "timestamp_ms");
@@ -37505,24 +37486,7 @@ fn project_tx(
     let entrypoint_kind =
         tx_field_value(tx, "entrypoint_kind").unwrap_or_else(|| "unknown".to_owned());
     let entry_hash = format!("{}", tx.entrypoint_hash());
-    let result_ok = {
-        let default_ok = match tx.entrypoint() {
-            iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
-                match signed.instructions() {
-                    iroha_data_model::transaction::executable::Executable::Instructions(v) => {
-                        v.as_ref().is_empty()
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        };
-        if default_ok {
-            true
-        } else {
-            tx.result().as_ref().is_ok()
-        }
-    };
+    let result_ok = tx.result().as_ref().is_ok();
     if selector.is_some() {
         // Respect selector by including only requested fields; always include entrypoint_hash and result_ok for sorting/consistency.
         let mut proj = TxProjection::default();
@@ -39585,6 +39549,36 @@ mod sse_filter_tests {
         assert!(filters.iter().any(|f| f.matches(&ev_block_committed)));
         assert!(!filters.iter().any(|f| f.matches(&ev_block_created)));
     }
+    routing_test! { sync contract_projection_waits_for_applied_block
+        let committed: EventBox = BlockEvent {
+            header: BlockHeader::new(nonzero!(7_u64), None, None, None, 0, 0),
+            status: BlockStatus::Committed,
+        }
+        .into();
+        let applied: EventBox = BlockEvent {
+            header: BlockHeader::new(nonzero!(7_u64), None, None, None, 0, 0),
+            status: BlockStatus::Applied,
+        }
+        .into();
+
+        assert_eq!(committed_block_height(&committed), Some(7));
+        assert!(applied_block_heights(&committed).is_empty());
+        assert_eq!(applied_block_heights(&applied), vec![7]);
+        let EventBox::Pipeline(applied_event) = applied else {
+            unreachable!();
+        };
+        assert_eq!(
+            applied_block_heights(&EventBox::PipelineBatch(vec![
+                applied_event.clone(),
+                PipelineEventBox::Block(BlockEvent {
+                    header: BlockHeader::new(nonzero!(8_u64), None, None, None, 0, 0),
+                    status: BlockStatus::Applied,
+                }),
+                applied_event,
+            ])),
+            vec![7, 8]
+        );
+    }
     routing_test! { sync tx_hash_eq_builds_matching_filter
         // Build two distinct tx hashes and use the first one in the filter
         let h_match = HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
@@ -40914,10 +40908,6 @@ mod tx_query_filter_tests {
         assert!(filter_tx(&nin_true, &tx_false));
     }
     routing_test! { sync filter_result_ok_eq_matches
-        // NOTE: For app-facing filters on transactions, empty-instruction Externals are
-        // treated as logically-ok for filtering purposes, even if a dummy error is set
-        // in the test transaction. This keeps filtering aligned with projections used
-        // by integration tests which don’t execute instructions.
         let (a, kp) = account_with_key();
         let tx_true = make_external_tx(&a, &kp, 100, None, true);
         let tx_false = make_external_tx(&a, &kp, 100, None, false);
@@ -40926,12 +40916,12 @@ mod tx_query_filter_tests {
             norito::json::Value::Bool(true),
         );
         assert!(filter_tx(&expr_true, &tx_true));
-        assert!(filter_tx(&expr_true, &tx_false));
+        assert!(!filter_tx(&expr_true, &tx_false));
         let expr_false = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("result_ok".into()),
             norito::json::Value::Bool(false),
         );
-        assert!(!filter_tx(&expr_false, &tx_false));
+        assert!(filter_tx(&expr_false, &tx_false));
         assert!(!filter_tx(&expr_false, &tx_true));
     }
     routing_test! { sync filter_not_and_or_across_fields
@@ -43582,36 +43572,51 @@ pub fn handle_v1_contracts_events_sse(
                         recv = state.rx.recv() => {
                             match recv {
                                 Ok(event_box) => {
-                                    let Some(height) = committed_block_height(&event_box) else {
-                                        continue;
-                                    };
-                                    if state
-                                        .last_block_height
-                                        .is_some_and(|last_height| height <= last_height)
-                                    {
+                                    let heights = applied_block_heights(&event_box);
+                                    if heights.is_empty() {
                                         continue;
                                     }
-                                    state.last_block_height = Some(height);
-                                    let Ok(height_usize) = usize::try_from(height) else {
-                                        iroha_logger::warn!(
-                                            height,
-                                            "failed to emit contract event SSE payload: block height exceeds host pointer width"
-                                        );
-                                        continue;
-                                    };
-                                    for projection in contract_event_projections_for_height_range(
-                                        state.state.as_ref(),
-                                        height_usize,
-                                        height_usize,
-                                    ) {
-                                        if contract_event_projection_is_visible(
-                                            state.state.as_ref(),
-                                            &visibility.current_visibility(),
-                                            &projection,
-                                        ) && contract_event_matches(&projection, &query)
+                                    for height in heights {
+                                        if state
+                                            .last_block_height
+                                            .is_some_and(|last_height| height <= last_height)
                                         {
-                                            state.pending.push_back(projection);
+                                            continue;
                                         }
+                                        let first_height = state
+                                            .last_block_height
+                                            .map_or(height, |last_height| {
+                                                last_height.saturating_add(1)
+                                            });
+                                        let (Ok(first_height), Ok(last_height)) = (
+                                            usize::try_from(first_height),
+                                            usize::try_from(height),
+                                        ) else {
+                                            state.pending.clear();
+                                            state.terminal = true;
+                                            let ev = stream_error_event(
+                                                "stream_height_unsupported",
+                                                "A contract event block height exceeds this server's address space.",
+                                                None,
+                                            );
+                                            return Some((Ok(ev), state));
+                                        };
+                                        let current_visibility = visibility.current_visibility();
+                                        for projection in contract_event_projections_for_height_range(
+                                            state.state.as_ref(),
+                                            first_height,
+                                            last_height,
+                                        ) {
+                                            if contract_event_projection_is_visible(
+                                                state.state.as_ref(),
+                                                &current_visibility,
+                                                &projection,
+                                            ) && contract_event_matches(&projection, &query)
+                                            {
+                                                state.pending.push_back(projection);
+                                            }
+                                        }
+                                        state.last_block_height = Some(height);
                                     }
                                 }
                                 Err(RecvError::Lagged(dropped_messages)) => {
@@ -44211,6 +44216,29 @@ fn committed_block_height(event: &EventBox) -> Option<u64> {
         _ => None,
     }
 }
+fn applied_block_heights(event: &EventBox) -> Vec<u64> {
+    let mut heights = Vec::new();
+    match event {
+        EventBox::Pipeline(PipelineEventBox::Block(block_event))
+            if matches!(block_event.status(), BlockStatus::Applied) =>
+        {
+            heights.push(block_event.header().height().get());
+        }
+        EventBox::PipelineBatch(events) => {
+            heights.extend(events.iter().filter_map(|event| {
+                let PipelineEventBox::Block(block_event) = event else {
+                    return None;
+                };
+                matches!(block_event.status(), BlockStatus::Applied)
+                    .then(|| block_event.header().height().get())
+            }));
+        }
+        _ => {}
+    }
+    heights.sort_unstable();
+    heights.dedup();
+    heights
+}
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 struct TelemetryLiveSnapshot {
     peers_info: Vec<crate::telemetry::peers::PeerInfoDto>,
@@ -44485,13 +44513,14 @@ pub fn handle_v1_gov_stream(
     events: EventsSender,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let stream = stream::unfold(
-        (events.subscribe(), VecDeque::<Value>::new()),
-        |(mut rx, mut pending)| async move {
+        Some((events.subscribe(), VecDeque::<Value>::new())),
+        |state| async move {
             use tokio::sync::broadcast::error::RecvError;
+            let (mut rx, mut pending) = state?;
             loop {
                 if let Some(payload) = pending.pop_front() {
                     let body = norito::json::to_json(&payload).unwrap_or_else(|_| "{}".to_owned());
-                    return Some((Ok(SseEvent::default().data(body)), (rx, pending)));
+                    return Some((Ok(SseEvent::default().data(body)), Some((rx, pending))));
                 }
                 match rx.recv().await {
                     Ok(event_box) => {
@@ -44499,13 +44528,20 @@ pub fn handle_v1_gov_stream(
                         if updates.is_empty() {
                             return Some((
                                 Ok(SseEvent::default().comment("ignored")),
-                                (rx, pending),
+                                Some((rx, pending)),
                             ));
                         }
                         pending.extend(updates);
                     }
-                    Err(RecvError::Lagged(_)) => {
-                        return Some((Ok(SseEvent::default().comment("lagged")), (rx, pending)));
+                    Err(RecvError::Lagged(dropped_messages)) => {
+                        return Some((
+                            Ok(stream_error_event(
+                                "stream_lagged",
+                                "The governance stream lost buffered events and cannot replay them.",
+                                Some(dropped_messages),
+                            )),
+                            None,
+                        ));
                     }
                     Err(RecvError::Closed) => return None,
                 }
@@ -45286,18 +45322,19 @@ pub fn handle_v1_kaigi_call_events_sse(
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let kind_filter = parse_kaigi_call_kind_filter(params.kind.as_deref());
     let stream = stream::unfold(
-        (events.subscribe(), kind_filter),
-        move |(mut rx, kind_filter)| {
+        Some((events.subscribe(), kind_filter)),
+        move |state| {
             let call_id = call_id.clone();
             async move {
                 use tokio::sync::broadcast::error::RecvError;
+                let (mut rx, kind_filter) = state?;
                 match rx.recv().await {
                     Ok(event_box) => {
                         let Some((kind, payload)) = convert_kaigi_call_event(&event_box, &call_id)
                         else {
                             return Some((
                                 Ok(SseEvent::default().comment("ignored")),
-                                (rx, kind_filter),
+                                Some((rx, kind_filter)),
                             ));
                         };
                         let matches_kind =
@@ -45309,11 +45346,16 @@ pub fn handle_v1_kaigi_call_events_sse(
                         } else {
                             SseEvent::default().comment("filtered")
                         };
-                        Some((Ok(event), (rx, kind_filter)))
+                        Some((Ok(event), Some((rx, kind_filter))))
                     }
-                    Err(RecvError::Lagged(_)) => {
-                        Some((Ok(SseEvent::default().comment("lagged")), (rx, kind_filter)))
-                    }
+                    Err(RecvError::Lagged(dropped_messages)) => Some((
+                        Ok(stream_error_event(
+                            "stream_lagged",
+                            "The Kaigi call stream lost buffered events and cannot replay them.",
+                            Some(dropped_messages),
+                        )),
+                        None,
+                    )),
                     Err(RecvError::Closed) => None,
                 }
             }
@@ -45333,16 +45375,22 @@ pub fn handle_v1_kaigi_relays_sse(
     let relay_filter = params.relay;
     let kind_filter = parse_kaigi_kind_filter(params.kind.as_deref());
     let stream = stream::unfold(
-        (events.subscribe(), domain_filter, relay_filter, kind_filter),
-        |(mut rx, domain_filter, relay_filter, kind_filter)| async move {
+        Some((
+            events.subscribe(),
+            domain_filter,
+            relay_filter,
+            kind_filter,
+        )),
+        |state| async move {
             use tokio::sync::broadcast::error::RecvError;
+            let (mut rx, domain_filter, relay_filter, kind_filter) = state?;
             match rx.recv().await {
                 Ok(event_box) => {
                     let Some((kind, domain, relay, payload)) = convert_kaigi_event(&event_box)
                     else {
                         return Some((
                             Ok(SseEvent::default().comment("ignored")),
-                            (rx, domain_filter, relay_filter, kind_filter),
+                            Some((rx, domain_filter, relay_filter, kind_filter)),
                         ));
                     };
                     let domain_lower = domain.to_ascii_lowercase();
@@ -45362,11 +45410,18 @@ pub fn handle_v1_kaigi_relays_sse(
                     } else {
                         SseEvent::default().comment("filtered")
                     };
-                    Some((Ok(event), (rx, domain_filter, relay_filter, kind_filter)))
+                    Some((
+                        Ok(event),
+                        Some((rx, domain_filter, relay_filter, kind_filter)),
+                    ))
                 }
-                Err(RecvError::Lagged(_)) => Some((
-                    Ok(SseEvent::default().comment("lagged")),
-                    (rx, domain_filter, relay_filter, kind_filter),
+                Err(RecvError::Lagged(dropped_messages)) => Some((
+                    Ok(stream_error_event(
+                        "stream_lagged",
+                        "The Kaigi relay stream lost buffered events and cannot replay them.",
+                        Some(dropped_messages),
+                    )),
+                    None,
                 )),
                 Err(RecvError::Closed) => None,
             }
@@ -45400,8 +45455,9 @@ pub fn handle_v1_soradns_directory_latest(state: Arc<CoreState>) -> Result<JsonV
 pub fn handle_v1_soradns_directory_events_sse(
     events: EventsSender,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
-    let stream = stream::unfold(events.subscribe(), |mut rx| async move {
+    let stream = stream::unfold(Some(events.subscribe()), |state| async move {
         use tokio::sync::broadcast::error::RecvError;
+        let mut rx = state?;
         match rx.recv().await {
             Ok(event_box) => {
                 let event = convert_soradns_event(&event_box).map(|payload| {
@@ -45409,9 +45465,16 @@ pub fn handle_v1_soradns_directory_events_sse(
                     SseEvent::default().event("soradns.directory").data(body)
                 });
                 let out = event.unwrap_or_else(|| SseEvent::default().comment("ignored"));
-                Some((Ok(out), rx))
+                Some((Ok(out), Some(rx)))
             }
-            Err(RecvError::Lagged(_)) => Some((Ok(SseEvent::default().comment("lagged")), rx)),
+            Err(RecvError::Lagged(dropped_messages)) => Some((
+                Ok(stream_error_event(
+                    "stream_lagged",
+                    "The SoraDNS directory stream lost buffered events and cannot replay them.",
+                    Some(dropped_messages),
+                )),
+                None,
+            )),
             Err(RecvError::Closed) => None,
         }
     });
@@ -46696,6 +46759,25 @@ mod sse_stream_tests {
             .expect("UTF-8 SSE frame")
             .to_owned()
     }
+    async fn assert_lagged_stream_is_terminal(
+        events: &EventsSender,
+        response: axum::response::Response,
+    ) {
+        let mut body = response.into_body();
+        events
+            .send(queued_transaction_event(0x71))
+            .expect("send first lag fixture");
+        events
+            .send(queued_transaction_event(0x72))
+            .expect("send second lag fixture");
+        let error_frame = next_sse_chunk(&mut body).await;
+        assert!(error_frame.contains("event: stream_error"));
+        assert!(error_frame.contains("\"code\":\"stream_lagged\""));
+        let terminal = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("lagged stream should terminate");
+        assert!(terminal.is_none());
+    }
     fn queued_transaction_event(byte: u8) -> EventBox {
         let hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
             [byte; Hash::LENGTH],
@@ -46801,6 +46883,36 @@ mod sse_stream_tests {
             terminal.is_none(),
             "lagged stream must close after its error event"
         );
+    }
+    routing_test! { async app_specific_sse_streams_fail_closed_after_lag
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let response = handle_v1_gov_stream(events.clone()).into_response();
+        assert_lagged_stream_is_terminal(&events, response).await;
+
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain"),
+            "lag-test".parse().expect("call name"),
+        );
+        let response = handle_v1_kaigi_call_events_sse(
+            events.clone(),
+            call_id,
+            crate::NoritoQuery(KaigiCallEventsParams::default()),
+        )
+        .into_response();
+        assert_lagged_stream_is_terminal(&events, response).await;
+
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let response = handle_v1_kaigi_relays_sse(
+            events.clone(),
+            crate::NoritoQuery(KaigiRelayEventsParams::default()),
+        )
+        .into_response();
+        assert_lagged_stream_is_terminal(&events, response).await;
+
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let response = handle_v1_soradns_directory_events_sse(events.clone()).into_response();
+        assert_lagged_stream_is_terminal(&events, response).await;
     }
     routing_test! { async sse_idle_stream_emits_heartbeat_comment
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -58679,7 +58791,7 @@ fn prepared_submit_outcome(
     let entrypoint_hash =
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone());
     if app.state.has_committed_entrypoint(entrypoint_hash) {
-        let status = crate::pipeline_status_from_state(app.as_ref(), transaction_hash)?
+        let status = crate::pipeline_status_from_state(&app.state, &app.kura, transaction_hash)?
             .ok_or(Error::AppServiceUnavailable {
                 code: "prepared_transaction_status_unavailable",
                 message: "the exact prepared transaction is committed but its canonical outcome is unavailable"
@@ -69298,9 +69410,6 @@ fn projection_archive_unavailable_error(message: impl Into<String>) -> Error {
 }
 fn asset_holder_live_aggregate_enabled() -> bool {
     cfg!(test)
-        || std::env::var("IROHA_TORII_ALLOW_LIVE_ASSET_HOLDER_AGGREGATE")
-            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
 }
 fn is_valid_aggregate_alias(alias: &str) -> bool {
     let mut chars = alias.chars();
@@ -71122,8 +71231,7 @@ fn ensure_status_visible(telemetry: &MaybeTelemetry, endpoint: &'static str) -> 
 }
 #[cfg(feature = "telemetry")]
 fn status_scalar_response(value: u64) -> Result<Response> {
-    let body = norito::json::to_json(&value)
-        .map_err(|error| Error::StatusFailure(eyre!(error)))?;
+    let body = norito::json::to_json(&value).map_err(|error| Error::StatusFailure(eyre!(error)))?;
     let mut response = axum::response::Response::new(axum::body::Body::from(body));
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -71194,8 +71302,8 @@ pub async fn handle_status(
     };
     match format {
         crate::utils::ResponseFormat::Norito => {
-            let bytes = norito::to_bytes(&status)
-                .map_err(|err| Error::StatusFailure(eyre!(err)))?;
+            let bytes =
+                norito::to_bytes(&status).map_err(|err| Error::StatusFailure(eyre!(err)))?;
             let mut resp = axum::response::Response::new(axum::body::Body::from(bytes));
             resp.headers_mut().insert(
                 axum::http::header::CONTENT_TYPE,

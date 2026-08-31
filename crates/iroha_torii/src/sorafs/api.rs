@@ -282,7 +282,6 @@ use sorafs_orchestrator::appeals::{
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{RwLock, broadcast};
-use urlencoding::decode;
 const HEADER_SORA_REQ_BLINDED_CID: &str = "sora-req-blinded-cid";
 const HEADER_SORA_REQ_SALT_EPOCH: &str = "sora-req-salt-epoch";
 const HEADER_SORA_REQ_NONCE: &str = "sora-req-nonce";
@@ -2341,6 +2340,8 @@ pub struct StorageStoredFileDto {
 }
 const DEFAULT_LIST_LIMIT: usize = 50;
 const MAX_LIST_LIMIT: usize = 500;
+const READBACK_QUERY_MAX_BYTES_V1: usize = 1_024;
+const READBACK_QUERY_MAX_PARAMETERS_V1: usize = 8;
 const REPUTATION_MAX_PAGE_ITEMS_V1: u16 = 500;
 const REPUTATION_QUERY_MAX_BYTES_V1: usize = 1_024;
 const REPUTATION_LATEST_PATH_V1: &str = "/v1/sorafs/reputation/latest";
@@ -2506,137 +2507,127 @@ struct CapacityStateReadbackQuery {
 }
 impl PinListQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        if let Some(raw) = raw {
-            if raw.contains('%') {
-                return Err(ResponseError::from(json_error(
-                    StatusCode::BAD_REQUEST,
-                    "percent-encoded finalized SoraFS pin-list query spellings are not accepted",
-                )));
-            }
-            if raw.split('&').any(str::is_empty) {
-                return Err(ResponseError::from(json_error(
-                    StatusCode::BAD_REQUEST,
-                    "empty finalized SoraFS pin-list query segments are not accepted",
-                )));
-            }
-        }
         let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => {
-                if query.limit.is_some() {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "duplicate limit",
-                    )));
+        walk_canonical_readback_query_params(raw, "finalized SoraFS pin-list", |key, value| {
+            match key {
+                "limit" => {
+                    if query.limit.is_some() {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "duplicate limit",
+                        )));
+                    }
+                    let limit = parse_canonical_nonzero_u32_query(value, "limit")?;
+                    if limit > PIN_MANIFEST_QUERY_MAX_ITEMS_V1 {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            format!("limit must be 1..={PIN_MANIFEST_QUERY_MAX_ITEMS_V1}"),
+                        )));
+                    }
+                    query.limit = Some(limit);
+                    Ok(())
                 }
-                let limit = parse_canonical_nonzero_u32_query(value, "limit")?;
-                if limit > PIN_MANIFEST_QUERY_MAX_ITEMS_V1 {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        format!("limit must be 1..={PIN_MANIFEST_QUERY_MAX_ITEMS_V1}"),
-                    )));
+                "max_bytes" => {
+                    if query.max_bytes.is_some() {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "duplicate max_bytes",
+                        )));
+                    }
+                    let max_bytes = parse_canonical_nonzero_u32_query(value, "max_bytes")?;
+                    if !(PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1
+                        ..=PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1)
+                        .contains(&max_bytes)
+                    {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            format!(
+                                "max_bytes must be {PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1}..={PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1}"
+                            ),
+                        )));
+                    }
+                    query.max_bytes = Some(max_bytes);
+                    Ok(())
                 }
-                query.limit = Some(limit);
-                Ok(())
-            }
-            "max_bytes" => {
-                if query.max_bytes.is_some() {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "duplicate max_bytes",
-                    )));
-                }
-                let max_bytes = parse_canonical_nonzero_u32_query(value, "max_bytes")?;
-                if !(PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1..=PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1)
-                    .contains(&max_bytes)
-                {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        format!(
-                            "max_bytes must be {PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1}..={PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1}"
-                        ),
-                    )));
-                }
-                query.max_bytes = Some(max_bytes);
-                Ok(())
-            }
-            "after_digest_hex" => {
-                if query.after_digest_hex.is_some() {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "duplicate after_digest_hex",
-                    )));
-                }
-                let digest = parse_canonical_hex_fixed::<32>(value, "after_digest_hex").map_err(
-                    |error| ResponseError::from(json_error(StatusCode::BAD_REQUEST, error)),
-                )?;
-                if digest == [0; 32] {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "after_digest_hex must be non-zero",
-                    )));
-                }
-                query.after_digest_hex = Some(value.to_owned());
-                Ok(())
-            }
-            "expected_finalized_height" => {
-                if query.expected_finalized_height.is_some() {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "duplicate expected_finalized_height",
-                    )));
-                }
-                query.expected_finalized_height = Some(parse_canonical_nonzero_u64_query(
-                    value,
-                    "expected_finalized_height",
-                )?);
-                Ok(())
-            }
-            "expected_finalized_block_hash_hex" => {
-                if query.expected_finalized_block_hash_hex.is_some() {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "duplicate expected_finalized_block_hash_hex",
-                    )));
-                }
-                let block_hash =
-                    parse_canonical_hex_fixed::<32>(value, "expected_finalized_block_hash_hex")
+                "after_digest_hex" => {
+                    if query.after_digest_hex.is_some() {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "duplicate after_digest_hex",
+                        )));
+                    }
+                    let digest = parse_canonical_hex_fixed::<32>(value, "after_digest_hex")
                         .map_err(|error| {
                             ResponseError::from(json_error(StatusCode::BAD_REQUEST, error))
                         })?;
-                if block_hash == [0; 32] {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "expected_finalized_block_hash_hex must be non-zero",
-                    )));
-                }
-                query.expected_finalized_block_hash_hex = Some(value.to_owned());
-                Ok(())
-            }
-            "status" => {
-                if query.status.is_some() {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "duplicate status",
-                    )));
-                }
-                query.status = Some(match value {
-                    "pending" => PinStatusKindV1::Pending,
-                    "approved" => PinStatusKindV1::Approved,
-                    "retired" => PinStatusKindV1::Retired,
-                    _ => {
+                    if digest == [0; 32] {
                         return Err(ResponseError::from(json_error(
                             StatusCode::BAD_REQUEST,
-                            "status must be pending, approved, or retired",
+                            "after_digest_hex must be non-zero",
                         )));
                     }
-                });
-                Ok(())
+                    query.after_digest_hex = Some(value.to_owned());
+                    Ok(())
+                }
+                "expected_finalized_height" => {
+                    if query.expected_finalized_height.is_some() {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "duplicate expected_finalized_height",
+                        )));
+                    }
+                    query.expected_finalized_height = Some(parse_canonical_nonzero_u64_query(
+                        value,
+                        "expected_finalized_height",
+                    )?);
+                    Ok(())
+                }
+                "expected_finalized_block_hash_hex" => {
+                    if query.expected_finalized_block_hash_hex.is_some() {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "duplicate expected_finalized_block_hash_hex",
+                        )));
+                    }
+                    let block_hash =
+                        parse_canonical_hex_fixed::<32>(value, "expected_finalized_block_hash_hex")
+                            .map_err(|error| {
+                                ResponseError::from(json_error(StatusCode::BAD_REQUEST, error))
+                            })?;
+                    if block_hash == [0; 32] {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "expected_finalized_block_hash_hex must be non-zero",
+                        )));
+                    }
+                    query.expected_finalized_block_hash_hex = Some(value.to_owned());
+                    Ok(())
+                }
+                "status" => {
+                    if query.status.is_some() {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "duplicate status",
+                        )));
+                    }
+                    query.status = Some(match value {
+                        "pending" => PinStatusKindV1::Pending,
+                        "approved" => PinStatusKindV1::Approved,
+                        "retired" => PinStatusKindV1::Retired,
+                        _ => {
+                            return Err(ResponseError::from(json_error(
+                                StatusCode::BAD_REQUEST,
+                                "status must be pending, approved, or retired",
+                            )));
+                        }
+                    });
+                    Ok(())
+                }
+                _ => Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("unknown finalized SoraFS pin-list query parameter `{key}`"),
+                ))),
             }
-            _ => Err(ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("unknown finalized SoraFS pin-list query parameter `{key}`"),
-            ))),
         })?;
         query
             .expected_finalized_cursor()
@@ -2661,48 +2652,52 @@ impl PinListQuery {
 impl PinManifestReadbackQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "expected_finalized_height" => {
-                if query.expected_finalized_height.is_some() || value.is_empty() {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "duplicate or empty expected_finalized_height",
-                    )));
+        walk_canonical_readback_query_params(
+            raw,
+            "finalized SoraFS pin-manifest",
+            |key, value| match key {
+                "expected_finalized_height" => {
+                    if query.expected_finalized_height.is_some() || value.is_empty() {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "duplicate or empty expected_finalized_height",
+                        )));
+                    }
+                    if !value
+                        .as_bytes()
+                        .first()
+                        .is_some_and(|first| matches!(*first, b'1'..=b'9'))
+                        || !value.bytes().all(|byte| byte.is_ascii_digit())
+                    {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "expected_finalized_height must be a canonical non-zero unsigned integer",
+                        )));
+                    }
+                    query.expected_finalized_height = Some(value.parse::<u64>().map_err(|_| {
+                        ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "expected_finalized_height exceeds the supported range",
+                        ))
+                    })?);
+                    Ok(())
                 }
-                if !value
-                    .as_bytes()
-                    .first()
-                    .is_some_and(|first| matches!(*first, b'1'..=b'9'))
-                    || !value.bytes().all(|byte| byte.is_ascii_digit())
-                {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "expected_finalized_height must be a canonical non-zero unsigned integer",
-                    )));
+                "expected_finalized_block_hash_hex" => {
+                    if query.expected_finalized_block_hash_hex.is_some() || value.is_empty() {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "duplicate or empty expected_finalized_block_hash_hex",
+                        )));
+                    }
+                    query.expected_finalized_block_hash_hex = Some(value.to_owned());
+                    Ok(())
                 }
-                query.expected_finalized_height = Some(value.parse::<u64>().map_err(|_| {
-                    ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "expected_finalized_height exceeds the supported range",
-                    ))
-                })?);
-                Ok(())
-            }
-            "expected_finalized_block_hash_hex" => {
-                if query.expected_finalized_block_hash_hex.is_some() || value.is_empty() {
-                    return Err(ResponseError::from(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "duplicate or empty expected_finalized_block_hash_hex",
-                    )));
-                }
-                query.expected_finalized_block_hash_hex = Some(value.to_owned());
-                Ok(())
-            }
-            _ => Err(ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("unknown finalized SoraFS pin-manifest query parameter `{key}`"),
-            ))),
-        })?;
+                _ => Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("unknown finalized SoraFS pin-manifest query parameter `{key}`"),
+                ))),
+            },
+        )?;
         query
             .expected_finalized_cursor()
             .map_err(ResponseError::from)?;
@@ -2744,63 +2739,58 @@ impl PinManifestReadbackQuery {
 }
 impl ProviderListQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
+        parse_limit_only_readback_query(raw, "SoraFS provider-list", MAX_LIST_LIMIT)
+            .map(|limit| Self { limit })
     }
 }
 impl StoragePeersReadbackQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
+        parse_limit_only_readback_query(
+            raw,
+            "SoraFS storage-peers",
+            iroha_config::parameters::actual::SORAFS_PUBLISH_PIN_TORII_URLS_MAX_V1,
+        )
+        .map(|limit| Self { limit })
     }
 }
 impl SiteFileListReadbackQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
+        parse_limit_only_readback_query(raw, "SoraFS site-file-list", MAX_LIST_LIMIT)
+            .map(|limit| Self { limit })
     }
 }
 impl StorageMetadataReadbackQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            "offset" => parse_u32_field(&mut query.offset, "offset", value),
-            _ => Ok(()),
-        })?;
+        walk_canonical_readback_query_params(
+            raw,
+            "SoraFS storage-metadata",
+            |key, value| match key {
+                "limit" => parse_bounded_readback_limit(
+                    &mut query.limit,
+                    value,
+                    "SoraFS storage-metadata",
+                    MAX_LIST_LIMIT,
+                ),
+                "offset" => set_canonical_readback_u32(
+                    &mut query.offset,
+                    "offset",
+                    value,
+                    "SoraFS storage-metadata",
+                ),
+                _ => Err(readback_query_error(
+                    "SoraFS storage-metadata",
+                    format!("unknown query parameter `{key}`"),
+                )),
+            },
+        )?;
         Ok(query)
     }
 }
 impl AliasListQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        if let Some(raw) = raw {
-            if raw.contains('%') {
-                return Err(ResponseError::from(json_error(
-                    StatusCode::BAD_REQUEST,
-                    "percent-encoded SoraFS alias query spellings are not accepted",
-                )));
-            }
-            if raw.split('&').any(str::is_empty) {
-                return Err(ResponseError::from(json_error(
-                    StatusCode::BAD_REQUEST,
-                    "empty SoraFS alias query segments are not accepted",
-                )));
-            }
-        }
         let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
+        walk_canonical_readback_query_params(raw, "SoraFS alias", |key, value| match key {
             "limit" => parse_alias_query_u32(&mut query.limit, key, value),
             "offset" => parse_alias_query_u32(&mut query.offset, key, value),
             "namespace" => parse_alias_query_string(&mut query.namespace, key, value),
@@ -2881,22 +2871,8 @@ fn parse_alias_query_string(target: &mut Option<String>, name: &str, raw: &str) 
 }
 impl ReplicationListQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        if let Some(raw) = raw {
-            if raw.contains('%') {
-                return Err(ResponseError::from(json_error(
-                    StatusCode::BAD_REQUEST,
-                    "percent-encoded SoraFS replication query spellings are not accepted",
-                )));
-            }
-            if raw.split('&').any(str::is_empty) {
-                return Err(ResponseError::from(json_error(
-                    StatusCode::BAD_REQUEST,
-                    "empty SoraFS replication query segments are not accepted",
-                )));
-            }
-        }
         let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
+        walk_canonical_readback_query_params(raw, "SoraFS replication", |key, value| match key {
             "limit" => parse_replication_query_u32(&mut query.limit, key, value),
             "offset" => parse_replication_query_u32(&mut query.offset, key, value),
             "status" => parse_replication_query_string(&mut query.status, key, value),
@@ -3034,11 +3010,28 @@ impl ReputationNoQuery {
 impl ModerationFinalizedEventsQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "since" => parse_u64_field(&mut query.since, "since", value),
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
+        walk_canonical_readback_query_params(
+            raw,
+            "SoraFS moderation-events",
+            |key, value| match key {
+                "since" => set_canonical_readback_u64(
+                    &mut query.since,
+                    "since",
+                    value,
+                    "SoraFS moderation-events",
+                ),
+                "limit" => parse_bounded_readback_limit(
+                    &mut query.limit,
+                    value,
+                    "SoraFS moderation-events",
+                    MAX_LIST_LIMIT,
+                ),
+                _ => Err(readback_query_error(
+                    "SoraFS moderation-events",
+                    format!("unknown query parameter `{key}`"),
+                )),
+            },
+        )?;
         Ok(query)
     }
 }
@@ -3127,62 +3120,56 @@ fn reputation_query_error(message: impl Into<String>) -> ResponseError {
 }
 impl PorIngestionReadbackQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
+        parse_limit_only_readback_query(raw, "SoraFS PoR-ingestion", MAX_LIST_LIMIT)
+            .map(|limit| Self { limit })
     }
 }
 impl ModerationBallotListQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
+        parse_limit_only_readback_query(raw, "SoraFS moderation-ballot", MAX_LIST_LIMIT)
+            .map(|limit| Self { limit })
     }
 }
 impl ModerationModelRegistryReadbackQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
+        parse_limit_only_readback_query(
+            raw,
+            "SoraFS moderation-model-registry",
+            MODERATION_READ_VIEW_MAX_RECORDS_V1,
+        )
+        .map(|limit| Self { limit })
     }
 }
 impl ModerationScreeningReadbackQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
+        parse_limit_only_readback_query(
+            raw,
+            "SoraFS moderation-screening",
+            MODERATION_READ_VIEW_MAX_RECORDS_V1,
+        )
+        .map(|limit| Self { limit })
     }
 }
 impl FinalizedOrderbookReadQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_orderbook_query_u32(&mut query.limit, key, value),
-            "expected_finalized_height" => {
-                parse_orderbook_query_u64(&mut query.expected_finalized_height, key, value)
+        walk_canonical_readback_query_params(raw, "finalized SoraFS orderbook", |key, value| {
+            match key {
+                "limit" => parse_orderbook_query_u32(&mut query.limit, key, value),
+                "expected_finalized_height" => {
+                    parse_orderbook_query_u64(&mut query.expected_finalized_height, key, value)
+                }
+                "expected_finalized_block_hash_hex" => parse_orderbook_query_string(
+                    &mut query.expected_finalized_block_hash_hex,
+                    key,
+                    value,
+                ),
+                "after_id_hex" => parse_orderbook_query_string(&mut query.after_id_hex, key, value),
+                _ => Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("unknown finalized SoraFS orderbook query parameter `{key}`"),
+                ))),
             }
-            "expected_finalized_block_hash_hex" => parse_orderbook_query_string(
-                &mut query.expected_finalized_block_hash_hex,
-                key,
-                value,
-            ),
-            "after_id_hex" => parse_orderbook_query_string(&mut query.after_id_hex, key, value),
-            _ => Err(ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("unknown finalized SoraFS orderbook query parameter `{key}`"),
-            ))),
         })?;
         if query
             .limit
@@ -3208,9 +3195,7 @@ impl FinalizedOrderbookReadQuery {
         Ok(query)
     }
     fn limit(&self) -> u32 {
-        self.limit
-            .unwrap_or(DEFAULT_LIST_LIMIT as u32)
-            .clamp(1, ORDERBOOK_QUERY_MAX_ITEMS_V1)
+        self.limit.unwrap_or(DEFAULT_LIST_LIMIT as u32)
     }
     fn expected_finalized_cursor(&self) -> Result<Option<OrderbookFinalizedCursorV1>, Response> {
         orderbook_finalized_cursor_from_query(
@@ -3232,31 +3217,37 @@ impl FinalizedOrderbookReadQuery {
 impl FinalizedOrderbookEventQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_orderbook_query_u32(&mut query.limit, key, value),
-            "expected_finalized_height" => {
-                parse_orderbook_query_u64(&mut query.expected_finalized_height, key, value)
-            }
-            "expected_finalized_block_hash_hex" => parse_orderbook_query_string(
-                &mut query.expected_finalized_block_hash_hex,
-                key,
-                value,
-            ),
-            "after_sequence" => parse_orderbook_query_u64(&mut query.after_sequence, key, value),
-            "after_block_height" => {
-                parse_orderbook_query_u64(&mut query.after_block_height, key, value)
-            }
-            "after_block_hash_hex" => {
-                parse_orderbook_query_string(&mut query.after_block_hash_hex, key, value)
-            }
-            "after_event_index" => {
-                parse_orderbook_query_u32(&mut query.after_event_index, key, value)
-            }
-            _ => Err(ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("unknown finalized SoraFS orderbook event query parameter `{key}`"),
-            ))),
-        })?;
+        walk_canonical_readback_query_params(
+            raw,
+            "finalized SoraFS orderbook-event",
+            |key, value| match key {
+                "limit" => parse_orderbook_query_u32(&mut query.limit, key, value),
+                "expected_finalized_height" => {
+                    parse_orderbook_query_u64(&mut query.expected_finalized_height, key, value)
+                }
+                "expected_finalized_block_hash_hex" => parse_orderbook_query_string(
+                    &mut query.expected_finalized_block_hash_hex,
+                    key,
+                    value,
+                ),
+                "after_sequence" => {
+                    parse_orderbook_query_u64(&mut query.after_sequence, key, value)
+                }
+                "after_block_height" => {
+                    parse_orderbook_query_u64(&mut query.after_block_height, key, value)
+                }
+                "after_block_hash_hex" => {
+                    parse_orderbook_query_string(&mut query.after_block_hash_hex, key, value)
+                }
+                "after_event_index" => {
+                    parse_orderbook_query_u32(&mut query.after_event_index, key, value)
+                }
+                _ => Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("unknown finalized SoraFS orderbook event query parameter `{key}`"),
+                ))),
+            },
+        )?;
         if query
             .limit
             .is_some_and(|limit| !(1..=ORDERBOOK_QUERY_MAX_ITEMS_V1).contains(&limit))
@@ -3278,9 +3269,7 @@ impl FinalizedOrderbookEventQuery {
         Ok(query)
     }
     fn limit(&self) -> u32 {
-        self.limit
-            .unwrap_or(DEFAULT_LIST_LIMIT as u32)
-            .clamp(1, ORDERBOOK_QUERY_MAX_ITEMS_V1)
+        self.limit.unwrap_or(DEFAULT_LIST_LIMIT as u32)
     }
     fn expected_finalized_cursor(&self) -> Result<Option<OrderbookFinalizedCursorV1>, Response> {
         orderbook_finalized_cursor_from_query(
@@ -3326,18 +3315,24 @@ impl FinalizedOrderbookEventQuery {
 impl FinalizedRepairAnchorQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "expected_finalized_height" => {
-                parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
-            }
-            "expected_finalized_block_hash_hex" => {
-                parse_repair_query_string(&mut query.expected_finalized_block_hash_hex, key, value)
-            }
-            _ => Err(ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("unknown finalized SoraFS repair query parameter `{key}`"),
-            ))),
-        })?;
+        walk_canonical_readback_query_params(
+            raw,
+            "finalized SoraFS repair",
+            |key, value| match key {
+                "expected_finalized_height" => {
+                    parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
+                }
+                "expected_finalized_block_hash_hex" => parse_repair_query_string(
+                    &mut query.expected_finalized_block_hash_hex,
+                    key,
+                    value,
+                ),
+                _ => Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("unknown finalized SoraFS repair query parameter `{key}`"),
+                ))),
+            },
+        )?;
         validate_repair_cursor_pair(
             query.expected_finalized_height,
             query.expected_finalized_block_hash_hex.as_deref(),
@@ -3357,21 +3352,25 @@ impl FinalizedRepairAnchorQuery {
 impl FinalizedRepairTaskQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_repair_query_u32(&mut query.limit, key, value),
-            "expected_finalized_height" => {
-                parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
+        walk_canonical_readback_query_params(raw, "finalized SoraFS repair-task", |key, value| {
+            match key {
+                "limit" => parse_repair_query_u32(&mut query.limit, key, value),
+                "expected_finalized_height" => {
+                    parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
+                }
+                "expected_finalized_block_hash_hex" => parse_repair_query_string(
+                    &mut query.expected_finalized_block_hash_hex,
+                    key,
+                    value,
+                ),
+                "after_task_id_hex" => {
+                    parse_repair_query_string(&mut query.after_task_id_hex, key, value)
+                }
+                _ => Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("unknown finalized SoraFS repair-task query parameter `{key}`"),
+                ))),
             }
-            "expected_finalized_block_hash_hex" => {
-                parse_repair_query_string(&mut query.expected_finalized_block_hash_hex, key, value)
-            }
-            "after_task_id_hex" => {
-                parse_repair_query_string(&mut query.after_task_id_hex, key, value)
-            }
-            _ => Err(ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("unknown finalized SoraFS repair-task query parameter `{key}`"),
-            ))),
         })?;
         validate_repair_query_limit(query.limit, "task")?;
         validate_repair_cursor_pair(
@@ -3387,9 +3386,7 @@ impl FinalizedRepairTaskQuery {
         Ok(query)
     }
     fn limit(&self) -> u32 {
-        self.limit
-            .unwrap_or(DEFAULT_LIST_LIMIT as u32)
-            .clamp(1, REPAIR_QUERY_MAX_ITEMS_V1)
+        self.limit.unwrap_or(DEFAULT_LIST_LIMIT as u32)
     }
     fn expected_finalized_cursor(&self) -> Result<Option<RepairFinalizedCursorV1>, Response> {
         repair_finalized_cursor_from_query(
@@ -3408,27 +3405,35 @@ impl FinalizedRepairTaskQuery {
 impl FinalizedRepairEventQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_repair_query_u32(&mut query.limit, key, value),
-            "expected_finalized_height" => {
-                parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
-            }
-            "expected_finalized_block_hash_hex" => {
-                parse_repair_query_string(&mut query.expected_finalized_block_hash_hex, key, value)
-            }
-            "after_sequence" => parse_repair_query_u64(&mut query.after_sequence, key, value),
-            "after_block_height" => {
-                parse_repair_query_u64(&mut query.after_block_height, key, value)
-            }
-            "after_block_hash_hex" => {
-                parse_repair_query_string(&mut query.after_block_hash_hex, key, value)
-            }
-            "after_event_index" => parse_repair_query_u32(&mut query.after_event_index, key, value),
-            _ => Err(ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("unknown finalized SoraFS repair-event query parameter `{key}`"),
-            ))),
-        })?;
+        walk_canonical_readback_query_params(
+            raw,
+            "finalized SoraFS repair-event",
+            |key, value| match key {
+                "limit" => parse_repair_query_u32(&mut query.limit, key, value),
+                "expected_finalized_height" => {
+                    parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
+                }
+                "expected_finalized_block_hash_hex" => parse_repair_query_string(
+                    &mut query.expected_finalized_block_hash_hex,
+                    key,
+                    value,
+                ),
+                "after_sequence" => parse_repair_query_u64(&mut query.after_sequence, key, value),
+                "after_block_height" => {
+                    parse_repair_query_u64(&mut query.after_block_height, key, value)
+                }
+                "after_block_hash_hex" => {
+                    parse_repair_query_string(&mut query.after_block_hash_hex, key, value)
+                }
+                "after_event_index" => {
+                    parse_repair_query_u32(&mut query.after_event_index, key, value)
+                }
+                _ => Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("unknown finalized SoraFS repair-event query parameter `{key}`"),
+                ))),
+            },
+        )?;
         validate_repair_query_limit(query.limit, "event")?;
         validate_repair_cursor_pair(
             query.expected_finalized_height,
@@ -3440,9 +3445,7 @@ impl FinalizedRepairEventQuery {
         Ok(query)
     }
     fn limit(&self) -> u32 {
-        self.limit
-            .unwrap_or(DEFAULT_LIST_LIMIT as u32)
-            .clamp(1, REPAIR_QUERY_MAX_ITEMS_V1)
+        self.limit.unwrap_or(DEFAULT_LIST_LIMIT as u32)
     }
     fn expected_finalized_cursor(&self) -> Result<Option<RepairFinalizedCursorV1>, Response> {
         repair_finalized_cursor_from_query(
@@ -3490,10 +3493,16 @@ fn parse_finalized_query_integer<T: FromStr>(
     raw: &str,
     domain: &str,
 ) -> ApiResult<()> {
-    if target.is_some() || raw.is_empty() {
+    if target.is_some() {
         return Err(ResponseError::from(json_error(
             StatusCode::BAD_REQUEST,
-            format!("duplicate or empty finalized SoraFS {domain} query parameter `{name}`"),
+            format!("duplicate finalized SoraFS {domain} query parameter `{name}`"),
+        )));
+    }
+    if !is_canonical_unsigned_decimal(raw) {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("finalized SoraFS {domain} {name} must use canonical unsigned decimal"),
         )));
     }
     *target = Some(raw.parse().map_err(|_| {
@@ -3704,62 +3713,165 @@ fn orderbook_finalized_cursor_from_query(
 }
 impl GovernancePublishReadbackQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
+        parse_limit_only_readback_query(raw, "SoraFS governance-publish", MAX_LIST_LIMIT)
+            .map(|limit| Self { limit })
     }
 }
 impl CapacityStateReadbackQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
+        parse_limit_only_readback_query(raw, "SoraFS capacity-state", MAX_LIST_LIMIT)
+            .map(|limit| Self { limit })
     }
 }
 fn parse_governance_lookup_limit(raw: Option<&str>) -> ApiResult<usize> {
     GovernancePublishReadbackQuery::parse(raw).map(|query| normalize_limit(query.limit))
 }
-fn parse_u64_field(target: &mut Option<u64>, name: &str, raw: &str) -> ApiResult<()> {
-    if raw.is_empty() {
-        *target = None;
-        return Ok(());
-    }
-    raw.parse::<u64>().map_or_else(
-        |_| {
-            Err(ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("invalid {name} value `{raw}`"),
-            )))
-        },
-        |value| {
-            *target = Some(value);
-            Ok(())
-        },
-    )
+fn parse_limit_only_readback_query(
+    raw: Option<&str>,
+    family: &str,
+    maximum: usize,
+) -> ApiResult<Option<u32>> {
+    let mut limit = None;
+    walk_canonical_readback_query_params(raw, family, |key, value| match key {
+        "limit" => parse_bounded_readback_limit(&mut limit, value, family, maximum),
+        _ => Err(readback_query_error(
+            family,
+            format!("unknown query parameter `{key}`"),
+        )),
+    })?;
+    Ok(limit)
 }
-fn parse_u32_field(target: &mut Option<u32>, name: &str, raw: &str) -> ApiResult<()> {
-    if raw.is_empty() {
-        *target = None;
+fn walk_canonical_readback_query_params(
+    raw: Option<&str>,
+    family: &str,
+    mut visitor: impl FnMut(&str, &str) -> ApiResult<()>,
+) -> ApiResult<()> {
+    let Some(raw) = raw else {
         return Ok(());
+    };
+    if raw.len() > READBACK_QUERY_MAX_BYTES_V1 {
+        return Err(readback_query_error(
+            family,
+            format!("exceeds the {READBACK_QUERY_MAX_BYTES_V1}-byte first-release limit"),
+        ));
     }
-    raw.parse::<u32>().map_or_else(
-        |_| {
-            Err(ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("invalid {name} value `{raw}`"),
-            )))
-        },
-        |value| {
-            *target = Some(value);
-            Ok(())
-        },
-    )
+    if raw.contains('%') {
+        return Err(readback_query_error(
+            family,
+            "percent-encoded query spellings are not accepted",
+        ));
+    }
+    for (index, segment) in raw.split('&').enumerate() {
+        if segment.is_empty() {
+            return Err(readback_query_error(
+                family,
+                "empty query segments are not accepted",
+            ));
+        }
+        if index >= READBACK_QUERY_MAX_PARAMETERS_V1 {
+            return Err(readback_query_error(
+                family,
+                format!(
+                    "exceeds the {READBACK_QUERY_MAX_PARAMETERS_V1}-parameter first-release limit"
+                ),
+            ));
+        }
+        let Some((key, value)) = segment.split_once('=') else {
+            return Err(readback_query_error(
+                family,
+                "query parameters must use key=value form",
+            ));
+        };
+        if key.is_empty() || value.is_empty() {
+            return Err(readback_query_error(
+                family,
+                "empty query parameter names or values are not accepted",
+            ));
+        }
+    }
+    for segment in raw.split('&') {
+        let (key, value) = segment
+            .split_once('=')
+            .expect("canonical query preflight requires key=value segments");
+        visitor(key, value)?;
+    }
+    Ok(())
+}
+fn parse_bounded_readback_limit(
+    target: &mut Option<u32>,
+    raw: &str,
+    family: &str,
+    maximum: usize,
+) -> ApiResult<()> {
+    if target.is_some() {
+        return Err(readback_query_error(
+            family,
+            "duplicate query parameter `limit`",
+        ));
+    }
+    let limit = parse_canonical_readback_u32(raw, "limit", family)?;
+    if limit == 0 || u128::from(limit) > maximum as u128 {
+        return Err(readback_query_error(
+            family,
+            format!("limit must be within 1..={maximum}"),
+        ));
+    }
+    *target = Some(limit);
+    Ok(())
+}
+fn set_canonical_readback_u32(
+    target: &mut Option<u32>,
+    name: &str,
+    raw: &str,
+    family: &str,
+) -> ApiResult<()> {
+    if target.is_some() {
+        return Err(readback_query_error(
+            family,
+            format!("duplicate query parameter `{name}`"),
+        ));
+    }
+    *target = Some(parse_canonical_readback_u32(raw, name, family)?);
+    Ok(())
+}
+fn set_canonical_readback_u64(
+    target: &mut Option<u64>,
+    name: &str,
+    raw: &str,
+    family: &str,
+) -> ApiResult<()> {
+    if target.is_some() {
+        return Err(readback_query_error(
+            family,
+            format!("duplicate query parameter `{name}`"),
+        ));
+    }
+    if !is_canonical_unsigned_decimal(raw) {
+        return Err(readback_query_error(
+            family,
+            format!("{name} must use canonical unsigned decimal"),
+        ));
+    }
+    *target = Some(raw.parse::<u64>().map_err(|_| {
+        readback_query_error(family, format!("{name} exceeds the supported range"))
+    })?);
+    Ok(())
+}
+fn parse_canonical_readback_u32(raw: &str, name: &str, family: &str) -> ApiResult<u32> {
+    if !is_canonical_unsigned_decimal(raw) {
+        return Err(readback_query_error(
+            family,
+            format!("{name} must use canonical unsigned decimal"),
+        ));
+    }
+    raw.parse::<u32>()
+        .map_err(|_| readback_query_error(family, format!("{name} exceeds the supported range")))
+}
+fn readback_query_error(family: &str, message: impl std::fmt::Display) -> ResponseError {
+    ResponseError::from(json_error(
+        StatusCode::BAD_REQUEST,
+        format!("{family} query {message}"),
+    ))
 }
 fn parse_canonical_nonzero_u32_query(raw: &str, name: &str) -> ApiResult<u32> {
     if !raw
@@ -3798,60 +3910,6 @@ fn parse_canonical_nonzero_u64_query(raw: &str, name: &str) -> ApiResult<u64> {
             format!("{name} exceeds the supported range"),
         ))
     })
-}
-fn ensure_percent_sequences(segment: &str, context: &str) -> Result<(), ResponseError> {
-    let bytes = segment.as_bytes();
-    let mut index = 0;
-    while let Some(pos) = segment[index..].find('%') {
-        let abs = index + pos;
-        if abs + 2 >= bytes.len() {
-            return Err(ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to decode {context} `{segment}`"),
-            )));
-        }
-        let hi = bytes[abs + 1] as char;
-        let lo = bytes[abs + 2] as char;
-        if !hi.is_ascii_hexdigit() || !lo.is_ascii_hexdigit() {
-            return Err(ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to decode {context} `{segment}`"),
-            )));
-        }
-        index = abs + 3;
-    }
-    Ok(())
-}
-fn walk_query_params(
-    raw: Option<&str>,
-    mut visitor: impl FnMut(&str, &str) -> ApiResult<()>,
-) -> ApiResult<()> {
-    if let Some(raw) = raw {
-        for pair in raw.split('&') {
-            if pair.is_empty() {
-                continue;
-            }
-            let mut parts = pair.splitn(2, '=');
-            let raw_key = parts.next().unwrap_or("");
-            let raw_value = parts.next().unwrap_or("");
-            ensure_percent_sequences(raw_key, "query key")?;
-            ensure_percent_sequences(raw_value, "query value")?;
-            let key = decode(raw_key).map_err(|_| {
-                ResponseError::from(json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("failed to decode query key `{raw_key}`"),
-                ))
-            })?;
-            let value = decode(raw_value).map_err(|_| {
-                ResponseError::from(json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("failed to decode query value `{raw_value}`"),
-                ))
-            })?;
-            visitor(&key, &value)?;
-        }
-    }
-    Ok(())
 }
 #[derive(Copy, Clone)]
 enum ReplicationStatusFilter {
@@ -3922,8 +3980,7 @@ pub(crate) async fn handle_get_sorafs_storage_peers(
         .pin_torii_urls
         .iter()
         .take(limit)
-        .cloned()
-        .map(Value::from)
+        .map(|url| Value::from(url.as_str()))
         .collect::<Vec<_>>();
     let returned_count = pin_torii_urls.len();
     let mut response = Map::new();
@@ -3933,7 +3990,7 @@ pub(crate) async fn handle_get_sorafs_storage_peers(
         publish
             .gateway_base_url
             .as_ref()
-            .map_or(Value::Null, |url| Value::from(url.clone())),
+            .map_or(Value::Null, |url| Value::from(url.as_str())),
     );
     response.insert("pin_torii_urls".into(), Value::Array(pin_torii_urls));
     response.insert("count".into(), Value::from(count as u64));
@@ -5135,14 +5192,15 @@ async fn enforce_transparency_proof_token_verify_access(
     headers: &HeaderMap,
     remote: SocketAddr,
 ) -> Result<(), Response> {
-    if let Err(err) = crate::validate_api_token(state, headers) {
-        return Err(err.into_response());
-    }
+    let principal = match crate::validate_api_token(state, headers) {
+        Ok(evaluation) => evaluation.authenticated_principal(),
+        Err(err) => return Err(err.into_response()),
+    };
     let key = crate::limits::key_from_headers(
         headers,
         Some(remote.ip()),
         Some(TELEMETRY_ENDPOINT_TRANSPARENCY_TOKEN_VERIFY),
-        state.api_token_enforced(),
+        principal,
     );
     if crate::limits::allow_cost_conditionally(&state.proof_rate_limiter, &key, 1, true).await {
         return Ok(());
@@ -29786,20 +29844,87 @@ mod app_api_tests {
             .write_to(std::io::sink())
             .expect("derive canonical fixture CAR archive stats")
     }
+    macro_rules! assert_strict_limit_query {
+        ($query:ty, $maximum:expr) => {{
+            let maximum = $maximum;
+            let absent = <$query>::parse(None).expect("absent query uses the default limit");
+            assert_eq!(absent.limit, None);
+            let canonical = <$query>::parse(Some("limit=2")).expect("canonical limit query");
+            assert_eq!(canonical.limit, Some(2));
+            for invalid in [
+                String::new(),
+                "limit".to_owned(),
+                "limit=".to_owned(),
+                "limit=0".to_owned(),
+                format!("limit={}", maximum + 1),
+                "limit=01".to_owned(),
+                "limit=+1".to_owned(),
+                "limit=-1".to_owned(),
+                "limit=bad".to_owned(),
+                "limit=4294967296".to_owned(),
+                "limit=1&limit=2".to_owned(),
+                "ignored=true".to_owned(),
+                "lim%69t=1".to_owned(),
+                "limit=%31".to_owned(),
+                "&limit=1".to_owned(),
+                "limit=1&".to_owned(),
+                "limit=1&&ignored=true".to_owned(),
+            ] {
+                let error = <$query>::parse(Some(&invalid))
+                    .expect_err("noncanonical readback query must fail");
+                assert_eq!(
+                    error.status(),
+                    StatusCode::BAD_REQUEST,
+                    "{} unexpectedly accepted query: {invalid}",
+                    stringify!($query),
+                );
+            }
+        }};
+    }
     #[test]
-    fn walk_query_params_decodes_percent_encoding() {
+    fn canonical_readback_query_preflight_visits_raw_pairs() {
         let mut pairs = Vec::new();
-        walk_query_params(Some("alias%2Fname=docs%2Froot"), |key, value| {
+        walk_canonical_readback_query_params(Some("limit=2&offset=7"), "test", |key, value| {
             pairs.push((key.to_string(), value.to_string()));
             Ok(())
         })
-        .expect("query decoding succeeds");
-        assert_eq!(pairs, [("alias/name".to_string(), "docs/root".to_string())]);
+        .expect("canonical query preflight succeeds");
+        assert_eq!(
+            pairs,
+            [
+                ("limit".to_string(), "2".to_string()),
+                ("offset".to_string(), "7".to_string()),
+            ]
+        );
     }
     #[test]
-    fn walk_query_params_rejects_invalid_percent_sequences() {
-        let err = walk_query_params(Some("%ZZ=value"), |_, _| Ok(())).expect_err("should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    fn canonical_readback_query_preflight_is_bounded_and_exact() {
+        let oversized = format!("key={}", "x".repeat(READBACK_QUERY_MAX_BYTES_V1));
+        let too_many = (0..=READBACK_QUERY_MAX_PARAMETERS_V1)
+            .map(|index| format!("key{index}=value"))
+            .collect::<Vec<_>>()
+            .join("&");
+        for invalid in [
+            String::new(),
+            "key".to_owned(),
+            "=value".to_owned(),
+            "key=".to_owned(),
+            "key=%31".to_owned(),
+            "%6bey=1".to_owned(),
+            "&key=value".to_owned(),
+            "key=value&".to_owned(),
+            "key=value&&other=value".to_owned(),
+            oversized,
+            too_many,
+        ] {
+            let error = walk_canonical_readback_query_params(Some(&invalid), "test", |_, _| Ok(()))
+                .expect_err("noncanonical query framing must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
     }
     #[test]
     fn alias_list_query_is_a_strict_canonical_hard_cut() {
@@ -29936,8 +30061,12 @@ mod app_api_tests {
         );
         for invalid in [
             "offset=1".to_owned(),
+            "limit".to_owned(),
+            "limit=".to_owned(),
             "limit=0".to_owned(),
             "limit=01".to_owned(),
+            "limit=+1".to_owned(),
+            "limit=%31".to_owned(),
             format!("limit={}", PIN_MANIFEST_QUERY_MAX_ITEMS_V1 + 1),
             "limit=1&limit=2".to_owned(),
             format!("max_bytes={}", PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1 - 1),
@@ -29979,10 +30108,23 @@ mod app_api_tests {
             })
         );
         for invalid in [
+            String::new(),
             "limit=2".to_owned(),
+            "expected_finalized_height".to_owned(),
+            "expected_finalized_height=".to_owned(),
             "expected_finalized_height=2".to_owned(),
             format!("expected_finalized_block_hash_hex={block_hash}"),
             format!("expected_finalized_height=02&expected_finalized_block_hash_hex={block_hash}"),
+            format!("expected_finalized_height=+2&expected_finalized_block_hash_hex={block_hash}"),
+            format!("expected_finalized_height=%32&expected_finalized_block_hash_hex={block_hash}"),
+            format!(
+                "expected_finalized_height=2&expected_finalized_block_hash_hex={}",
+                block_hash.to_ascii_uppercase()
+            ),
+            format!(
+                "expected_finalized_height=2&expected_finalized_block_hash_hex=%31{}",
+                &block_hash[2..]
+            ),
             format!(
                 "expected_finalized_height=2&expected_finalized_block_hash_hex={}",
                 "00".repeat(32)
@@ -29990,6 +30132,11 @@ mod app_api_tests {
             format!(
                 "expected_finalized_height=2&expected_finalized_height=3&expected_finalized_block_hash_hex={block_hash}"
             ),
+            format!(
+                "expected_finalized_height=2&expected_finalized_block_hash_hex={block_hash}&expected_finalized_block_hash_hex={block_hash}"
+            ),
+            format!("&expected_finalized_height=2&expected_finalized_block_hash_hex={block_hash}"),
+            format!("expected_finalized_height=2&expected_finalized_block_hash_hex={block_hash}&"),
         ] {
             let err = PinManifestReadbackQuery::parse(Some(&invalid))
                 .expect_err("noncanonical or incomplete cursor must fail");
@@ -29998,15 +30145,15 @@ mod app_api_tests {
     }
     #[test]
     fn governance_publish_readback_query_parses_limits_and_bounds_entries() {
-        let query = GovernancePublishReadbackQuery::parse(Some("limit=2&ignored=true"))
-            .expect("parse governance publish readback query");
-        assert_eq!(normalize_limit(query.limit), 2);
-        let query = GovernancePublishReadbackQuery::parse(Some("limit=9999"))
-            .expect("parse oversized governance publish readback query");
-        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
-        let err = GovernancePublishReadbackQuery::parse(Some("limit=bad"))
-            .expect_err("invalid limit should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_strict_limit_query!(GovernancePublishReadbackQuery, MAX_LIST_LIMIT);
+        assert_eq!(
+            normalize_limit(
+                GovernancePublishReadbackQuery::parse(None)
+                    .expect("absent query")
+                    .limit,
+            ),
+            DEFAULT_LIST_LIMIT,
+        );
         let (entries, truncated) = limit_governance_readback_values(
             vec![Value::from(1_u64), Value::from(2_u64), Value::from(3_u64)],
             2,
@@ -30019,77 +30166,134 @@ mod app_api_tests {
     }
     #[test]
     fn moderation_readback_limit_matches_runtime_clone_ceiling() {
-        assert_eq!(normalize_moderation_read_limit(None), DEFAULT_LIST_LIMIT);
-        assert_eq!(normalize_moderation_read_limit(Some(0)), 1);
-        assert_eq!(
-            normalize_moderation_read_limit(Some(u32::MAX)),
+        assert_strict_limit_query!(ModerationBallotListQuery, MAX_LIST_LIMIT);
+        assert_strict_limit_query!(
+            ModerationModelRegistryReadbackQuery,
             MODERATION_READ_VIEW_MAX_RECORDS_V1
         );
+        assert_strict_limit_query!(
+            ModerationScreeningReadbackQuery,
+            MODERATION_READ_VIEW_MAX_RECORDS_V1
+        );
+        let maximum = u32::try_from(MODERATION_READ_VIEW_MAX_RECORDS_V1)
+            .expect("moderation read ceiling fits in the query field");
+        let query = ModerationModelRegistryReadbackQuery::parse(Some(&format!(
+            "limit={MODERATION_READ_VIEW_MAX_RECORDS_V1}"
+        )))
+        .expect("runtime moderation read ceiling is accepted");
+        assert_eq!(
+            normalize_moderation_read_limit(query.limit),
+            MODERATION_READ_VIEW_MAX_RECORDS_V1
+        );
+        assert_eq!(query.limit, Some(maximum));
+        assert_eq!(normalize_moderation_read_limit(None), DEFAULT_LIST_LIMIT);
+    }
+    #[test]
+    fn moderation_finalized_events_query_is_strict_and_preserves_cursor_range() {
+        let absent = ModerationFinalizedEventsQuery::parse(None).expect("absent query");
+        assert_eq!(absent.since, None);
+        assert_eq!(absent.limit, None);
+        assert_eq!(normalize_limit(absent.limit), DEFAULT_LIST_LIMIT);
+        let canonical = ModerationFinalizedEventsQuery::parse(Some("since=0&limit=500"))
+            .expect("canonical moderation event query");
+        assert_eq!(canonical.since, Some(0));
+        assert_eq!(canonical.limit, Some(MAX_LIST_LIMIT as u32));
+        let maximum_cursor =
+            ModerationFinalizedEventsQuery::parse(Some("since=18446744073709551615"))
+                .expect("the full event cursor range remains accepted");
+        assert_eq!(maximum_cursor.since, Some(u64::MAX));
+        for invalid in [
+            String::new(),
+            "since".to_owned(),
+            "since=".to_owned(),
+            "since=00".to_owned(),
+            "since=+1".to_owned(),
+            "since=-1".to_owned(),
+            "since=18446744073709551616".to_owned(),
+            "since=1&since=2".to_owned(),
+            "limit=0".to_owned(),
+            format!("limit={}", MAX_LIST_LIMIT + 1),
+            "limit=01".to_owned(),
+            "limit=1&limit=2".to_owned(),
+            "ignored=true".to_owned(),
+            "sin%63e=1".to_owned(),
+            "since=%31".to_owned(),
+            "&since=1".to_owned(),
+            "since=1&".to_owned(),
+            "since=1&&limit=2".to_owned(),
+        ] {
+            let error = ModerationFinalizedEventsQuery::parse(Some(&invalid))
+                .expect_err("noncanonical moderation event query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
     }
     #[test]
     fn capacity_state_readback_query_parses_limits() {
-        let query = CapacityStateReadbackQuery::parse(Some("limit=2&ignored=true"))
-            .expect("parse capacity state readback query");
-        assert_eq!(normalize_limit(query.limit), 2);
-        let query = CapacityStateReadbackQuery::parse(Some("limit=9999"))
-            .expect("parse oversized capacity state readback query");
-        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
-        let err = CapacityStateReadbackQuery::parse(Some("limit=bad"))
-            .expect_err("invalid limit should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_strict_limit_query!(CapacityStateReadbackQuery, MAX_LIST_LIMIT);
     }
     #[test]
     fn provider_list_query_parses_limits() {
-        let query = ProviderListQuery::parse(Some("limit=2&ignored=true"))
-            .expect("parse provider list query");
-        assert_eq!(normalize_limit(query.limit), 2);
-        let query =
-            ProviderListQuery::parse(Some("limit=9999")).expect("parse oversized provider query");
-        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
-        let err =
-            ProviderListQuery::parse(Some("limit=bad")).expect_err("invalid limit should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_strict_limit_query!(ProviderListQuery, MAX_LIST_LIMIT);
     }
     #[test]
     fn storage_peers_readback_query_parses_limits() {
-        let query = StoragePeersReadbackQuery::parse(Some("limit=2&ignored=true"))
-            .expect("parse storage peer readback query");
-        assert_eq!(normalize_limit(query.limit), 2);
-        let query = StoragePeersReadbackQuery::parse(Some("limit=9999"))
-            .expect("parse oversized storage peer query");
-        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
-        let err = StoragePeersReadbackQuery::parse(Some("limit=bad"))
-            .expect_err("invalid limit should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_strict_limit_query!(
+            StoragePeersReadbackQuery,
+            iroha_config::parameters::actual::SORAFS_PUBLISH_PIN_TORII_URLS_MAX_V1
+        );
     }
     #[test]
     fn storage_metadata_readback_query_parses_pagination() {
-        let query = StorageMetadataReadbackQuery::parse(Some("limit=2&offset=7&ignored=true"))
+        let absent = StorageMetadataReadbackQuery::parse(None).expect("absent query");
+        assert_eq!(absent.limit, None);
+        assert_eq!(absent.offset, None);
+        assert_eq!(normalize_limit(absent.limit), DEFAULT_LIST_LIMIT);
+        let query = StorageMetadataReadbackQuery::parse(Some("limit=2&offset=7"))
             .expect("parse storage metadata readback query");
         assert_eq!(normalize_limit(query.limit), 2);
         assert_eq!(query.offset, Some(7));
-        let query = StorageMetadataReadbackQuery::parse(Some("limit=9999"))
-            .expect("parse oversized storage metadata query");
-        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
-        assert_eq!(query.offset, None);
-        let err = StorageMetadataReadbackQuery::parse(Some("limit=bad"))
-            .expect_err("invalid limit should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        let err = StorageMetadataReadbackQuery::parse(Some("offset=bad"))
-            .expect_err("invalid offset should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        let maximum_offset = StorageMetadataReadbackQuery::parse(Some("offset=4294967295"))
+            .expect("the full offset field range remains accepted");
+        assert_eq!(maximum_offset.offset, Some(u32::MAX));
+        let zero_offset = StorageMetadataReadbackQuery::parse(Some("offset=0"))
+            .expect("canonical zero offset remains accepted");
+        assert_eq!(zero_offset.offset, Some(0));
+        for invalid in [
+            String::new(),
+            "limit=0".to_owned(),
+            format!("limit={}", MAX_LIST_LIMIT + 1),
+            "limit=01".to_owned(),
+            "limit=1&limit=2".to_owned(),
+            "offset".to_owned(),
+            "offset=".to_owned(),
+            "offset=00".to_owned(),
+            "offset=+1".to_owned(),
+            "offset=-1".to_owned(),
+            "offset=4294967296".to_owned(),
+            "offset=1&offset=2".to_owned(),
+            "ignored=true".to_owned(),
+            "off%73et=1".to_owned(),
+            "offset=%31".to_owned(),
+            "&offset=1".to_owned(),
+            "offset=1&".to_owned(),
+            "offset=1&&limit=2".to_owned(),
+        ] {
+            let error = StorageMetadataReadbackQuery::parse(Some(&invalid))
+                .expect_err("noncanonical storage metadata query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
     }
     #[test]
     fn site_file_list_readback_query_parses_limits() {
-        let query = SiteFileListReadbackQuery::parse(Some("limit=2&ignored=true"))
-            .expect("parse site file-list readback query");
-        assert_eq!(normalize_limit(query.limit), 2);
-        let query = SiteFileListReadbackQuery::parse(Some("limit=9999"))
-            .expect("parse oversized site file-list query");
-        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
-        let err = SiteFileListReadbackQuery::parse(Some("limit=bad"))
-            .expect_err("invalid limit should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_strict_limit_query!(SiteFileListReadbackQuery, MAX_LIST_LIMIT);
     }
     #[test]
     fn reputation_queries_are_bounded_schema_closed_and_canonical() {
@@ -30155,15 +30359,7 @@ mod app_api_tests {
     }
     #[test]
     fn por_ingestion_readback_query_parses_limits() {
-        let query = PorIngestionReadbackQuery::parse(Some("limit=2&ignored=true"))
-            .expect("parse PoR ingestion readback query");
-        assert_eq!(normalize_limit(query.limit), 2);
-        let query = PorIngestionReadbackQuery::parse(Some("limit=9999"))
-            .expect("parse oversized PoR ingestion readback query");
-        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
-        let err = PorIngestionReadbackQuery::parse(Some("limit=bad"))
-            .expect_err("invalid limit should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_strict_limit_query!(PorIngestionReadbackQuery, MAX_LIST_LIMIT);
     }
     #[test]
     fn parse_range_header_parses_valid_range() {
@@ -30494,14 +30690,10 @@ fn chunk_fetch_spec_json(spec: &ChunkFetchSpec) -> Value {
     Value::Object(obj)
 }
 fn normalize_limit(limit: Option<u32>) -> usize {
-    let requested = limit.unwrap_or(DEFAULT_LIST_LIMIT as u32);
-    let clamped = requested.clamp(1, MAX_LIST_LIMIT as u32);
-    clamped as usize
+    limit.unwrap_or(DEFAULT_LIST_LIMIT as u32) as usize
 }
 fn normalize_moderation_read_limit(limit: Option<u32>) -> usize {
-    let requested = limit.unwrap_or(DEFAULT_LIST_LIMIT as u32);
-    let maximum = u32::try_from(MODERATION_READ_VIEW_MAX_RECORDS_V1).unwrap_or(u32::MAX);
-    requested.clamp(1, maximum) as usize
+    limit.unwrap_or(DEFAULT_LIST_LIMIT as u32) as usize
 }
 fn limit_governance_readback_values(mut entries: Vec<Value>, limit: usize) -> (Vec<Value>, bool) {
     let truncated = entries.len() > limit;
@@ -32651,11 +32843,21 @@ mod advert_tests {
         Arc::get_mut(&mut state)
             .expect("unique app state")
             .sorafs_publish_discovery = iroha_config::parameters::actual::SorafsPublishDiscovery {
-            gateway_base_url: Some("https://taira.sora.org".to_string()),
+            gateway_base_url: Some(
+                "https://taira.sora.org"
+                    .parse()
+                    .expect("canonical gateway base URL"),
+            ),
             pin_torii_urls: vec![
-                "https://taira-validator-1.sora.org".to_string(),
-                "https://taira-validator-2.sora.org".to_string(),
-                "https://taira-validator-3.sora.org".to_string(),
+                "https://taira-validator-1.sora.org"
+                    .parse()
+                    .expect("canonical pin Torii URL"),
+                "https://taira-validator-2.sora.org"
+                    .parse()
+                    .expect("canonical pin Torii URL"),
+                "https://taira-validator-3.sora.org"
+                    .parse()
+                    .expect("canonical pin Torii URL"),
             ],
         };
         let response =
@@ -34547,6 +34749,31 @@ mod advert_tests {
             query.after_id().expect("decode page cursor"),
             Some([0x22; 32])
         );
+        for invalid in [
+            String::new(),
+            "limit".to_owned(),
+            "limit=01".to_owned(),
+            "limit=+1".to_owned(),
+            "lim%69t=1".to_owned(),
+            "limit=%31".to_owned(),
+            "&limit=1".to_owned(),
+            "limit=1&".to_owned(),
+            format!("expected_finalized_height=07&expected_finalized_block_hash_hex={block_hash}"),
+            format!("expected_finalized_height=+7&expected_finalized_block_hash_hex={block_hash}"),
+            format!(
+                "expected_finalized_height=7&expected_finalized_block_hash_hex={}",
+                "AB".repeat(32)
+            ),
+            format!("after_id_hex={}", "CD".repeat(32)),
+        ] {
+            let error = FinalizedOrderbookReadQuery::parse(Some(&invalid))
+                .expect_err("noncanonical orderbook query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
         assert!(
             FinalizedOrderbookEventQuery::parse(Some("after_sequence=2&after_block_height=7"))
                 .is_err()
@@ -34565,6 +34792,40 @@ mod advert_tests {
                 event_index: 3,
             })
         );
+        for invalid in [
+            String::new(),
+            "after_sequence".to_owned(),
+            format!(
+                "after_sequence=02&after_block_height=7&after_block_hash_hex={block_hash}&after_event_index=3"
+            ),
+            format!(
+                "after_sequence=+2&after_block_height=7&after_block_hash_hex={block_hash}&after_event_index=3"
+            ),
+            format!(
+                "after_sequence=2&after_block_height=07&after_block_hash_hex={block_hash}&after_event_index=3"
+            ),
+            format!(
+                "after_sequence=2&after_block_height=7&after_block_hash_hex={}&after_event_index=3",
+                "AB".repeat(32)
+            ),
+            format!(
+                "after_sequence=2&after_block_height=7&after_block_hash_hex={block_hash}&after_event_index=03"
+            ),
+            format!(
+                "after_sequence=%32&after_block_height=7&after_block_hash_hex={block_hash}&after_event_index=3"
+            ),
+            format!(
+                "after_sequence=2&&after_block_height=7&after_block_hash_hex={block_hash}&after_event_index=3"
+            ),
+        ] {
+            let error = FinalizedOrderbookEventQuery::parse(Some(&invalid))
+                .expect_err("noncanonical orderbook event query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
     }
     #[test]
     fn finalized_repair_queries_require_bounded_exact_cursors() {
@@ -34576,6 +34837,26 @@ mod advert_tests {
         assert!(FinalizedRepairAnchorQuery::parse(Some("status=queued")).is_err());
         let block_hash = hex::encode([0x11; 32]);
         let after_task_id = hex::encode([0x22; 32]);
+        for invalid in [
+            String::new(),
+            "expected_finalized_height".to_owned(),
+            format!("expected_finalized_height=07&expected_finalized_block_hash_hex={block_hash}"),
+            format!("expected_finalized_height=+7&expected_finalized_block_hash_hex={block_hash}"),
+            format!(
+                "expected_finalized_height=7&expected_finalized_block_hash_hex={}",
+                "AB".repeat(32)
+            ),
+            format!("expected_finalized_height=%37&expected_finalized_block_hash_hex={block_hash}"),
+            format!("expected_finalized_height=7&&expected_finalized_block_hash_hex={block_hash}"),
+        ] {
+            let error = FinalizedRepairAnchorQuery::parse(Some(&invalid))
+                .expect_err("noncanonical repair anchor query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
         let raw = format!(
             "limit=17&expected_finalized_height=7&expected_finalized_block_hash_hex={block_hash}&after_task_id_hex={after_task_id}"
         );
@@ -34604,6 +34885,26 @@ mod advert_tests {
             ))
             .is_err()
         );
+        for invalid in [
+            String::new(),
+            "limit".to_owned(),
+            "limit=01".to_owned(),
+            "limit=+1".to_owned(),
+            "limit=%31".to_owned(),
+            "lim%69t=1".to_owned(),
+            "&limit=1".to_owned(),
+            "limit=1&".to_owned(),
+            format!("after_task_id_hex={}", "CD".repeat(32)),
+            format!("expected_finalized_height=07&expected_finalized_block_hash_hex={block_hash}"),
+        ] {
+            let error = FinalizedRepairTaskQuery::parse(Some(&invalid))
+                .expect_err("noncanonical repair task query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
         assert!(
             FinalizedRepairEventQuery::parse(Some("after_sequence=2&after_block_height=7"))
                 .is_err()
@@ -34622,6 +34923,41 @@ mod advert_tests {
                 event_index: 3,
             })
         );
+        for invalid in [
+            String::new(),
+            "after_sequence".to_owned(),
+            format!(
+                "after_sequence=02&after_block_height=7&after_block_hash_hex={block_hash}&after_event_index=3"
+            ),
+            format!(
+                "after_sequence=+2&after_block_height=7&after_block_hash_hex={block_hash}&after_event_index=3"
+            ),
+            format!(
+                "after_sequence=2&after_block_height=07&after_block_hash_hex={block_hash}&after_event_index=3"
+            ),
+            format!(
+                "after_sequence=2&after_block_height=7&after_block_hash_hex={}&after_event_index=3",
+                "AB".repeat(32)
+            ),
+            format!(
+                "after_sequence=2&after_block_height=7&after_block_hash_hex={block_hash}&after_event_index=03"
+            ),
+            format!(
+                "after_sequence=2&after_block_height=7&after_block_hash_hex=%31{}&after_event_index=3",
+                &block_hash[2..]
+            ),
+            format!(
+                "after_sequence=2&after_block_height=7&&after_block_hash_hex={block_hash}&after_event_index=3"
+            ),
+        ] {
+            let error = FinalizedRepairEventQuery::parse(Some(&invalid))
+                .expect_err("noncanonical repair event query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
     }
     #[tokio::test]
     async fn repair_api_capability_is_independent_of_local_storage() {

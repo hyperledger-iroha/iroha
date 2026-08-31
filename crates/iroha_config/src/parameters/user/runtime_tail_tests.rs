@@ -349,6 +349,27 @@ fn sumeragi_requires_bls_allowed_algorithms() {
     );
     assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
 }
+
+#[test]
+fn sumeragi_rejects_unknown_key_policy_fields() {
+    let mut table = base_table();
+    let sumeragi = table
+        .entry("sumeragi")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .expect("sumeragi table");
+    let keys = sumeragi
+        .entry("keys")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .expect("sumeragi.keys table");
+    keys.insert("unsupported_key_policy".into(), Value::Boolean(true));
+    assert!(
+        actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+        "unknown sumeragi.keys fields must be rejected",
+    );
+}
+
 #[test]
 fn retired_sumeragi_npos_config_is_rejected() {
     let mut table = base_table();

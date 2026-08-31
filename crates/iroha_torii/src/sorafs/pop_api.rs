@@ -388,7 +388,7 @@ pub enum PopCredentialRuntimeProviderRegistryErrorV1 {
 }
 /// Deployment-owned factory for all PoP private runtime dependencies.
 ///
-/// Implementations must change `qualification` whenever any signer, KMS, authentication,
+/// Implementations must change `qualification` whenever any signer, key-management, authentication,
 /// enrollment-recipient, wallet, witness, finalized-query, or transaction adapter identity/policy
 /// changes. `resolve` receives only public bindings and must never persist or log private material.
 pub trait PopCredentialRuntimeProviderRegistryV1: Send + Sync + fmt::Debug {
@@ -553,7 +553,7 @@ pub struct PopCredentialRuntimeProvidersV1 {
     pub issuance_draft_provider: Arc<dyn PopIssuanceDraftProviderV1>,
     /// Protected wallet-recipient open capability.
     pub wallet_recipient: Arc<dyn PopWalletRecipientV1>,
-    /// KMS/PKCS#11 wallet DEK wrapper.
+    /// Qualified wallet DEK wrapper.
     pub wallet_key_wrapper: Arc<dyn PopWalletKeyWrapper>,
     /// Private wallet witness provider.
     pub wallet_witness_provider: Arc<dyn PopWalletWitnessProviderV1>,

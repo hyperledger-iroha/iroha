@@ -1,5 +1,5 @@
 use super::*;
-use crate::{account::NewAccount, consensus::HsmBinding, domain::NewDomain};
+use crate::{account::NewAccount, domain::NewDomain};
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
 use std::fmt::Display;
@@ -82,6 +82,7 @@ impl_into_box! {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct RegisterPeerWithPop {
     /// Peer to register
     pub peer: PeerId,
@@ -95,10 +96,6 @@ pub struct RegisterPeerWithPop {
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub expiry_at: Option<u64>,
-    /// Optional HSM binding for the consensus key.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub hsm: Option<HsmBinding>,
 }
 impl_display! {
     RegisterPeerWithPop => "REGISTER_PEER_WITH_POP `{}`", peer
@@ -112,7 +109,6 @@ impl RegisterPeerWithPop {
             pop,
             activation_at: None,
             expiry_at: None,
-            hsm: None,
         }
     }
     /// Attach an explicit activation height; must satisfy the lead-time policy.
@@ -125,12 +121,6 @@ impl RegisterPeerWithPop {
     #[must_use]
     pub fn with_expiry_at(mut self, expiry_at: u64) -> Self {
         self.expiry_at = Some(expiry_at);
-        self
-    }
-    /// Attach an HSM binding for the consensus key.
-    #[must_use]
-    pub fn with_hsm(mut self, hsm: HsmBinding) -> Self {
-        self.hsm = Some(hsm);
         self
     }
 }
@@ -353,10 +343,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPeerWithPop {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let hsm = super::decode_aos_canonical_field::<Option<HsmBinding>>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -367,7 +353,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPeerWithPop {
                 pop,
                 activation_at,
                 expiry_at,
-                hsm,
             },
             offset,
         ))
@@ -599,11 +584,6 @@ mod tests {
             pop: vec![1u8, 2, 3, 4, 5],
             activation_at: Some(10),
             expiry_at: Some(100),
-            hsm: Some(HsmBinding {
-                provider: "softkey".to_owned(),
-                key_label: "validator-1".to_owned(),
-                slot: Some(7),
-            }),
         }
     }
     fn assert_slice_roundtrip<T>(value: T)
@@ -638,6 +618,14 @@ mod tests {
         let encoded = isi.encode();
         let decoded = RegisterPeerWithPop::decode(&mut &encoded[..]).expect("decode");
         assert_eq!(decoded, isi);
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn register_peer_with_pop_json_rejects_unknown_fields() {
+        let isi = register_peer_with_pop();
+        let canonical = norito::json::to_json(&isi).expect("serialize peer registration");
+        let with_unknown = canonical.replacen('{', "{\"unknown\":null,", 1);
+        assert!(norito::json::from_json::<RegisterPeerWithPop>(&with_unknown).is_err());
     }
     #[test]
     fn register_unregister_decode_from_slice_roundtrips() {

@@ -3881,6 +3881,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
   switch (wireId) {
     case PROPOSE_DEPLOY_CONTRACT_WIRE_ID: {
       const fields = decodeStructFields(payload, "ProposeDeployContract", [
+        "proposal_operator",
         "contract_address",
         "code_hash",
         "abi_hash",
@@ -3888,6 +3889,10 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         "manifest_provenance",
       ]);
       const decoded = {
+        proposal_operator: decodeAccountIdValue(
+          fields.proposal_operator,
+          "ProposeDeployContract.proposal_operator",
+        ),
         contract_address: decodeStringValue(
           fields.contract_address,
           "ProposeDeployContract.contract_address",
@@ -6485,6 +6490,7 @@ function decodeGovernanceAbiVersionValue(payload, context) {
 function encodeProposeDeployContractPayload(value) {
   validateProposeDeployContractPayload(value);
   return encodeStructValue([
+    [encodeAccountIdValue(value.proposal_operator, "ProposeDeployContract.proposal_operator")],
     [encodeNoritoStringValue(assertNonEmptyString(value.contract_address, "ProposeDeployContract.contract_address"))],
     [encodeGovernanceHash32Value(value.code_hash, "ProposeDeployContract.code_hash")],
     [encodeGovernanceHash32Value(value.abi_hash, "ProposeDeployContract.abi_hash")],

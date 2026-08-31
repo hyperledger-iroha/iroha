@@ -588,7 +588,6 @@ fn install_lifecycle_queue_plan_validator_authority(
             ),
             activation_height: 0,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };

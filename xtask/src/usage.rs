@@ -158,10 +158,10 @@ fn print_usage() {
         "    Run or dry-run SNNet-15F1 chaos drills from the scenario pack; defaults to artifacts/soranet/gateway_chaos and the ops-pack scenarios."
     );
     eprintln!(
-        "  cargo xtask soranet-gateway-hardening [--sbom <path>] [--vuln-report <path>] [--hsm-policy <path>] [--sandbox-profile <path>] [--data-retention-days <u32>] [--log-retention-days <u32>] [--out <dir>]"
+        "  cargo xtask soranet-gateway-hardening [--sbom <path>] [--vuln-report <path>] [--signing-policy <path>] [--sandbox-profile <path>] [--data-retention-days <u32>] [--log-retention-days <u32>] [--out <dir>]"
     );
     eprintln!(
-        "    Generate the SNNet-15H hardening summary (SBOM/vuln/HSM/sandbox evidence + retention defaults) with JSON + Markdown outputs. Defaults to artifacts/soranet/gateway_hardening."
+        "    Generate the SNNet-15H hardening summary (SBOM/vulnerability/signing-policy/sandbox evidence + retention defaults) with JSON + Markdown outputs. Defaults to artifacts/soranet/gateway_hardening."
     );
     eprintln!(
         "  cargo xtask soranet-gar-controller [--config <path>] [--output-dir <path>] [--markdown-out <path>] [--now <unix-secs>]"

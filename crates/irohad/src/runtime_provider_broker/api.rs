@@ -760,7 +760,7 @@ define_runtime_provider_backends_v1! {
     pub struct RuntimeProviderBrokerBackendsV1 {
         /// Attach the deployment-owned native Bootle/Lantern issuer and authenticator.
         optional bootle_lantern_issuance: Arc<dyn BootleLanternIssuanceBrokerBackendV1> => pub fn with_bootle_lantern_issuance(backend);
-        /// Attach the deployment-owned PKCS#11/KMS quarantine-DEK wrapper.
+        /// Attach the deployment-owned authenticated quarantine-DEK wrapper.
         optional moderation_quarantine_key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper> => pub fn with_moderation_quarantine_key_wrapper(key_wrapper);
         /// Attach the deployment-owned threshold-PRF provider used for privacy cycles.
         optional privacy_cycle_prf_provider: Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1> => pub fn with_privacy_cycle_prf_provider(provider);

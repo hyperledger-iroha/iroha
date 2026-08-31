@@ -58,8 +58,11 @@ async fn webhooks_endpoints_exposed_by_default() {
         state,
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
-    );
-    let app = torii.api_router_for_tests();
+    )
+    .expect("valid Torii webhook fixture");
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     // Webhook registry routes reject requests before dispatch unless operator
     // authentication succeeds.
     let resp = app
@@ -153,8 +156,11 @@ async fn webhooks_endpoints_hidden_when_disabled() {
         state,
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
-    );
-    let app = torii.api_router_for_tests();
+    )
+    .expect("valid Torii webhook fixture");
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let resp = app
         .clone()
         .oneshot(

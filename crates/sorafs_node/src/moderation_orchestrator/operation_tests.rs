@@ -502,7 +502,11 @@ fn late_applied_retired_envelope_fences_new_generation_until_semantic_finality()
     let active_policy = policy(1);
     orchestrator_fixture!(orchestrator; reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); => config(&temp, "late-old-envelope.norito"); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
     orchestrator
-        .submit(authority.clone(), policy_action(active_policy), [0x83; 32])
+        .submit(
+            authority.clone(),
+            policy_action(active_policy.clone()),
+            [0x83; 32],
+        )
         .expect("initial submission");
     let (operation_id, _, first_signed, first_timing, _) = retained_envelope(&orchestrator);
     submitter.set_lookup(
@@ -1084,7 +1088,11 @@ fn ambiguous_submission_is_reconciled_after_restart_without_resubmit() {
     {
         open_test_orchestrator!(orchestrator = checkpoint.clone(); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
         orchestrator
-            .submit(authority.clone(), policy_action(active_policy), [0x11; 32])
+            .submit(
+                authority.clone(),
+                policy_action(active_policy.clone()),
+                [0x11; 32],
+            )
             .expect("ambiguous submit remains pending");
         single_outbox_entry!(state, entry = orchestrator; "orchestrator state"; "one ambiguous outbox entry must remain");
         assert_eq!(entry.state, StoredOutboxStateV1::Ambiguous);
@@ -1120,7 +1128,7 @@ fn ambiguous_submission_is_reconciled_after_restart_without_resubmit() {
     reader.replace(snapshot_with_policy(
         3,
         [3; 32],
-        active_policy,
+        active_policy.clone(),
         authority.clone(),
     ));
     restarted.reconcile().expect("finalized reconciliation");

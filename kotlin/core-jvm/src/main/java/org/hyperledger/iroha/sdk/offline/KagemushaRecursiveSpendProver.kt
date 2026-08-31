@@ -604,7 +604,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun projectOperationStatus(status: OperationStatus): OperationStatusProjection {
             requireArtifactBridge()
             val fields = nativeProjectOperationStatusV4(status.noritoEncoded())
-            requireFieldCount(fields, 10, "operation status projection")
+            requireFieldCount(fields, 9, "operation status projection")
             val state = when (canonicalText(fields[0], "operationState")) {
                 "pending" -> OperationState.PENDING
                 "applied" -> OperationState.APPLIED
@@ -614,30 +614,27 @@ class KagemushaRecursiveSpendProver private constructor() {
             val kind = operationKind(canonicalText(fields[1], "operationKind"))
             val heightOrSubmittedAt = fields[4].takeIf { it.isNotEmpty() }
                 ?.let { longInteger(it, "operationHeightOrSubmittedAt") }
-            val serverTime = fields[5].takeIf { it.isNotEmpty() }
-                ?.let { longInteger(it, "serverTimeMilliseconds") }
-            val finalizedTopUp = if (fields[6].isNotEmpty() || fields[7].isNotEmpty()) {
+            val finalizedTopUp = if (fields[5].isNotEmpty() || fields[6].isNotEmpty()) {
                 check(state == OperationState.APPLIED && kind == OperationKind.TOP_UP &&
-                    fields[6].isNotEmpty() && fields[7].isNotEmpty() &&
-                    heightOrSubmittedAt != null && serverTime != null) {
+                    fields[5].isNotEmpty() && fields[6].isNotEmpty() &&
+                    heightOrSubmittedAt != null) {
                     "native Kagemusha finalized top-up fields are invalid"
                 }
                 FinalizedTopUp(
-                    TopUpAnchorV4(fields[6]),
-                    TopUpFinalityProof(fields[7]),
+                    TopUpAnchorV4(fields[5]),
+                    TopUpFinalityProof(fields[6]),
                     heightOrSubmittedAt,
-                    serverTime,
                 )
             } else {
                 null
             }
-            val rejection = if (fields[8].isNotEmpty() || fields[9].isNotEmpty()) {
-                check(state == OperationState.REJECTED && fields[8].isNotEmpty() && fields[9].isNotEmpty()) {
+            val rejection = if (fields[7].isNotEmpty() || fields[8].isNotEmpty()) {
+                check(state == OperationState.REJECTED && fields[7].isNotEmpty() && fields[8].isNotEmpty()) {
                     "native Kagemusha rejection fields are invalid"
                 }
                 OperationRejection(
-                    canonicalText(fields[8], "rejectionCode"),
-                    canonicalText(fields[9], "rejectionMessage"),
+                    canonicalText(fields[7], "rejectionCode"),
+                    canonicalText(fields[8], "rejectionMessage"),
                 )
             } else {
                 null
@@ -649,7 +646,6 @@ class KagemushaRecursiveSpendProver private constructor() {
                 requireTransactionHash(fields[3], "transactionHash"),
                 if (state == OperationState.PENDING) heightOrSubmittedAt else null,
                 if (state == OperationState.APPLIED) heightOrSubmittedAt else null,
-                serverTime,
                 finalizedTopUp,
                 rejection,
             )
@@ -4013,11 +4009,9 @@ class KagemushaRecursiveSpendProver private constructor() {
         val anchor: TopUpAnchorV4,
         val finalityProof: TopUpFinalityProof,
         val finalizedBlockHeight: Long,
-        val serverTimeMilliseconds: Long,
     ) {
         init {
             require(finalizedBlockHeight > 0) { "finalizedBlockHeight must be positive" }
-            require(serverTimeMilliseconds > 0) { "serverTimeMilliseconds must be positive" }
         }
     }
 
@@ -4028,7 +4022,6 @@ class KagemushaRecursiveSpendProver private constructor() {
         transactionHash: ByteArray,
         val submittedAtMilliseconds: Long?,
         val finalizedBlockHeight: Long?,
-        val serverTimeMilliseconds: Long?,
         val finalizedTopUp: FinalizedTopUp?,
         val rejection: OperationRejection?,
     ) {
@@ -4039,22 +4032,20 @@ class KagemushaRecursiveSpendProver private constructor() {
             when (state) {
                 OperationState.PENDING -> require(
                     submittedAtMilliseconds != null && submittedAtMilliseconds > 0 &&
-                        finalizedBlockHeight == null && serverTimeMilliseconds == null &&
+                        finalizedBlockHeight == null &&
                         finalizedTopUp == null && rejection == null,
                 ) { "pending operation status fields are invalid" }
                 OperationState.APPLIED -> require(
                     submittedAtMilliseconds == null &&
                         finalizedBlockHeight != null && finalizedBlockHeight > 0 &&
-                        serverTimeMilliseconds != null && serverTimeMilliseconds > 0 &&
                         rejection == null &&
                         ((kind == OperationKind.TOP_UP && finalizedTopUp != null &&
-                            finalizedTopUp.finalizedBlockHeight == finalizedBlockHeight &&
-                            finalizedTopUp.serverTimeMilliseconds == serverTimeMilliseconds) ||
+                            finalizedTopUp.finalizedBlockHeight == finalizedBlockHeight) ||
                             (kind == OperationKind.REDEEM && finalizedTopUp == null)),
                 ) { "applied operation status fields are invalid" }
                 OperationState.REJECTED -> require(
                     submittedAtMilliseconds == null && finalizedBlockHeight == null &&
-                        serverTimeMilliseconds == null && finalizedTopUp == null &&
+                        finalizedTopUp == null &&
                         rejection != null,
                 ) { "rejected operation status fields are invalid" }
             }

@@ -836,7 +836,7 @@ impl PorFinalizedReplayArchiveRecordV1 {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-/// HSM-authenticated receipt for one replay-archive append.
+/// Provider-authenticated receipt for one replay-archive append.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PorFinalizedReplayArchiveReceiptV1 {
     binding: PorFinalizedReplayArchiveBindingV1,
@@ -914,7 +914,7 @@ impl PorFinalizedReplayArchiveReceiptV1 {
             signature,
         })
     }
-    /// Verify the canonical fields and HSM signature carried by this receipt.
+    /// Verify the canonical fields and provider signature carried by this receipt.
     ///
     /// # Errors
     ///
@@ -1099,7 +1099,7 @@ impl PorFinalizedReplayArchiveProofBoundsV1 {
 pub struct PorFinalizedReplayArchiveReadbackV1 {
     /// Exact canonical finalized record.
     pub record: PorFinalizedReplayArchiveRecordV1,
-    /// HSM-authenticated receipt binding that record.
+    /// Provider-authenticated receipt binding that record.
     pub receipt: PorFinalizedReplayArchiveReceiptV1,
     /// Signed contiguous successors proving inclusion at the pinned head.
     pub successor_receipts: Vec<PorFinalizedReplayArchiveReceiptV1>,
@@ -1153,7 +1153,7 @@ impl PorFinalizedReplayArchiveReadbackV1 {
         Ok(())
     }
 }
-/// HSM-authenticated proof that one challenge is absent at an exact signed head.
+/// Provider-authenticated proof that one challenge is absent at an exact signed head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PorFinalizedReplayArchiveAbsenceProofV1 {
     binding: PorFinalizedReplayArchiveBindingV1,
@@ -1295,7 +1295,7 @@ pub trait PorFinalizedReplayArchiveV1: Send + Sync + std::fmt::Debug {
     /// This call must not mutate archive state. Adapters that cannot establish
     /// fresh authenticated read/write readiness must fail closed.
     fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1>;
-    /// Return the current HSM-authenticated monotonic head.
+    /// Return the current provider-authenticated monotonic head.
     fn current_head(
         &self,
     ) -> Result<Option<PorFinalizedReplayArchiveReceiptV1>, PorFinalizedReplayArchiveExternalErrorV1>;
@@ -2744,7 +2744,7 @@ impl PorTracker {
     }
     /// Archive and compact a bounded acknowledged finalized prefix.
     ///
-    /// Every record is durably appended and its HSM-authenticated receipt is
+    /// Every record is durably appended and its provider-authenticated receipt is
     /// verified before local replay state is removed. If any append fails,
     /// in-memory state rolls back to its exact pre-call snapshot; an archive
     /// that committed before the failure must return the same receipt on retry.

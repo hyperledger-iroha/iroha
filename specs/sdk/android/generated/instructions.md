@@ -643,7 +643,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha_data_model::isi::register::RegisterPeerWithPop`
 
-> Schema summary: struct fields: peer: PeerId, pop: Vec<u8>, activation_at: Option<u64>, expiry_at: Option<u64>, hsm: Option<HsmBinding>.
+> Schema summary: struct fields: peer: PeerId, pop: Vec<u8>, activation_at: Option<u64>, expiry_at: Option<u64>.
 
 - Rust type: `iroha_data_model::isi::register::RegisterPeerWithPop`
 - Schema hash: `5bce06b486a498769cabef7046aa4b60`
@@ -656,7 +656,6 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | `pop` | `Vec<u8>` |
 | `activation_at` | `Option<u64>` |
 | `expiry_at` | `Option<u64>` |
-| `hsm` | `Option<HsmBinding>` |
 
 ## `iroha_data_model::isi::register::Unregister<iroha_data_model::account::model::Account>`
 

@@ -6,6 +6,7 @@ use crate::{
 use iroha_config::client_api::ConfigGetDTO;
 use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::NetworkId;
+use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::prelude::*;
 use monitor::Metrics as PeerMetricsSnapshot;
 pub use monitor::Update;
@@ -17,7 +18,10 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::RwLock;
+use tokio::{
+    sync::RwLock,
+    task::{JoinHandle, JoinSet},
+};
 use url::Url;
 const PROPAGATION_HISTORY_LIMIT: usize = 64;
 const PROPAGATION_SNAPSHOT_LIMIT: usize = 32;
@@ -121,6 +125,7 @@ impl From<&iroha_config::parameters::actual::ToriiPeerGeo> for GeoLookupConfig {
 pub struct PeerTelemetryService {
     peers: RwLock<BTreeMap<ToriiUrl, PeerState>>,
     propagation: RwLock<PropagationTracker>,
+    peer_urls: BTreeSet<ToriiUrl>,
     geo_config: GeoLookupConfig,
     network_id: NetworkId,
     operator_signer: Option<KeyPair>,
@@ -132,30 +137,110 @@ impl PeerTelemetryService {
         network_id: NetworkId,
         operator_signer: Option<KeyPair>,
     ) -> Arc<Self> {
-        let service = Arc::new(Self {
+        Arc::new(Self {
             peers: RwLock::new(BTreeMap::new()),
             propagation: RwLock::new(PropagationTracker::default()),
+            peer_urls: BTreeSet::from_iter(peer_urls),
             geo_config,
             network_id,
             operator_signer,
-        });
-        for url in BTreeSet::from_iter(peer_urls) {
-            service.spawn_monitor(url);
-        }
-        service
+        })
     }
-    fn spawn_monitor(self: &Arc<Self>, url: ToriiUrl) {
+    /// Start the configured peer monitors under the supplied shutdown signal.
+    ///
+    /// Returns `None` when no peer telemetry URLs were configured. The returned
+    /// task owns every per-peer worker and only exits normally after shutdown;
+    /// callers should keep and supervise its [`JoinHandle`].
+    pub(crate) fn start(
+        self: &Arc<Self>,
+        shutdown_signal: ShutdownSignal,
+    ) -> Option<JoinHandle<crate::ToriiCriticalWorkerExit>> {
+        if self.peer_urls.is_empty() {
+            return None;
+        }
+
         let service = Arc::clone(self);
-        let geo_config = service.geo_config.clone();
-        let network_id = service.network_id;
-        let operator_signer = service.operator_signer.clone();
-        tokio::spawn(async move {
-            let (mut rx, fut) = monitor::run(url.clone(), geo_config, network_id, operator_signer);
-            tokio::spawn(fut);
-            while let Some(update) = rx.recv().await {
-                service.apply_update(url.clone(), update).await;
+        Some(tokio::spawn(async move {
+            let mut workers = JoinSet::new();
+            for url in service.peer_urls.iter().cloned() {
+                let service = Arc::clone(&service);
+                let worker_shutdown = shutdown_signal.clone();
+                workers.spawn(async move {
+                    service.monitor_peer(url, worker_shutdown).await;
+                });
             }
-        });
+
+            loop {
+                tokio::select! {
+                    biased;
+                    () = shutdown_signal.receive() => {
+                        while let Some(result) = workers.join_next().await {
+                            if let Err(error) = result
+                                && !error.is_cancelled()
+                            {
+                                iroha_logger::error!(?error, "peer telemetry worker failed during shutdown");
+                            }
+                        }
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
+                    result = workers.join_next() => match result {
+                        Some(Ok(())) if shutdown_signal.is_sent() => {}
+                        Some(Ok(())) => {
+                            return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                        }
+                        Some(Err(error)) if shutdown_signal.is_sent() && error.is_cancelled() => {}
+                        Some(Err(error)) => {
+                            iroha_logger::error!(
+                                ?error,
+                                "peer telemetry worker failed before shutdown"
+                            );
+                            return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                        }
+                        None if shutdown_signal.is_sent() => {
+                            return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                        }
+                        None => return crate::ToriiCriticalWorkerExit::UnexpectedExit,
+                    },
+                }
+            }
+        }))
+    }
+    async fn monitor_peer(self: &Arc<Self>, url: ToriiUrl, shutdown_signal: ShutdownSignal) {
+        let (mut rx, monitor) = monitor::run(
+            url.clone(),
+            self.geo_config.clone(),
+            self.network_id,
+            self.operator_signer.clone(),
+            shutdown_signal.clone(),
+        );
+        tokio::pin!(monitor);
+        loop {
+            tokio::select! {
+                biased;
+                () = shutdown_signal.receive() => return,
+                () = &mut monitor => {
+                    if shutdown_signal.is_sent() {
+                        return;
+                    }
+                    iroha_logger::error!(
+                        %url,
+                        "peer telemetry monitor exited before shutdown"
+                    );
+                    return;
+                }
+                update = rx.recv() => match update {
+                    Some(update) => self.apply_update(url.clone(), update).await,
+                    None if shutdown_signal.is_sent() => return,
+                    None => {
+                        iroha_logger::error!(
+                            %url,
+                            "peer telemetry update stream closed before shutdown"
+                        );
+                        return;
+                    }
+                },
+            }
+        }
     }
     async fn apply_update(&self, url: ToriiUrl, update: Update) {
         let peer_url = url.as_str().to_owned();
@@ -472,6 +557,40 @@ mod tests {
             config.endpoint.as_ref().map(Url::as_str),
             Some(endpoint.as_str())
         );
+    }
+    #[test]
+    fn construction_is_inert() {
+        let peer_url = "http://127.0.0.1:9".parse().expect("torii url");
+        let service = PeerTelemetryService::new(
+            vec![peer_url],
+            GeoLookupConfig::disabled(),
+            crate::signed_query_test_network_id(),
+            None,
+        );
+
+        assert_eq!(Arc::strong_count(&service), 1);
+    }
+    #[tokio::test]
+    async fn started_worker_stops_and_releases_service_on_shutdown() {
+        let peer_url = "http://127.0.0.1:9".parse().expect("torii url");
+        let service = PeerTelemetryService::new(
+            vec![peer_url],
+            GeoLookupConfig::disabled(),
+            crate::signed_query_test_network_id(),
+            None,
+        );
+        let shutdown = ShutdownSignal::new();
+        let worker = service
+            .start(shutdown.clone())
+            .expect("configured peer starts a worker");
+
+        shutdown.send();
+        let exit = tokio::time::timeout(Duration::from_secs(1), worker)
+            .await
+            .expect("peer telemetry worker observes shutdown")
+            .expect("peer telemetry worker stops cleanly");
+        assert_eq!(exit, crate::ToriiCriticalWorkerExit::StoppedByShutdown);
+        assert_eq!(Arc::strong_count(&service), 1);
     }
     #[tokio::test]
     async fn peers_status_reflects_metrics_updates() {

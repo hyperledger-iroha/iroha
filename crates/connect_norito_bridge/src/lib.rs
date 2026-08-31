@@ -11185,6 +11185,80 @@ fn validate_kagemusha_topup_provenance_for_bundle_v4(
         &installed,
     )
 }
+/// Canonical-decode and validate one complete Kagemusha offline operation
+/// status before an Apple SDK projects any of its fields.
+///
+/// Applied top-up validation authenticates the anchor's balanced Merkle path
+/// against the Commit-QC execution commitment and binds the operation,
+/// transaction, network, height, anchor, and proof to one another. Validator
+/// roster/QC signature authentication remains the responsibility of the
+/// release-pinned finality verifier when the result is consumed by the prover.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_offline_operation_status_validate_v1(
+    status_norito_ptr: *const c_uchar,
+    status_norito_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if status_norito_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let status_len =
+            usize::try_from(status_norito_len).map_err(|_| BridgeError::KagemushaProve)?;
+        if status_len == 0
+            || status_len > iroha_torii_shared::offline_api::OFFLINE_OPERATION_STATUS_MAX_BYTES
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let status_bytes = read_kagemusha_bytes!(
+            status_norito_ptr,
+            status_norito_len,
+            iroha_torii_shared::offline_api::OFFLINE_OPERATION_STATUS_MAX_BYTES
+        )?;
+        let status = decode_canonical_kagemusha_archive::<
+            iroha_torii_shared::offline_api::OfflineOperationStatus,
+        >(&status_bytes)?;
+        status
+            .validate_structure()
+            .map_err(|_| BridgeError::KagemushaProve)
+    })();
+    bridge_result_to_code(result)
+}
+/// Strict-decode and structurally validate one Kagemusha offline operation
+/// status directly from the bounded Norito JSON returned by Torii.
+///
+/// This boundary rejects unknown or duplicate fields before an SDK projects
+/// nested values. Applied top-ups authenticate their balanced Merkle path and
+/// combined post-state root against the execution commitment carried by the
+/// response. It deliberately does not authenticate the embedded Commit-QC
+/// signature; that requires the separately trusted, release-pinned validator
+/// roster when the result is consumed by the prover.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+    status_json_ptr: *const c_uchar,
+    status_json_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if status_json_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let status_len =
+            usize::try_from(status_json_len).map_err(|_| BridgeError::KagemushaProve)?;
+        if status_len == 0
+            || status_len > iroha_torii_shared::offline_api::OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let status_bytes = unsafe { slice::from_raw_parts(status_json_ptr, status_len) };
+        let status = norito::json::from_slice::<
+            iroha_torii_shared::offline_api::OfflineOperationStatus,
+        >(status_bytes)
+        .map_err(|_| BridgeError::KagemushaProve)?;
+        status
+            .validate_structure()
+            .map_err(|_| BridgeError::KagemushaProve)
+    })();
+    bridge_result_to_code(result)
+}
 /// Verify one compact Kagemusha top-up finality proof against a complete
 /// chain-issued anchor and a pre-fetched, content-addressed validator roster
 /// artifact.
@@ -18397,7 +18471,7 @@ mod kagemusha_bridge_tests {
             shield_verifier_commitment,
             artifact_binding: artifact_binding.clone(),
             finalized_height: 42,
-            finalized_tx_hash: [0x94; 32],
+            finalized_tx_hash: Hash::new([0x94; 32]).into(),
             anchor_digest: [0; 32],
         }
         .finalize_digest()
@@ -28672,6 +28746,133 @@ mod tests {
     #[test]
     fn native_signer_jni_contract_revision_is_the_v5_network_id_hard_cut() {
         assert_eq!(native_signer_jni_contract_revision(), 5);
+    }
+    #[test]
+    fn offline_operation_status_ffi_rejects_invalid_shared_status() {
+        use iroha_torii_shared::offline_api::{OfflineOperationKind, OfflineOperationStatus};
+
+        let valid = OfflineOperationStatus::Pending {
+            operation_id: "11".repeat(32),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: format!("{}23", "22".repeat(31)),
+            submitted_at_ms: 42,
+        };
+        let valid_archive = norito::encode_canonical(&valid).expect("encode valid status");
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_offline_operation_status_validate_v1(
+                    valid_archive.as_ptr(),
+                    valid_archive.len() as c_ulong,
+                )
+            },
+            0
+        );
+
+        let invalid = OfflineOperationStatus::Pending {
+            submitted_at_ms: 0,
+            ..valid
+        };
+        let invalid_archive = norito::encode_canonical(&invalid).expect("encode invalid status");
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_offline_operation_status_validate_v1(
+                    invalid_archive.as_ptr(),
+                    invalid_archive.len() as c_ulong,
+                )
+            },
+            ERR_KAGEMUSHA_PROVE
+        );
+    }
+    #[test]
+    fn offline_operation_status_json_ffi_is_bounded_strict_and_structural() {
+        use iroha_torii_shared::offline_api::{OfflineOperationKind, OfflineOperationStatus};
+
+        let valid = OfflineOperationStatus::Pending {
+            operation_id: "11".repeat(32),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: format!("{}23", "22".repeat(31)),
+            submitted_at_ms: 42,
+        };
+        let valid_json = norito::json::to_vec(&valid).expect("encode valid status JSON");
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                    valid_json.as_ptr(),
+                    valid_json.len() as c_ulong,
+                )
+            },
+            0
+        );
+
+        let invalid = OfflineOperationStatus::Pending {
+            submitted_at_ms: 0,
+            ..valid
+        };
+        let invalid_json = norito::json::to_vec(&invalid).expect("encode invalid status JSON");
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                    invalid_json.as_ptr(),
+                    invalid_json.len() as c_ulong,
+                )
+            },
+            ERR_KAGEMUSHA_PROVE
+        );
+
+        let valid_json_text = String::from_utf8(valid_json).expect("JSON is UTF-8");
+        let mut unknown_field_json = valid_json_text.clone();
+        unknown_field_json.pop();
+        unknown_field_json.push_str(r#","unexpected":true}"#);
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                    unknown_field_json.as_ptr(),
+                    unknown_field_json.len() as c_ulong,
+                )
+            },
+            ERR_KAGEMUSHA_PROVE
+        );
+
+        let duplicate_field_json = valid_json_text.replacen(
+            r#""state":"pending""#,
+            r#""state":"pending","state":"pending""#,
+            1,
+        );
+        assert_ne!(duplicate_field_json, valid_json_text);
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                    duplicate_field_json.as_ptr(),
+                    duplicate_field_json.len() as c_ulong,
+                )
+            },
+            ERR_KAGEMUSHA_PROVE
+        );
+
+        let byte = 0_u8;
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_offline_operation_status_json_validate_v1(&byte, 0) },
+            ERR_KAGEMUSHA_PROVE
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                    &byte,
+                    (iroha_torii_shared::offline_api::OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES + 1)
+                        as c_ulong,
+                )
+            },
+            ERR_KAGEMUSHA_PROVE
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                    std::ptr::null(),
+                    1,
+                )
+            },
+            ERR_NULL_PTR
+        );
     }
     #[test]
     fn c_and_jni_transaction_network_ids_require_exact_canonical_encodings() {

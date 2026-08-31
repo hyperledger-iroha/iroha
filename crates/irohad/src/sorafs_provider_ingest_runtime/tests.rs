@@ -1044,7 +1044,7 @@ async fn governed_signer_pins_assignment_revision_before_hsm_signing() {
     assert_eq!(
         signer.sign_calls.load(Ordering::SeqCst),
         1,
-        "substituted assignment revision must not reach the HSM signer"
+        "substituted assignment revision must not reach the runtime signer"
     );
 }
 #[tokio::test]
@@ -1067,7 +1067,7 @@ async fn governed_signer_rejects_provider_substitution_before_hsm_signing() {
     assert_eq!(
         signer.sign_calls.load(Ordering::SeqCst),
         0,
-        "a completion for another provider must not reach the HSM signer"
+        "a completion for another provider must not reach the runtime signer"
     );
 }
 #[tokio::test]

@@ -104,6 +104,7 @@ from scripts.tests.sorafs_rollout_gate_source_support import (
     governance_source,
     read_source as read,
 )
+from scripts.tests.state_source_bundle import read_rust_source_bundle
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
@@ -14956,15 +14957,15 @@ def test_pop_credentials_docs_match_stock_broker_and_open_deployment_backend() -
         "The remaining release blocker is `V1-BLOCK-POP-RUNTIME-01`, but it is no longer a missing standard-daemon injection or shared sidecar transport.",
         "Stock `irohad` projects the exact public PoP binding into its fixed local broker client, and `RuntimeProviderBrokerDeploymentV1` is the public sidecar launcher.",
         "The missing deployment package must implement `RuntimeProviderBrokerBackendRegistryV1`, attach a genuine PoP registry to `RuntimeProviderBrokerBackendsV1`, and resolve:",
-        "This checker is a rollout gate; it does not replace the deployment-owned broker executable, genuine external software signer/KMS and authentication backends, or deployed verifier evidence.",
+        "This checker is a rollout gate; it does not replace the deployment-owned broker executable, qualified signer, key-wrapper, and authentication backends, or deployed verifier evidence.",
         "Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API, durable encrypted workflow, and broker authentication operation are shipped; operator UI, WebAuthn enrollment ceremony, and a genuine deployment-owned authenticator backend remain open.",
         "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, external software-signer interface, strict policy binding, issuance/revocation APIs, retry-safe outbox, and standard-daemon broker wiring are shipped; a genuine independently administered software-signing backend and deployment evidence remain open.",
         "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, durable reconciliation, and broker transaction/read operations are shipped; a deployment-owned committed-state backend and multi-peer evidence remain open.",
-        "Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, local proof APIs, and broker wallet operations are shipped; a genuine deployment-owned KMS/witness backend and operator client remain open.",
+        "Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted provider-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, local proof APIs, and broker wallet operations are shipped; a qualified deployment-owned key-wrapper/witness backend and operator client remain open.",
         "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, SDK/bridge reference gate, and standard broker adapter are shipped; a genuine runtime backend and reviewed deployment evidence remain open.",
         "`V1-BLOCK-POP-RUNTIME-01` blocks production completion and promotion, not the standard-daemon source integration.",
         "Operators without that qualified deployment backend must leave `sorafs.storage.pop_credentials.enabled = false`; the intentional enabled-without-runtime startup failure must not be bypassed.",
-        "Resolve `V1-BLOCK-POP-RUNTIME-01` by packaging and supervising the genuine deployment-owned backend through the shipped broker launcher; do not add a software-key, file-key, environment, or process-clock fallback.",
+        "Resolve `V1-BLOCK-POP-RUNTIME-01` by packaging and supervising the genuine deployment-owned backend through the shipped broker launcher; do not add a plaintext/manual, configuration-key, environment, unqualified in-process, or process-clock fallback. A qualified deployment-owned provider is not a fallback.",
         "Publish operator and juror command documentation only after the still-open CLI and genuine deployment-owned broker backend exist.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
@@ -14978,7 +14979,10 @@ def test_pop_credentials_docs_match_stock_broker_and_open_deployment_backend() -
     ):
         assert stale_claim not in normalized
     daemon = read(REPO_ROOT / "crates" / "irohad" / "src" / "main.rs")
-    broker = read(REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_broker.rs")
+    broker = read_rust_source_bundle(
+        REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_broker.rs",
+        root=REPO_ROOT,
+    )
     launcher = read(
         REPO_ROOT
         / "crates"
@@ -15009,7 +15013,9 @@ def test_pop_credentials_docs_match_stock_broker_and_open_deployment_backend() -
         "PopCredentialProviderRegistry",
     ):
         assert marker in broker
-    assert "OPERATION_POP_RUNTIME_RESOLVE_V1" not in broker
+    retired_operation = "OPERATION_POP_RUNTIME_RESOLVE_V1"
+    broker_without_audit_literals = broker.replace(f'"{retired_operation}"', "")
+    assert retired_operation not in broker_without_audit_literals
     for marker in (
         "RuntimeProviderBrokerBackendRegistryV1",
         "RuntimeProviderBrokerDeploymentV1",
@@ -16054,6 +16060,8 @@ def test_ai_prescreen_deployed_workflow_services_stay_open_in_docs() -> None:
 
 def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     required_current = (
+        "Every implementation must satisfy the same qualification contract.",
+        "`V1-BLOCK-AI-QUARANTINE-KMS-01` (a legacy identifier) therefore remains open; tests-only wrappers, plaintext/manual wrapping, configuration or environment keys, and unauthenticated fallback wrapping cannot close it. A qualified software provider can.",
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`.",
         "its dry-run JSON includes the checker-backed `evidence_contract` map with the schema and required payload fields for every SFM-4a evidence kind, and the runner validates the schema-closed collection plan, external evidence map, evidence contract, and command steps before dry-run output or live canaries.",
         "It requires a pre-collected `--transparency-producer-evidence` artifact and validates its schema, freshness, deployment context, durable provenance, and absence of generic public ingress before dry-run output or live canaries.",
@@ -16729,7 +16737,7 @@ def test_moderation_panel_parent_services_stay_open_in_docs() -> None:
         "The evidence viewer's signed receipt checkpoint and exact predecessor-bound projection are its sole audit authority",
         "The durable orchestrator now runs payload-free panel notifications through the same supervised maintenance owner.",
         "`panel_notification_handle`, `panel_notification_revision`, and `panel_notification_policy_digest_hex`",
-        "Construct and inject the reference deployment's real messaging, settlement/publication, external software signer/KMS/WebAuthn, and authenticated downstream providers through the shipped qualified boundaries.",
+        "Construct and inject the reference deployment's qualified messaging, settlement/publication, signer, request-authentication, and authenticated downstream providers through the shipped qualified boundaries.",
         "Deploy the existing appeal/panel transaction outbox, finalized-chain orchestrator, retry/reconciliation worker, supervised panel-notification pass, and challenge/no-show maintenance with the remaining juror portal and scheduled settlement provider integrations",
         "Connect panel outcomes to gateway compliance caches, transparency publication, settlement reconciliation, and reputation scoring.",
         "Connect committed native moderation events to the durable Governance DAG and public IPFS/IPNS decision trail.",

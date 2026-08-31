@@ -335,6 +335,7 @@ public enum KagemushaOperationState: String, Codable, Equatable, Sendable {
 public enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable {
     case invalidField(String)
     case invalidNoritoArchive
+    case nativeValidationUnavailable
 
     public var errorDescription: String? {
         switch self {
@@ -342,6 +343,8 @@ public enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable 
             return "Invalid Kagemusha operation field: \(field)."
         case .invalidNoritoArchive:
             return "Kagemusha operation request must be a canonical Norito archive."
+        case .nativeValidationUnavailable:
+            return "Kagemusha operation status validation requires the native Norito bridge."
         }
     }
 }
@@ -455,7 +458,10 @@ public struct KagemushaOperationReference: Codable, Equatable, Sendable {
 /// Canonical finalized top-up anchor consumed by the Kagemusha wallet prover.
 ///
 /// The public API intentionally exposes the current semantic name while the
-/// versioned consensus wire type remains an internal codec detail.
+/// versioned consensus wire type remains an internal codec detail. Parsing an
+/// anchor alone does not authenticate finality; the operation-status decoder
+/// validates inclusion natively and the prover later authenticates the QC and
+/// its release-pinned validator roster.
 public struct KagemushaTopUpAnchor: Equatable, Sendable {
     private let archive: Data
     private let anchorDigest: Data
@@ -504,14 +510,14 @@ public struct KagemushaTopUpAnchor: Equatable, Sendable {
 public struct KagemushaTopUpResult: Equatable, Sendable {
     public let transactionHash: String
     public let finalizedBlockHeight: UInt64
-    public let serverTimeMs: UInt64
     public let anchor: KagemushaTopUpAnchor
     public let finalityProof: KagemushaTopUpFinalityProofArchive
 
-    public init(
+    /// Constructed only after the complete enclosing status passed native
+    /// canonical, Merkle-inclusion, and mutual-binding validation.
+    init(
         transactionHash: String,
         finalizedBlockHeight: UInt64,
-        serverTimeMs: UInt64,
         anchor: KagemushaTopUpAnchor,
         finalityProof: KagemushaTopUpFinalityProofArchive
     ) throws {
@@ -522,10 +528,6 @@ public struct KagemushaTopUpResult: Equatable, Sendable {
         self.finalizedBlockHeight = try KagemushaOperationValidation.positive(
             finalizedBlockHeight,
             field: "finalized_block_height"
-        )
-        self.serverTimeMs = try KagemushaOperationValidation.positive(
-            serverTimeMs,
-            field: "server_time_ms"
         )
         guard self.transactionHash == anchor.finalizedTransactionHash,
               self.finalizedBlockHeight == anchor.finalizedBlockHeight else {
@@ -539,12 +541,10 @@ public struct KagemushaTopUpResult: Equatable, Sendable {
 public struct KagemushaRedeemResult: Equatable, Sendable {
     public let transactionHash: String
     public let finalizedBlockHeight: UInt64
-    public let serverTimeMs: UInt64
 
     public init(
         transactionHash: String,
-        finalizedBlockHeight: UInt64,
-        serverTimeMs: UInt64
+        finalizedBlockHeight: UInt64
     ) throws {
         self.transactionHash = try KagemushaOperationValidation.transactionHash(
             transactionHash,
@@ -553,10 +553,6 @@ public struct KagemushaRedeemResult: Equatable, Sendable {
         self.finalizedBlockHeight = try KagemushaOperationValidation.positive(
             finalizedBlockHeight,
             field: "finalized_block_height"
-        )
-        self.serverTimeMs = try KagemushaOperationValidation.positive(
-            serverTimeMs,
-            field: "server_time_ms"
         )
     }
 }
@@ -738,7 +734,8 @@ public enum KagemushaOperationStatus: Equatable, Sendable {
         public let operationId: String
         public let result: KagemushaOperationResult
 
-        public init(operationId: String, result: KagemushaOperationResult) throws {
+        /// Constructed only by the native-validated status decoder.
+        init(operationId: String, result: KagemushaOperationResult) throws {
             self.operationId = try KagemushaOperationValidation.operationId(operationId)
             if case .topUp(let topUp) = result,
                self.operationId != topUp.anchor.operationId {
@@ -748,7 +745,7 @@ public enum KagemushaOperationStatus: Equatable, Sendable {
         }
     }
 
-    /// Validated payload for a terminally rejected operation.
+    /// Validated payload for one rejected, retryable carrier attempt.
     public struct Rejected: Equatable, Sendable {
         public let operationId: String
         public let kind: KagemushaOperationKind
@@ -789,9 +786,9 @@ public enum KagemushaOperationCodec {
     /// A reference contains only bounded identifiers, tags, a status URI, and
     /// a timestamp. Reject oversized input before Norito frame parsing.
     public static let referenceMaximumArchiveBytes = 4 * 1_024
-    /// Applied top-up status may contain the 2 MiB finality proof plus its
-    /// anchor and framing. Three MiB is a tight first-release wire ceiling.
-    public static let statusMaximumArchiveBytes = 3 * 1_024 * 1_024
+    /// Exact shared native/canonical ceiling for an operation status. Applied
+    /// top-up status may contain the bounded finality proof plus framing.
+    public static let statusMaximumArchiveBytes = 4 * 1_024 * 1_024
     /// Upper bound for every individual textual field decoded by this codec.
     public static let maximumTextFieldUTF8Bytes = 64 * 1_024
 
@@ -875,6 +872,18 @@ public enum KagemushaOperationCodec {
               frame.header.flags == NoritoHeader.compactLen,
               frame.paddingLength == 8 else {
             throw KagemushaOperationError.invalidNoritoArchive
+        }
+        let nativeValidated: Bool?
+        do {
+            nativeValidated = try NoritoNativeBridge.shared
+                .kagemushaOfflineOperationStatusValidateV1(
+                    statusArchive: archive
+                )
+        } catch {
+            throw KagemushaOperationError.invalidNoritoArchive
+        }
+        guard nativeValidated == true else {
+            throw KagemushaOperationError.nativeValidationUnavailable
         }
         var reader = CanonicalNoritoReader(data: frame.payload)
         let variant = try reader.readUInt32LE()
@@ -969,9 +978,6 @@ public enum KagemushaOperationCodec {
         let finalizedBlockHeight = try readField(&reader, compact: compact) {
             try $0.readUInt64LE()
         }
-        let serverTimeMs = try readField(&reader, compact: compact) {
-            try $0.readUInt64LE()
-        }
         let anchorPayload = try readField(&reader, compact: compact) {
             try $0.readBytes($0.remaining())
         }
@@ -995,7 +1001,6 @@ public enum KagemushaOperationCodec {
         return try KagemushaTopUpResult(
             transactionHash: transactionHash,
             finalizedBlockHeight: finalizedBlockHeight,
-            serverTimeMs: serverTimeMs,
             anchor: anchor,
             finalityProof: finalityProof
         )
@@ -1013,13 +1018,9 @@ public enum KagemushaOperationCodec {
         let finalizedBlockHeight = try readField(&reader, compact: compact) {
             try $0.readUInt64LE()
         }
-        let serverTimeMs = try readField(&reader, compact: compact) {
-            try $0.readUInt64LE()
-        }
         return try KagemushaRedeemResult(
             transactionHash: transactionHash,
-            finalizedBlockHeight: finalizedBlockHeight,
-            serverTimeMs: serverTimeMs
+            finalizedBlockHeight: finalizedBlockHeight
         )
     }
 

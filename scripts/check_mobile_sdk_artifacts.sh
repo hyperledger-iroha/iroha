@@ -505,6 +505,8 @@ KAGEMUSHA_CANDIDATE_LAB_JNI_SYMBOLS=(
 # acknowledgement primitives reused by V4; all recursive V2/V3 aliases are retired.
 KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_capabilities_v4
+  connect_norito_kagemusha_offline_operation_status_validate_v1
+  connect_norito_kagemusha_offline_operation_status_json_validate_v1
   connect_norito_kagemusha_topup_finality_verify_v4
   connect_norito_kagemusha_topup_shield_build_unsigned_v4
   connect_norito_kagemusha_recursive_spend_artifact_begin_v4

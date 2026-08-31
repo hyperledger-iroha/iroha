@@ -1993,7 +1993,7 @@ def _validate_auditor_key_custody_report(
             "protocol",
             "commit",
             "provider",
-            "hsm_or_kms_backed",
+            "isolated_key_custody",
             "signing_encryption_keys_separate",
             "signing_consensus_keys_separate",
             "encryption_consensus_keys_separate",
@@ -2015,7 +2015,7 @@ def _validate_auditor_key_custody_report(
         or report["commit"] != commit
         or report["passed"] is not True
         or report["findings"] != []
-        or report["hsm_or_kms_backed"] is not True
+        or report["isolated_key_custody"] is not True
         or report["signing_encryption_keys_separate"] is not True
         or report["signing_consensus_keys_separate"] is not True
         or report["encryption_consensus_keys_separate"] is not True

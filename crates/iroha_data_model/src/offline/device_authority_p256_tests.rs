@@ -87,7 +87,7 @@ mod device_authority_p256_tests {
             expires_at_ms: 1_800_000_030_000,
             nonce: [0x22; 32],
             payload_digest: [0x23; 32],
-            registration_hash: [0x24; 32],
+            registration_hash: Hash::new([0x24; 32]).into(),
             hardware_assertion,
         };
         let signing_bytes = authorization
@@ -748,10 +748,7 @@ mod device_authority_p256_tests {
     fn online_authorization_expiry_is_exclusive() {
         let authorization = authorization(&signing_key(13), None);
         authorization
-            .validate_for_payload_at(
-                authorization.payload_digest,
-                authorization.issued_at_ms,
-            )
+            .validate_for_payload_at(authorization.payload_digest, authorization.issued_at_ms)
             .expect("authorization is valid at issuance");
         authorization
             .validate_for_payload_at(
@@ -769,10 +766,7 @@ mod device_authority_p256_tests {
         );
         assert!(
             authorization
-                .validate_for_payload_at(
-                    authorization.payload_digest,
-                    authorization.expires_at_ms,
-                )
+                .validate_for_payload_at(authorization.payload_digest, authorization.expires_at_ms,)
                 .is_err(),
             "authorization at the exclusive expiry must fail closed",
         );
@@ -924,6 +918,22 @@ mod device_authority_p256_tests {
                 "every account/device/asset/platform/hash/time/operation coordinate is signed",
             );
         }
+    }
+    #[test]
+    fn online_authorization_rejects_unmarked_registration_hash() {
+        let key = signing_key(33);
+        let mut authorization = authorization(&key, None);
+        authorization.registration_hash[Hash::LENGTH - 1] &= !1;
+        assert!(
+            authorization
+                .validate_for_payload(authorization.payload_digest)
+                .is_err(),
+            "registration identity must preserve the canonical Iroha hash marker",
+        );
+        assert!(
+            authorization.signing_bytes().is_err(),
+            "clients must not sign a non-canonical registration identity",
+        );
     }
     #[test]
     fn online_ios_assertion_binds_authenticator_data_and_client_data_hash() {

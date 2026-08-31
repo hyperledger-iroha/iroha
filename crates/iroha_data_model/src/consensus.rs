@@ -309,18 +309,6 @@ impl ConsensusKeyId {
         }
     }
 }
-/// HSM/keystore binding for a consensus key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct HsmBinding {
-    /// Provider identifier (e.g., `pkcs11`, `yubihsm`, `softkey` for tests).
-    pub provider: String,
-    /// Provider-specific key label or path.
-    pub key_label: String,
-    /// Optional slot/index inside the provider.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub slot: Option<u16>,
-}
 /// Lifecycle state of a consensus key.
 #[derive(
     Debug,
@@ -353,6 +341,7 @@ pub enum ConsensusKeyStatus {
 /// Recorded consensus/committee key with lifecycle metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ConsensusKeyRecord {
     /// Identifier of the key (role + name).
     pub id: ConsensusKeyId,
@@ -366,9 +355,6 @@ pub struct ConsensusKeyRecord {
     /// Optional block height (exclusive) at which this key expires.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub expiry_height: Option<u64>,
-    /// Optional HSM binding backing this key.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub hsm: Option<HsmBinding>,
     /// Optional link to the key this record supersedes.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub replaces: Option<ConsensusKeyId>,
@@ -937,7 +923,6 @@ mod tests {
             pop: None,
             activation_height: 10,
             expiry_height: Some(20),
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };
@@ -959,12 +944,36 @@ mod tests {
             pop: None,
             activation_height: 0,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Disabled,
         };
         assert!(!record.is_live_at(0, 5, 5));
         assert!(!record.is_live_at(100, 5, 5));
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn consensus_key_record_json_rejects_unknown_fields() {
+        let record = ConsensusKeyRecord {
+            id: ConsensusKeyId::new(ConsensusKeyRole::Validator, "v1"),
+            public_key: checked_random_keypair().public_key().clone(),
+            pop: None,
+            activation_height: 10,
+            expiry_height: None,
+            replaces: None,
+            status: ConsensusKeyStatus::Pending,
+        };
+        let mut value = norito::json::to_value(&record).expect("serialize consensus key record");
+        value
+            .as_object_mut()
+            .expect("consensus key record JSON object")
+            .insert(
+                "unsupported_key_metadata".to_owned(),
+                norito::json::Value::Null,
+            );
+        assert!(
+            norito::json::from_value::<ConsensusKeyRecord>(value).is_err(),
+            "the first-release consensus key schema must reject unknown fields"
+        );
     }
     #[test]
     fn validator_election_outcome_empty_has_expected_defaults() {

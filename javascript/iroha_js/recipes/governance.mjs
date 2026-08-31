@@ -89,6 +89,7 @@ async function main() {
       label: "ProposeDeployContract",
       buildInstruction: () =>
         buildProposeDeployContractInstruction({
+          proposalOperator: AUTHORITY,
           contractAddress: SAMPLE_CONTRACT_ADDRESS,
           codeHash: Buffer.alloc(32, 0xcd),
           abiHash: Buffer.alloc(32, 0xef),

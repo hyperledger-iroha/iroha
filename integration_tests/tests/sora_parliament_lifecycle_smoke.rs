@@ -1163,6 +1163,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
 
     let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: client.account.clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,

@@ -34,10 +34,10 @@ use iroha_data_model::{
         KagemushaActiveReceiverAmbiguousEntryV1, KagemushaActiveReceiverEntryV1,
         KagemushaActiveReceiverKeyV1, KagemushaActiveReceiverSnapshotV1,
         KagemushaActiveReceiverValueV1, KagemushaOnlineHardwareAssertionV1,
-        KagemushaRecipientPaymentRequestV2, KagemushaRecursiveSpendBranchClaimV2,
-        KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
-        KagemushaRecursiveSpendTopUpAnchorV4, KagemushaRequestAuthorizationV2,
-        OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1,
+        KagemushaOperationRequestV4, KagemushaRecipientPaymentRequestV2,
+        KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
+        KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaRecursiveSpendTopUpAnchorV4,
+        KagemushaRequestAuthorizationV2, OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1,
         OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1,
@@ -244,7 +244,7 @@ pub struct KagemushaAuthenticatedArtifactSetReadinessV4 {
 pub struct KagemushaRecipientRegistrationResolutionV1 {
     /// Validated registration projection with raw report and evidence bytes removed.
     pub registration: OfflineDeviceAttestationRegistration,
-    /// SHA-256 hash of the original canonical registration submitted for admission.
+    /// Canonical Iroha hash of the original registration submitted for admission.
     pub registration_hash: [u8; 32],
     /// Governed policy hash recorded when the registration was admitted.
     pub admission_policy_hash: [u8; 32],
@@ -5473,28 +5473,9 @@ pub mod isi {
         anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
         request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
     ) -> Result<(), Error> {
-        if anchor.network_id != request.current_note.network_id
-            || anchor.payer != request.authorization.authority
-            || anchor.asset != request.asset
-            || anchor.asset_scale != request.amount.scale
-            || anchor.amount != request.amount
-            || anchor.initial_root != request.shield_evidence.initial_root
-            || anchor.finalized_root != request.shield_evidence.finalized_root
-            || anchor.shield_leaf_index != request.shield_evidence.leaf_index
-            || anchor.current_note != request.current_note
-            || anchor.topup_operation_id != request.operation_id
-            || anchor.shield_verifier_id != request.shield_evidence.proof.vk_ref
-            || Some(anchor.shield_verifier_commitment)
-                != request.shield_evidence.proof.vk_commitment
-            || anchor.artifact_binding != request.artifact_binding
-        {
-            return Err(labeled_invariant(
-                "topup_anchor_mismatch",
-                "persisted Kagemusha V4 top-up anchor does not match the signed request",
-            )
-            .into());
-        }
-        Ok(())
+        anchor
+            .validate_against_topup_request(request)
+            .map_err(|err| labeled_invariant("topup_anchor_mismatch", err.to_string()).into())
     }
     fn finalized_kagemusha_v4_topup_anchor(
         request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
@@ -5994,6 +5975,11 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let request = self.request;
+            state_transaction
+                .consume_kagemusha_operation_carrier_binding_v4(KagemushaOperationRequestV4::TopUp(
+                    &request,
+                ))
+                .map_err(|err| labeled_invariant("operation_carrier_invalid", err.to_string()))?;
             request
                 .validate_public_binding()
                 .map_err(|err| labeled_invariant("invalid_recursive_topup", err.to_string()))?;
@@ -6032,6 +6018,7 @@ pub mod isi {
                         )
                         .into());
                     }
+                    // Exact replay is a successful no-op, not a fresh economic claim.
                     return Ok(());
                 }
                 KagemushaV4ReplayStatus::Fresh(markers) => markers,
@@ -6224,6 +6211,12 @@ pub mod isi {
                 state_transaction,
             )?;
             commit_kagemusha_v4_replay_markers(replay_markers, state_transaction);
+            crate::kagemusha_operation::stage_kagemusha_operation_finality_claim_v4(
+                state_transaction,
+                authority,
+                KagemushaOperationRequestV4::TopUp(&request),
+            )
+            .map_err(|err| labeled_invariant("operation_finality_claim", err.to_string()))?;
             Ok(())
         }
     }
@@ -6234,6 +6227,11 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let request = self.request;
+            state_transaction
+                .consume_kagemusha_operation_carrier_binding_v4(
+                    KagemushaOperationRequestV4::Redeem(&request),
+                )
+                .map_err(|err| labeled_invariant("operation_carrier_invalid", err.to_string()))?;
             request
                 .validate_public_binding()
                 .map_err(|err| labeled_invariant("invalid_recursive_redeem", err.to_string()))?;
@@ -6265,6 +6263,7 @@ pub mod isi {
                         payload_digest,
                         state_transaction,
                     )?;
+                    // Exact replay is a successful no-op, not a fresh economic claim.
                     return Ok(());
                 }
                 KagemushaV4ReplayStatus::Fresh(markers) => markers,
@@ -6477,7 +6476,14 @@ pub mod isi {
                 hardware_assertion_commit,
                 state_transaction,
             )?;
-            commit_plan.commit(state_transaction)
+            commit_plan.commit(state_transaction)?;
+            crate::kagemusha_operation::stage_kagemusha_operation_finality_claim_v4(
+                state_transaction,
+                authority,
+                KagemushaOperationRequestV4::Redeem(&request),
+            )
+            .map_err(|err| labeled_invariant("operation_finality_claim", err.to_string()))?;
+            Ok(())
         }
     }
     include!("offline/kagemusha_activation.rs");

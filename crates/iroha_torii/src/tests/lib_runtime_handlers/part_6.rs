@@ -394,10 +394,10 @@ async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_token
         let mut app = mk_app_state_for_tests();
         let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = if duplicate {
-            Arc::new(HashSet::from(["valid-token".to_owned()]))
+        app_mut.api_token_digests = if duplicate {
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]))
         } else {
-            Arc::new(HashSet::new())
+            Arc::new(limits::ApiTokenDigestSet::default())
         };
         app_mut.rate_limiter = limits::RateLimiter::new(Some(1), Some(8));
         app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
@@ -407,9 +407,9 @@ async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_token
         let rate_key = if duplicate {
             headers.append(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
             headers.append(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
-            "valid-token"
+            limits::ApiTokenPrincipal::from_token("valid-token").rate_limit_key()
         } else {
-            "127.0.0.1"
+            "127.0.0.1".to_owned()
         };
         let heavy_errors =
             heavy_route_auth_errors_for_test(Arc::clone(&app), headers.clone()).await;
@@ -421,7 +421,7 @@ async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_token
             );
         }
         assert!(
-            app.rate_limiter.allow_cost(rate_key, 8).await,
+            app.rate_limiter.allow_cost(&rate_key, 8).await,
             "authentication failures must not consume rate capacity"
         );
     }
@@ -512,13 +512,21 @@ fn signed_query_preauth_key_ignores_unauthenticated_api_token_text() {
         HeaderValue::from_static("attacker-token-2"),
     );
     assert_eq!(
-        signed_query_preauth_rate_limit_key(&first, remote, false),
-        signed_query_preauth_rate_limit_key(&second, remote, false),
+        signed_query_preauth_rate_limit_key(&first, remote, None),
+        signed_query_preauth_rate_limit_key(&second, remote, None),
         "raw API-token text must not choose a pre-verification rate bucket"
     );
     assert_ne!(
-        signed_query_preauth_rate_limit_key(&first, remote, true),
-        signed_query_preauth_rate_limit_key(&second, remote, true),
+        signed_query_preauth_rate_limit_key(
+            &first,
+            remote,
+            Some(limits::ApiTokenPrincipal::from_token("attacker-token-1")),
+        ),
+        signed_query_preauth_rate_limit_key(
+            &second,
+            remote,
+            Some(limits::ApiTokenPrincipal::from_token("attacker-token-2")),
+        ),
         "an already-validated API credential may identify its own caller budget"
     );
 }

@@ -157,9 +157,9 @@ pub fn is_canonical_webauthn_origin_v1(value: &str, rp_id: &str) -> bool {
 ///
 /// Handles are stable public deployment identities rather than endpoint URLs or
 /// credentials. V1 permits ASCII letters, digits, `.`, `_`, `:`, `/`, and `-`
-/// so opaque `hsm://`, `sealed://`, and pinned-source identities remain
-/// representable. URI userinfo, query, fragment, percent-encoding, whitespace,
-/// controls, and components marking test adapters are rejected.
+/// so opaque `software://`, `signer://`, `sealed://`, and pinned-source identities
+/// remain representable. URI userinfo, query, fragment, percent-encoding,
+/// whitespace, controls, and components marking test adapters are rejected.
 ///
 /// # Errors
 ///
@@ -205,7 +205,8 @@ mod tests {
     #[test]
     fn production_runtime_handle_grammar_is_credential_free_and_canonical() {
         for accepted in [
-            "hsm://sorafs/provider-ingest/primary",
+            "software://iroha/parliament-tle/primary",
+            "signer://sorafs/provider-ingest/primary",
             "sealed://sorafs/provider-ingest/checkpoint-a",
             "https-pinned-source-pool:eu-1",
         ] {
@@ -220,9 +221,9 @@ mod tests {
             "https://host/source?token=secret",
             "https://host/source#fragment",
             "https://host/%73ource",
-            "hsm://sorafs/provider-ingest/dummy",
-            "hsm://sorafs/provider-ingest/test",
-            "hsm://sorafs/provider-ingest/demo",
+            "signer://sorafs/provider-ingest/dummy",
+            "signer://sorafs/provider-ingest/test",
+            "signer://sorafs/provider-ingest/demo",
             "provider ingest",
             "provider\\ingest",
             "provider\nprimary",
@@ -238,7 +239,7 @@ mod tests {
             Err(ProductionRuntimeHandleError::InvalidSyntax)
         );
         assert_eq!(
-            validate_production_runtime_handle("hsm://sorafs/provider-ingest/dummy"),
+            validate_production_runtime_handle("signer://sorafs/provider-ingest/dummy"),
             Err(ProductionRuntimeHandleError::TestMarked)
         );
     }

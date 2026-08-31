@@ -7558,14 +7558,10 @@ impl NetworkBuilder {
             // Fan-out gossip to all peers so block sync converges quickly in multi-peer
             // integration scenarios (NPoS liveness and certified-body recovery).
             .write(["network", "block_gossip_size"], participant_fanout);
-        base_layer = base_layer
-            // Test networks always provision BLS validator keys; drop the HSM binding requirement
-            // so genesis peer registration succeeds.
-            .write(["sumeragi", "keys", "require_hsm"], false)
-            .write(
-                ["genesis", "public_key"],
-                genesis_key_pair.public_key().to_string(),
-            );
+        base_layer = base_layer.write(
+            ["genesis", "public_key"],
+            genesis_key_pair.public_key().to_string(),
+        );
         base_layer = base_layer
             // Ensure BLS batching stays enabled so PoP-based peers can register and vote.
             .write(["pipeline", "signature_batch_max_bls"], 4i64)

@@ -17,6 +17,7 @@ def _execution_commitment() -> dict[str, object]:
         "parent_state_root": canonical_hash(0x61),
         "post_state_root": canonical_hash(0x62),
         "ordinary_writes_root": canonical_hash(0x63),
+        "topup_anchor_root": None,
         "topup_anchor_count": 0,
         "native_amx_application_manifest_version": 1,
         "native_amx_application_manifest_root": _EMPTY_NATIVE_MANIFEST_ROOT,

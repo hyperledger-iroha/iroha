@@ -39,10 +39,8 @@ enum ExactOutputRolloverClaim {
     DurableCertifiedBodyResponse {
         scope: ExactOutputCreationScope,
         target: PeerId,
-        responder: PeerId,
-        source_round: wire::ConsensusRound,
-        source_subject: wire::BlockSubject,
-        response_hash: HashOf<wire::CertifiedBodyResponse>,
+        network_id: NetworkId,
+        proof: super::v2_block_sync::HistoricalBodyDurableSourceProof,
     },
     DurableLaneCertificateResponse {
         scope: ExactOutputCreationScope,
@@ -325,26 +323,16 @@ impl ExactOutputRolloverClaim {
             }
             Self::DurableCertifiedBodyResponse {
                 target,
-                source_round,
-                source_subject,
-                response_hash,
+                network_id,
+                proof,
                 ..
             } => {
-                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
+                let [message] = messages else {
                     return Err("durable body response claim requires one exact message".to_owned());
                 };
-                let BlockMessage::V2(message) = envelope.as_message() else {
-                    return Err("durable body response claim covers a lane message".to_owned());
-                };
-                let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) =
-                    &message.payload
-                else {
-                    return Err("durable body response claim covers another v2 payload".to_owned());
-                };
                 if peers != std::slice::from_ref(target)
-                    || response.manifest.round != *source_round
-                    || response.manifest.subject != *source_subject
-                    || HashOf::new(response) != *response_hash
+                    || proof.network_id() != *network_id
+                    || !proof.covers_message_in_network(network_id, message)
                 {
                     return Err("durable body response claim changed identity".to_owned());
                 }
@@ -448,8 +436,7 @@ impl ExactOutputRolloverClaim {
             } => {
                 let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
                     return Err(
-                        "historical lane certification claim requires one exact message"
-                            .to_owned(),
+                        "historical lane certification claim requires one exact message".to_owned(),
                     );
                 };
                 let message = envelope.as_message();
@@ -485,9 +472,7 @@ impl ExactOutputRolloverClaim {
                         != Some((*source_height, *lane_id, *lane_block_height, *proposal_hash))
                     || HashOf::new(message) != *message_hash
                 {
-                    return Err(
-                        "historical lane certification claim changed identity".to_owned()
-                    );
+                    return Err("historical lane certification claim changed identity".to_owned());
                 }
                 Ok(())
             }
@@ -569,8 +554,7 @@ impl ExactOutputRolloverClaim {
                 };
                 if peers != std::slice::from_ref(target)
                     || certificate.is_empty()
-                    || certificate.len()
-                        > iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES
+                    || certificate.len() > iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES
                     || Hash::new(certificate.as_slice()) != *certificate_hash
                 {
                     return Err(

@@ -223,6 +223,28 @@ mod tests {
             "path and context equality cannot substitute for move-only instance ownership"
         );
     }
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn lifecycle_root_match_rejects_a_replaced_context_directory() {
+        let root = TempDir::new().expect("temporary binding body store");
+        let (context, _) = context_and_keys();
+        let store = V2BodyStore::open(root.path(), context.clone()).expect("open body store");
+        assert!(store.matches_lifecycle_storage_root(
+            root.path(),
+            &context,
+            &BlockSignaturePolicy::RotatingLeader,
+        ));
+        let context_path = root.path().join(hex::encode(context.id().0.as_ref()));
+        let displaced = root.path().join("displaced-context");
+        fs::rename(&context_path, &displaced).expect("displace bound context directory");
+        fs::create_dir(&context_path).expect("install empty replacement directory");
+
+        assert!(!store.matches_lifecycle_storage_root(
+            root.path(),
+            &context,
+            &BlockSignaturePolicy::RotatingLeader,
+        ));
+    }
     #[test]
     fn emergency_fast_body_store_skips_inventory_and_rejects_writes() {
         let root = TempDir::new().expect("temporary emergency body store");
@@ -2118,7 +2140,7 @@ mod tests {
         ));
         assert_eq!(fs::read(&sentinel_path).expect("read sentinel"), sentinel);
         fs::remove_file(marker_temporary_path).expect("remove marker temporary symlink");
-        store
+        let _validated = store
             .persist_validated_receipt(&receipt, execution_commitment)
             .expect("publish marker normally");
     }
@@ -2163,7 +2185,7 @@ mod tests {
         let receipt = store.store(manifest, body).expect("store body");
         let execution_commitment =
             ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-        store
+        let _validated = store
             .persist_validated_receipt(&receipt, execution_commitment)
             .expect("store validation marker");
         let directory = store
@@ -2191,7 +2213,7 @@ mod tests {
         let (context, keys) = context_and_keys();
         let (body, manifest) = body_and_manifest(&context, &keys, None);
         let mut store = V2BodyStore::open(root.path(), context).expect("open body store");
-        store.store(manifest, body).expect("store body");
+        let _receipt = store.store(manifest, body).expect("store body");
         let directory = store
             .bound_directory
             .take()

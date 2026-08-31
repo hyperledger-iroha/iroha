@@ -2517,15 +2517,6 @@ fn render_peer_config(
         "allowed_algorithms".into(),
         Value::Array(vec![Value::String("bls_normal".to_owned())]),
     );
-    keys.insert(
-        "allowed_hsm_providers".into(),
-        Value::Array(
-            iroha_config::parameters::defaults::sumeragi::key_allowed_hsm_providers()
-                .into_iter()
-                .map(Value::String)
-                .collect(),
-        ),
-    );
     sumeragi.insert("keys".into(), Value::Table(keys));
     let mut nexus = Table::new();
     if npos_bootstrap {

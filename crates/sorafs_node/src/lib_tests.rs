@@ -1482,7 +1482,7 @@ fn node_startup_rejects_unsafe_programmatic_reserve_worker_policy() {
         .expect_err("unsafe programmatic reserve worker policy must fail closed");
     assert!(matches!(error, NodeInitError::ReserveWorkerConfig { .. }));
 }
-const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
+const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "software://sorafs/moderation/quarantine/primary";
 const TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION: ModerationQuarantineKeyProviderQualificationV1 =
     ModerationQuarantineKeyProviderQualificationV1::new(1, [0x51; 32]);
 const TEST_ROTATED_QUARANTINE_KEY_PROVIDER_QUALIFICATION:
@@ -1597,7 +1597,7 @@ impl ModerationQuarantineKeyWrapper for TestQuarantineKeyWrapper {
 }
 fn test_quarantine_key_wrapper() -> Arc<dyn ModerationQuarantineKeyWrapper> {
     Arc::new(TestQuarantineKeyWrapper::single(
-        "kms:test/quarantine-v1",
+        "software://sorafs/moderation/quarantine-v1",
         0xA5,
     ))
 }
@@ -3253,7 +3253,7 @@ fn moderation_screening_authority_loads_from_digest_pinned_config_and_rejects_ro
     assert!(node.uses_moderation_quarantine_key_wrapper(&key_wrapper));
     assert_eq!(
         node.moderation_quarantine_key_id(),
-        Some("kms:test/quarantine-v1")
+        Some("software://sorafs/moderation/quarantine-v1")
     );
     let older = moderation_screening_authority_bundle_fixture(
         now_unix,
@@ -4466,7 +4466,10 @@ fn moderation_quarantine_object_store_persists_encrypted_payload_and_reloads() {
     let envelope_bytes = fs::read(&envelope_path).expect("read encrypted envelope");
     let envelope: crate::moderation::ModerationQuarantineObjectEnvelopeV1 =
         norito::decode_from_bytes(&envelope_bytes).expect("decode encrypted envelope");
-    assert_eq!(envelope.wrapping_key_id, "kms:test/quarantine-v1");
+    assert_eq!(
+        envelope.wrapping_key_id,
+        "software://sorafs/moderation/quarantine-v1"
+    );
     assert!(!envelope.wrapped_dek.is_empty());
     assert!(!envelope.chunks.is_empty());
     assert!(
@@ -4524,7 +4527,7 @@ fn moderation_quarantine_range_and_dek_rewrap_survive_restart() {
         .map(|index| (index % 251) as u8)
         .collect::<Vec<_>>();
     let old_wrapper: Arc<dyn ModerationQuarantineKeyWrapper> = Arc::new(
-        TestQuarantineKeyWrapper::single("kms:test/quarantine-old", 0x31),
+        TestQuarantineKeyWrapper::single("software://sorafs/moderation/quarantine-old", 0x31),
     );
     let source =
         NodeHandle::try_new_with_quarantine_key_wrapper(cfg.clone(), Arc::clone(&old_wrapper))
@@ -4571,9 +4574,9 @@ fn moderation_quarantine_range_and_dek_rewrap_survive_restart() {
         .build();
     let rotated_wrapper: Arc<dyn ModerationQuarantineKeyWrapper> =
         Arc::new(TestQuarantineKeyWrapper::rotated(
-            "kms:test/quarantine-old",
+            "software://sorafs/moderation/quarantine-old",
             0x31,
-            "kms:test/quarantine-new",
+            "software://sorafs/moderation/quarantine-new",
             0x52,
         ));
     assert!(matches!(
@@ -4590,7 +4593,10 @@ fn moderation_quarantine_range_and_dek_rewrap_survive_restart() {
     let before_bytes = fs::read(&envelope_path).expect("read pre-rotation envelope");
     let before: crate::moderation::ModerationQuarantineObjectEnvelopeV1 =
         norito::decode_from_bytes(&before_bytes).expect("decode pre-rotation envelope");
-    assert_eq!(before.wrapping_key_id, "kms:test/quarantine-old");
+    assert_eq!(
+        before.wrapping_key_id,
+        "software://sorafs/moderation/quarantine-old"
+    );
     assert_eq!(
         rotated
             .rewrap_moderation_quarantine_object_dek(quarantine_id)
@@ -4601,7 +4607,10 @@ fn moderation_quarantine_range_and_dek_rewrap_survive_restart() {
     let after: crate::moderation::ModerationQuarantineObjectEnvelopeV1 =
         norito::decode_from_bytes(&after_bytes).expect("decode rewrapped envelope");
     assert_ne!(after_bytes, before_bytes);
-    assert_eq!(after.wrapping_key_id, "kms:test/quarantine-new");
+    assert_eq!(
+        after.wrapping_key_id,
+        "software://sorafs/moderation/quarantine-new"
+    );
     assert_eq!(after.object_id, before.object_id);
     assert_eq!(after.ciphertext_digest, before.ciphertext_digest);
     assert_eq!(after.chunks, before.chunks);
@@ -4615,7 +4624,7 @@ fn moderation_quarantine_range_and_dek_rewrap_survive_restart() {
     drop(rotated);
     let new_only_wrapper: Arc<dyn ModerationQuarantineKeyWrapper> =
         Arc::new(TestQuarantineKeyWrapper::single_with_qualification(
-            "kms:test/quarantine-new",
+            "software://sorafs/moderation/quarantine-new",
             0x52,
             TEST_ROTATED_QUARANTINE_KEY_PROVIDER_QUALIFICATION,
         ));
@@ -7493,7 +7502,7 @@ fn privacy_cycle_prf_debug_redacts_runtime_crypto_provider_implementations() {
     assert!(debug.contains("PrivacyCyclePrfProviderV1(<runtime-only>)"));
     assert!(debug.contains("PrivacyReleaseAnchorV1(<runtime-only>)"));
     assert!(debug.contains("TransparencyLeaderLeaseProviderV1(<runtime-only>)"));
-    assert!(!debug.contains("kms:test/quarantine-v1"));
+    assert!(!debug.contains("software://sorafs/moderation/quarantine-v1"));
     assert!(!debug.contains("TEST-PRF-VENDOR-DIAGNOSTIC-MUST-NOT-LEAK"));
 }
 #[test]

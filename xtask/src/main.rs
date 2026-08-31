@@ -4771,7 +4771,7 @@ where
             let mut output_dir: Option<PathBuf> = None;
             let mut sbom: Option<PathBuf> = None;
             let mut vuln_report: Option<PathBuf> = None;
-            let mut hsm_policy: Option<PathBuf> = None;
+            let mut signing_policy: Option<PathBuf> = None;
             let mut sandbox_profile: Option<PathBuf> = None;
             let mut data_retention_days: u32 = 30;
             let mut log_retention_days: u32 = 30;
@@ -4796,11 +4796,11 @@ where
                         };
                         vuln_report = Some(normalize_path(Path::new(&path))?);
                     }
-                    "--hsm-policy" => {
+                    "--signing-policy" => {
                         let Some(path) = pending.next() else {
-                            return Err("expected path after --hsm-policy".into());
+                            return Err("expected path after --signing-policy".into());
                         };
-                        hsm_policy = Some(normalize_path(Path::new(&path))?);
+                        signing_policy = Some(normalize_path(Path::new(&path))?);
                     }
                     "--sandbox-profile" => {
                         let Some(path) = pending.next() else {
@@ -4842,7 +4842,7 @@ where
                     output_dir,
                     sbom,
                     vuln_report,
-                    hsm_policy,
+                    signing_policy,
                     sandbox_profile,
                     data_retention_days,
                     log_retention_days,
@@ -13627,8 +13627,10 @@ async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Erro
         OnlinePeersProvider::new(peers_rx),
         None,
         MaybeTelemetry::disabled(),
-    );
-    let router = torii.api_router_for_tests();
+    )?;
+    let router = torii
+        .api_router_for_tests()
+        .map_err(|error| eyre!("failed to initialize Torii router: {error}"))?;
     let spec = fetch_openapi_from_router(router, OPENAPI_ENDPOINT_CANDIDATES).await;
     Ok(spec)
 }

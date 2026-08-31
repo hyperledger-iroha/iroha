@@ -39,7 +39,7 @@ fn configure_subprocess_sanitizer_with_limits(
         Some(sanitizer_path),
         MaybeTelemetry::disabled(),
     );
-    iroha_torii::zk_attachments::init_persistence();
+    iroha_torii::zk_attachments::init_persistence().expect("attachment persistence preflight");
 }
 fn configure_subprocess_sanitizer(sanitizer_path: PathBuf, sanitize_timeout_ms: u64) {
     configure_subprocess_sanitizer_with_limits(

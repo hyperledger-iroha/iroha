@@ -91,14 +91,8 @@
           "key_activation_lead_blocks": 1,
           "key_overlap_grace_blocks": 8,
           "key_expiry_grace_blocks": 0,
-          "key_require_hsm": false,
           "key_allowed_algorithms": [
             "bls_normal"
-          ],
-          "key_allowed_hsm_providers": [
-            "pkcs11",
-            "softkey",
-            "yubihsm"
           ]
         },
         "block": {

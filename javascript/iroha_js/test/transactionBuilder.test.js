@@ -3151,6 +3151,7 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         proposal: {
+          proposalOperator: AUTHORITY_ID_INPUT,
           contractAddress:
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           codeHash: "aa".repeat(32),
@@ -3161,6 +3162,7 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
   );
   assert.equal(captures.length, 1);
   const propose = captures[0].instructions[0].ProposeDeployContract;
+  assert.equal(propose.proposal_operator, AUTHORITY_ID);
   assert.equal(
     propose.contract_address,
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
@@ -3170,6 +3172,35 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
   assert.equal(propose.abi_version, 1);
   assert.equal(Object.hasOwn(propose, "window"), false);
   assert.equal(Object.hasOwn(propose, "mode"), false);
+});
+
+baseTest("buildProposeDeployContractTransaction rejects an operator distinct from authority", () => {
+  let nativeCalls = 0;
+  assert.throws(
+    () => withTransactionApi(
+      {
+        buildTransaction: () => {
+          nativeCalls += 1;
+          throw new Error("mismatched proposal reached transaction construction");
+        },
+      },
+      (transaction) => transaction.buildProposeDeployContractTransaction({
+        networkId: NETWORK_ID,
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        proposal: {
+          proposalOperator: RELAY_ACCOUNT_ID_INPUT,
+          contractAddress:
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+          codeHash: "aa".repeat(32),
+          abiHash: "bb".repeat(32),
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+    ),
+    /proposalOperator must equal the exact transaction authority/u,
+  );
+  assert.equal(nativeCalls, 0);
 });
 
 baseTest("buildProposeSccpRouteGovernanceTransaction binds the exact network anchor", () => {

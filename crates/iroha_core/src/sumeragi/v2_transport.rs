@@ -1049,17 +1049,6 @@ impl From<&wire::CertifiedBodyRequest> for RequestIdentity {
         }
     }
 }
-fn roster_peer(
-    context: &wire::HeightContext,
-    index: wire::ValidatorIndex,
-) -> Result<&PeerId, V2TransportError> {
-    let index = usize::try_from(index).map_err(|_| wire::ValidationError::SignerOutOfRange)?;
-    context
-        .roster
-        .get(index)
-        .map(|entry| &entry.validator)
-        .ok_or_else(|| wire::ValidationError::SignerOutOfRange.into())
-}
 fn bind_outer_identity(
     kind: TransportIdentityKind,
     claimed: &PeerId,

@@ -304,6 +304,7 @@ fn validate_block_transaction_admission(
     state_tx: &mut crate::state::StateTransaction<'_, '_>,
     tx: &SignedTransaction,
     routing: crate::queue::RoutingDecision,
+    entrypoint_index: usize,
 ) -> Result<crate::tx::StatefulAdmission, TransactionRejectionReason> {
     let governance_ballot_binding = crate::state::standalone_governance_ballot_instruction_v1(
         tx.instructions(),
@@ -318,6 +319,9 @@ fn validate_block_transaction_admission(
     let private_settlement_carrier_binding =
         crate::private_settlement::carrier::signed_private_settlement_carrier_binding_v1(tx)
             .map_err(TransactionRejectionReason::Validation)?;
+    let kagemusha_operation_carrier_binding =
+        crate::kagemusha_operation::signed_kagemusha_operation_carrier_binding_v4(tx)
+            .map_err(TransactionRejectionReason::Validation)?;
     let canary_wire_identity =
         crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(tx)
             .map_err(TransactionRejectionReason::Validation)?;
@@ -326,7 +330,20 @@ fn validate_block_transaction_admission(
             .map_err(TransactionRejectionReason::Validation)?;
     state_tx.bind_privacy_transaction_intent_v1(privacy_intent_binding);
     state_tx.bind_private_settlement_carrier_v1(private_settlement_carrier_binding);
+    state_tx.bind_kagemusha_operation_carrier_v4(kagemusha_operation_carrier_binding);
     state_tx.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
+    let phase_index = u64::try_from(entrypoint_index).map_err(|_| {
+        TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::InternalError(
+            "Kagemusha ordinary phase index exceeds u64".to_owned(),
+        ))
+    })?;
+    state_tx.current_entrypoint_index = Some(phase_index);
+    state_tx.bind_kagemusha_operation_execution_locator_v4(Some(
+        crate::kagemusha_operation::KagemushaOperationExecutionLocatorV4::new(
+            crate::kagemusha_operation::KagemushaOperationExecutionPhaseV4::Ordinary,
+            phase_index,
+        ),
+    ));
     state_tx.kagemusha_taira_canary_external_entrypoint = true;
     state_tx.kagemusha_taira_canary_wire_identity = canary_wire_identity;
     state_tx.kagemusha_release_lifecycle_entrypoint = lifecycle_entrypoint;
@@ -427,6 +444,22 @@ mod overlay_error_tests {
         assert!(uses_live_batch_scheduler(&batch));
         let instructions = Executable::Instructions(Vec::<InstructionBox>::new().into());
         assert!(!uses_live_batch_scheduler(&instructions));
+    }
+    #[test]
+    fn prepared_overlay_admission_installs_exact_kagemusha_context() {
+        let source = include_str!("block.rs");
+        let start = source
+            .find("fn validate_block_transaction_admission(")
+            .expect("prepared-overlay admission helper");
+        let end = source[start..]
+            .find("fn commit_stateful_admission_sequence(")
+            .map(|offset| start + offset)
+            .expect("prepared-overlay admission helper boundary");
+        let helper = &source[start..end];
+        assert!(helper.contains("signed_kagemusha_operation_carrier_binding_v4(tx)"));
+        assert!(helper.contains("bind_kagemusha_operation_carrier_v4"));
+        assert!(helper.contains("KagemushaOperationExecutionPhaseV4::Ordinary"));
+        assert!(helper.contains("bind_kagemusha_operation_execution_locator_v4"));
     }
     #[test]
     fn governance_ballot_requires_an_exact_standalone_direct_entrypoint() {
@@ -4184,6 +4217,7 @@ pub(crate) mod valid {
         routing: crate::queue::RoutingDecision,
         chunk_size: usize,
         is_genesis: bool,
+        entrypoint_index: usize,
     ) -> TransactionResultInner {
         let mut state_tx = state_block.transaction();
         state_tx.current_lane_id = Some(routing.lane_id);
@@ -4208,7 +4242,8 @@ pub(crate) mod valid {
                 iroha_data_model::query::error::FindError::Account(authority.clone()),
             ));
         }
-        let admission = validate_block_transaction_admission(&mut state_tx, tx, routing)?;
+        let admission =
+            validate_block_transaction_admission(&mut state_tx, tx, routing, entrypoint_index)?;
         precharge_gas_for_applied_overlay(&mut state_tx, tx, overlay)
             .map_err(TransactionRejectionReason::Validation)?;
         let confidential_gas =
@@ -11957,6 +11992,22 @@ pub(crate) mod valid {
             }
             let height = block.header().height().get();
             crate::sumeragi::witness::start_block();
+            let mut kagemusha_operation_reservations =
+                crate::kagemusha_operation::KagemushaOperationReservationBatchV4::new(
+                    height,
+                    crate::kagemusha_operation::KagemushaOperationExecutionPhaseV4::Ordinary,
+                );
+            crate::kagemusha_operation::reserve_kagemusha_operation_outcomes_v4(
+                state_block,
+                &mut kagemusha_operation_reservations,
+                0,
+                block.external_entrypoints_slice(),
+            )
+            .map_err(|error| {
+                Self::execution_context_error(format!(
+                    "failed to reserve Kagemusha operation outcomes: {error}"
+                ))
+            })?;
             let sequential_entrypoints = Self::sequential_entrypoints_for_live_execution(block);
             if let Some(entrypoints) = sequential_entrypoints {
                 Self::validate_and_record_entrypoints_sequential(
@@ -11974,6 +12025,22 @@ pub(crate) mod valid {
                             "QueuePlan pending application obligation could not be resolved: {error}"
                         ))
                     })?;
+                crate::kagemusha_operation::finalize_kagemusha_operation_outcomes_v4(
+                    state_block,
+                    kagemusha_operation_reservations,
+                    [
+                        crate::kagemusha_operation::KagemushaOperationResultSegmentV4::new(
+                            0,
+                            block.external_entrypoints_slice(),
+                            block.results().take(block.external_entrypoint_count()),
+                        ),
+                    ],
+                )
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "failed to finalize Kagemusha operation outcomes: {error}"
+                    ))
+                })?;
                 return Ok(());
             }
             // Prepare scheduling: collect transactions, their access sets, and hashes
@@ -13861,6 +13928,7 @@ pub(crate) mod valid {
                     &mut state_tx,
                     tx,
                     routing_decisions[idx],
+                    idx,
                 )?;
                 let executor = state_tx.world.executor.clone();
                 let mut ivm_cache = overlay_caches[0].lock();
@@ -14588,6 +14656,7 @@ pub(crate) mod valid {
                                 routing_decisions[idx],
                                 chunk_size,
                                 block.header().is_genesis(),
+                                idx,
                             );
                             if let Err(reason) = &result {
                                 iroha_logger::debug!(
@@ -14694,6 +14763,7 @@ pub(crate) mod valid {
                                     &mut state_tx,
                                     tx,
                                     routing_decisions[p.idx],
+                                    p.idx,
                                 ) {
                                     Ok(admission) => admission,
                                     Err(reason) => {
@@ -14866,6 +14936,7 @@ pub(crate) mod valid {
                                         &mut state_tx,
                                         tx,
                                         routing_decisions[p.idx],
+                                        p.idx,
                                     ) {
                                         Ok(admission) => admission,
                                         Err(reason) => {
@@ -15160,6 +15231,7 @@ pub(crate) mod valid {
                             routing_decisions[idx],
                             chunk_size,
                             block.header().is_genesis(),
+                            idx,
                         );
                         if matches!(
                             result,
@@ -15263,6 +15335,7 @@ pub(crate) mod valid {
                         routing_decisions[idx],
                         chunk_size,
                         block.header().is_genesis(),
+                        idx,
                     );
                     if matches!(
                         result,
@@ -15734,6 +15807,22 @@ pub(crate) mod valid {
                         "QueuePlan pending application obligation could not be resolved: {error}"
                     ))
                 })?;
+            crate::kagemusha_operation::finalize_kagemusha_operation_outcomes_v4(
+                state_block,
+                kagemusha_operation_reservations,
+                [
+                    crate::kagemusha_operation::KagemushaOperationResultSegmentV4::new(
+                        0,
+                        block.external_entrypoints_slice(),
+                        block.results().take(block.external_entrypoint_count()),
+                    ),
+                ],
+            )
+            .map_err(|error| {
+                Self::execution_context_error(format!(
+                    "failed to finalize Kagemusha operation outcomes: {error}"
+                ))
+            })?;
             Ok(())
         }
         /// Execute a locally constructed block whose admission checks were completed upstream.
@@ -17542,7 +17631,6 @@ pub(crate) mod valid {
                 pop,
                 activation_height,
                 expiry_height,
-                hsm: None,
                 replaces: None,
                 status,
             };
@@ -18808,7 +18896,6 @@ pub(crate) mod valid {
                 pop: None,
                 activation_height: 1,
                 expiry_height: None,
-                hsm: None,
                 replaces: None,
                 status: ConsensusKeyStatus::Active,
             };

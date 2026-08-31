@@ -44,7 +44,7 @@ fn zero_cleanup_deadline_polls_an_already_buffered_completion() {
 }
 #[test]
 fn finalized_cleanup_without_context_worker_reports_unavailability() {
-    let (mut service, keys) = fixture();
+    let (service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
     let mut supervisor = V2CleanupSupervisor::default();

@@ -673,6 +673,8 @@ pub(crate) struct RecoveredLifecycleStorageAuthorityV1 {
     lifecycle_root: PathBuf,
     body_store_root: PathBuf,
     signature_policy: super::v2_body_store::BlockSignaturePolicy,
+    serve_payload_directory_authority:
+        Option<crate::kura::KuraV2CertifiedServePayloadDirectoryAuthority>,
     successor_floor: Option<AuthenticatedRecoveredLifecycleSuccessorFloorV1>,
 }
 /// Exact predecessor address retained by one recovered successor storage seal.
@@ -839,11 +841,16 @@ impl RecoveredLifecycleStorageAuthorityV1 {
         signature_policy: &super::v2_body_store::BlockSignaturePolicy,
         genesis_account: &AccountId,
         permit: super::v2_recovery::RecoveredLifecycleStorageMintPermitV1,
-    ) -> Self {
+    ) -> Result<Self, crate::kura::Error> {
         assert!(permit.authorizes(kura, verified, signature_policy, genesis_account));
         let storage_root = kura.sumeragi_v2_storage_root();
         let context = verified.context();
-        Self {
+        let serve_payload_directory_authority = if kura.emergency_fast_startup_enabled() {
+            None
+        } else {
+            Some(kura.mint_v2_certified_serve_payload_directory_authority(context)?)
+        };
+        Ok(Self {
             kura_identity: kura.instance_identity(),
             genesis_account: genesis_account.clone(),
             predecessor: Self::predecessor_storage_identity(&storage_root, verified),
@@ -857,8 +864,9 @@ impl RecoveredLifecycleStorageAuthorityV1 {
                 .join(hex::encode(context.id().0.as_ref())),
             body_store_root: storage_root.join("bodies"),
             signature_policy: signature_policy.clone(),
+            serve_payload_directory_authority,
             successor_floor: None,
-        }
+        })
     }
     /// Bind the exact finalized H floor, initialize/authenticate H+1, and
     /// retain that frame proof until the production coordinator opens it.
@@ -900,24 +908,20 @@ impl RecoveredLifecycleStorageAuthorityV1 {
         signature_policy: super::v2_body_store::BlockSignaturePolicy,
         genesis_account: AccountId,
     ) -> Self {
-        let storage_root = kura.sumeragi_v2_storage_root();
-        let context = verified.context();
-        Self {
-            kura_identity: kura.instance_identity(),
-            genesis_account,
-            predecessor: Self::predecessor_storage_identity(&storage_root, verified),
-            context_id: context.id(),
-            height: context.height,
-            wal_path: storage_root
-                .join("wal")
-                .join(format!("{:020}.wal", context.height)),
-            lifecycle_root: storage_root
-                .join("lifecycle-v1")
-                .join(hex::encode(context.id().0.as_ref())),
-            body_store_root: storage_root.join("bodies"),
-            signature_policy,
-            successor_floor: None,
-        }
+        let permit = super::v2_recovery::RecoveredLifecycleStorageMintPermitV1::for_test(
+            kura,
+            verified,
+            &signature_policy,
+            &genesis_account,
+        );
+        Self::mint_from_recovered_height(
+            kura,
+            verified,
+            &signature_policy,
+            &genesis_account,
+            permit,
+        )
+        .expect("mint fixture Certified-Serve payload directory authority")
     }
 }
 #[allow(variant_size_differences)]

@@ -2894,6 +2894,7 @@ test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
 
 baseTest("buildProposeDeployContractInstruction normalizes the typed V1 payload", () => {
   const instruction = buildProposeDeployContractInstruction({
+    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: `blake2b32:0x${"AA".repeat(32)}`,
     abiHash: `0X${"BB".repeat(32)}`,
@@ -2901,6 +2902,7 @@ baseTest("buildProposeDeployContractInstruction normalizes the typed V1 payload"
   });
   const expected = {
     ProposeDeployContract: {
+      proposal_operator: ACCOUNT_ID_CANONICAL,
       contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       code_hash: "aa".repeat(32),
       abi_hash: "bb".repeat(32),
@@ -2913,8 +2915,9 @@ baseTest("buildProposeDeployContractInstruction normalizes the typed V1 payload"
   assert.deepEqual(decoded, expected);
 });
 
-baseTest("buildProposeDeployContractInstruction encodes manifest provenance as field five", () => {
+baseTest("buildProposeDeployContractInstruction encodes manifest provenance after the bound operator", () => {
   const instruction = buildProposeDeployContractInstruction({
+    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -2940,6 +2943,7 @@ baseTest("buildProposeDeployContractInstruction encodes manifest provenance as f
 
 baseTest("buildProposeDeployContractInstruction validates ML-DSA manifest signer keys", () => {
   const base = {
+    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -2975,6 +2979,7 @@ baseTest("buildProposeDeployContractInstruction validates ML-DSA manifest signer
 
 baseTest("buildProposeDeployContractInstruction has a closed canonical local target", () => {
   const base = {
+    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -3011,6 +3016,7 @@ baseTest("buildProposeDeployContractInstruction has a closed canonical local tar
 
 baseTest("buildProposeDeployContractInstruction accepts only numeric ABI V1", () => {
   const base = {
+    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -3030,6 +3036,7 @@ baseTest("buildProposeDeployContractInstruction accepts only numeric ABI V1", ()
 
 baseTest("buildProposeDeployContractInstruction enforces the governance hash grammar", () => {
   const base = {
+    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -3050,6 +3057,7 @@ baseTest("buildProposeDeployContractInstruction enforces the governance hash gra
 
 baseTest("governance proposal builder rejects every private-key alias recursively", () => {
   const base = {
+    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -3081,6 +3089,7 @@ baseTest("governance proposal builder rejects every private-key alias recursivel
 
 baseTest("buildProposeDeployContractInstruction rejects retired lifecycle controls", () => {
   const base = {
+    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -3097,6 +3106,7 @@ baseTest("buildProposeDeployContractInstruction rejects retired lifecycle contro
       () =>
         noritoEncodeInstruction({
           ProposeDeployContract: {
+            proposal_operator: ACCOUNT_ID,
             contract_address: base.contractAddress,
             code_hash: base.codeHash,
             abi_hash: base.abiHash,
@@ -3363,8 +3373,9 @@ baseTest("direct governance Norito validation runs before native dispatch", () =
     },
   })).noritoEncodeInstruction;
   assert.throws(
-    () => encodeWithNative({
+      () => encodeWithNative({
         ProposeDeployContract: {
+          proposal_operator: ACCOUNT_ID,
           contract_address:
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           code_hash: "aa".repeat(32),

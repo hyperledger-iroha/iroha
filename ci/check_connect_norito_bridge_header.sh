@@ -92,6 +92,7 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
     "connect_norito_kagemusha_output_membership_frontier_build_v4",
     "connect_norito_kagemusha_output_membership_paths_derive_v4",
+    "connect_norito_kagemusha_offline_operation_status_validate_v1",
     "connect_norito_kagemusha_recursive_spend_append_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
@@ -124,6 +125,11 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
     "connect_norito_kagemusha_secret_free_buffer",
+}
+KAGEMUSHA_AUXILIARY_EXPORTS = {
+    # C# receives operation status as JSON. Swift consumes canonical Norito and
+    # therefore deliberately does not surface this transport-specific helper.
+    "connect_norito_kagemusha_offline_operation_status_json_validate_v1",
 }
 KAGEMUSHA_CANDIDATE_LAB_EXPORTS = {
     "connect_norito_kagemusha_recursive_spend_candidate_lab_accepted_identity_v4",
@@ -457,12 +463,12 @@ for label, actual in (
         raise SystemExit(f"{label} contains forbidden first-release compatibility exports: {forbidden}")
 exact(
     "Rust Kagemusha",
-    KAGEMUSHA_EXPORTS | KAGEMUSHA_CANDIDATE_LAB_EXPORTS,
+    KAGEMUSHA_EXPORTS | KAGEMUSHA_AUXILIARY_EXPORTS | KAGEMUSHA_CANDIDATE_LAB_EXPORTS,
     rust_kagemusha,
 )
 exact(
     "C header Kagemusha",
-    KAGEMUSHA_EXPORTS | KAGEMUSHA_CANDIDATE_LAB_EXPORTS,
+    KAGEMUSHA_EXPORTS | KAGEMUSHA_AUXILIARY_EXPORTS | KAGEMUSHA_CANDIDATE_LAB_EXPORTS,
     header_kagemusha,
 )
 exact("Rust privacy", PRIVACY_EXPORTS, rust_exports("iroha_privacy_"))
@@ -621,6 +627,7 @@ for name in sorted(rust_transaction_signers):
         )
 require_signature_parity(
     KAGEMUSHA_EXPORTS
+    | KAGEMUSHA_AUXILIARY_EXPORTS
     | KAGEMUSHA_CANDIDATE_LAB_EXPORTS
     | PRIVACY_EXPORTS
     | SORAFS_REFERENCE_EXPORTS
@@ -773,7 +780,7 @@ if re.search(r"requiredNativeSymbols\s*=\s*requiredProofSymbols\s*\+\s*requiredP
 
 print(
     "bridge header contract passed: bridge ABI 23, "
-    f"{len(KAGEMUSHA_EXPORTS)} Kagemusha exports, "
+    f"{len(KAGEMUSHA_EXPORTS | KAGEMUSHA_AUXILIARY_EXPORTS)} Kagemusha exports, "
     f"{len(PRIVACY_EXPORTS)} privacy exports, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS exports, "
     f"{len(DETACHED_EXPORTS)} detached-transaction exports, and "

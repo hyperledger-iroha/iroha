@@ -28678,7 +28678,7 @@ reply_writer_flush_timeout,
         (
             actual_path,
             actual_source,
-            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;",
+            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 7;",
             "source-geometry shared-config format version",
         ),
         (

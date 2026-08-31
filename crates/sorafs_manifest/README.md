@@ -118,7 +118,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_builder \
   and the report marks `por_samples_truncated` if the request exceeded the tree size.
 - `sorafs_provider_advert --prepare` accepts only a raw 32-byte public-key file
   plus its reviewed SHA-256 fingerprint and writes the exact canonical payload
-  for an external Ed25519/HSM signer.
+  for an external Ed25519 signer.
 - `sorafs_provider_advert --emit` requires that reviewed signing-payload file
   plus the exact raw public key and raw 64-byte external signature. The
   production tool has no private-key or inline key/signature option.
@@ -175,7 +175,7 @@ cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_provider_advert --
   --public-key-fingerprint-sha256="$REVIEWED_PROVIDER_KEY_SHA256" \
   --signing-payload-out=provider-advert.signing-payload
 
-# Sign provider-advert.signing-payload with the governed external HSM.
+# Sign provider-advert.signing-payload with the governed external signer.
 
 cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_provider_advert -- \
   --emit "${advert_args[@]}" \

@@ -201,7 +201,7 @@ Public operator guidance and escalation procedures are maintained at
   `ballot_survivor_deadline_expired`, `ballot_commitment_deadline_expired`,
   `ballot_release_pulse_unavailable`, or `ballot_opening_deadline_expired`.
   Exhausted deterministic body-election retries use
-  `sortition_retries_exhausted`; a narrow Policy Jury result with fewer than two
+  `sortition_retries_exhausted`; a narrow Policy Jury result with fewer than three
   eligible fresh confirmers uses `confirmation_jury_capacity_unavailable`.
   A class attached to an incompatible transition kind is ignored by telemetry.
 - `governance_parliament_attempts_by_status{status}` and

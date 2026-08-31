@@ -43,8 +43,8 @@ This flag can be combined with the `--features` flag in order to precisely speci
 ### Deployment runtime-provider launcher
 
 `irohad` is also a library target. A deployment-owned binary can use the same
-CLI/config/bootstrap path as the stock binary while supplying HSM, KMS,
-WebAuthn, authenticated transport, immutable-query, publication, and sealed
+CLI/config/bootstrap path as the stock binary while supplying deployment-owned
+signing, custody, authentication, transport, immutable-query, publication, and sealed
 checkpoint adapters:
 
 ```rust
@@ -185,8 +185,8 @@ Linux and macOS use the platform-fixed authenticated endpoint, while Windows
 and other platforms fail before catalog filesystem access because V1 has no
 equivalent authenticated transport.
 
-No checked-in binary or registry supplies vendor HSM, KMS, WebAuthn, sealed
-store, network, or immutable-query implementations. Under the current static
+No checked-in binary or registry supplies deployment-specific signing, custody,
+authentication, sealed-store, network, or immutable-query implementations. Under the current static
 injection architecture, a deployment must link its reviewed concrete registry
 into a thin owned binary that parses `RuntimeProviderBrokerExecutableArgsV1`
 and calls `RuntimeProviderBrokerExecutableV1`; credentials remain inside those

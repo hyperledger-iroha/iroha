@@ -731,7 +731,7 @@ fn remote_addr_probe_payload(
     payload.insert("header".into(), header_remote);
     Value::Object(payload)
 }
-fn install_remote_addr_probe_router(app: &mut SharedAppState) {
+fn install_remote_addr_probe_router(app: &mut SharedAppState) -> McpDispatchRouterOwner {
     let allow = vec![crate::limits::parse_cidr("127.0.0.0/8").expect("loopback cidr")];
     let router: axum::Router = axum::Router::new().route(
         iroha_torii_shared::uri::HEALTH,
@@ -757,17 +757,12 @@ fn install_remote_addr_probe_router(app: &mut SharedAppState) {
             }
         })),
     );
-    let app = std::sync::Arc::get_mut(app).expect("unique app state");
-    let mut guard = app
-        .mcp_dispatch_router
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *guard = Some(router);
+    app.mcp_dispatch_router.install(router)
 }
 fn install_request_counting_router(
     app: &mut SharedAppState,
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-) {
+) -> McpDispatchRouterOwner {
     let router: axum::Router =
         axum::Router::new().fallback_service(tower::service_fn(move |_request: Request<Body>| {
             let calls = std::sync::Arc::clone(&calls);
@@ -781,21 +776,16 @@ fn install_request_counting_router(
                 )
             }
         }));
-    let app = std::sync::Arc::get_mut(app).expect("unique app state");
-    let mut guard = app
-        .mcp_dispatch_router
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *guard = Some(router);
+    app.mcp_dispatch_router.install(router)
 }
-fn install_api_token_probe_router(app: &mut SharedAppState, configured_tokens: &[&str]) {
+fn install_api_token_probe_router(
+    app: &mut SharedAppState,
+    configured_tokens: &[&str],
+) -> McpDispatchRouterOwner {
     let state = std::sync::Arc::get_mut(app).expect("unique app state");
     state.require_api_token = true;
-    state.api_tokens_set = std::sync::Arc::new(
-        configured_tokens
-            .iter()
-            .map(|token| (*token).to_owned())
-            .collect(),
+    state.api_token_digests = std::sync::Arc::new(
+        limits::ApiTokenDigestSet::from_tokens(configured_tokens.iter().copied()),
     );
     let router = axum::Router::new()
         .route(
@@ -806,11 +796,7 @@ fn install_api_token_probe_router(app: &mut SharedAppState, configured_tokens: &
             std::sync::Arc::clone(app),
             crate::enforce_api_token,
         ));
-    let mut guard = app
-        .mcp_dispatch_router
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *guard = Some(router);
+    app.mcp_dispatch_router.install(router)
 }
 #[tokio::test]
 async fn tool_dispatch_fails_fast_when_inflight_capacity_is_exhausted() {
@@ -948,7 +934,7 @@ async fn real_long_poll_cannot_starve_bounded_dispatch_and_releases_both_permits
             }
         }));
     let mut app = mk_app_state_for_tests();
-    let (global, long_poll) = {
+    let (global, long_poll, _mcp_dispatch_router_owner) = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(2).expect("nonzero");
         state.mcp.profile = ToriiMcpProfile::Writer;
@@ -956,13 +942,11 @@ async fn real_long_poll_cannot_starve_bounded_dispatch_and_releases_both_permits
             std::sync::Arc::new(vec![iroha_health_tool(), iroha_transactions_wait_tool()]);
         state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
         state.mcp_long_poll_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-        *state
-            .mcp_dispatch_router
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
+        let owner = state.mcp_dispatch_router.install(router);
         (
             std::sync::Arc::clone(&state.mcp_dispatch_inflight),
             std::sync::Arc::clone(&state.mcp_long_poll_inflight),
+            owner,
         )
     };
     let wait_arguments = norito::json!({
@@ -1051,21 +1035,21 @@ async fn cancelling_real_long_poll_releases_both_quotas_and_allows_reentry() {
             }
         }));
     let mut app = mk_app_state_for_tests();
-    let (global, long_poll) = {
+    let (global, long_poll, _mcp_dispatch_router_owner) = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = std::sync::Arc::new(["client".to_owned()].into_iter().collect());
+        state.api_token_digests = std::sync::Arc::new(
+            limits::ApiTokenDigestSet::from_tokens(["client"]),
+        );
         state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(2).expect("nonzero");
         state.mcp_tools = std::sync::Arc::new(vec![iroha_transactions_wait_tool()]);
         state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
         state.mcp_long_poll_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-        *state
-            .mcp_dispatch_router
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
+        let owner = state.mcp_dispatch_router.install(router);
         (
             std::sync::Arc::clone(&state.mcp_dispatch_inflight),
             std::sync::Arc::clone(&state.mcp_long_poll_inflight),
+            owner,
         )
     };
     let wait_arguments = norito::json!({
@@ -1183,11 +1167,7 @@ async fn faucet_tools_dispatch_only_exact_json_bodies_to_exact_routes() {
             }
         }));
     let mut app = mk_app_state_for_tests();
-    *std::sync::Arc::get_mut(&mut app)
-        .expect("unique app state")
-        .mcp_dispatch_router
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
+    let _mcp_dispatch_router_owner = app.mcp_dispatch_router.install(router);
     let prepare_body = norito::json!({
         "schema": "iroha.accounts.faucet.prepare.v1",
         "binding": {},
@@ -1256,16 +1236,13 @@ async fn faucet_tools_reject_noncanonical_argument_shapes_before_dispatch() {
             }
         }));
     let mut app = mk_app_state_for_tests();
-    {
+    let _mcp_dispatch_router_owner = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.mcp.profile = ToriiMcpProfile::Writer;
         state.account_faucet = Some(test_faucet_runtime_config());
         state.mcp_tools = std::sync::Arc::new(build_tool_specs(&state.mcp));
-        *state
-            .mcp_dispatch_router
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
-    }
+        state.mcp_dispatch_router.install(router)
+    };
     for (name, invalid_arguments) in [
         (
             "iroha.accounts.faucet.prepare",
@@ -1419,7 +1396,9 @@ async fn malformed_authenticated_cancellation_nonce_is_rejected() {
     {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = std::sync::Arc::new(["client".to_owned()].into_iter().collect());
+        state.api_token_digests = std::sync::Arc::new(
+            limits::ApiTokenDigestSet::from_tokens(["client"]),
+        );
     }
     let request = cancellable_health_request_with_nonce(
         Value::String("invalid-nonce".to_owned()),
@@ -1447,7 +1426,9 @@ fn authenticated_call_without_nonce_remains_non_cancellable() {
     {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = std::sync::Arc::new(["client".to_owned()].into_iter().collect());
+        state.api_token_digests = std::sync::Arc::new(
+            limits::ApiTokenDigestSet::from_tokens(["client"]),
+        );
     }
     let params = norito::json!({ "name": "iroha.health", "arguments": {} });
     assert!(matches!(
@@ -1487,16 +1468,15 @@ async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
             }
         }));
     let mut app = mk_app_state_for_tests();
-    {
+    let _mcp_dispatch_router_owner = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = std::sync::Arc::new(["client".to_owned()].into_iter().collect());
+        state.api_token_digests = std::sync::Arc::new(
+            limits::ApiTokenDigestSet::from_tokens(["client"]),
+        );
         state.mcp_tools = std::sync::Arc::new(vec![iroha_health_tool()]);
-        *state
-            .mcp_dispatch_router
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
-    }
+        state.mcp_dispatch_router.install(router)
+    };
     let cancellation_nonce = cancellation_test_nonce(0x41);
     let request_json = r#"{"jsonrpc":"2.0","id":18446744073709551616,"method":"tools/call","params":{"name":"iroha.health","arguments":{},"_meta":{"iroha/cancellationNonce":"__NONCE__"}}}"#
         .replace("__NONCE__", &cancellation_nonce);
@@ -1599,22 +1579,20 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
             }
         }));
     let mut app = mk_app_state_for_tests();
-    let global = {
+    let (global, _mcp_dispatch_router_owner) = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = std::sync::Arc::new(
-            ["client-a".to_owned(), "client-b".to_owned()]
-                .into_iter()
-                .collect(),
+        state.api_token_digests = std::sync::Arc::new(
+            limits::ApiTokenDigestSet::from_tokens(["client-a", "client-b"]),
         );
         state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(4).expect("nonzero");
         state.mcp_tools = std::sync::Arc::new(vec![iroha_health_tool()]);
         state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
-        *state
-            .mcp_dispatch_router
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
-        std::sync::Arc::clone(&state.mcp_dispatch_inflight)
+        let owner = state.mcp_dispatch_router.install(router);
+        (
+            std::sync::Arc::clone(&state.mcp_dispatch_inflight),
+            owner,
+        )
     };
     let shared_id = Value::String("shared".to_owned());
     let app_a = std::sync::Arc::clone(&app);
@@ -1759,18 +1737,20 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
             }
         }));
     let mut app = mk_app_state_for_tests();
-    let global = {
+    let (global, _mcp_dispatch_router_owner) = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = std::sync::Arc::new(["client".to_owned()].into_iter().collect());
+        state.api_token_digests = std::sync::Arc::new(
+            limits::ApiTokenDigestSet::from_tokens(["client"]),
+        );
         state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(2).expect("nonzero");
         state.mcp_tools = std::sync::Arc::new(vec![iroha_health_tool()]);
         state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
-        *state
-            .mcp_dispatch_router
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
-        std::sync::Arc::clone(&state.mcp_dispatch_inflight)
+        let owner = state.mcp_dispatch_router.install(router);
+        (
+            std::sync::Arc::clone(&state.mcp_dispatch_inflight),
+            owner,
+        )
     };
     let first_app = std::sync::Arc::clone(&app);
     let first_headers = cancellation_test_headers("client");
@@ -1895,7 +1875,9 @@ fn anonymous_or_invalid_tokens_have_no_cancellation_identity() {
     assert!(authenticated_cancellation_client_fingerprint(&app, &HeaderMap::new()).is_none());
     let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
-    state.api_tokens_set = std::sync::Arc::new(["valid".to_owned()].into_iter().collect());
+    state.api_token_digests = std::sync::Arc::new(
+        limits::ApiTokenDigestSet::from_tokens(["valid"]),
+    );
     assert!(
         authenticated_cancellation_client_fingerprint(&app, &cancellation_test_headers("invalid"))
             .is_none()

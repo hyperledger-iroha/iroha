@@ -40,6 +40,7 @@ impl PendingSuccessorActivation {
     /// Authenticate one recovered successor and retain its exact activation authority.
     pub(super) fn recovered(
         authority: RecoveredSuccessorActivationAuthority,
+        kura: &Kura,
         local_signer: &KeyPair,
     ) -> Result<Self, V2RunnerError> {
         let (transition, authority_kind, status_height) = match &authority {
@@ -76,7 +77,7 @@ impl PendingSuccessorActivation {
             RecoveredSuccessorActivationAuthority::CompleteTip(authority) => {
                 let expected_predecessor = authority.predecessor();
                 let retired = authority
-                    .into_canonical_predecessor_storage(local_signer)?
+                    .into_kura_bound_canonical_predecessor_storage(kura, local_signer)?
                     .retire()?;
                 if retired.predecessor() != expected_predecessor {
                     return Err(V2RunnerError::SuccessorPredecessorAuthorityMismatch {
@@ -658,9 +659,7 @@ pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_for_test(
     executor: &V2EffectExecutor,
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
-    output_guard: &ConsensusOutputGuard,
     kura: &Kura,
-    local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
 ) -> Result<bool, V2RunnerError> {
     drain_decided_lane_recovery_ingress(
@@ -669,9 +668,7 @@ pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_for_test(
         services,
         lane_work,
         executor.current_tag().view(),
-        output_guard,
         kura,
-        local_key,
         block_sync_server,
         DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
     )
@@ -779,6 +776,12 @@ fn run_lifecycle_active_height(
         activated.with_runner_runtime(
             &mut active_runner,
             |_owner, executor, services, _local_proposal| {
+                let _ = settle_historical_body_serve_completion(
+                    receiver,
+                    block_sync_server,
+                    services,
+                    output_guard.as_ref(),
+                )?;
                 retry_recovered_decision_fetch_if_due(
                     now,
                     &mut next_recovered_decision_fetch_retransmit,
@@ -970,9 +973,7 @@ fn run_lifecycle_active_height(
                                 services,
                                 &mut lane_work,
                                 executor.current_tag().view(),
-                                output_guard.as_ref(),
                                 kura.as_ref(),
-                                &common_config.key_pair,
                                 block_sync_server,
                                 DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
                             )?;
@@ -1481,11 +1482,12 @@ fn run_lifecycle_active_height(
             }
         }
 
-        let finalization_ready = if ready_to_finish {
-            activated.ready_for_finalized_rollover(&mut active_runner)?
-        } else {
-            false
-        };
+        let finalization_ready =
+            if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {
+                activated.ready_for_finalized_rollover(&mut active_runner)?
+            } else {
+                false
+            };
         if ready_to_finish && !finalization_ready {
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
@@ -1528,9 +1530,7 @@ fn run_lifecycle_active_height(
                         services,
                         &mut lane_work,
                         executor.current_tag().view(),
-                        output_guard.as_ref(),
                         kura.as_ref(),
-                        &common_config.key_pair,
                         block_sync_server,
                         DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
                     )?;
@@ -1640,9 +1640,7 @@ fn run_lifecycle_active_height(
                             services,
                             &mut lane_work,
                             executor.current_tag().view(),
-                            output_guard.as_ref(),
                             kura.as_ref(),
-                            &common_config.key_pair,
                             block_sync_server,
                             DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
                         )?;
@@ -1931,7 +1929,16 @@ pub(super) fn run_non_pending_lifecycle_loop(
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
         let new_block_sync_server = block_sync_server
             .is_none()
-            .then(|| V2BlockSyncServer::new(context.network_id, certified_request_capacity))
+            .then(|| {
+                let limits = HistoricalBodyServeLimits::first_release(certified_request_capacity)?;
+                V2BlockSyncServer::new_with_historical_body_service(
+                    context.network_id,
+                    certified_request_capacity,
+                    Arc::clone(&kura),
+                    common_config.key_pair.clone(),
+                    limits,
+                )
+            })
             .transpose()?;
         let mut block_sync = V2BlockSyncDiscovery::new(
             context.clone(),

@@ -957,6 +957,7 @@ mod tests {
         let create = dm_isi::governance::CreateParliamentGovernanceAttemptV1 {
             proposal: iroha_data_model::governance::types::ProposalKind::DeployContract(
                 iroha_data_model::governance::types::DeployContractProposal {
+                    proposal_operator: sample_account(),
                     contract_address:
                         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                             .parse()

@@ -52,10 +52,13 @@ fn torii_test_harness(cfg: Root) -> ToriiTestHarness {
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
         telemetry_handle,
-    );
+    )
+    .expect("valid Torii Sumeragi-parameters fixture");
     ToriiTestHarness {
         cfg,
-        app: torii.api_router_for_tests(),
+        app: torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
         _kiso_child: kiso_child,
     }
 }

@@ -206,12 +206,14 @@ pub struct KagemushaInternalValidationCommandOutcomeV1 {
     /// Process exit code; production requires zero.
     pub exit_code: i32,
     /// Terminating signal, if any; production requires none.
+    #[norito(required)]
     pub termination_signal: Option<u16>,
     /// Whether the command exceeded its outer deadline; production requires false.
     pub timed_out: bool,
     /// Exact nonempty canonical stdout/stderr frame archive.
     pub log_archive: KagemushaExactBytesDigestV1,
     /// Campaign counters for a fuzz command and `None` for every other command.
+    #[norito(required)]
     pub fuzz: Option<KagemushaInternalValidationFuzzOutcomeV1>,
 }
 

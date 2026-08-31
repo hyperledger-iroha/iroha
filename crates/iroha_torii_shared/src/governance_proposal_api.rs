@@ -5,6 +5,7 @@
 //! flow and are deliberately absent from the first-release API.
 
 use iroha_data_model::{
+    account::AccountId,
     governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash, ProposalContentId},
     isi::bridge::SccpRouteGovernanceActionV1,
     smart_contract::{ContractAddress, ContractAlias, manifest::ManifestProvenance},
@@ -55,6 +56,8 @@ mod one_instruction {
 )]
 #[norito(deny_unknown_fields)]
 pub struct DeployContractProposalDraftRequestV1 {
+    /// Canonical transaction authority that will submit the returned instruction.
+    pub proposal_operator: AccountId,
     /// Optional canonical contract address targeted by the proposal.
     #[norito(default, skip_serializing_if = "Option::is_none")]
     pub contract_address: Option<ContractAddress>,

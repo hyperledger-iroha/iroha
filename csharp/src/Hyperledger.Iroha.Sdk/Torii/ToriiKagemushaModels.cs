@@ -98,20 +98,25 @@ public sealed record class ToriiKagemushaOperationReference
 
     public required string StatusUri { get; init; }
 
-    public ulong SubmittedAtMilliseconds { get; init; }
+    public required ulong SubmittedAtMilliseconds { get; init; }
 }
 
 /// <summary>
 /// Terminal top-up projection. Anchor and finality proof remain typed JSON
 /// documents because this SDK intentionally does not ship a native prover.
 /// </summary>
+/// <remarks>
+/// Operation-status decoding validates their portable structure and mutual
+/// bindings, but does not authenticate the embedded Commit-QC signature.
+/// Consumers must verify that signature against a separately trusted,
+/// release-pinned validator roster before treating this evidence as consensus
+/// finality.
+/// </remarks>
 public sealed record class ToriiKagemushaTopUpResultV4
 {
     public required string TransactionHash { get; init; }
 
     public ulong FinalizedBlockHeight { get; init; }
-
-    public ulong ServerTimeMilliseconds { get; init; }
 
     public required JsonElement Anchor { get; init; }
 
@@ -126,8 +131,6 @@ public sealed record class ToriiKagemushaRedeemResultV4
     public required string TransactionHash { get; init; }
 
     public ulong FinalizedBlockHeight { get; init; }
-
-    public ulong ServerTimeMilliseconds { get; init; }
 }
 
 /// <summary>
@@ -151,10 +154,15 @@ public sealed record class ToriiKagemushaOperationStatus
 
     public required ToriiKagemushaOperationState State { get; init; }
 
-    public ToriiKagemushaOperationKind? Kind { get; init; }
+    public required ToriiKagemushaOperationKind Kind { get; init; }
 
-    public string? TransactionHash { get; init; }
+    public required string TransactionHash { get; init; }
 
+    /// <summary>
+    /// The active submission time carried only by Pending responses. It repeats while their
+    /// transaction hash is unchanged and may replace both values for a newer exact retry
+    /// attempt. Applied and Rejected responses omit this field.
+    /// </summary>
     public ulong? SubmittedAtMilliseconds { get; init; }
 
     public ToriiKagemushaTopUpResultV4? TopUpResult { get; init; }
@@ -169,7 +177,9 @@ internal static class ToriiKagemushaTransport
     internal const int BridgeAbiVersion = 23;
     internal const int ManifestVersion = 4;
     internal const int MaxHops = 8;
-    internal const int MaxJsonResponseBytes = 256 * 1024;
+    internal const int MaxReadinessJsonResponseBytes = 4 * 1024;
+    internal const int MaxOperationReferenceJsonResponseBytes = 4 * 1024;
+    internal const int MaxOperationStatusJsonResponseBytes = 16 * 1024 * 1024;
     internal const int MaxTopUpNoritoRequestBytes = 512 * 1024;
     internal const int MaxRedeemNoritoRequestBytes = 48 * 1024 * 1024;
     internal const string TopUpRequestSchemaName = "iroha.torii.v1.offline.top_up.request";

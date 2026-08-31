@@ -2629,7 +2629,6 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
-                Vec::new(),
             ],
             OfflineOperationStatus::Applied {
                 operation_id,
@@ -2640,7 +2639,6 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
                 java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
                 java_kagemusha_transaction_hash(&result.transaction_hash)?,
                 result.finalized_block_height.to_string().into_bytes(),
-                result.server_time_ms.to_string().into_bytes(),
                 norito::to_bytes(&result.anchor).map_err(|error| {
                     format!("failed to encode finalized top-up anchor: {error}")
                 })?,
@@ -2658,7 +2656,6 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
                 java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
                 java_kagemusha_transaction_hash(&result.transaction_hash)?,
                 result.finalized_block_height.to_string().into_bytes(),
-                result.server_time_ms.to_string().into_bytes(),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
@@ -2678,7 +2675,6 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
                     },
                     java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
                     java_kagemusha_transaction_hash(&transaction_hash)?,
-                    Vec::new(),
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),

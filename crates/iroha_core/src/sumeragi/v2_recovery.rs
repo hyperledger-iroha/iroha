@@ -25,6 +25,7 @@ use super::{
     },
     v2_first_release_recovery::{LifecycleContext, LifecycleDigest},
     v2_lane_work::durable_lane_completion_matches_finality_during_startup,
+    v2_lifecycle_coordinator::LifecycleLedgerError,
 };
 use crate::{
     kura::{
@@ -1007,6 +1008,20 @@ impl RecoveredLifecycleStorageMintPermitV1 {
             signature_policy: signature_policy.clone(),
         }
     }
+    /// Construct the exact recovery permit for a sibling-module lifecycle fixture.
+    ///
+    /// Shipping code can mint this capability only inside recovery. The
+    /// test-only bridge lets the production-factory fixture exercise the same
+    /// consuming boundary without exposing a raw-root constructor.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        kura: &Kura,
+        verified: &VerifiedHeightContext,
+        signature_policy: &BlockSignaturePolicy,
+        genesis_account: &AccountId,
+    ) -> Self {
+        Self::new(kura, verified, signature_policy, genesis_account)
+    }
     /// Consume the permit while comparing every recovery-authenticated input.
     pub(in crate::sumeragi) fn authorizes(
         self,
@@ -1238,6 +1253,8 @@ struct CanonicalCompleteTipLifecycleStorageV1 {
     predecessor: CanonicalLifecycleHeightStorageV1,
     successor: CanonicalLifecycleHeightStorageV1,
     body_store_root: PathBuf,
+    serve_payload_directory_authority:
+        Option<crate::kura::KuraV2CertifiedServePayloadDirectoryAuthority>,
 }
 impl CanonicalCompleteTipLifecycleStorageV1 {
     fn from_kura(
@@ -1259,6 +1276,7 @@ impl CanonicalCompleteTipLifecycleStorageV1 {
                 successor_height,
             ),
             body_store_root: kura.sumeragi_v2_storage_root().join("bodies"),
+            serve_payload_directory_authority: None,
         }
     }
 }
@@ -1279,7 +1297,7 @@ impl RecoveredCompleteTipActivationAuthority {
             verified_successor.context().id(),
             verified_successor.context().height,
         );
-        Self::authenticate_exact(
+        let mut authenticated = Self::authenticate_exact(
             artifact,
             receipt,
             verified_predecessor,
@@ -1288,7 +1306,16 @@ impl RecoveredCompleteTipActivationAuthority {
             activation,
             lifecycle_storage,
             Some(kura.instance_identity()),
-        )
+        )?;
+        if !kura.emergency_fast_startup_enabled() {
+            authenticated
+                .lifecycle_storage
+                .serve_payload_directory_authority =
+                Some(kura.mint_v2_certified_serve_payload_directory_authority(
+                    authenticated.verified_predecessor.context(),
+                )?);
+        }
+        Ok(authenticated)
     }
     fn authenticate_exact(
         artifact: wire::finality::V2FinalityArtifact,
@@ -1486,6 +1513,12 @@ impl RecoveredCompleteTipActivationAuthority {
             _ => false,
         }
     }
+    /// Compare the live predecessor-store owner with the Kura that authenticated CompleteTip.
+    pub(in crate::sumeragi) fn authorizes_predecessor_kura(&self, kura: &Kura) -> bool {
+        self.kura_identity
+            .as_ref()
+            .is_some_and(|expected| expected.matches(kura))
+    }
     /// Compare every caller-visible predecessor-storage input in one closed oracle.
     ///
     /// Only the local signer remains caller-selected. Roots, contexts, PoPs,
@@ -1513,8 +1546,49 @@ impl RecoveredCompleteTipActivationAuthority {
     /// The exact Kura-derived roots, predecessor context, and signature policy
     /// never cross this boundary as caller-supplied values. The local signer is
     /// used only to reauthenticate its frozen-roster Serve retention authority.
+    pub(in crate::sumeragi) fn into_kura_bound_canonical_predecessor_storage(
+        mut self,
+        kura: &Kura,
+        local_signer: &KeyPair,
+    ) -> Result<
+        crate::sumeragi::v2_first_release_recovery::AuthenticatedCompleteTipPredecessorStorageV1,
+        crate::sumeragi::v2_first_release_recovery::CompleteTipPredecessorStorageErrorV1,
+    > {
+        let authority = self
+            .lifecycle_storage
+            .serve_payload_directory_authority
+            .take()
+            .ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "CompleteTip has no recovery-minted Certified-Serve payload authority"
+                        .to_owned(),
+                )
+            })?;
+        self.into_canonical_predecessor_storage_at(
+            crate::sumeragi::v2_first_release_recovery::CompleteTipPayloadStoreOpenTargetV1::Kura {
+                kura,
+                authority,
+            },
+            local_signer,
+        )
+    }
+    /// Open a raw-root CompleteTip fixture without exposing that path in production.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn into_canonical_predecessor_storage(
         self,
+        local_signer: &KeyPair,
+    ) -> Result<
+        crate::sumeragi::v2_first_release_recovery::AuthenticatedCompleteTipPredecessorStorageV1,
+        crate::sumeragi::v2_first_release_recovery::CompleteTipPredecessorStorageErrorV1,
+    > {
+        self.into_canonical_predecessor_storage_at(
+            crate::sumeragi::v2_first_release_recovery::CompleteTipPayloadStoreOpenTargetV1::FixtureRoot,
+            local_signer,
+        )
+    }
+    fn into_canonical_predecessor_storage_at(
+        self,
+        payload_store_target: crate::sumeragi::v2_first_release_recovery::CompleteTipPayloadStoreOpenTargetV1<'_>,
         local_signer: &KeyPair,
     ) -> Result<
         crate::sumeragi::v2_first_release_recovery::AuthenticatedCompleteTipPredecessorStorageV1,
@@ -1533,6 +1607,7 @@ impl RecoveredCompleteTipActivationAuthority {
         let verified_predecessor = self.verified_predecessor.clone();
         let signature_policy = self.predecessor_signature_policy.clone();
         crate::sumeragi::v2_first_release_recovery::open_complete_tip_predecessor_storage(
+            payload_store_target,
             &predecessor_root,
             &successor_root,
             successor_context,
@@ -1567,6 +1642,7 @@ impl RecoveredCompleteTipActivationAuthority {
                 root: PathBuf::from("test-only-unbound-complete-tip-successor-root"),
             },
             body_store_root: PathBuf::from("test-only-unbound-complete-tip-body-root"),
+            serve_payload_directory_authority: None,
         };
         Self::authenticate_exact(
             artifact,
@@ -1613,6 +1689,7 @@ impl RecoveredCompleteTipActivationAuthority {
                     root: predecessor_root.join("test-only-successor"),
                 },
                 body_store_root: predecessor_root.join("test-only-body-root"),
+                serve_payload_directory_authority: None,
             },
             None,
         )
@@ -1635,7 +1712,7 @@ impl RecoveredCompleteTipActivationAuthority {
             successor_context_id,
             artifact.height.saturating_add(1),
         );
-        Self::authenticate_exact(
+        let mut authenticated = Self::authenticate_exact(
             artifact,
             receipt,
             verified_predecessor,
@@ -1644,7 +1721,16 @@ impl RecoveredCompleteTipActivationAuthority {
             activation,
             lifecycle_storage,
             Some(kura.instance_identity()),
-        )
+        )?;
+        if !kura.emergency_fast_startup_enabled() {
+            authenticated
+                .lifecycle_storage
+                .serve_payload_directory_authority =
+                Some(kura.mint_v2_certified_serve_payload_directory_authority(
+                    authenticated.verified_predecessor.context(),
+                )?);
+        }
+        Ok(authenticated)
     }
 }
 /// Distinct one-shot authority for the first executable height after an audited snapshot.
@@ -1783,7 +1869,7 @@ impl VerifiedSuccessorHeight {
                 &signature_policy,
                 genesis_account,
                 permit,
-            );
+            )?;
         Ok((verified_context, activation, lifecycle_storage_authority))
     }
 }
@@ -1939,7 +2025,7 @@ pub(crate) fn recover_active_height_with_plan(
                 &signature_policy,
                 &genesis_account,
                 lifecycle_storage_mint,
-            );
+            )?;
         return Ok(RecoveredV2Height {
             verified_context,
             context_store,
@@ -2002,7 +2088,7 @@ pub(crate) fn recover_active_height_with_plan(
                 &signature_policy,
                 &genesis_account,
                 lifecycle_storage_mint,
-            );
+            )?;
         return Ok(RecoveredV2Height {
             verified_context,
             context_store,
@@ -2065,7 +2151,7 @@ pub(crate) fn recover_active_height_with_plan(
                 &signature_policy,
                 &genesis_account,
                 lifecycle_storage_mint,
-            );
+            )?;
         return Ok(RecoveredV2Height {
             verified_context,
             context_store,
@@ -2133,7 +2219,7 @@ pub(crate) fn recover_active_height_with_plan(
             &signature_policy,
             &genesis_account,
             lifecycle_storage_mint,
-        );
+        )?;
     Ok(RecoveredV2Height {
         verified_context,
         context_store,

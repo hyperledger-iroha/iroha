@@ -1975,7 +1975,9 @@ _OFFLINE_BLS_PROOF_BYTES = 96
 _OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
 _OFFLINE_BLS_VALIDATOR_ID_RE = re.compile(r"^ea0130[0-9A-F]{96}$")
 _OFFLINE_MAX_JSON_DEPTH = 128
-_OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
+_OFFLINE_STATUS_MAX_BYTES = 4 * 1024
+_OFFLINE_OPERATION_REFERENCE_MAX_BYTES = 4 * 1024
+_OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES = 16 * 1024 * 1024
 _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES = 512 * 1024
 _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
 _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 23
@@ -2236,6 +2238,77 @@ def _offline_hash_literal(value: Any, context: str) -> str:
     if int(body[-2:], 16) & 1 == 0:
         raise RuntimeError(f"{context} must set the Iroha hash marker bit")
     return value
+
+
+def _offline_hash_literal_bytes(value: Any, context: str) -> bytes:
+    canonical = _offline_hash_literal(value, context)
+    match = _OFFLINE_HASH_LITERAL_RE.fullmatch(canonical)
+    if match is None:  # The canonical validator above already rejected this shape.
+        raise AssertionError("validated offline hash literal did not match its grammar")
+    return bytes.fromhex(match.group(1))
+
+
+def _offline_iroha_blake2b_hash(*chunks: bytes) -> bytes:
+    digest = bytearray(hashlib.blake2b(b"".join(chunks), digest_size=32).digest())
+    digest[-1] |= 1
+    return bytes(digest)
+
+
+def _validate_offline_top_up_anchor_inclusion(
+    operation_id: str,
+    anchor_digest: Tuple[int, ...],
+    path: "OfflineTopUpAnchorMerkleProof",
+    commitment: "OfflineTopUpFinalityExecutionCommitment",
+    context: str,
+) -> None:
+    if commitment.topup_anchor_root is None:
+        raise RuntimeError(f"{context} requires a committed top-up root")
+    key_hash = _offline_iroha_blake2b_hash(b"\xd2" + bytes.fromhex(operation_id))
+    value_hash = _offline_iroha_blake2b_hash(bytes(anchor_digest))
+    current = _offline_iroha_blake2b_hash(b"\x00", key_hash, value_hash)
+    index = path.leaf_index
+    node_domain = b"iroha:kagemusha:v2:topup-node\x00"
+    for level, raw_sibling in enumerate(path.siblings):
+        sibling = bytes(raw_sibling)
+        if sibling[-1] & 1 == 0:
+            raise RuntimeError(
+                f"{context}.anchor_path.siblings[{level}] must set the Iroha hash marker bit"
+            )
+        level_bytes = level.to_bytes(2, "little")
+        if index & 1 == 0:
+            current = _offline_iroha_blake2b_hash(
+                node_domain, level_bytes, current, sibling
+            )
+        else:
+            current = _offline_iroha_blake2b_hash(
+                node_domain, level_bytes, sibling, current
+            )
+        index //= 2
+    expected_root = _offline_hash_literal_bytes(
+        commitment.topup_anchor_root, f"{context}.commit_qc.certificate.execution_commitment.topup_anchor_root"
+    )
+    if current != expected_root:
+        raise RuntimeError(f"{context}.anchor_path does not authenticate the top-up anchor")
+
+    ordinary_root = _offline_hash_literal_bytes(
+        commitment.ordinary_writes_root,
+        f"{context}.commit_qc.certificate.execution_commitment.ordinary_writes_root",
+    )
+    expected_post_root = _offline_iroha_blake2b_hash(
+        b"iroha:kagemusha:v2:post-state-root\x00",
+        path.leaf_count.to_bytes(4, "little"),
+        ordinary_root,
+        expected_root,
+    )
+    actual_post_root = _offline_hash_literal_bytes(
+        commitment.post_state_root,
+        f"{context}.commit_qc.certificate.execution_commitment.post_state_root",
+    )
+    if actual_post_root != expected_post_root:
+        raise RuntimeError(
+            f"{context}.commit_qc.certificate.execution_commitment.post_state_root "
+            "does not authenticate the top-up projection"
+        )
 
 
 def taira_local_signing_context(deployed_network_id: str) -> ToriiLocalSigningContext:
@@ -2600,7 +2673,6 @@ class OfflineTopUpResult:
 
     transaction_hash: str
     finalized_block_height: int
-    server_time_ms: int
     anchor: OfflineTopUpAnchor
     finality_proof: OfflineTopUpFinalityProof
 
@@ -2611,7 +2683,6 @@ class OfflineRedeemResult:
 
     transaction_hash: str
     finalized_block_height: int
-    server_time_ms: int
 
 
 @dataclass(frozen=True)
@@ -2708,7 +2779,7 @@ class OfflineAppliedOperation:
 
 @dataclass(frozen=True)
 class OfflineRejectedOperation:
-    """Rejected terminal Offline operation state."""
+    """One rejected carrier attempt for a still-retryable Offline operation."""
 
     operation_id: str
     kind: OfflineOperationKind
@@ -2813,6 +2884,40 @@ def _offline_operation_reference(
             positive=True,
         ),
     )
+
+
+def _validated_offline_operation_reference(
+    value: Any,
+    context: str = "accepted offline operation reference",
+) -> OfflineOperationReference:
+    if type(value) is not OfflineOperationReference:
+        raise TypeError(f"{context} must be an OfflineOperationReference")
+    operation_id = _require_offline_operation_id(
+        value.operation_id, f"{context}.operation_id"
+    )
+    if (
+        type(value.kind) is not OfflineOperationKind
+        or value.kind.kind not in ("top_up", "redeem")
+        or value.kind.value is not None
+    ):
+        raise RuntimeError(f"{context}.kind must be an exact top_up or redeem unit tag")
+    if (
+        type(value.state) is not OfflinePendingState
+        or value.state.state != "pending"
+        or value.state.value is not None
+    ):
+        raise RuntimeError(f"{context}.state must be the exact pending unit tag")
+    _offline_transaction_hash(value.transaction_hash, f"{context}.transaction_hash")
+    expected_uri = _offline_status_uri(operation_id)
+    if value.status_uri != expected_uri:
+        raise RuntimeError(f"{context}.status_uri must equal {expected_uri}")
+    _offline_unsigned(
+        value.submitted_at_ms,
+        f"{context}.submitted_at_ms",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    return value
 
 
 def _offline_optional_error_string(
@@ -3169,10 +3274,9 @@ def _offline_top_up_finality_subject(
     _offline_exact_object_fields(
         record,
         context,
-        required=("block_hash", "payload_hash"),
-        optional=("parent_block_hash",),
+        required=("parent_block_hash", "block_hash", "payload_hash"),
     )
-    raw_parent = record.get("parent_block_hash")
+    raw_parent = _offline_required(record, "parent_block_hash", context)
     parent_block_hash = (
         None
         if raw_parent is None
@@ -3227,6 +3331,7 @@ def _offline_top_up_finality_execution_commitment(
             "parent_state_root",
             "post_state_root",
             "ordinary_writes_root",
+            "topup_anchor_root",
             "topup_anchor_count",
             "native_amx_application_manifest_version",
             "native_amx_application_manifest_root",
@@ -3236,14 +3341,13 @@ def _offline_top_up_finality_execution_commitment(
             "executed_block_wire_len",
             "executed_block_wire_hash",
         ),
-        optional=("topup_anchor_root",),
     )
     topup_anchor_count = _offline_unsigned(
         _offline_required(record, "topup_anchor_count", context),
         f"{context}.topup_anchor_count",
         _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK,
     )
-    raw_topup_root = record.get("topup_anchor_root")
+    raw_topup_root = _offline_required(record, "topup_anchor_root", context)
     topup_anchor_root = (
         None
         if raw_topup_root is None
@@ -3640,16 +3744,14 @@ def _offline_top_up_finality_height_context(
             "height",
             "epoch",
             "epoch_end_height",
+            "next_epoch_snapshot",
             "mode",
+            "parent_commit_qc",
+            "snapshot_bootstrap",
             "nexus_amx_context_hash",
             "execution_policy_hash",
             "da_layout",
             "leader_seed",
-        ),
-        optional=(
-            "next_epoch_snapshot",
-            "parent_commit_qc",
-            "snapshot_bootstrap",
         ),
     )
     context_id = _offline_top_up_finality_height_context_id(
@@ -3691,7 +3793,7 @@ def _offline_top_up_finality_height_context(
     mode = _offline_top_up_finality_consensus_mode(
         _offline_required(record, "mode", context), f"{context}.mode"
     )
-    raw_next_snapshot = record.get("next_epoch_snapshot")
+    raw_next_snapshot = _offline_required(record, "next_epoch_snapshot", context)
     if raw_next_snapshot is None:
         next_epoch_snapshot = None
     else:
@@ -3704,7 +3806,7 @@ def _offline_top_up_finality_height_context(
             successor_height=height + 1,
             current_mode=mode,
         )
-    raw_parent_qc = record.get("parent_commit_qc")
+    raw_parent_qc = _offline_required(record, "parent_commit_qc", context)
     parent_commit_qc = (
         None
         if raw_parent_qc is None
@@ -3718,7 +3820,7 @@ def _offline_top_up_finality_height_context(
         raise RuntimeError(
             f"{context}.parent_commit_qc.round.height must immediately precede height"
         )
-    raw_snapshot_bootstrap = record.get("snapshot_bootstrap")
+    raw_snapshot_bootstrap = _offline_required(record, "snapshot_bootstrap", context)
     snapshot_bootstrap = (
         None
         if raw_snapshot_bootstrap is None
@@ -4079,6 +4181,13 @@ def _offline_top_up_finality_proof(
         anchor_path_context,
         expected_leaf_count=certificate.execution_commitment.topup_anchor_count,
     )
+    _validate_offline_top_up_anchor_inclusion(
+        expected_operation_id,
+        anchor_digest,
+        anchor_path,
+        certificate.execution_commitment,
+        context,
+    )
     return OfflineTopUpFinalityProof(
         version=1,
         anchor=OfflineTopUpFinalityProofAnchor(
@@ -4110,7 +4219,6 @@ def _offline_applied_result(
             required=(
                 "transaction_hash",
                 "finalized_block_height",
-                "server_time_ms",
                 "anchor",
                 "finality_proof",
             ),
@@ -4122,7 +4230,6 @@ def _offline_applied_result(
             required=(
                 "transaction_hash",
                 "finalized_block_height",
-                "server_time_ms",
             ),
         )
     transaction_hash = _offline_transaction_hash(
@@ -4132,12 +4239,6 @@ def _offline_applied_result(
     finalized_block_height = _offline_unsigned(
         _offline_required(result, "finalized_block_height", result_context),
         f"{result_context}.finalized_block_height",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    server_time_ms = _offline_unsigned(
-        _offline_required(result, "server_time_ms", result_context),
-        f"{result_context}.server_time_ms",
         _OFFLINE_MAX_U64,
         positive=True,
     )
@@ -4160,7 +4261,6 @@ def _offline_applied_result(
             OfflineTopUpResult(
                 transaction_hash=transaction_hash,
                 finalized_block_height=finalized_block_height,
-                server_time_ms=server_time_ms,
                 anchor=anchor,
                 finality_proof=finality_proof,
             )
@@ -4174,14 +4274,14 @@ def _offline_applied_result(
         OfflineRedeemResult(
             transaction_hash=transaction_hash,
             finalized_block_height=finalized_block_height,
-            server_time_ms=server_time_ms,
         )
     )
 
 
 def _offline_operation_status(
-    payload: Mapping[str, Any], expected_operation_id: str
+    payload: Mapping[str, Any], accepted_reference: OfflineOperationReference
 ) -> OfflineOperationStatus:
+    accepted = _validated_offline_operation_reference(accepted_reference)
     context = "offline operation status"
     record = _offline_mapping(payload, context)
     _offline_exact_object_fields(record, context, required=("state", "value"))
@@ -4210,12 +4310,12 @@ def _offline_operation_status(
         _offline_required(value, "operation_id", value_context),
         f"{value_context}.operation_id",
     )
-    if operation_id != expected_operation_id:
+    if operation_id != accepted.operation_id:
         raise RuntimeError(
-            f"{value_context}.operation_id does not match the requested operation"
+            f"{value_context}.operation_id does not match the accepted operation"
         )
     if state == "pending":
-        return OfflinePendingOperation(
+        status = OfflinePendingOperation(
             operation_id=operation_id,
             kind=_offline_operation_kind(
                 _offline_required(value, "kind", value_context), f"{value_context}.kind"
@@ -4231,8 +4331,16 @@ def _offline_operation_status(
                 positive=True,
             ),
         )
+        if status.kind != accepted.kind or (
+            status.transaction_hash == accepted.transaction_hash
+            and status.submitted_at_ms != accepted.submitted_at_ms
+        ):
+            raise RuntimeError(
+                f"{value_context} does not match the accepted kind or active submission identity"
+            )
+        return status
     if state == "applied":
-        return OfflineAppliedOperation(
+        status = OfflineAppliedOperation(
             operation_id=operation_id,
             result=_offline_applied_result(
                 _offline_required(value, "result", value_context),
@@ -4240,7 +4348,12 @@ def _offline_operation_status(
                 operation_id,
             ),
         )
-    return OfflineRejectedOperation(
+        if status.result.kind != accepted.kind.kind:
+            raise RuntimeError(
+                f"{value_context}.result does not match the accepted operation kind"
+            )
+        return status
+    status = OfflineRejectedOperation(
         operation_id=operation_id,
         kind=_offline_operation_kind(
             _offline_required(value, "kind", value_context), f"{value_context}.kind"
@@ -4253,6 +4366,11 @@ def _offline_operation_status(
             _offline_required(value, "error", value_context), f"{value_context}.error"
         ),
     )
+    if status.kind != accepted.kind:
+        raise RuntimeError(
+            f"{value_context} does not match the accepted operation kind"
+        )
+    return status
 
 
 def _multisig_norito_compact_length(value: int) -> bytes:
@@ -11314,11 +11432,21 @@ class ToriiClient(
             "GET",
             _OFFLINE_CAPABILITY_PATH,
             headers={"Accept": "application/json"},
+            stream=True,
             allow_redirects=False,
             timeout=_kagemusha_request_timeout(timeout, "get_offline_capability"),
         )
-        self._expect_status(response, {200})
-        payload = self._offline_json_response(response, "offline capability response")
+        self._expect_status(
+            response,
+            {200},
+            maximum_body_bytes=_OFFLINE_STATUS_MAX_BYTES,
+            context="offline capability",
+        )
+        payload = self._offline_json_response(
+            response,
+            "offline capability response",
+            maximum_body_bytes=_OFFLINE_STATUS_MAX_BYTES,
+        )
         return OfflineStatus.from_payload(payload)
 
     def submit_kagemusha_top_up(
@@ -11359,26 +11487,42 @@ class ToriiClient(
 
     def get_kagemusha_operation_status(
         self,
-        operation_id: str,
+        accepted_reference: OfflineOperationReference,
         *,
         timeout: Optional[float] = None,
     ) -> OfflineOperationStatus:
-        """Fetch the typed state of one Kagemusha operation with an optional timeout."""
+        """Fetch status bound to an accepted Kagemusha operation identity.
 
-        canonical_id = _require_offline_operation_id(operation_id)
+        Exact retries and a foreign-authority global Applied winner may advance
+        the active transaction hash while the operation id and kind stay fixed.
+        After Pending advances its hash and timestamp, persist that returned
+        pair in the accepted reference used for the next poll.
+        """
+
+        accepted = _validated_offline_operation_reference(accepted_reference)
         response = self._request(
             "GET",
-            f"{_OFFLINE_OPERATIONS_PATH}/{canonical_id}",
+            accepted.status_uri,
             headers={"Accept": "application/json"},
+            stream=True,
             allow_redirects=False,
             timeout=_kagemusha_request_timeout(
                 timeout,
                 "get_kagemusha_operation_status",
             ),
         )
-        self._expect_status(response, {200})
-        payload = self._offline_json_response(response, "offline operation status response")
-        return _offline_operation_status(payload, canonical_id)
+        self._expect_status(
+            response,
+            {200},
+            maximum_body_bytes=_OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
+            context="offline operation status",
+        )
+        payload = self._offline_json_response(
+            response,
+            "offline operation status response",
+            maximum_body_bytes=_OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
+        )
+        return _offline_operation_status(payload, accepted)
 
     def _submit_kagemusha_command(
         self,
@@ -11398,11 +11542,22 @@ class ToriiClient(
                 "Idempotency-Key": operation_id,
             },
             data=body,
+            stream=True,
+            allow_retry=False,
             allow_redirects=False,
             timeout=timeout,
         )
-        self._expect_status(response, {202})
-        payload = self._offline_json_response(response, "offline operation reference response")
+        self._expect_status(
+            response,
+            {202},
+            maximum_body_bytes=_OFFLINE_OPERATION_REFERENCE_MAX_BYTES,
+            context="offline operation reference",
+        )
+        payload = self._offline_json_response(
+            response,
+            "offline operation reference response",
+            maximum_body_bytes=_OFFLINE_OPERATION_REFERENCE_MAX_BYTES,
+        )
         return _offline_operation_reference(
             payload,
             expected_operation_id=operation_id,
@@ -11413,17 +11568,54 @@ class ToriiClient(
 
     @staticmethod
     def _offline_json_response(
-        response: requests.Response, context: str
+        response: requests.Response,
+        context: str,
+        *,
+        maximum_body_bytes: int,
     ) -> Mapping[str, Any]:
-        content_type = response.headers.get("Content-Type", "")
-        media_type = content_type.split(";", 1)[0].strip().lower()
-        if media_type != "application/json":
-            raise RuntimeError(f"{context} must use Content-Type application/json")
-        body = response.content
-        if len(body) > _OFFLINE_MAX_JSON_RESPONSE_BYTES:
-            raise RuntimeError(
-                f"{context} exceeds {_OFFLINE_MAX_JSON_RESPONSE_BYTES} bytes"
-            )
+        if (
+            isinstance(maximum_body_bytes, bool)
+            or not isinstance(maximum_body_bytes, int)
+            or maximum_body_bytes <= 0
+        ):
+            raise ValueError(f"{context} byte-size bound must be a positive integer")
+        try:
+            content_type = response.headers.get("Content-Type", "")
+            media_type = content_type.split(";", 1)[0].strip().lower()
+            if media_type != "application/json":
+                raise RuntimeError(f"{context} must use Content-Type application/json")
+
+            raw_content_length = response.headers.get("Content-Length")
+            if raw_content_length is not None:
+                if not isinstance(raw_content_length, str) or re.fullmatch(
+                    r"(?:0|[1-9][0-9]*)", raw_content_length
+                ) is None:
+                    raise RuntimeError(
+                        f"{context} Content-Length must be a canonical unsigned decimal integer"
+                    )
+                maximum_literal = str(maximum_body_bytes)
+                if len(raw_content_length) > len(maximum_literal) or (
+                    len(raw_content_length) == len(maximum_literal)
+                    and raw_content_length > maximum_literal
+                ):
+                    raise RuntimeError(
+                        f"{context} exceeds {maximum_body_bytes} bytes"
+                    )
+
+            bounded_body = bytearray()
+            for chunk in response.iter_content(chunk_size=8192, decode_unicode=False):
+                if not chunk:
+                    continue
+                if not isinstance(chunk, (bytes, bytearray)):
+                    raise RuntimeError(f"{context} yielded a non-byte response chunk")
+                if len(chunk) > maximum_body_bytes - len(bounded_body):
+                    raise RuntimeError(
+                        f"{context} exceeds {maximum_body_bytes} bytes"
+                    )
+                bounded_body.extend(chunk)
+            body = bytes(bounded_body)
+        finally:
+            response.close()
         try:
             text = body.decode("utf-8")
         except UnicodeDecodeError as error:

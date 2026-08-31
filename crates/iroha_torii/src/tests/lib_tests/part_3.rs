@@ -1054,9 +1054,9 @@ async fn identifier_policies_enforce_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        let mut tokens = HashSet::new();
-        tokens.insert("token-identifier".to_owned());
-        state.api_tokens_set = Arc::new(tokens);
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens([
+            "token-identifier",
+        ]));
     }
     let missing = handler_identifier_policies(
         State(app.clone()),
@@ -1511,9 +1511,8 @@ async fn identifier_resolve_enforces_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        let mut tokens = HashSet::new();
-        tokens.insert("token-resolve".to_owned());
-        state.api_tokens_set = Arc::new(tokens);
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["token-resolve"]));
     }
     let missing = handler_identifier_resolve(
         State(app),
@@ -1713,9 +1712,8 @@ async fn identifier_claim_receipt_enforces_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        let mut tokens = HashSet::new();
-        tokens.insert("token-claim".to_owned());
-        state.api_tokens_set = Arc::new(tokens);
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["token-claim"]));
     }
     let missing = handler_identifier_claim_receipt(
         State(app),
@@ -2721,7 +2719,7 @@ async fn proof_request_rate_limit_admits_max_body_cost_and_throttles_repetition(
     }
     let headers = HeaderMap::new();
     let remote = Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-    let max_body = app.proof_limits.max_body_bytes as usize;
+    let max_body = app.proof_limits.max_body_bytes;
     enforce_proof_body_limit(&app, max_body, "v1/zk/verify-batch")
         .expect("configured maximum body remains admissible");
     check_proof_access(

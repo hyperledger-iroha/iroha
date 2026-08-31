@@ -222,7 +222,16 @@ pub(crate) fn certified_autonomous_lane_startup_fixture(
         &lane_config,
         lane_incarnation,
     );
-    let kura = Kura::blank_kura_for_testing_with_lane_config(&lane_config);
+    let config = kura_config_for_path(
+        std::path::Path::new("unused-certified-autonomous-lane-startup-root"),
+        BLOCKS_IN_MEMORY,
+    );
+    let kura = Kura::new_temporary_with_configured_lane_catalog(
+        &config,
+        &lane_config,
+        &lane_catalog,
+    )
+    .expect("initialize authenticated temporary autonomous-lane Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let mut fixture = CertifiedAutonomousLaneStartupFixture { kura, payload };
     fixture.certify_with_hint(

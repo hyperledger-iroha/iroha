@@ -86,9 +86,9 @@ fn map_coordinator_error(error: TleReleaseCoordinatorErrorV1) -> crate::Error {
 /// seat, or transcript. Core reconstructs those values from a point-in-time
 /// committed query view before the runtime signer is invoked.
 ///
-/// Signer work runs on the blocking pool because production implementations may
-/// synchronously enter PKCS#11, an HSM, or a local KMS bridge. The coordinator
-/// independently verifies the returned public proof before this function returns.
+/// Signer work runs on the blocking pool because production implementations may synchronously call
+/// a deployment-owned signing provider. The coordinator independently verifies the returned public
+/// proof before this function returns; provider implementation details are outside the protocol.
 ///
 /// # Errors
 ///

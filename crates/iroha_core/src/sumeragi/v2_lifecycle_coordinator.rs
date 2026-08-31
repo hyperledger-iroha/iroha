@@ -135,9 +135,10 @@ pub(crate) use ledger::ProductionLifecycleStartupErrorV1;
 pub(crate) use ledger::WalVoteLedgerRepairTestSummary;
 pub(in crate::sumeragi) use ledger::{
     AuthenticatedCompleteTipPredecessorStorageV1, AuthenticatedRecoveredLifecycleSuccessorFloorV1,
-    CompleteTipPredecessorStorageErrorV1, LaunchedRecoveredCompleteTipSuccessorLifecycleV1,
-    LifecycleLedgerError, LifecycleLedgerV1, PublishedFinalizedLifecycleRetainedFloorV1,
-    RetiredRecoveredCompleteTipActivationAuthorityV1, open_complete_tip_predecessor_storage,
+    CompleteTipPayloadStoreOpenTargetV1, CompleteTipPredecessorStorageErrorV1,
+    LaunchedRecoveredCompleteTipSuccessorLifecycleV1, LifecycleLedgerError, LifecycleLedgerV1,
+    PublishedFinalizedLifecycleRetainedFloorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
+    open_complete_tip_predecessor_storage,
 };
 #[cfg(all(test, feature = "bls"))]
 /// Run the two release-bound CompleteTip disk-retirement regressions.

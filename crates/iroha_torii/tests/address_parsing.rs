@@ -1338,8 +1338,15 @@ fn build_test_router() -> (Router, Arc<Metrics>, KeyPair) {
             Some(telemetry),
             iroha_config::parameters::actual::TelemetryProfile::Operator,
         ),
-    );
-    (torii.api_router_for_tests(), metrics, operator_key_pair)
+    )
+    .expect("valid Torii address-parsing fixture");
+    (
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
+        metrics,
+        operator_key_pair,
+    )
 }
 fn account_segments() -> (String, String) {
     use iroha_crypto::PublicKey;

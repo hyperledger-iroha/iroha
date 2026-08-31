@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.sorafs
 
 import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
+import org.hyperledger.iroha.sdk.client.LocalSigningContext
 import org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutor
 import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.TransportSecurity
@@ -171,17 +172,15 @@ class SorafsReputationClient(
             "SoraFS reputation SSE requires a StreamingTransportExecutor; buffered fallback is unsupported"
         }
         val query = eventQuery(since, limit)
-        val target = buildTarget(EVENTS_STREAM_PATH, query)
-        val headers = canonicalHeaders(target, canonicalAuth)
         val options = ToriiEventStreamOptions(
             queryParameters = query,
-            headers = headers,
             timeout = timeout,
         )
-        val streamClient = ToriiEventStreamClient(
-            baseUri = baseUri,
-            transport = transport,
-        )
+        val streamClient = ToriiEventStreamClient.builder()
+            .setBaseUri(baseUri)
+            .setTransportExecutor(transport)
+            .canonicalRequestAuth(LocalSigningContext(networkId), canonicalAuth)
+            .build()
         return streamClient.openSseStream(
             EVENTS_STREAM_PATH,
             options,

@@ -504,7 +504,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 864
+_PRODUCTION_TEST_COUNT = 867
 _G_UNIT_TEST_COUNT = 522
 _G_UNIT_GROUPS = (
     (
@@ -618,7 +618,7 @@ _PRODUCTION_MODULES = (
     (
         "production-v2-certified-serve-payload-store",
         "sumeragi::v2_certified_serve_payload_store::tests",
-        11,
+        13,
     ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
@@ -635,7 +635,7 @@ _PRODUCTION_MODULES = (
     (
         "production-v2-lifecycle-coordinator",
         "sumeragi::v2_lifecycle_coordinator",
-        42,
+        43,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
     (

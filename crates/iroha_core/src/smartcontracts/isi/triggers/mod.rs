@@ -63,7 +63,6 @@ pub(crate) fn trigger_was_registered_before_block(
 /// - adjusting trigger metadata to reflect registration height and block time
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
-    use super::specialized::LoadedActionTrait as _;
     use super::{super::prelude::*, *};
     use iroha_data_model::{
         isi::error::{InvalidParameterError, RepetitionError},

@@ -61,7 +61,8 @@ fn dedicated_operator_bootstrap_tokens_remain_configurable() {
 
 #[test]
 fn operator_bootstrap_tokens_are_exact_bounded_visible_values() {
-    let too_many = (0..=iroha_config::parameters::defaults::torii::operator_auth::MAX_BOOTSTRAP_TOKENS)
+    let too_many = (0
+        ..=iroha_config::parameters::defaults::torii::operator_auth::MAX_BOOTSTRAP_TOKENS)
         .map(|index| format!("\"first-credential-bootstrap-token-{index:02}\""))
         .collect::<Vec<_>>()
         .join(", ");

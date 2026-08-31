@@ -7,6 +7,8 @@ import XCTest
 final class ToriiParliamentAPIV1Tests: XCTestCase {
     private static let contractAddress =
         "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
+    private static let proposalOperator =
+        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
     private let attemptID = String(repeating: "ab", count: 32)
     private let proposalID = String(repeating: "cd", count: 32)
     private let root = [UInt8](repeating: 0x55, count: 32)
@@ -20,7 +22,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         try ToriiParliamentProposalV1(
             validating: Data(
                 """
-                {"kind":"DeployContract","payload":{"contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}}
+                {"kind":"DeployContract","payload":{"proposal_operator":"\(Self.proposalOperator)","contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}}
                 """.utf8
             )
         )
@@ -580,7 +582,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             try ToriiParliamentProposalV1(
                 validating: Data(
                     """
-                    {"kind":"DeployContract","payload":{"contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"abi_version":1,"manifest_provenance":null}}
+                    {"kind":"DeployContract","payload":{"proposal_operator":"\(Self.proposalOperator)","contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"abi_version":1,"manifest_provenance":null}}
                     """.utf8
                 )
             )

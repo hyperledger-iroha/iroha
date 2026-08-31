@@ -448,12 +448,18 @@ export function registerToriiClientGovernanceTests({
     const variants = [
       [
         "DeployContract",
-        cloneFixture(toriiFixtures.governance.proposalDeployContract).proposal.kind.payload,
+        {
+          ...cloneFixture(
+            toriiFixtures.governance.proposalDeployContract,
+          ).proposal.kind.payload,
+          proposal_operator: FIXTURE_ALICE_ID,
+        },
         "deploy_contract",
       ],
       [
         "RuntimeUpgrade",
         {
+          proposal_operator: FIXTURE_ALICE_ID,
           manifest: {
             name: "runtime-v1-refresh",
             description: "Canonical V1 runtime image",
@@ -543,6 +549,7 @@ export function registerToriiClientGovernanceTests({
       [
         "ContractLifecycleGovernance",
         {
+          proposal_operator: FIXTURE_ALICE_ID,
           contract_address: contractAddress,
           expected_revision: 3,
           action: {
@@ -1318,6 +1325,7 @@ export function registerToriiClientGovernanceTests({
     });
     const result = await client.governanceProposeDeployContract(
       {
+        proposalOperator: FIXTURE_ALICE_ID,
         contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         codeHash: `BlAkE2b32:0X${"1a".repeat(32)}`,
         abiHash: Buffer.alloc(32, 0xbb),
@@ -1333,6 +1341,7 @@ export function registerToriiClientGovernanceTests({
       capturedBody.contract_address,
       "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     );
+    assert.equal(capturedBody.proposal_operator, FIXTURE_ALICE_ID);
     assert.equal(capturedBody.code_hash, "1a".repeat(32));
     assert.equal(capturedBody.abi_hash, "bb".repeat(32));
     assert.equal(capturedBody.abi_version, 1);
@@ -1367,6 +1376,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       },
     });
     const base = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       codeHash: "aa".repeat(32),
       abiHash: "bb".repeat(32),
@@ -1405,8 +1415,33 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     );
   });
 
+  test("governanceProposeDeployContract rejects an operator distinct from canonical auth", async () => {
+    let fetchCalls = 0;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("mismatched proposal reached transport");
+      },
+    });
+    await assert.rejects(
+      client.governanceProposeDeployContract(
+        {
+          proposalOperator: FIXTURE_BOB_ID,
+          contractAddress:
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+          codeHash: "aa".repeat(32),
+          abiHash: "bb".repeat(32),
+        },
+        governanceBallotOptions(FIXTURE_ALICE_ID),
+      ),
+      /canonicalAuth\.accountId must equal the exact proposalOperator/u,
+    );
+    assert.equal(fetchCalls, 0);
+  });
+
   test("governanceProposeDeployContract rejects noncanonical draft responses", async () => {
     const request = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       codeHash: "11".repeat(32),
       abiHash: "22".repeat(32),
@@ -1485,6 +1520,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         .sort();
 
     const deploy = interfaceBody("ToriiGovernanceDeployContractProposalRequest");
+    assert.match(deploy, /proposalOperator: string;/u);
     assert.doesNotMatch(deploy, /\blimits\??:/u);
     assert.match(deploy, /abiVersion\?: 1;/u);
     assert.doesNotMatch(deploy, /\b(?:window|mode)\??:/u);
@@ -1500,6 +1536,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       "code_hash",
       "contract_address",
       "manifest_provenance",
+      "proposal_operator",
     ]);
     assert.match(storedDeploy, /abi_version: 1;/u);
     assert.match(
@@ -1613,6 +1650,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
 
     await client.governanceProposeDeployContract(
       {
+        proposalOperator: FIXTURE_ALICE_ID,
         contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         codeHash: Array.from(Buffer.alloc(32, 0x1a)),
         abiHash: Array.from(Buffer.alloc(32, 0xbb)),
@@ -1634,6 +1672,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       },
     });
     const base = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       codeHash: "1a".repeat(32),
       abiHash: "bb".repeat(32),
@@ -1662,6 +1701,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     });
     const hash = "1a".repeat(32);
     const base = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       abiHash: "bb".repeat(32),
     };
@@ -1693,6 +1733,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       },
     });
     const base = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       codeHash: `0x${"1a".repeat(32)}`,
       abiHash: Buffer.alloc(32, 0xbb),
@@ -1744,6 +1785,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       () =>
         client.governanceProposeDeployContract(
           {
+            proposalOperator: FIXTURE_ALICE_ID,
             contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             codeHash: [256],
             abiHash: Array.from(Buffer.alloc(32, 0xbb)),
@@ -1987,6 +2029,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       {
         name: "deploy-contract",
         payload: {
+          proposalOperator: FIXTURE_ALICE_ID,
           contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           codeHash: "11".repeat(32),
           abiHash: "22".repeat(32),
@@ -2116,6 +2159,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       () =>
         client.governanceProposeDeployContract(
           {
+            proposalOperator: FIXTURE_ALICE_ID,
             contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             codeHash: "11".repeat(32),
             abiHash: "22".repeat(32),
@@ -2129,6 +2173,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       () =>
         client.governanceProposeDeployContract(
           {
+            proposalOperator: FIXTURE_ALICE_ID,
             contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             codeHash: "11".repeat(32),
             abiHash: "22".repeat(32),
@@ -2154,6 +2199,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       },
     });
     const deploy = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       codeHash: "11".repeat(32),
       abiHash: "22".repeat(32),
@@ -2524,6 +2570,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       () =>
         client.governanceProposeDeployContract(
           {
+            proposalOperator: FIXTURE_ALICE_ID,
             contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             codeHash: "11".repeat(32),
             abiHash: Buffer.alloc(32, 0xaa),

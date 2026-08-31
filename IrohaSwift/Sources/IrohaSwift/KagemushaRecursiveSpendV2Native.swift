@@ -18,6 +18,9 @@ extension NoritoNativeBridge {
         UnsafePointer<UInt8>?, CUnsignedLong, UInt64,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias KagemushaV2ArchiveValidateFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong
+    ) -> Int32
     private typealias KagemushaV2TwoArchiveOutFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -147,6 +150,37 @@ extension NoritoNativeBridge {
         #else
         _ = symbols
         return false
+        #endif
+    }
+
+    /// Canonical-decode and validate the complete shared offline-operation
+    /// status before Swift projects attacker-controlled nested fields.
+    func kagemushaOfflineOperationStatusValidateV1(
+        statusArchive: Data
+    ) throws -> Bool? {
+        guard !statusArchive.isEmpty,
+              statusArchive.count <= KagemushaOperationCodec.statusMaximumArchiveBytes else {
+            throw NativeBridgeError.kagemushaProve
+        }
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_kagemusha_offline_operation_status_validate_v1",
+            as: KagemushaV2ArchiveValidateFn.self
+        ) else {
+            return nil
+        }
+        let status = statusArchive.withUnsafeBytes { buffer in
+            function(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(buffer.count)
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            throw error
+        }
+        return true
+        #else
+        return nil
         #endif
     }
 

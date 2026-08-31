@@ -38,8 +38,8 @@ fn policy_jury_binding(
     let opening_deadline_height = 35;
     let tally = ParliamentAggregateTallyV1 {
         original_seats: 3,
-        accepted_ballots: 2,
-        aye: 2,
+        accepted_ballots: 3,
+        aye: 3,
         nay: 0,
         abstain: 0,
     };

@@ -311,6 +311,25 @@ public final class ParliamentApiV1Tests {
   }
 
   @Test
+  public void effectSensitiveProposalsRequireExactOperator() {
+    for (final String kind :
+        List.of("DeployContract", "RuntimeUpgrade", "ContractLifecycleGovernance")) {
+      final Map<String, Object> valid = validProposal(kind);
+      ParliamentApiV1.Proposal.fromJson(encode(valid));
+
+      final Map<String, Object> payload = objectValue(valid.get("payload"));
+      payload.remove("proposal_operator");
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> ParliamentApiV1.Proposal.fromJson(encode(valid)));
+      payload.put("proposal_operator", "not-an-account");
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> ParliamentApiV1.Proposal.fromJson(encode(valid)));
+    }
+  }
+
+  @Test
   public void contractLifecycleUnitActionsRequireExplicitNullPayload() {
     for (final String action :
         List.of("CancelOwnershipOffer", "AcceptParliamentOwnership")) {
@@ -1681,6 +1700,7 @@ public final class ParliamentApiV1Tests {
       case "DeployContract" ->
           payload =
               map(
+                  "proposal_operator", account(1),
                   "contract_address", CONTRACT_ADDRESS,
                   "code_hash", "11".repeat(32),
                   "abi_hash", "22".repeat(32),
@@ -1689,6 +1709,7 @@ public final class ParliamentApiV1Tests {
       case "RuntimeUpgrade" ->
           payload =
               map(
+                  "proposal_operator", account(1),
                   "manifest",
                   map(
                       "name", "runtime-v1",
@@ -1754,6 +1775,7 @@ public final class ParliamentApiV1Tests {
       case "ContractLifecycleGovernance" ->
           payload =
               map(
+                  "proposal_operator", account(1),
                   "contract_address", CONTRACT_ADDRESS,
                   "expected_revision", 3,
                   "action",

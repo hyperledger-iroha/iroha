@@ -7,9 +7,10 @@
 use axum::http::HeaderMap;
 use dashmap::{DashMap, mapref::entry::Entry};
 use parking_lot::Mutex;
+use sha2::{Digest as _, Sha256};
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap, HashSet, VecDeque, hash_map::DefaultHasher},
+    collections::{BinaryHeap, HashMap, VecDeque, hash_map::DefaultHasher},
     fmt,
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -20,6 +21,83 @@ use std::{
     },
     time::{Duration, Instant},
 };
+const API_TOKEN_DIGEST_DOMAIN: &[u8] = b"iroha.torii.api-token.v1\0";
+/// Fixed-length, sensitive identity derived from an authenticated API token.
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub(crate) struct ApiTokenPrincipal([u8; 32]);
+impl fmt::Debug for ApiTokenPrincipal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ApiTokenPrincipal([REDACTED])")
+    }
+}
+impl ApiTokenPrincipal {
+    /// Derive the stable principal without retaining the supplied token text.
+    #[must_use]
+    pub(crate) fn from_token(token: &str) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(API_TOKEN_DIGEST_DOMAIN);
+        hasher.update(token.as_bytes());
+        Self(hasher.finalize().into())
+    }
+    /// Return the fixed-length digest for domain-separated downstream derivations.
+    #[must_use]
+    pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+    /// Return a namespaced, stable limiter identity that contains no raw token text.
+    #[must_use]
+    pub(crate) fn rate_limit_key(self) -> String {
+        format!("api-token:{}", hex::encode(self.0))
+    }
+}
+/// Startup-compiled API-token digests used for constant-time authentication.
+#[derive(Clone, Default)]
+pub(crate) struct ApiTokenDigestSet {
+    digests: Box<[[u8; 32]]>,
+}
+impl fmt::Debug for ApiTokenDigestSet {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ApiTokenDigestSet")
+            .field("count", &self.digests.len())
+            .finish_non_exhaustive()
+    }
+}
+impl ApiTokenDigestSet {
+    /// Compile token text to fixed-length digests and discard duplicate entries.
+    #[must_use]
+    pub(crate) fn from_tokens<T, I>(tokens: I) -> Self
+    where
+        T: AsRef<str>,
+        I: IntoIterator<Item = T>,
+    {
+        let mut digests = tokens
+            .into_iter()
+            .map(|token| ApiTokenPrincipal::from_token(token.as_ref()).0)
+            .collect::<Vec<_>>();
+        digests.sort_unstable();
+        digests.dedup();
+        Self {
+            digests: digests.into_boxed_slice(),
+        }
+    }
+    /// Return whether no usable token was configured.
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.digests.is_empty()
+    }
+    /// Authenticate one token digest without early exit at a matching entry.
+    #[must_use]
+    pub(crate) fn authenticate(&self, token: &str) -> Option<ApiTokenPrincipal> {
+        let principal = ApiTokenPrincipal::from_token(token);
+        let mut matched = false;
+        for configured in &self.digests {
+            matched |=
+                iroha_torii_shared::connect_sdk::constant_time_eq(configured, principal.as_bytes());
+        }
+        matched.then_some(principal)
+    }
+}
 /// Shared, cheap-to-clone limiter.
 #[derive(Clone)]
 pub struct RateLimiter {
@@ -478,56 +556,19 @@ fn parse_forwarded_for_chain(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
     }
     (!addresses.is_empty()).then_some(addresses)
 }
-/// Derive a rate-limit key from headers and optional hint:
-/// - Prefer `X-API-Token` if present and token usage is enabled
+/// Derive a rate-limit key from an authenticated principal and optional request metadata:
+/// - Prefer the supplied digest-derived API-token principal
 /// - Else the effective client IP resolved by ingress middleware
 /// - Else provided hint
 /// - Else "anon"
-pub fn key_from_headers(
+pub(crate) fn key_from_headers(
     headers: &HeaderMap,
     remote: Option<IpAddr>,
     hint: Option<&str>,
-    use_api_token: bool,
+    authenticated_api_token: Option<ApiTokenPrincipal>,
 ) -> String {
-    if use_api_token {
-        let mut values = headers.get_all("x-api-token").iter();
-        if let Some(value) = values.next()
-            && values.next().is_none()
-            && let Ok(value) = value.to_str()
-            && !value.is_empty()
-        {
-            return value.to_owned();
-        }
-    }
-    if let Some(ip) = effective_remote_ip(headers, remote) {
-        return ip.to_string();
-    }
-    if let Some(h) = hint {
-        return h.to_string();
-    }
-    "anon".to_string()
-}
-/// Derive a rate-limit key while accepting only configured API tokens as identities.
-///
-/// Invalid or ambiguous token headers fall back to the effective remote address, so an attacker
-/// cannot manufacture an unbounded family of fresh rate buckets before authentication rejects the
-/// request.
-pub fn key_from_validated_headers(
-    headers: &HeaderMap,
-    remote: Option<IpAddr>,
-    hint: Option<&str>,
-    use_api_token: bool,
-    valid_tokens: &HashSet<String>,
-) -> String {
-    if use_api_token {
-        let mut values = headers.get_all("x-api-token").iter();
-        if let Some(value) = values.next()
-            && values.next().is_none()
-            && let Ok(value) = value.to_str()
-            && valid_tokens.contains(value)
-        {
-            return value.to_owned();
-        }
+    if let Some(principal) = authenticated_api_token {
+        return principal.rate_limit_key();
     }
     if let Some(ip) = effective_remote_ip(headers, remote) {
         return ip.to_string();
@@ -1257,6 +1298,46 @@ mod tests {
         assert!(!limiter.allow("batch").await);
     }
     #[test]
+    fn api_token_digest_set_authenticates_exact_text_and_deduplicates() {
+        let tokens =
+            ApiTokenDigestSet::from_tokens(["alpha-secret", "beta-secret", "alpha-secret"]);
+        assert_eq!(tokens.digests.len(), 2);
+        assert_eq!(
+            tokens.authenticate("alpha-secret"),
+            Some(ApiTokenPrincipal::from_token("alpha-secret"))
+        );
+        assert_eq!(tokens.authenticate("Alpha-secret"), None);
+        assert_eq!(tokens.authenticate("alpha-secret "), None);
+        assert_eq!(tokens.authenticate(""), None);
+    }
+    #[test]
+    fn api_token_debug_output_redacts_token_and_digest_material() {
+        let raw_token = "debug-must-not-expose-this-token";
+        let principal = ApiTokenPrincipal::from_token(raw_token);
+        let digest_hex = hex::encode(principal.as_bytes());
+        let principal_debug = format!("{principal:?}");
+        let set_debug = format!("{:?}", ApiTokenDigestSet::from_tokens([raw_token]));
+        for rendered in [&principal_debug, &set_debug] {
+            assert!(!rendered.contains(raw_token));
+            assert!(!rendered.contains(&digest_hex));
+        }
+        assert!(principal_debug.contains("REDACTED"));
+    }
+    #[test]
+    fn limiter_keys_are_not_written_to_torii_logs() {
+        for source in [
+            include_str!("lib.rs"),
+            include_str!("operator_rate_limit_helpers.rs"),
+        ] {
+            assert!(
+                !source
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("%key")),
+                "rate-limit keys may contain credential-derived material and must not be logged"
+            );
+        }
+    }
+    #[test]
     fn key_from_headers_prefers_token_then_remote_then_hint() {
         let mut headers = HeaderMap::new();
         assert_eq!(
@@ -1264,39 +1345,49 @@ mod tests {
                 &headers,
                 Some("203.0.113.99".parse().unwrap()),
                 Some("hint"),
-                true
+                None
             ),
             "203.0.113.99"
         );
         headers.insert("x-api-token", "secret".parse().unwrap());
+        let principal = ApiTokenPrincipal::from_token("secret").rate_limit_key();
         assert_eq!(
-            key_from_headers(&headers, Some("203.0.113.99".parse().unwrap()), None, true),
-            "secret"
+            key_from_headers(
+                &headers,
+                Some("203.0.113.99".parse().unwrap()),
+                None,
+                Some(ApiTokenPrincipal::from_token("secret")),
+            ),
+            principal
         );
+        assert!(!principal.contains("secret"));
         let headers2 = HeaderMap::new();
         assert_eq!(
-            key_from_headers(&headers2, None, Some("hint"), true),
+            key_from_headers(&headers2, None, Some("hint"), None),
             "hint"
         );
-        assert_eq!(key_from_headers(&headers2, None, None, true), "anon");
+        assert_eq!(key_from_headers(&headers2, None, None, None), "anon");
     }
     #[test]
-    fn validated_header_key_reuses_remote_bucket_for_invalid_tokens() {
+    fn only_authenticated_principals_replace_the_remote_bucket() {
         let remote = Some("203.0.113.99".parse().unwrap());
-        let valid = HashSet::from(["configured-secret".to_owned()]);
+        let valid = ApiTokenDigestSet::from_tokens(["configured-secret"]);
         for supplied in ["attacker-one", "attacker-two"] {
             let mut headers = HeaderMap::new();
             headers.insert("x-api-token", supplied.parse().unwrap());
             assert_eq!(
-                key_from_validated_headers(&headers, remote, Some("hint"), true, &valid),
+                key_from_headers(&headers, remote, Some("hint"), valid.authenticate(supplied),),
                 "203.0.113.99"
             );
         }
         let mut headers = HeaderMap::new();
         headers.insert("x-api-token", "configured-secret".parse().unwrap());
+        let principal = valid
+            .authenticate("configured-secret")
+            .expect("configured token authenticates");
         assert_eq!(
-            key_from_validated_headers(&headers, remote, Some("hint"), true, &valid),
-            "configured-secret"
+            key_from_headers(&headers, remote, Some("hint"), Some(principal)),
+            principal.rate_limit_key()
         );
     }
     #[test]
@@ -1308,18 +1399,18 @@ mod tests {
                 &headers,
                 Some("203.0.113.77".parse().unwrap()),
                 Some("hint"),
-                false
+                None
             ),
             "203.0.113.77"
         );
         let headers2 = HeaderMap::new();
         assert_eq!(
-            key_from_headers(&headers2, None, Some("hint"), false),
+            key_from_headers(&headers2, None, Some("hint"), None),
             "hint"
         );
     }
     #[test]
-    fn key_from_headers_rejects_ambiguous_token_identity() {
+    fn key_from_headers_never_infers_a_principal_from_raw_headers() {
         let mut headers = HeaderMap::new();
         headers.append("x-api-token", "first".parse().unwrap());
         headers.append("x-api-token", "second".parse().unwrap());
@@ -1328,7 +1419,7 @@ mod tests {
                 &headers,
                 Some("203.0.113.88".parse().unwrap()),
                 Some("hint"),
-                true,
+                None,
             ),
             "203.0.113.88",
             "duplicate API-token fields must not choose an attacker-controlled bucket",
@@ -1647,7 +1738,7 @@ mod tests {
             REMOTE_ADDR_HEADER,
             "2001:db8::42".parse().expect("valid header value"),
         );
-        assert_eq!(key_from_headers(&headers, None, None, true), "2001:db8::42");
+        assert_eq!(key_from_headers(&headers, None, None, None), "2001:db8::42");
     }
     #[test]
     fn key_from_headers_prefers_injected_header() {
@@ -1658,7 +1749,7 @@ mod tests {
                 &headers,
                 Some("198.51.100.1".parse().unwrap()),
                 Some("hint"),
-                true
+                None
             ),
             "203.0.113.55"
         );

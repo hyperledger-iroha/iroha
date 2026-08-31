@@ -22000,6 +22000,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = self.bodyJSON(from: request)
+            XCTAssertEqual(body["proposal_operator"] as? String, self.authority)
             XCTAssertEqual(body["contract_alias"] as? String, "demo::universal")
             XCTAssertEqual(body["code_hash"] as? String, codeHash.hexLowercased())
             XCTAssertEqual(body["abi_hash"] as? String, abiHash.hexLowercased())
@@ -22019,7 +22020,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, payload)
         }
 
-        let request = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
+        let request = ToriiGovernanceDeployContractProposalRequest(proposalOperator: authority,
+                                                                   contractAlias: "demo::universal",
                                                                    codeHash: codeHash,
                                                                    abiHash: abiHash,
                                                                    manifestProvenance: .init(
@@ -22042,8 +22044,47 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
+    func testGovernanceDeployContractProposalRejectsMismatchedOperatorBeforeTransport() throws {
+        let expectation = expectation(description: "operator mismatch")
+        var transportCalled = false
+        StubURLProtocol.handler = { request in
+            transportCalled = true
+            throw NSError(
+                domain: "unexpected governance transport",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: request.url?.absoluteString ?? ""]
+            )
+        }
+        let otherOperator = try Keypair(privateKeyBytes: Data(repeating: 0x42, count: 32))
+            .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
+        let request = ToriiGovernanceDeployContractProposalRequest(
+            proposalOperator: otherOperator,
+            contractAlias: "demo::universal",
+            codeHash: Data(repeating: 0x44, count: 32),
+            abiHash: Data(repeating: 0x55, count: 32)
+        )
+
+        makeClient().submitGovernanceDeployContractProposal(
+            request,
+            canonicalAuth: canonicalReadAuth
+        ) { result in
+            guard case .failure(let error) = result,
+                  let clientError = error as? ToriiClientError,
+                  case .invalidPayload(let message) = clientError else {
+                XCTFail("expected operator mismatch, got \(result)")
+                expectation.fulfill()
+                return
+            }
+            XCTAssertTrue(message.contains("proposal_operator must equal"))
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+        XCTAssertFalse(transportCalled)
+    }
+
     func testGovernanceDeployContractProposalRejectsAmbiguousTarget() throws {
         let request = ToriiGovernanceDeployContractProposalRequest(
+            proposalOperator: authority,
             contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             contractAlias: "demo::universal",
             codeHash: Data(repeating: 0x44, count: 32),
@@ -22060,6 +22101,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testGovernanceDeployContractProposalRejectsNonV1AbiVersion() {
         for abiVersion: UInt16 in [0, 2, .max] {
             let request = ToriiGovernanceDeployContractProposalRequest(
+                proposalOperator: authority,
                 contractAlias: "demo::universal",
                 codeHash: Data(repeating: 0x44, count: 32),
                 abiHash: Data(repeating: 0x55, count: 32),
@@ -22077,6 +22119,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testGovernanceDeployContractProposalRejectsWrongHashLengths() {
         for length in [0, 31, 33] {
             let request = ToriiGovernanceDeployContractProposalRequest(
+                proposalOperator: authority,
                 contractAlias: "demo::universal",
                 codeHash: Data(repeating: 0x44, count: length),
                 abiHash: Data(repeating: 0x55, count: 32)
@@ -22133,7 +22176,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let payload = """
-            {"found":true,"proposal":{"proposer":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","kind":{"kind":"DeployContract","payload":{"contract_address":"\(contractAddress)","code_hash":"\(codeHash.hexLowercased())","abi_hash":"\(abiHash.hexLowercased())","abi_version":1,"manifest_provenance":{"signer":"ed25519:public","signature":"ed25519:signature"}}},"created_height":42,"status":"Enacted"}}
+            {"found":true,"proposal":{"proposer":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","kind":{"kind":"DeployContract","payload":{"proposal_operator":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","contract_address":"\(contractAddress)","code_hash":"\(codeHash.hexLowercased())","abi_hash":"\(abiHash.hexLowercased())","abi_version":1,"manifest_provenance":{"signer":"ed25519:public","signature":"ed25519:signature"}}},"created_height":42,"status":"Enacted"}}
             """.data(using: .utf8)!
             return (response, payload)
         }
@@ -22147,6 +22190,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                     return XCTFail("expected deploy contract kind")
                 }
                 XCTAssertEqual(payload.contractAddress, contractAddress)
+                XCTAssertEqual(payload.proposalOperator, response.proposal?.proposer)
                 XCTAssertEqual(payload.codeHash, codeHash)
                 XCTAssertEqual(payload.abiHash, abiHash)
                 XCTAssertEqual(payload.abiVersion, 1)

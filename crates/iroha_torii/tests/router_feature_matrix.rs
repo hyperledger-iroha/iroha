@@ -143,8 +143,11 @@ async fn router_builds_under_current_features() {
         state,
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
-    );
-    let app = torii.api_router_for_tests();
+    )
+    .expect("valid Torii route-matrix fixture");
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     diff_openapi_if_available(&app).await;
     let canonical_openapi = app
         .clone()
@@ -444,8 +447,11 @@ async fn router_exposes_status_with_operator_telemetry_profile() {
             Some(telemetry),
             iroha_config::parameters::actual::TelemetryProfile::Operator,
         ),
-    );
-    let app = torii.api_router_for_tests();
+    )
+    .expect("valid Torii route-matrix fixture");
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     for path in [
         iroha_torii_shared::uri::STATUS,
         iroha_torii_shared::uri::STATUS_BLOCKS,

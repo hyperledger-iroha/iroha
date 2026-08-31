@@ -1,4 +1,9 @@
-use super::{SocketAdmission, WriteTimeoutIo, bind_torii_tcp_listener, serve_torii_http};
+use super::{
+    PipelineStatusCache, ShutdownOnDrop, SocketAdmission, ToriiCriticalWorker,
+    ToriiCriticalWorkerExit, ToriiCriticalWorkerFailure, ValidatedToriiHttpTransport,
+    WriteTimeoutIo, bind_torii_tcp_listener, serve_torii_http,
+    start_pipeline_status_projection_worker, supervise_torii_critical_workers,
+};
 use axum::{Router, body::Body, routing::get};
 use iroha_config::parameters::actual::ToriiHttpTransport;
 use iroha_futures::supervisor::ShutdownSignal;
@@ -13,6 +18,136 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
+
+#[test]
+fn shutdown_guard_signals_when_start_future_is_dropped() {
+    let shutdown = ShutdownSignal::new();
+    {
+        let _guard = ShutdownOnDrop::new(shutdown.clone());
+        assert!(!shutdown.is_sent());
+    }
+    assert!(shutdown.is_sent());
+}
+
+#[test]
+fn invalid_http_transport_is_rejected_before_serving() {
+    let mut config = ToriiHttpTransport::default();
+    config.max_connections = NonZeroUsize::new(1).expect("nonzero");
+    config.max_connections_per_ip = NonZeroUsize::new(2).expect("nonzero");
+    assert!(ValidatedToriiHttpTransport::new(config).is_err());
+
+    let mut config = ToriiHttpTransport::default();
+    config.header_read_timeout = Duration::ZERO;
+    assert!(ValidatedToriiHttpTransport::new(config).is_err());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn critical_worker_exit_fails_closed_and_stops_server() {
+    let shutdown = ShutdownSignal::new();
+    let server_shutdown = shutdown.clone();
+    let result = supervise_torii_critical_workers(
+        shutdown.clone(),
+        vec![ToriiCriticalWorker {
+            name: "probe",
+            task: tokio::spawn(async { ToriiCriticalWorkerExit::UnexpectedExit }),
+        }],
+        async move {
+            server_shutdown.receive().await;
+            Ok(())
+        },
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(ToriiCriticalWorkerFailure::ExitedUnexpectedly("probe"))
+    ));
+    assert!(shutdown.is_sent());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn critical_workers_are_joined_on_graceful_shutdown() {
+    let shutdown = ShutdownSignal::new();
+    let worker_shutdown = shutdown.clone();
+    let server_shutdown = shutdown.clone();
+    let supervision = supervise_torii_critical_workers(
+        shutdown.clone(),
+        vec![ToriiCriticalWorker {
+            name: "probe",
+            task: tokio::spawn(async move {
+                worker_shutdown.receive().await;
+                ToriiCriticalWorkerExit::StoppedByShutdown
+            }),
+        }],
+        async move {
+            server_shutdown.receive().await;
+            Ok(())
+        },
+    );
+    tokio::pin!(supervision);
+    tokio::task::yield_now().await;
+    shutdown.send();
+    assert!(matches!(supervision.await, Ok(Ok(()))));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn panicked_critical_worker_stops_server_and_joins_siblings() {
+    let shutdown = ShutdownSignal::new();
+    let sibling_shutdown = shutdown.clone();
+    let server_shutdown = shutdown.clone();
+    let sibling_joined = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let sibling_joined_by_task = std::sync::Arc::clone(&sibling_joined);
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        supervise_torii_critical_workers(
+            shutdown.clone(),
+            vec![
+                ToriiCriticalWorker {
+                    name: "panic_probe",
+                    task: tokio::spawn(async { panic!("critical worker probe") }),
+                },
+                ToriiCriticalWorker {
+                    name: "sibling_probe",
+                    task: tokio::spawn(async move {
+                        sibling_shutdown.receive().await;
+                        sibling_joined_by_task.store(true, std::sync::atomic::Ordering::Release);
+                        ToriiCriticalWorkerExit::StoppedByShutdown
+                    }),
+                },
+            ],
+            async move {
+                server_shutdown.receive().await;
+                Ok(())
+            },
+        ),
+    )
+    .await
+    .expect("critical-worker supervision must drain within its shutdown bound");
+    assert!(matches!(
+        result,
+        Err(ToriiCriticalWorkerFailure::Panicked("panic_probe"))
+    ));
+    assert!(shutdown.is_sent());
+    assert!(sibling_joined.load(std::sync::atomic::Ordering::Acquire));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn closed_pipeline_projection_channel_is_a_critical_exit() {
+    let (events, _) = tokio::sync::broadcast::channel(1);
+    let shutdown = ShutdownSignal::new();
+    let worker = start_pipeline_status_projection_worker(
+        std::sync::Arc::new(PipelineStatusCache::new()),
+        iroha_core::kura::Kura::blank_kura_for_testing(),
+        &events,
+        shutdown,
+    );
+    drop(events);
+    let exit = tokio::time::timeout(Duration::from_secs(1), worker)
+        .await
+        .expect("pipeline projection worker should stop")
+        .expect("pipeline projection worker should join");
+    assert_eq!(exit, ToriiCriticalWorkerExit::UnexpectedExit);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn torii_reusable_tcp_listener_binds_loopback() {
     let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
@@ -101,7 +236,7 @@ async fn partial_http_head_is_closed_at_listener_deadline() {
         serve_torii_http(
             listener,
             Router::new().route("/", get(|| async { "ok" })),
-            config,
+            ValidatedToriiHttpTransport::new(config).expect("valid test HTTP transport"),
             server_shutdown,
         )
         .await
@@ -165,10 +300,15 @@ async fn shutdown_aborts_a_response_that_never_finishes() {
     config.write_timeout = Duration::from_millis(25);
     let shutdown = ShutdownSignal::new();
     let server_shutdown = shutdown.clone();
-    let server =
-        tokio::spawn(
-            async move { serve_torii_http(listener, router, config, server_shutdown).await },
-        );
+    let server = tokio::spawn(async move {
+        serve_torii_http(
+            listener,
+            router,
+            ValidatedToriiHttpTransport::new(config).expect("valid test HTTP transport"),
+            server_shutdown,
+        )
+        .await
+    });
     let mut client = TcpStream::connect(address)
         .await
         .expect("test client should connect");

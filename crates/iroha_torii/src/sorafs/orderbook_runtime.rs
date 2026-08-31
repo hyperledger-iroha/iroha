@@ -2,7 +2,7 @@
 //!
 //! The durable `sorafs_node` forwarder is the only local delivery state. Policy, book status,
 //! channels, receipts, and transaction outcomes are read from one immutable finalized ledger view.
-//! Signing and submission are separate boundaries: an injected runtime/HSM signer sees only an
+//! Signing and submission are separate boundaries: an injected qualified runtime signer sees only an
 //! exact fee-quoted payload, and only strict durable Torii ingress can expose the resulting signed
 //! transaction.
 

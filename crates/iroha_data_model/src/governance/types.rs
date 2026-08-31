@@ -458,6 +458,11 @@ pub enum ProposalKind {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct DeployContractProposal {
+    /// Canonical transaction authority that created this proposal.
+    ///
+    /// The operator is part of the exact proposal and effect preimages so
+    /// transaction ordering cannot change deployment provenance.
+    pub proposal_operator: AccountId,
     /// Canonical public contract address governed by the proposal.
     pub contract_address: ContractAddress,
     /// Blake2b-32 hash of the compiled `.to` bytecode.
@@ -571,6 +576,11 @@ pub enum ContractLifecycleGovernanceActionV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ContractLifecycleGovernanceProposalV1 {
+    /// Canonical transaction authority that created this proposal.
+    ///
+    /// The operator is part of the exact proposal and effect preimages because
+    /// activation and deactivation consume its lifecycle authority.
+    pub proposal_operator: AccountId,
     /// Contract whose lifecycle changes.
     pub contract_address: ContractAddress,
     /// Exact lifecycle revision required at enactment.
@@ -645,6 +655,11 @@ pub struct GlobalDataTriggerPermissionGovernanceProposalV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct RuntimeUpgradeProposal {
+    /// Canonical transaction authority that created this proposal.
+    ///
+    /// The operator is part of the exact proposal and effect preimages so the
+    /// retained runtime-upgrade attribution cannot depend on transaction order.
+    pub proposal_operator: AccountId,
     /// Canonical runtime-upgrade manifest payload.
     pub manifest: RuntimeUpgradeManifest,
 }
@@ -1135,6 +1150,12 @@ impl GovernanceAttemptV1 {
 /// The bound accommodates the largest permitted Confirmation Jury while
 /// keeping ballot and certificate resource limits finite.
 pub const MAX_PARLIAMENT_BODY_TARGET_SEATS_V1: u32 = 1_000;
+/// Minimum frozen survivor and accepted-ballot count for a hidden Parliament ballot.
+///
+/// V1 publishes an exact aggregate tally. Requiring at least three participants
+/// prevents the reachable two-person corpus from disclosing both choices when
+/// unanimous, or one choice when the other participant's choice is known.
+pub const MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1: u32 = 3;
 /// The sole consensus policy version implemented by first-release Parliament.
 pub const PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1: u64 = 1;
 /// Hard protocol ceiling for end-to-end governance retries after sequence zero.
@@ -1941,7 +1962,7 @@ pub enum ParliamentBallotFailureKindV1 {
     /// The aggregate was not validly opened before its immutable deadline.
     #[codec(index = 4)]
     OpeningDeadlineExpired,
-    /// Fewer than two eligible citizens remained outside the sealed Policy Jury.
+    /// Fewer than the hidden-ballot anonymity floor remained outside the sealed Policy Jury.
     #[codec(index = 5)]
     ConfirmationJuryCapacityUnavailable,
     /// A narrow Policy approval required a fresh Confirmation Jury after the
@@ -1986,7 +2007,7 @@ pub enum ParliamentNoResultKindV1 {
     /// The current body exhausted its bounded future-pulse sortition retries.
     #[codec(index = 7)]
     SortitionRetriesExhausted,
-    /// A narrow Policy Jury result had fewer than two eligible fresh confirmers.
+    /// A narrow Policy Jury result lacked the hidden-ballot anonymity floor of fresh confirmers.
     #[codec(index = 8)]
     ConfirmationJuryCapacityUnavailable,
     /// A required fresh Confirmation draw exceeded the proposal-wide redraw budget.
@@ -2197,6 +2218,13 @@ pub enum ParliamentTallyErrorV1 {
         /// Immutable original-seat count.
         original_seats: u32,
     },
+    /// The exact public tally would describe fewer than the V1 anonymity floor.
+    CorpusBelowAnonymityFloor {
+        /// Accepted corpus size committed by the attempt.
+        accepted_ballots: u32,
+        /// Canonical minimum accepted corpus size.
+        minimum: u32,
+    },
 }
 impl fmt::Display for ParliamentTallyErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -2214,6 +2242,13 @@ impl fmt::Display for ParliamentTallyErrorV1 {
             } => write!(
                 f,
                 "accepted ballot corpus {accepted_ballots} exceeds original seat count {original_seats}"
+            ),
+            Self::CorpusBelowAnonymityFloor {
+                accepted_ballots,
+                minimum,
+            } => write!(
+                f,
+                "accepted ballot corpus {accepted_ballots} is below the hidden-ballot anonymity floor {minimum}"
             ),
         }
     }
@@ -2238,11 +2273,12 @@ pub struct ParliamentAggregateTallyV1 {
     pub abstain: u32,
 }
 impl ParliamentAggregateTallyV1 {
-    /// Validate count conservation and the immutable-seat upper bound.
+    /// Validate count conservation, the immutable-seat upper bound, and the anonymity floor.
     ///
     /// # Errors
     /// Returns [`ParliamentTallyErrorV1`] when counts do not describe the
-    /// accepted corpus or the corpus exceeds the original seats.
+    /// accepted corpus, the corpus exceeds the original seats, or it falls
+    /// below the canonical hidden-ballot anonymity floor.
     pub fn validate(&self) -> Result<(), ParliamentTallyErrorV1> {
         let counted_ballots = u64::from(self.aye) + u64::from(self.nay) + u64::from(self.abstain);
         if counted_ballots != u64::from(self.accepted_ballots) {
@@ -2257,13 +2293,19 @@ impl ParliamentAggregateTallyV1 {
                 original_seats: self.original_seats,
             });
         }
+        if self.accepted_ballots < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1 {
+            return Err(ParliamentTallyErrorV1::CorpusBelowAnonymityFloor {
+                accepted_ballots: self.accepted_ballots,
+                minimum: MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+            });
+        }
         Ok(())
     }
 
     /// Evaluate quorum and the strict `Aye > Nay` approval rule.
     ///
-    /// A zero-seat denominator deterministically returns
-    /// [`ParliamentAggregateOutcomeV1::NoQuorum`].
+    /// A corpus below the canonical anonymity floor is malformed and cannot
+    /// produce a public decision.
     ///
     /// # Errors
     /// Returns [`ParliamentTallyErrorV1`] for malformed aggregate counts.
@@ -3015,6 +3057,27 @@ pub fn parliament_execution_failure_root_v1(
 }
 
 impl ProposalKind {
+    /// Return the transaction operator committed by effect-sensitive proposal kinds.
+    ///
+    /// These proposal effects either consume the operator as execution authority or
+    /// persist it as immutable provenance. The retained governance proposer must
+    /// therefore agree with this payload-bound identity.
+    #[must_use]
+    pub const fn proposal_operator_v1(&self) -> Option<&AccountId> {
+        match self {
+            Self::DeployContract(payload) => Some(&payload.proposal_operator),
+            Self::RuntimeUpgrade(payload) => Some(&payload.proposal_operator),
+            Self::ValidationFeePolicy(payload) => Some(&payload.proposal_operator),
+            Self::ValidationFeePayoutLifecycle(payload) => Some(&payload.proposal_operator),
+            Self::ContractLifecycleGovernance(payload) => Some(&payload.proposal_operator),
+            Self::SccpRouteGovernance(_)
+            | Self::MusubiRegistryGovernance(_)
+            | Self::SorafsProviderGovernance(_)
+            | Self::ContractEmergencyHold(_)
+            | Self::GlobalDataTriggerPermissionGovernance(_) => None,
+        }
+    }
+
     /// Return the first proposal-owned `u64` that cannot be represented exactly by every SDK.
     ///
     /// This is an exhaustive traversal of the closed first-release proposal enum, including
@@ -3249,6 +3312,7 @@ mod tests {
                 .expect("contract address");
         let lifecycle =
             ProposalKind::ContractLifecycleGovernance(ContractLifecycleGovernanceProposalV1 {
+                proposal_operator: owner,
                 contract_address: address.clone(),
                 expected_revision: 1,
                 action: ContractLifecycleGovernanceActionV1::CancelOwnershipOffer,
@@ -3473,6 +3537,7 @@ mod tests {
         let code_hash = ContractCodeHash::from_hex_str(&"aa".repeat(32)).expect("code hash");
         let abi_hash = ContractAbiHash::from_hex_str(&"bb".repeat(32)).expect("abi hash");
         let proposal = DeployContractProposal {
+            proposal_operator: checked_account_id(),
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
@@ -3526,12 +3591,96 @@ mod tests {
     }
 
     #[test]
+    fn effect_sensitive_proposals_bind_the_operator_into_both_hashes() {
+        let first_operator = checked_account_id();
+        let second_operator = checked_account_id();
+        assert_ne!(first_operator, second_operator);
+        let contract_address: ContractAddress =
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                .parse()
+                .expect("contract address");
+        let manifest = RuntimeUpgradeManifest {
+            name: "operator-bound runtime upgrade".to_owned(),
+            description: "operator binding fixture".to_owned(),
+            abi_version: 1,
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            added_syscalls: Vec::new(),
+            added_pointer_types: Vec::new(),
+            start_height: 42,
+            end_height: 99,
+            sbom_digests: Vec::new(),
+            slsa_attestation: Vec::new(),
+            provenance: Vec::new(),
+        };
+        let pairs = [
+            (
+                ProposalKind::DeployContract(DeployContractProposal {
+                    proposal_operator: first_operator.clone(),
+                    contract_address: contract_address.clone(),
+                    code_hash: ContractCodeHash::new([0x11; 32]),
+                    abi_hash: ContractAbiHash::new([0x22; 32]),
+                    abi_version: AbiVersion::new(1),
+                    manifest_provenance: None,
+                }),
+                ProposalKind::DeployContract(DeployContractProposal {
+                    proposal_operator: second_operator.clone(),
+                    contract_address: contract_address.clone(),
+                    code_hash: ContractCodeHash::new([0x11; 32]),
+                    abi_hash: ContractAbiHash::new([0x22; 32]),
+                    abi_version: AbiVersion::new(1),
+                    manifest_provenance: None,
+                }),
+            ),
+            (
+                ProposalKind::ContractLifecycleGovernance(ContractLifecycleGovernanceProposalV1 {
+                    proposal_operator: first_operator.clone(),
+                    contract_address: contract_address.clone(),
+                    expected_revision: 1,
+                    action: ContractLifecycleGovernanceActionV1::CancelOwnershipOffer,
+                }),
+                ProposalKind::ContractLifecycleGovernance(ContractLifecycleGovernanceProposalV1 {
+                    proposal_operator: second_operator.clone(),
+                    contract_address,
+                    expected_revision: 1,
+                    action: ContractLifecycleGovernanceActionV1::CancelOwnershipOffer,
+                }),
+            ),
+            (
+                ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+                    proposal_operator: first_operator.clone(),
+                    manifest: manifest.clone(),
+                }),
+                ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+                    proposal_operator: second_operator.clone(),
+                    manifest,
+                }),
+            ),
+        ];
+
+        for (first, second) in pairs {
+            assert_eq!(first.proposal_operator_v1(), Some(&first_operator));
+            assert_eq!(second.proposal_operator_v1(), Some(&second_operator));
+            assert_ne!(first.fingerprint(), second.fingerprint());
+            assert_ne!(
+                first.effect_preimage_hash_v1(),
+                second.effect_preimage_hash_v1()
+            );
+            assert_eq!(
+                first.governed_subject_id_v1().expect("first subject"),
+                second.governed_subject_id_v1().expect("second subject")
+            );
+        }
+    }
+
+    #[test]
     fn competing_contract_effects_share_one_governed_subject() {
+        let proposal_operator = checked_account_id();
         let contract_address: ContractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let first = ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: proposal_operator.clone(),
             contract_address: contract_address.clone(),
             code_hash: ContractCodeHash::new([0x11; 32]),
             abi_hash: ContractAbiHash::new([0x22; 32]),
@@ -3539,6 +3688,7 @@ mod tests {
             manifest_provenance: None,
         });
         let second = ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator,
             contract_address,
             code_hash: ContractCodeHash::new([0x33; 32]),
             abi_hash: ContractAbiHash::new([0x44; 32]),
@@ -3560,6 +3710,7 @@ mod tests {
     #[test]
     fn deploy_proposal_json_rejects_unknown_payload_fields() {
         let proposal = ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: checked_account_id(),
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
@@ -3636,7 +3787,10 @@ mod tests {
             slsa_attestation: Vec::new(),
             provenance: Vec::new(),
         };
-        let payload = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal { manifest });
+        let payload = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+            proposal_operator: checked_account_id(),
+            manifest,
+        });
         let framed = norito::to_bytes(&payload).expect("encode runtime-upgrade proposal");
         let decoded = norito::decode_from_bytes::<ProposalKind>(&framed)
             .expect("decode runtime-upgrade proposal");
@@ -3676,6 +3830,7 @@ mod tests {
     fn runtime_upgrade_proposal_bounds_number_encoded_heights() {
         let proposal = |start_height, end_height| {
             ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+                proposal_operator: checked_account_id(),
                 manifest: RuntimeUpgradeManifest {
                     name: "bounded runtime upgrade".to_owned(),
                     description: "exact JSON height fixture".to_owned(),
@@ -3722,6 +3877,7 @@ mod tests {
     #[test]
     fn proposal_fingerprint_matches_manual_derivation() {
         let proposal = DeployContractProposal {
+            proposal_operator: checked_account_id(),
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
@@ -4124,6 +4280,20 @@ mod tests {
                 original_seats: 2
             })
         ));
+        let privacy_unsafe = ParliamentAggregateTallyV1 {
+            original_seats: 3,
+            accepted_ballots: 2,
+            aye: 1,
+            nay: 1,
+            abstain: 0,
+        };
+        assert_eq!(
+            privacy_unsafe.validate(),
+            Err(ParliamentTallyErrorV1::CorpusBelowAnonymityFloor {
+                accepted_ballots: 2,
+                minimum: MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+            })
+        );
     }
     #[test]
     fn parliament_decision_counts_abstain_for_quorum_and_requires_aye_majority() {
@@ -4160,14 +4330,22 @@ mod tests {
             ParliamentAggregateOutcomeV1::NoQuorum
         );
         assert_eq!(
-            ParliamentAggregateTallyV1::default()
-                .decision()
-                .expect("zero-seat tally is defined"),
-            ParliamentAggregateOutcomeV1::NoQuorum
+            ParliamentAggregateTallyV1::default().decision(),
+            Err(ParliamentTallyErrorV1::CorpusBelowAnonymityFloor {
+                accepted_ballots: 0,
+                minimum: MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+            })
         );
     }
     #[test]
     fn confirmation_margin_is_strictly_below_five_percent() {
+        assert_eq!(
+            ParliamentAggregateTallyV1::default().requires_confirmation(),
+            Err(ParliamentTallyErrorV1::CorpusBelowAnonymityFloor {
+                accepted_ballots: 0,
+                minimum: MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+            })
+        );
         let below_five = ParliamentAggregateTallyV1 {
             original_seats: 41,
             accepted_ballots: 41,
@@ -4191,11 +4369,6 @@ mod tests {
             !exactly_five
                 .requires_confirmation()
                 .expect("well-formed exact-boundary tally")
-        );
-        assert!(
-            !ParliamentAggregateTallyV1::default()
-                .requires_confirmation()
-                .expect("zero denominator is defined")
         );
     }
     #[test]

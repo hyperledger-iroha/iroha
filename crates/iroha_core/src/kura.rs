@@ -127,7 +127,6 @@ use iroha_data_model::{
         },
         decode_framed_signed_block,
     },
-    isi::offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
     kaigi::KaigiId,
     merge::{
         LaneDrainNativeFrontierEvidenceV1, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
@@ -1587,7 +1586,6 @@ impl Kura {
             incomplete_merge_heights: BTreeSet::new(),
             incomplete_kaigi_signal_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
-            heights_by_offline_operation_id: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
@@ -1648,9 +1646,6 @@ impl Kura {
                 .entry(hash)
                 .or_default()
                 .insert(height);
-        }
-        for entrypoint in &entrypoints {
-            Self::insert_offline_operation_id_heights(index, height, entrypoint);
         }
         for entrypoint in &entrypoints {
             if let Some(authority) = entrypoint.authority_opt() {
@@ -1815,44 +1810,6 @@ impl Kura {
             Some(existing) => existing == locator,
         }
     }
-    fn insert_offline_operation_id_heights(
-        index: &mut TransactionEntrypointIndex,
-        height: NonZeroUsize,
-        entrypoint: &TransactionEntrypoint,
-    ) {
-        let transaction = match entrypoint {
-            TransactionEntrypoint::External(transaction) => transaction,
-            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => return,
-        };
-        let transaction_authority = transaction.authority();
-        for instruction in transaction.instructions().explicit_instructions() {
-            let any = instruction.as_any();
-            let operation_id = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV4>()
-            {
-                top_up.request.authorization.operation_id
-            } else if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
-                redeem.request.authorization.operation_id
-            } else {
-                continue;
-            };
-            if operation_id == [0; 32] {
-                continue;
-            }
-            let key = (transaction_authority.clone(), operation_id);
-            index
-                .inventories_by_height
-                .entry(height)
-                .or_default()
-                .offline_operation_ids
-                .insert(key.clone());
-            index
-                .heights_by_offline_operation_id
-                .entry(key)
-                .or_default()
-                .insert(height);
-        }
-    }
     fn validate_merge_transaction_uniqueness(
         block: &SignedBlock,
         entry: &MergeLedgerEntry,
@@ -1910,7 +1867,6 @@ impl Kura {
         let mut canonical_merge_index = 0_usize;
         for execution in &batch.lanes {
             for (entrypoint, result) in execution.entrypoints.iter().zip(&execution.results) {
-                Self::insert_offline_operation_id_heights(index, height, entrypoint);
                 index
                     .heights_by_entrypoint
                     .entry(entrypoint.hash())
@@ -1991,11 +1947,6 @@ impl Kura {
         Self::remove_transaction_height_for_keys(
             &mut index.heights_by_entrypoint,
             inventory.entrypoint_hashes,
-            height,
-        );
-        Self::remove_transaction_height_for_keys(
-            &mut index.heights_by_offline_operation_id,
-            inventory.offline_operation_ids,
             height,
         );
         Self::remove_transaction_height_for_keys(
@@ -12991,41 +12942,6 @@ impl Kura {
         }
         heights
     }
-    /// Resolve the earliest block height containing an issuer-bound offline operation.
-    ///
-    /// The outer `None` means the in-memory transaction index is partial. An inner `None`
-    /// means the complete index contains no operation with both the requested outer transaction
-    /// authority and signed operation identifier. Binding the lookup to the outer authority keeps
-    /// a rejected transaction from another authority from shadowing a Torii-issued operation.
-    /// Returning only the earliest height bounds request-time work even if invalid historical data
-    /// reused an identifier within one issuer namespace.
-    pub fn get_earliest_block_height_by_offline_operation_id(
-        &self,
-        issuer: &AccountId,
-        operation_id: [u8; 32],
-    ) -> Option<Option<NonZeroUsize>> {
-        if self.prune_recovery_is_required()
-            || self.canonical_storage_poisoned.load(Ordering::Acquire)
-        {
-            return None;
-        }
-        #[cfg(test)]
-        self.observe_canonical_read_after_prune_check_for_tests(OFFLINE_OPERATION_READER_OBSERVED);
-        let index = self.transaction_entrypoint_index.lock();
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let height = index.complete.then(|| {
-            index
-                .heights_by_offline_operation_id
-                .get(&(issuer.clone(), operation_id))
-                .and_then(|heights| heights.first().copied())
-        });
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        height
-    }
     /// Resolve block heights containing committed transactions with the given authority.
     ///
     /// Returns `None` when the in-memory transaction index is known to be partial.
@@ -21274,10 +21190,6 @@ impl Kura {
                 || contains_pruned_height(&index.incomplete_kaigi_signal_heights)
                 || index
                     .heights_by_entrypoint
-                    .values()
-                    .any(contains_pruned_height)
-                || index
-                    .heights_by_offline_operation_id
                     .values()
                     .any(contains_pruned_height)
                 || index

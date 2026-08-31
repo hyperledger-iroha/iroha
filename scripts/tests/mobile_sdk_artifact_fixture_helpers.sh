@@ -620,6 +620,8 @@ SWIFT
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
+    "connect_norito_kagemusha_offline_operation_status_validate_v1",
+    "connect_norito_kagemusha_offline_operation_status_json_validate_v1",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",

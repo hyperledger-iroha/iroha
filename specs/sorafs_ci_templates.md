@@ -59,8 +59,9 @@ bytes. V1 requires the `authenticated_external_signer` provider with exact
 `software` backend. The wrapper copies the governed 32-byte raw public key,
 checks its reviewed SHA256 fingerprint, and verifies immutable snapshots with
 the exact `sorafs-validate` binary whose SHA256 was supplied. Successful output
-is `software-key-qualified`. The same provider boundary can accept a future HSM
-adapter only after new HSM-backed qualification evidence exists.
+is `software-key-qualified`. Iroha exposes no HSM-specific adapter or future
+hardware-signing qualification mode; custody behind the authenticated external
+signer is deployment-owned.
 
 There are no fixture, key, fingerprint, or verifier defaults. Missing inputs,
 unsafe path aliases, malformed key/signature sizes, fingerprint drift, verifier

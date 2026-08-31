@@ -76,7 +76,8 @@ def _successor_production_recovery_source_fidelity_errors(
                 "fn authorizes_predecessor_storage_inputs(",
                 "self.lifecycle_storage.body_store_root == body_store_root",
                 "&self.predecessor_signature_policy == signature_policy",
-                "fn into_canonical_predecessor_storage(",
+                "fn into_kura_bound_canonical_predecessor_storage(",
+                "fn authorizes_predecessor_kura(",
                 "fn authorizes_verified_successor(",
                 "verified.context().parent_commit_qc.as_ref() == Some(&self.artifact.commit_qc)",
                 "verified.verified_predecessor_context() == Some(&self.artifact.height_context)",
@@ -238,15 +239,16 @@ def _successor_production_recovery_source_fidelity_errors(
                 if open_predecessor_storage is not None
                 else "",
                 (
+                    "payload_store_target.authorizes(&complete_tip)",
                     "complete_tip.authorizes_predecessor_storage_inputs(",
+                    "payload_store_target.open(predecessor_root, verified_predecessor.context())?",
+                    "recovered.authenticate_for_complete_tip_retirement( &verified_predecessor, local_signer )?",
                     "LifecycleLedgerStoreV1::open(predecessor_root, context)?",
                     "ledger_store.authenticate_present_frame(&opened_ledger)?",
                     "opened_ledger.stage_complete_tip_terminal_apply_recovery(&complete_tip, present_frame)?",
                     "if repaired_live_apply",
                     "ledger_store.persist_exact_successor(&opened_ledger, &ledger)?",
                     "ledger.into_complete_tip_terminal_apply_store_join( ledger_store, complete_tip, predecessor_evidence, )?",
-                    "CertifiedServePayloadStoreV1::open( predecessor_root, verified_predecessor.context() )?",
-                    "recovered.authenticate_for_complete_tip_retirement( &verified_predecessor, local_signer )?",
                     "authenticate_complete_tip_serve_census( &terminal.ledger, &serve_payloads )?",
                     "AuthenticatedCompleteTipPredecessorStorageV1",
                     "cut.is_exact()?",
@@ -268,8 +270,11 @@ def _successor_production_recovery_source_fidelity_errors(
                     "complete_tip.authorizes_predecessor_lifecycle_root(root)",
                     "self.path == root.join(LEDGER_FILE)",
                     "pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(",
+                    "payload_store_target: CompleteTipPayloadStoreOpenTargetV1<'_>",
+                    "payload_store_target.authorizes(&complete_tip)",
                     "complete_tip.authorizes_predecessor_storage_inputs(",
-                    "CertifiedServePayloadStoreV1::open( predecessor_root, verified_predecessor.context() )?",
+                    "Self::Kura(kura) => CertifiedServePayloadStoreV1::open_with_kura(kura, context)",
+                    "payload_store_target.open(predecessor_root, verified_predecessor.context())?",
                     "recovered.authenticate_for_complete_tip_retirement( &verified_predecessor, local_signer )?",
                     "authenticate_complete_tip_serve_census( &terminal.ledger, &serve_payloads )?",
                     "payload_store.retire_authenticated_cut(serve_payloads, &retained_serve_payloads)?",
@@ -678,6 +683,16 @@ def _successor_production_recovery_source_fidelity_errors(
                     "wal_path: storage_root .join(\"wal\") .join(format!(\"{:020}.wal\", context.height))",
                     "lifecycle_root: storage_root .join(\"lifecycle-v1\") .join(hex::encode(context.id().0.as_ref()))",
                     "body_store_root: storage_root.join(\"bodies\")",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "side-effect-free recovered lifecycle storage mint",
+                storage_mint.source if storage_mint is not None else "",
+                (
+                    "mint_v2_certified_serve_payload_directory_authority",
+                    "CertifiedServePayloadStoreV1::open",
+                    "create_dir",
                 ),
             )
             require_order(
@@ -4655,10 +4670,64 @@ self.io.is_some()
         payload_store_path, payload_store_source = load(
             "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs"
         )
+        payload_store_startup_path, payload_store_startup_source = load(
+            "crates/iroha_core/src/sumeragi/"
+            "v2_authenticated_recovered_adapter_startup_impl.rs"
+        )
         coordinator_path, coordinator_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
         )
-        if payload_store_source and lifecycle_open_source and coordinator_source:
+        if (
+            payload_store_source
+            and payload_store_startup_source
+            and ledger_source
+            and lifecycle_open_source
+            and coordinator_source
+        ):
+            require_literal_count(
+                payload_store_startup_path,
+                "ordinary production Serve payload Kura open",
+                payload_store_startup_source,
+                "CertifiedServePayloadStoreV1::open_with_kura(",
+                1,
+            )
+            require_literal_count(
+                ledger_path,
+                "CompleteTip production Serve payload Kura open",
+                ledger_source,
+                "CertifiedServePayloadStoreV1::open_with_kura(",
+                1,
+            )
+            payload_store_production_source = payload_store_source.split(
+                "\n#[cfg(test)]\nmod tests",
+                1,
+            )[0]
+            for path, role, source in (
+                (
+                    payload_store_startup_path,
+                    "ordinary production Serve payload Kura open",
+                    payload_store_startup_source,
+                ),
+                (
+                    ledger_path,
+                    "CompleteTip production Serve payload Kura open",
+                    ledger_source,
+                ),
+                (
+                    payload_store_path,
+                    "descriptor-bound Serve payload store implementation",
+                    payload_store_production_source,
+                ),
+            ):
+                reject_tokens(
+                    path,
+                    role,
+                    source,
+                    (
+                        "Self::open_with_kura_authority(",
+                        "CertifiedServePayloadStoreV1::open_with_kura_authority(",
+                    ),
+                )
             retirement_authenticate = _require_qualified_rust_item(
                 payload_store_path,
                 payload_store_source,
@@ -4709,15 +4778,11 @@ self.io.is_some()
                 "CompleteTip Serve payload directory census",
                 payload_census,
                 (
-                    "fs::symlink_metadata(&self.directory)",
-                    "directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir()",
                     "self.max_entries.checked_mul(2)",
-                    "fs::read_dir(&self.directory)",
-                    "fs::symlink_metadata(&path)",
-                    "metadata.file_type().is_symlink() || !metadata.is_file()",
+                    "self.bound_directory()?.inventory(traversal_capacity)?",
                     "!has_canonical_hash_name(name, FILE_SUFFIX)",
                     "payloads.len() >= self.max_entries",
-                    "self.load_path(&path, metadata.len())?",
+                    "self.load_leaf(&leaf)?",
                     "self.path_for(payload.id()) != path",
                     "payloads.insert(payload.id(), payload).is_some()",
                     "Ok(payloads)",
@@ -4736,8 +4801,10 @@ self.io.is_some()
                     "fn reload_payload_census_strict(",
                     "let observed = self.reload_payload_census_strict()?",
                     "observed_ids != self.indexed || cut_ids != observed_ids",
-                    "fn authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner()",
-                    "fn authenticated_cut_rejects_store_directory_symlink_replacement()",
+                    "fn authenticated_cut_has_one_exclusive_store_owner()",
+                    "fn authenticated_cut_rejects_store_directory_inode_replacement()",
+                    "fn production_open_consumes_the_exact_kura_directory_authority()",
+                    "fn emergency_fast_payload_store_skips_inventory_and_rejects_retirement()",
                 ),
             )
             if authenticate_inner is not None:

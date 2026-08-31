@@ -375,9 +375,9 @@ _OFFLINE_TOOLCHAIN_SDK_PLANS = (
         "--workspace",
     ),
     _planned(
-        "g-unit-production-864",
+        "g-unit-production-867",
         "release-runner",
-        "operation:g-unit-production-864.v1",
+        "operation:g-unit-production-867.v1",
     ),
     _planned(
         "g-unit-focused-522",

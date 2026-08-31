@@ -72,7 +72,8 @@ async fn sccp_submit_ingress_rejects_missing_token_without_polling_body() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["expected-token".to_owned()]));
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["expected-token"]));
     }
     let router = sccp_ingress_test_router(app);
     for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
@@ -96,7 +97,7 @@ async fn sccp_submit_ingress_fails_closed_when_required_tokens_are_unconfigured(
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::new());
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
         state.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
         state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
         state.query_queue_timeout = Duration::ZERO;
@@ -127,7 +128,8 @@ async fn sccp_submit_ingress_rejects_duplicate_tokens_before_rate_body_and_admis
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["expected-token".to_owned()]));
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["expected-token"]));
         state.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
         state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
         state.query_queue_timeout = Duration::ZERO;
@@ -284,7 +286,7 @@ async fn sccp_submit_wrong_methods_bypass_proof_admission_and_body_polling() {
         &headers,
         Some(remote_ip),
         policy.rate_limit_hint,
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     let router = sccp_ingress_test_router(Arc::clone(&app));
     for method in [axum::http::Method::GET, axum::http::Method::PUT] {
@@ -324,7 +326,7 @@ async fn sccp_submit_ingress_rejects_exhausted_rate_limit_without_polling_body()
             &headers,
             Some(remote_ip),
             policy.rate_limit_hint,
-            app.api_token_enforced(),
+            app.authenticated_api_token_principal(&headers),
         )
     });
     assert_eq!(
@@ -755,9 +757,7 @@ async fn openapi_enforces_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        let mut tokens = HashSet::new();
-        tokens.insert("token-123".to_owned());
-        state.api_tokens_set = Arc::new(tokens);
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["token-123"]));
     }
     let headers = HeaderMap::new();
     let missing = super::handler_openapi(
@@ -1373,9 +1373,7 @@ async fn profiling_enforces_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        let mut tokens = HashSet::new();
-        tokens.insert("token-456".to_owned());
-        state.api_tokens_set = Arc::new(tokens);
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["token-456"]));
     }
     let params: routing::profiling::ProfileParams =
         norito::json::from_value(norito::json!({})).expect("defaults");
@@ -1695,9 +1693,12 @@ impl RuntimeApiRouterFixture {
             OnlinePeersProvider::new(peers_rx),
             None,
             runtime_deps,
-        );
+        )
+        .expect("valid Torii runtime API fixture");
         Self {
-            router: torii.api_router_for_tests(),
+            router: torii
+                .api_router_for_tests()
+                .expect("test Torii router initializes"),
             _kiso_child: child,
         }
     }

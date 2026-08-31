@@ -40,7 +40,7 @@ pub const POP_APPROVAL: RouteDescriptor = authenticated_post(
     "/v1/sorafs/pop/approvals",
     RouteEffect::Mutation,
 );
-/// Trigger runtime-resolved HSM-backed issuance.
+/// Trigger runtime-resolved provider-backed issuance.
 pub const POP_ISSUE: RouteDescriptor = authenticated_post(
     "sorafs.pop.credential.issue",
     "/v1/sorafs/pop/issue",

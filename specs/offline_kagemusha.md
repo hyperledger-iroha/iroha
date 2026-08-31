@@ -74,10 +74,67 @@ Top-up and redemption accept only the canonical typed value with
 `Content-Type: application/x-norito`. They do not accept JSON request bodies or
 an encoded-byte wrapper. The lowercase 64-hex `Idempotency-Key` is the signed
 operation id. An identical retry returns the same operation; reuse with any
-different request conflicts. A client retains its local pending operation until
-Torii reports final chain finality. Maintained clients bind the operation id and
-kind, canonical status URI, and marker-preserving transaction hash in every
-accepted or polled response to the request they actually submitted.
+different request conflicts. A client retains its local operation until Torii
+reports globally final Applied state. Maintained clients keep the operation id,
+kind, and canonical status URI immutable. The active marker-preserving
+transaction hash may advance when the configured authority retries an exact
+Rejected attempt or when another authorized authority wins global Applied
+finality. A Pending response must repeat `submitted_at_ms` while its transaction
+hash is unchanged; when the hash advances, clients accept and retain the new
+positive timestamp with it and use that pair as the reference for the next
+poll. Maintained SDKs issue each command POST as exactly one transport dispatch,
+regardless of any ambient POST-retry policy. An ambiguous response is reconciled
+through the canonical status resource; a further POST is authorized only after
+an exact Rejected attempt is observed and the same request is deliberately
+retried.
+
+Before commit, Torii resolves the configured submission authority's pending
+attempt from Queue's exact composite key of authority and operation id. If
+Queue startup recovery or an in-flight durability transition prevents a
+coherent ownership snapshot, both status lookup and idempotent submission
+reconciliation return `503 offline_operation_pending_unavailable`; they never
+guess that the operation is absent or merely pending. A forward/reverse index
+or exact-carrier mismatch returns
+`503 offline_operation_evidence_inconsistent`. Queue's hot path checks equal
+index cardinality and the exact reciprocal owner in logarithmic time. It scans
+the complete bijection once after cold journal reconstruction, so integrity
+checking cannot turn every admission or lookup into work proportional to all
+pending operations. When a recovered exact Queue attempt is newer than Torii's
+process-local admitted binding, the Queue transaction hash is authoritative.
+
+Rejected attempts remain authority-scoped and can be retried only with the same
+economic request identity. Torii replaces only the exact rejected local
+carrier, using a checked deterministic nonce increment (`None` becomes `1`) so
+the new attempt cannot collide with Queue's committed transaction hash while
+replicas still construct the same wire. Exhausting the nonce space returns
+`409 offline_operation_retry_exhausted` and requires a newly authorized
+operation id. Rejected is final only for that carrier attempt, not for the
+operation resource; the same exact request may advance to a newer Pending,
+Rejected, or Applied carrier. Applied finality is globally unique by
+signed operation id: only a successful fresh economic branch may stage a
+global claim, and canonical finalization promotes exactly one claim after the
+balance, anchor, and replay writes have succeeded. A global Applied result therefore
+supersedes every rejected attempt, including when another authorized manager
+won a cross-instance race with a different signed transaction. Torii requires
+the complete request identity to match and then follows that record's exact
+height/phase/index locator; it does not require the losing local transaction
+hash to match. A foreign Rejected attempt never shadows the configured
+authority. Consensus-persisted outcome state takes precedence over
+process-local admission, Queue, and pipeline hints.
+
+Consensus outcome records bind request and outer authorities through their
+fixed canonical digests rather than embedding variable-size `AccountId`
+values. Decoding recomputes and verifies those digests. This keeps the record
+under its fixed state-value ceiling even when a valid multisignature authority
+has a large member set.
+
+Command POSTs recover an existing operation before consulting transient
+readiness. Only the elected in-flight leader must pass readiness before
+constructing a new transaction. Accepted replays and followers remain
+observable while readiness is down, and every fallible construction,
+admission, and accepted-binding transition performs an exact recovery before
+returning its error so a concurrent commit cannot be hidden by stale local
+failure.
 
 Canonical request and native-bridge decoding rejects compression and alternate
 Norito layouts from the fixed header before reconstruction. Each route applies

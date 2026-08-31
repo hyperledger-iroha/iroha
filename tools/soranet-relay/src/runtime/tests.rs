@@ -16,7 +16,7 @@ mod tests {
     };
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{
-        SessionKey, Signature,
+        SessionKey,
         soranet::{
             certificate::{
                 CapabilityToggle, RelayCapabilityFlagsV1, RelayCertificateBundleV2,
@@ -2433,18 +2433,18 @@ mod tests {
         let verifier = sample_keypair(measurement_seed);
         RelayBandwidthProofV1::try_sign(
             RelayBandwidthProofPayloadV1 {
-            relay_id: TEST_RELAY_ID,
-            measurement_id,
-            epoch,
-            verified_bytes,
-            verifier_id: AccountId::new(verifier.public_key().clone()),
-            issued_at_unix: 1,
-            confidence: BandwidthConfidenceV1 {
-                sample_count: 16,
-                jitter_p95_ms: 4,
-                confidence_per_mille: 900,
-            },
-            metadata: Metadata::default(),
+                relay_id: TEST_RELAY_ID,
+                measurement_id,
+                epoch,
+                verified_bytes,
+                verifier_id: AccountId::new(verifier.public_key().clone()),
+                issued_at_unix: 1,
+                confidence: BandwidthConfidenceV1 {
+                    sample_count: 16,
+                    jitter_p95_ms: 4,
+                    confidence_per_mille: 900,
+                },
+                metadata: Metadata::default(),
             },
             verifier.private_key(),
         )
@@ -4036,7 +4036,7 @@ mod tests {
             Arc::clone(&privacy),
             Arc::clone(&privacy_events),
             mode,
-            Some(Arc::clone(&incentive_logger)),
+            None,
             remote,
         )
         .await

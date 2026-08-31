@@ -1,6 +1,6 @@
 //! Hardening and privacy baseline checks for the SoraGlobal Gateway CDN (SNNet-15H).
 //! Produces JSON/Markdown evidence that SBOMs, vuln scans, retention defaults,
-//! and sandbox/HSM artefacts are present before promotion.
+//! and sandbox/signing-policy artefacts are present before promotion.
 use blake3::Hasher as Blake3;
 use eyre::{Result, WrapErr};
 use norito::json::{self, Map, Number, Value};
@@ -17,8 +17,8 @@ pub struct GatewayHardeningOptions {
     pub sbom: Option<PathBuf>,
     /// Path to the vulnerability scan report.
     pub vuln_report: Option<PathBuf>,
-    /// Path to the HSM policy document.
-    pub hsm_policy: Option<PathBuf>,
+    /// Path to the signing policy document.
+    pub signing_policy: Option<PathBuf>,
     /// Path to the sandbox profile (cgroup/WASM/runtime).
     pub sandbox_profile: Option<PathBuf>,
     /// Default data retention in days.
@@ -72,9 +72,10 @@ pub fn run_gateway_hardening(options: GatewayHardeningOptions) -> Result<Gateway
     let (vuln_state, vuln_obj) = check_file("vuln_report", options.vuln_report.as_deref())?;
     overall = overall.elevate(vuln_state);
     root.insert("vuln_report".into(), vuln_obj);
-    let (hsm_state, hsm_obj) = check_file("hsm_policy", options.hsm_policy.as_deref())?;
-    overall = overall.elevate(hsm_state);
-    root.insert("hsm_policy".into(), hsm_obj);
+    let (signing_state, signing_obj) =
+        check_file("signing_policy", options.signing_policy.as_deref())?;
+    overall = overall.elevate(signing_state);
+    root.insert("signing_policy".into(), signing_obj);
     let (sandbox_state, sandbox_obj) =
         check_file("sandbox_profile", options.sandbox_profile.as_deref())?;
     overall = overall.elevate(sandbox_state);
@@ -165,7 +166,7 @@ fn render_markdown(root: &Map) -> String {
         .unwrap_or("error");
     let sbom = component_state(root, "sbom");
     let vuln = component_state(root, "vuln_report");
-    let hsm = component_state(root, "hsm_policy");
+    let signing = component_state(root, "signing_policy");
     let sandbox = component_state(root, "sandbox_profile");
     let retention = component_state(root, "retention");
     format!(
@@ -173,7 +174,7 @@ fn render_markdown(root: &Map) -> String {
 Overall status: {overall}\n\n\
 - SBOM: {sbom}\n\
 - Vulnerability report: {vuln}\n\
-- HSM policy: {hsm}\n\
+- Signing policy: {signing}\n\
 - Sandbox profile: {sandbox}\n\
 - Retention: {retention}\n"
     )

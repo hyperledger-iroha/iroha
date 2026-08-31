@@ -2018,8 +2018,11 @@ impl ParliamentTimedOvn {
             "governance timed-OVN corpus limit must match the crypto decoder"
         );
         assert!(
-            (1..=crypto_corpus_limit).contains(&self.max_corpus_entries),
-            "governance.parliament_timed_ovn.max_corpus_entries must be within 1..={crypto_corpus_limit}"
+            (iroha_data_model::governance::types::MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+                ..=crypto_corpus_limit)
+                .contains(&self.max_corpus_entries),
+            "governance.parliament_timed_ovn.max_corpus_entries must be within {}..={crypto_corpus_limit}",
+            iroha_data_model::governance::types::MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
         );
         let required_single_record_blocks = u64::from(self.max_corpus_entries);
         let required_registration_blocks = required_single_record_blocks
@@ -2158,6 +2161,10 @@ pub struct Governance {
     pub min_enactment_delay: u64,
     /// Referendum window span (in blocks); `h_end = h_start + span - 1`.
     pub window_span: u64,
+    /// Maximum number of non-closed governance referenda retained at once.
+    pub max_active_referenda: NonZeroU32,
+    /// Maximum distinct governance-lock owners retained for one referendum.
+    pub max_lock_owners_per_referendum: NonZeroU32,
     /// Allow non‑ZK quadratic voting (plain ballots). If false, plain ballots are rejected.
     pub plain_voting_enabled: bool,
     /// Approval threshold numerator (Q-format): approve / (approve + reject) >= num/den.
@@ -2194,9 +2201,9 @@ pub struct Governance {
     pub review_panel_size: usize,
     /// Coordination Council size.
     pub coordination_council_size: usize,
-    /// Policy Jury size (at least two for non-identity timed-OVN masks).
+    /// Policy Jury size (at least the hidden-ballot anonymity floor).
     pub policy_jury_size: usize,
-    /// Confirmation Jury target/cap (at least two for timed-OVN confirmation).
+    /// Confirmation Jury target/cap (at least the hidden-ballot anonymity floor).
     pub confirmation_jury_size: usize,
     /// Oversight Committee size.
     pub oversight_committee_size: usize,
@@ -2250,6 +2257,9 @@ impl_default!(Governance => {
             max_conviction: 6,
             min_enactment_delay: 20,
             window_span: 100,
+            max_active_referenda: defaults::governance::MAX_ACTIVE_REFERENDA,
+            max_lock_owners_per_referendum:
+                defaults::governance::MAX_LOCK_OWNERS_PER_REFERENDUM,
             plain_voting_enabled: defaults::governance::PLAIN_VOTING_ENABLED,
             approval_threshold_q_num: 1,
             approval_threshold_q_den: 2,
@@ -4088,6 +4098,14 @@ pub fn execution_policy_digest_v1(
         &governance.min_enactment_delay,
     );
     policy.push("governance.window_span", &governance.window_span);
+    policy.push(
+        "governance.max_active_referenda",
+        &governance.max_active_referenda.get(),
+    );
+    policy.push(
+        "governance.max_lock_owners_per_referendum",
+        &governance.max_lock_owners_per_referendum.get(),
+    );
     policy.push(
         "governance.plain_voting_enabled",
         &governance.plain_voting_enabled,
@@ -6281,7 +6299,7 @@ impl_default!(SumeragiV2RuntimeLimits => {
                 defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
         }
 });
-/// Consensus key-rotation and HSM policy.
+/// Consensus key-rotation and algorithm policy.
 #[derive(Debug, Clone)]
 pub struct SumeragiKeys {
     /// Minimum lead time between publishing and activating a consensus key.
@@ -6290,23 +6308,15 @@ pub struct SumeragiKeys {
     pub overlap_grace_blocks: u64,
     /// Grace window after declared consensus-key expiry.
     pub expiry_grace_blocks: u64,
-    /// Whether consensus keys must be bound to an admitted HSM provider.
-    pub require_hsm: bool,
     /// Allowed consensus signing algorithms.
     pub allowed_algorithms: BTreeSet<Algorithm>,
-    /// Admitted HSM provider identifiers.
-    pub allowed_hsm_providers: BTreeSet<String>,
 }
 impl_default!(SumeragiKeys => {
         Self {
             activation_lead_blocks: defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
             overlap_grace_blocks: defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
             expiry_grace_blocks: defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
-            require_hsm: defaults::sumeragi::KEY_REQUIRE_HSM,
             allowed_algorithms: defaults::sumeragi::key_allowed_algorithms()
-                .into_iter()
-                .collect(),
-            allowed_hsm_providers: defaults::sumeragi::key_allowed_hsm_providers()
                 .into_iter()
                 .collect(),
         }
@@ -6334,7 +6344,7 @@ pub struct Sumeragi {
     pub limits: SumeragiV2RuntimeLimits,
     /// Node-local durable storage budgets excluded from the shared fingerprint.
     pub storage: SumeragiStorage,
-    /// Consensus key-rotation and HSM policy.
+    /// Consensus key-rotation and algorithm policy.
     pub keys: SumeragiKeys,
 }
 impl_default!(Sumeragi => {
@@ -6763,19 +6773,6 @@ impl Sumeragi {
             return Err(SumeragiV2ConfigError::MissingBlsNormal);
         }
         let allowed_algorithms = self.keys.allowed_algorithms.iter().copied().collect();
-        let mut allowed_hsm_providers = Vec::with_capacity(self.keys.allowed_hsm_providers.len());
-        for provider in &self.keys.allowed_hsm_providers {
-            let provider = provider.trim();
-            if provider.is_empty() {
-                return Err(SumeragiV2ConfigError::EmptyHsmProvider);
-            }
-            allowed_hsm_providers.push(provider.to_owned());
-        }
-        allowed_hsm_providers.sort();
-        allowed_hsm_providers.dedup();
-        if self.keys.require_hsm && allowed_hsm_providers.is_empty() {
-            return Err(SumeragiV2ConfigError::MissingHsmProvider);
-        }
         Ok(SumeragiV2Config {
             format_version: SUMERAGI_V2_CONFIG_FORMAT_VERSION,
             protocol_version: consensus_v2::PROTOCOL_VERSION,
@@ -6834,20 +6831,15 @@ impl Sumeragi {
                 activation_lead_blocks: self.keys.activation_lead_blocks,
                 overlap_grace_blocks: self.keys.overlap_grace_blocks,
                 expiry_grace_blocks: self.keys.expiry_grace_blocks,
-                require_hsm: self.keys.require_hsm,
                 allowed_algorithms,
-                allowed_hsm_providers,
             },
         })
     }
 }
 /// Version of the canonical Norito shared-config projection.
 ///
-/// Version 6 additionally binds Kura's pending certified-merge and QueuePlan
-/// admission stores, including their shared aggregate byte budget. Nodes with
-/// incompatible pre-carrier persistence geometry therefore derive a different
-/// handshake fingerprint.
-pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;
+/// Current signed projection schema identifier.
+pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 7;
 const SUMERAGI_V2_CONFIG_FINGERPRINT_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:shared-config-fingerprint\0";
 /// Canonical shared Sumeragi v2 runtime configuration.
@@ -7081,12 +7073,8 @@ pub struct SumeragiV2KeyPolicy {
     pub overlap_grace_blocks: u64,
     /// Expiry grace window in blocks.
     pub expiry_grace_blocks: u64,
-    /// Whether a recognized HSM binding is mandatory.
-    pub require_hsm: bool,
     /// Canonically sorted allowed signing algorithms.
     pub allowed_algorithms: Vec<Algorithm>,
-    /// Canonically sorted and deduplicated allowed HSM providers.
-    pub allowed_hsm_providers: Vec<String>,
 }
 /// Invalid bounded geometry for the Sumeragi v2 exact-output corridor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -7403,12 +7391,6 @@ pub enum SumeragiV2ConfigError {
     /// The signing policy did not admit BLS-Normal.
     #[error("Sumeragi v2 consensus key policy must include BlsNormal")]
     MissingBlsNormal,
-    /// A configured HSM provider normalized to an empty string.
-    #[error("Sumeragi v2 HSM provider names must not be empty")]
-    EmptyHsmProvider,
-    /// HSM binding was required without an admitted provider.
-    #[error("Sumeragi v2 requires at least one HSM provider when HSM binding is mandatory")]
-    MissingHsmProvider,
 }
 fn canonical_duration_ms(
     field: &'static str,
@@ -7656,6 +7638,54 @@ pub struct ProofApi {
     /// Retry hint surfaced on throttling responses.
     pub retry_after: Duration,
 }
+#[derive(Clone, Copy)]
+struct RedactedSecret(usize);
+impl RedactedSecret {
+    const fn present(present: bool) -> Self {
+        if present { Self(1) } else { Self(0) }
+    }
+
+    const fn count(count: usize) -> Self {
+        Self(count)
+    }
+}
+impl fmt::Debug for RedactedSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "[REDACTED; {} configured]", self.0)
+    }
+}
+/// Listener-wide Torii API tokens with debug output that never exposes token text.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ToriiApiTokens(Vec<String>);
+impl fmt::Debug for ToriiApiTokens {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "[REDACTED; {} Torii API token(s)]", self.0.len())
+    }
+}
+impl core::ops::Deref for ToriiApiTokens {
+    type Target = [String];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl AsRef<[String]> for ToriiApiTokens {
+    fn as_ref(&self) -> &[String] {
+        &self.0
+    }
+}
+impl From<Vec<String>> for ToriiApiTokens {
+    fn from(tokens: Vec<String>) -> Self {
+        Self(tokens)
+    }
+}
+impl norito::json::JsonDeserialize for ToriiApiTokens {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> core::result::Result<Self, norito::json::Error> {
+        <Vec<String> as norito::json::JsonDeserialize>::json_deserialize(parser).map(Self)
+    }
+}
 /// Limits for app-facing list/query endpoints.
 #[derive(Debug, Clone, Copy)]
 pub struct AppApi {
@@ -7721,7 +7751,7 @@ impl_default!(WebhookSecurity => {
         }
 });
 /// Push notification delivery configuration (FCM/APNS).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Push {
     /// Enable the push bridge (disabled by default).
     pub enabled: bool,
@@ -7750,7 +7780,37 @@ pub struct Push {
     /// Path to the APNs `.p8` private key used for token authentication.
     pub apns_private_key_path: Option<PathBuf>,
     /// Optional APNs endpoint base URL override for tests or private deployments.
-    pub apns_endpoint: Option<String>,
+    pub apns_endpoint: Option<Url>,
+}
+impl fmt::Debug for Push {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Push")
+            .field("enabled", &self.enabled)
+            .field("rate_per_minute", &self.rate_per_minute)
+            .field("burst", &self.burst)
+            .field("connect_timeout", &self.connect_timeout)
+            .field("request_timeout", &self.request_timeout)
+            .field("max_topics_per_device", &self.max_topics_per_device)
+            .field("fcm_project_id", &self.fcm_project_id)
+            .field(
+                "fcm_service_account_path",
+                &RedactedSecret::present(self.fcm_service_account_path.is_some()),
+            )
+            .field("apns_environment", &self.apns_environment)
+            .field("apns_topic", &self.apns_topic)
+            .field("apns_team_id", &self.apns_team_id)
+            .field("apns_key_id", &self.apns_key_id)
+            .field(
+                "apns_private_key_path",
+                &RedactedSecret::present(self.apns_private_key_path.is_some()),
+            )
+            .field(
+                "apns_endpoint",
+                &RedactedSecret::present(self.apns_endpoint.is_some()),
+            )
+            .finish()
+    }
 }
 impl_default!(Push => {
         Self {
@@ -7773,7 +7833,7 @@ impl_default!(Push => {
         }
 });
 /// Torii API configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Torii {
     /// API listening address.
     pub address: WithOrigin<SocketAddr>,
@@ -7826,7 +7886,7 @@ pub struct Torii {
     /// Require a valid API token for app-facing endpoints.
     pub require_api_token: bool,
     /// Allowed API tokens (opaque strings). Empty means no tokens defined.
-    pub api_tokens: Vec<String>,
+    pub api_tokens: ToriiApiTokens,
     /// Optional fee policy: asset definition id (e.g., `62Fk4FPcMuLvW5QjDGNF2a4jAmjM`).
     pub api_fee_asset_id: Option<String>,
     /// Optional fee policy: fixed amount per request.
@@ -8002,6 +8062,8 @@ pub struct Torii {
     pub tx_history: Option<ToriiTxHistory>,
     /// Retail recipient lookup route configuration.
     pub recipient_lookup: ToriiRecipientLookup,
+    /// Explicit Torii origins used for public-dataspace routed reads.
+    pub public_dataspace_upstreams: Vec<ToriiPublicDataspaceUpstream>,
     /// App-facing query/backpressure limits.
     pub app_api: AppApi,
     /// Webhook delivery/backpressure configuration.
@@ -8010,6 +8072,54 @@ pub struct Torii {
     pub webhook_security: WebhookSecurity,
     /// Push notification delivery configuration.
     pub push: Push,
+}
+impl fmt::Debug for Torii {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Torii")
+            .field("address", &self.address)
+            .field("max_content_len", &self.max_content_len)
+            .field("data_dir", &self.data_dir)
+            .field(
+                "receipt_signer",
+                &RedactedSecret::present(self.receipt_signer.is_some()),
+            )
+            .field("query_max_inflight", &self.query_max_inflight)
+            .field("query_heavy_max_inflight", &self.query_heavy_max_inflight)
+            .field("require_api_token", &self.require_api_token)
+            .field("api_tokens", &self.api_tokens)
+            .field(
+                "peer_telemetry_urls",
+                &RedactedSecret::count(self.peer_telemetry_urls.len()),
+            )
+            .field("peer_geo", &self.peer_geo)
+            .field("operator_auth", &self.operator_auth)
+            .field("operator_signatures", &self.operator_signatures)
+            .field("transport", &self.transport)
+            .field("mcp", &self.mcp)
+            .field("proof_api", &self.proof_api)
+            .field(
+                "account_onboarding",
+                &RedactedSecret::present(self.account_onboarding.is_some()),
+            )
+            .field("faucet_configured", &self.faucet.is_some())
+            .field(
+                "kagemusha_commands",
+                &RedactedSecret::present(self.kagemusha_commands.is_some()),
+            )
+            .field(
+                "ram_lfe_program_count",
+                &self
+                    .ram_lfe
+                    .as_ref()
+                    .map_or(0, |config| config.programs.len()),
+            )
+            .field("tx_history", &self.tx_history)
+            .field("recipient_lookup", &self.recipient_lookup)
+            .field("da_ingest", &self.da_ingest)
+            .field("push", &self.push)
+            .finish_non_exhaustive()
+    }
 }
 /// Non-secret production policy for native Bootle/Lantern blind issuance.
 ///
@@ -8067,7 +8177,7 @@ impl_default!(ToriiRecipientLookup => {
         }
 });
 /// Single bank Core API route used by the retail recipient lookup endpoint.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToriiRecipientLookupRoute {
     /// Canonical FI identifier, for example `hbl.sbp` or `ubl.sbp`.
     pub fi_id: String,
@@ -8075,6 +8185,27 @@ pub struct ToriiRecipientLookupRoute {
     pub base_url: Url,
     /// Service bearer token used only by Torii when calling the bank Core API.
     pub bearer_token: String,
+}
+/// One explicitly configured public-dataspace Torii upstream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToriiPublicDataspaceUpstream {
+    /// Exact numeric dataspace identity (`0` is the universal dataspace).
+    pub dataspace_id: DataSpaceId,
+    /// Canonical credential-free Torii base URL.
+    pub base_url: Url,
+}
+impl fmt::Debug for ToriiRecipientLookupRoute {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToriiRecipientLookupRoute")
+            .field("fi_id", &self.fi_id)
+            .field(
+                "base_url",
+                &RedactedSecret::present(!self.base_url.as_str().is_empty()),
+            )
+            .field("bearer_token", &RedactedSecret::present(true))
+            .finish()
+    }
 }
 /// Execution mode for attachment sanitization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8130,7 +8261,7 @@ impl_default!(ToriiOperatorSignatures => {
         }
 });
 /// Operator authentication configuration for Torii operator endpoints.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToriiOperatorAuth {
     /// Master enable switch for operator authentication.
     pub enabled: bool,
@@ -8152,6 +8283,23 @@ pub struct ToriiOperatorAuth {
     pub lockout: OperatorAuthLockout,
     /// WebAuthn configuration (when enabled).
     pub webauthn: Option<OperatorWebAuthnConfig>,
+}
+impl fmt::Debug for ToriiOperatorAuth {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToriiOperatorAuth")
+            .field("enabled", &self.enabled)
+            .field("require_mtls", &self.require_mtls)
+            .field("mtls_trusted_proxy_cidrs", &self.mtls_trusted_proxy_cidrs)
+            .field("tokens", &RedactedSecret::count(self.tokens.len()))
+            .field("rate_per_minute", &self.rate_per_minute)
+            .field("burst", &self.burst)
+            .field("ephemeral_state_capacity", &self.ephemeral_state_capacity)
+            .field("credential_capacity", &self.credential_capacity)
+            .field("lockout", &self.lockout)
+            .field("webauthn", &self.webauthn)
+            .finish()
+    }
 }
 impl_default!(ToriiOperatorAuth => {
         Self {
@@ -8241,12 +8389,24 @@ impl OperatorWebAuthnAlgorithm {
     }
 }
 /// Peer telemetry geo lookup configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToriiPeerGeo {
     /// Enable geo lookups for peer telemetry.
     pub enabled: bool,
     /// Optional geo endpoint; required and HTTPS-only when lookups are enabled.
     pub endpoint: Option<Url>,
+}
+impl fmt::Debug for ToriiPeerGeo {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToriiPeerGeo")
+            .field("enabled", &self.enabled)
+            .field(
+                "endpoint",
+                &RedactedSecret::present(self.endpoint.is_some()),
+            )
+            .finish()
+    }
 }
 impl_default!(ToriiPeerGeo => {
         Self {
@@ -8290,7 +8450,7 @@ pub struct ToriiTransport {
 include!("actual/torii_http_transport.rs");
 include!("actual/torii_mcp_profile.rs");
 /// Norito-RPC transport configuration (stage, allowlist, toggles).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct NoritoRpcTransport {
     /// Master enable switch for Norito-RPC decoding.
     pub enabled: bool,
@@ -8302,6 +8462,21 @@ pub struct NoritoRpcTransport {
     pub allowed_clients: Vec<String>,
     /// Current rollout stage label.
     pub stage: NoritoRpcStage,
+}
+impl fmt::Debug for NoritoRpcTransport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NoritoRpcTransport")
+            .field("enabled", &self.enabled)
+            .field("require_mtls", &self.require_mtls)
+            .field("mtls_trusted_proxy_cidrs", &self.mtls_trusted_proxy_cidrs)
+            .field(
+                "allowed_clients",
+                &RedactedSecret::count(self.allowed_clients.len()),
+            )
+            .field("stage", &self.stage)
+            .finish()
+    }
 }
 /// Rollout stage for the Norito-RPC transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -8384,7 +8559,7 @@ pub struct AccountOnboarding {
     pub auto_renew: Option<AccountOnboardingAutoRenew>,
 }
 /// One header-token credential accepted by sponsored onboarding.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AccountOnboardingCredential {
     /// Stable operator-facing credential identifier.
     pub id: Name,
@@ -8392,6 +8567,16 @@ pub struct AccountOnboardingCredential {
     pub scope: AccountOnboardingCredentialScope,
     /// BLAKE3 digest of the runtime-only token.
     pub token_hash: [u8; 32],
+}
+impl fmt::Debug for AccountOnboardingCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AccountOnboardingCredential")
+            .field("id", &self.id)
+            .field("scope", &self.scope)
+            .field("token_hash", &RedactedSecret::present(true))
+            .finish()
+    }
 }
 /// Exact textual scope attached to an onboarding API credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8601,7 +8786,7 @@ impl_default!(TransactionIngress => {
         }
 });
 /// Data-availability ingest configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(clippy::struct_field_names)]
 pub struct DaIngest {
     /// Per-`(lane, epoch)` bounds for committed manifests and, independently, in-flight
@@ -8636,8 +8821,45 @@ pub struct DaIngest {
     /// Optional telemetry cluster label used for Taikai ingest metrics.
     pub telemetry_cluster_label: Option<String>,
 }
+impl fmt::Debug for DaIngest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DaIngest")
+            .field("replay_cache_capacity", &self.replay_cache_capacity)
+            .field(
+                "replay_cache_max_lane_epochs",
+                &self.replay_cache_max_lane_epochs,
+            )
+            .field("replay_cache_ttl", &self.replay_cache_ttl)
+            .field(
+                "replay_cache_max_sequence_lag",
+                &self.replay_cache_max_sequence_lag,
+            )
+            .field("replay_cache_store_dir", &self.replay_cache_store_dir)
+            .field("manifest_store_dir", &self.manifest_store_dir)
+            .field(
+                "max_concurrent_compute_jobs",
+                &self.max_concurrent_compute_jobs,
+            )
+            .field("spool_queue_capacity", &self.spool_queue_capacity)
+            .field("spool_batch_max", &self.spool_batch_max)
+            .field(
+                "governance_metadata_key",
+                &RedactedSecret::present(self.governance_metadata_key.is_some()),
+            )
+            .field(
+                "governance_metadata_key_label_configured",
+                &self.governance_metadata_key_label.is_some(),
+            )
+            .field("taikai_anchor", &self.taikai_anchor)
+            .field("replication_policy", &self.replication_policy)
+            .field("rent_policy", &self.rent_policy)
+            .field("telemetry_cluster_label", &self.telemetry_cluster_label)
+            .finish()
+    }
+}
 /// Configuration describing how Torii should publish Taikai artefacts to SoraNS.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DaTaikaiAnchor {
     /// HTTP(S) endpoint that accepts Taikai envelope uploads.
     pub endpoint: Url,
@@ -8649,6 +8871,21 @@ pub struct DaTaikaiAnchor {
     pub poll_interval: Duration,
     /// Absolute deadline for one upload and signed receipt response.
     pub request_timeout: Duration,
+}
+impl fmt::Debug for DaTaikaiAnchor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DaTaikaiAnchor")
+            .field("endpoint", &RedactedSecret::present(true))
+            .field(
+                "api_token",
+                &RedactedSecret::present(self.api_token.is_some()),
+            )
+            .field("receipt_public_key", &self.receipt_public_key)
+            .field("poll_interval", &self.poll_interval)
+            .field("request_timeout", &self.request_timeout)
+            .finish()
+    }
 }
 impl_default!(DaIngest => {
         Self {
@@ -8711,9 +8948,138 @@ pub struct SorafsAdmission {
 #[derive(Debug, Clone, Default)]
 pub struct SorafsPublishDiscovery {
     /// Public gateway base URL deploy clients should verify after pinning.
-    pub gateway_base_url: Option<String>,
+    pub gateway_base_url: Option<SorafsPublishBaseUrl>,
     /// Torii URLs deploy clients should pin storage to after registering a paid pin.
-    pub pin_torii_urls: Vec<String>,
+    pub pin_torii_urls: Vec<SorafsPublishBaseUrl>,
+}
+/// Canonical HTTP(S) origin advertised to SoraFS deploy clients.
+///
+/// The validated representation has no credentials, query, fragment, or non-root path. Its
+/// canonical configuration and wire spelling omits the root-path slash.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct SorafsPublishBaseUrl(Url);
+/// Maximum encoded length of one SoraFS publish origin.
+pub const SORAFS_PUBLISH_BASE_URL_MAX_BYTES_V1: usize = 2_048;
+/// Maximum number of pin Torii origins exposed by SoraFS publish discovery.
+pub const SORAFS_PUBLISH_PIN_TORII_URLS_MAX_V1: usize = 500;
+impl SorafsPublishBaseUrl {
+    /// Return the canonical origin spelling without a trailing root-path slash.
+    pub fn as_str(&self) -> &str {
+        let serialized = self.0.as_str();
+        serialized.strip_suffix('/').unwrap_or(serialized)
+    }
+
+    /// Return the parsed URL.
+    pub const fn as_url(&self) -> &Url {
+        &self.0
+    }
+}
+impl fmt::Debug for SorafsPublishBaseUrl {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("SorafsPublishBaseUrl")
+            .field(&self.as_str())
+            .finish()
+    }
+}
+impl fmt::Display for SorafsPublishBaseUrl {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+impl FromStr for SorafsPublishBaseUrl {
+    type Err = SorafsPublishBaseUrlError;
+
+    fn from_str(raw: &str) -> core::result::Result<Self, Self::Err> {
+        if raw.is_empty() {
+            return Err(SorafsPublishBaseUrlError::Empty);
+        }
+        if raw.len() > SORAFS_PUBLISH_BASE_URL_MAX_BYTES_V1 {
+            return Err(SorafsPublishBaseUrlError::TooLong);
+        }
+        if raw.chars().any(char::is_whitespace) || raw.chars().any(char::is_control) {
+            return Err(SorafsPublishBaseUrlError::NonCanonical);
+        }
+        let url = Url::parse(raw).map_err(|_| SorafsPublishBaseUrlError::Invalid)?;
+        let host = url.host().ok_or(SorafsPublishBaseUrlError::Invalid)?;
+        if url.cannot_be_a_base() {
+            return Err(SorafsPublishBaseUrlError::Invalid);
+        }
+        let literal_loopback = match host {
+            url::Host::Ipv4(address) => address.is_loopback(),
+            url::Host::Ipv6(address) => address.is_loopback(),
+            url::Host::Domain(_) => false,
+        };
+        if url.scheme() != "https" && !(url.scheme() == "http" && literal_loopback) {
+            return Err(SorafsPublishBaseUrlError::InsecureScheme);
+        }
+        let authority_start = url.scheme().len() + "://".len();
+        let authority_end = url.as_str()[authority_start..]
+            .find('/')
+            .map_or(url.as_str().len(), |offset| authority_start + offset);
+        if url.as_str()[authority_start..authority_end].contains('@') {
+            return Err(SorafsPublishBaseUrlError::UserInfo);
+        }
+        if url.query().is_some() {
+            return Err(SorafsPublishBaseUrlError::Query);
+        }
+        if url.fragment().is_some() {
+            return Err(SorafsPublishBaseUrlError::Fragment);
+        }
+        if url.path() != "/" {
+            return Err(SorafsPublishBaseUrlError::Path);
+        }
+        if url.port() == Some(0) {
+            return Err(SorafsPublishBaseUrlError::ZeroPort);
+        }
+        if url.domain().is_some_and(|domain| domain.ends_with('.')) {
+            return Err(SorafsPublishBaseUrlError::NonCanonical);
+        }
+        let canonical = url
+            .as_str()
+            .strip_suffix('/')
+            .ok_or(SorafsPublishBaseUrlError::NonCanonical)?;
+        if raw != canonical {
+            return Err(SorafsPublishBaseUrlError::NonCanonical);
+        }
+        Ok(Self(url))
+    }
+}
+/// Reason a configured SoraFS publish origin is invalid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum SorafsPublishBaseUrlError {
+    /// No URL was supplied.
+    #[error("must not be empty")]
+    Empty,
+    /// The URL exceeds the established Torii URL admission bound.
+    #[error("must not exceed 2048 bytes")]
+    TooLong,
+    /// The value is not an absolute hierarchical URL with a host.
+    #[error("must be an absolute HTTP(S) URL with a host")]
+    Invalid,
+    /// The transport is not HTTPS or literal-loopback HTTP.
+    #[error("must use HTTPS; HTTP is allowed only for a literal loopback IP address")]
+    InsecureScheme,
+    /// User information was embedded in the authority.
+    #[error("must not contain user information")]
+    UserInfo,
+    /// A query component was supplied.
+    #[error("must not contain a query")]
+    Query,
+    /// A fragment component was supplied.
+    #[error("must not contain a fragment")]
+    Fragment,
+    /// The URL contains a non-root path.
+    #[error("must be an origin without a path")]
+    Path,
+    /// Port zero cannot identify a reachable service.
+    #[error("must not use port zero")]
+    ZeroPort,
+    /// The spelling is not the unique canonical representation.
+    #[error(
+        "must use exact canonical spelling without whitespace, aliases, default ports, or a trailing slash"
+    )]
+    NonCanonical,
 }
 /// Native repair worker and durable transaction-forwarder configuration.
 #[derive(Debug, Clone, Copy)]
@@ -9252,7 +9618,7 @@ pub struct SorafsAppealFinanceCheckpointBinding {
 /// configuration inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsModerationQuarantineKeyProviderBinding {
-    /// Stable opaque PKCS#11/HSM/KMS provider handle.
+    /// Stable opaque deployment-owned provider handle.
     pub handle: String,
     /// Exact non-zero deployment adapter and public-policy revision.
     pub revision: u64,
@@ -9919,7 +10285,7 @@ pub struct SorafsProviderAttestationRuntimeBinding {
 pub struct SorafsProviderAttestationJournal {
     /// Qualified rollback-resistant UNIX-time seal provider.
     pub clock_seal: SorafsProviderAttestationRuntimeBinding,
-    /// Qualified approval-only HSM/KMS or threshold signer provider.
+    /// Qualified approval-only external or threshold signer provider.
     pub approval_signer: SorafsProviderAttestationRuntimeBinding,
     /// Qualified authenticated coordinator-inventory provider.
     pub inventory: SorafsProviderAttestationRuntimeBinding,

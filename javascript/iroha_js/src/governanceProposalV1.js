@@ -60,6 +60,7 @@ export function normalizeGovernanceProposalWireV1(value, context = "proposal") {
 
 function normalizeDeployContract(value, context) {
   const record = exactRecord(value, [
+    "proposal_operator",
     "contract_address",
     "code_hash",
     "abi_hash",
@@ -72,6 +73,10 @@ function normalizeDeployContract(value, context) {
   const contractAddress = nonEmptyString(record.contract_address, `${context}.contract_address`);
   parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
   return {
+    proposal_operator: canonicalAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
     contract_address: contractAddress,
     code_hash: lowerHex32(record.code_hash, `${context}.code_hash`),
     abi_hash: lowerHex32(record.abi_hash, `${context}.abi_hash`),
@@ -94,7 +99,7 @@ function normalizeManifestProvenance(value, context) {
 }
 
 function normalizeRuntimeUpgrade(value, context) {
-  const record = exactRecord(value, ["manifest"], context);
+  const record = exactRecord(value, ["proposal_operator", "manifest"], context);
   const manifestContext = `${context}.manifest`;
   const manifest = exactRecord(record.manifest, [
     "name",
@@ -129,6 +134,10 @@ function normalizeRuntimeUpgrade(value, context) {
     throw new TypeError(`${manifestContext}.end_height must be greater than start_height`);
   }
   return {
+    proposal_operator: canonicalAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
     manifest: {
       name: nonEmptyString(manifest.name, `${manifestContext}.name`),
       description: exactString(manifest.description, `${manifestContext}.description`),
@@ -711,12 +720,16 @@ function normalizeSorafsProvider(value, context) {
 function normalizeContractLifecycle(value, context) {
   const record = exactRecord(
     value,
-    ["contract_address", "expected_revision", "action"],
+    ["proposal_operator", "contract_address", "expected_revision", "action"],
     context,
   );
   const contractAddress = nonEmptyString(record.contract_address, `${context}.contract_address`);
   parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
   return {
+    proposal_operator: canonicalAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
     contract_address: contractAddress,
     expected_revision: jsonUint(
       record.expected_revision,

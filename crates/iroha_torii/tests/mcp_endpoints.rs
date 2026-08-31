@@ -52,8 +52,11 @@ fn build_router(cfg: iroha_config::parameters::actual::Root) -> axum::Router {
         OnlinePeersProvider::new(peers_rx),
         None,
         MaybeTelemetry::disabled(),
-    );
-    torii.api_router_for_tests()
+    )
+    .expect("valid Torii MCP fixture");
+    torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes")
 }
 async fn read_json_body(response: axum::response::Response) -> Value {
     let bytes = response
@@ -1050,6 +1053,7 @@ async fn mcp_jsonrpc_generic_notifications_return_accepted_without_body() {
 #[tokio::test]
 async fn mcp_jsonrpc_authenticated_cancellation_stops_exact_live_call() {
     const CANCELLATION_NONCE: &str = "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI";
+    const API_TOKEN: &str = "cancellation-client-0000000000000";
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -1057,7 +1061,7 @@ async fn mcp_jsonrpc_authenticated_cancellation_stops_exact_live_call() {
     cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(10_000).expect("nonzero rate"));
     cfg.torii.mcp.burst = Some(NonZeroU32::new(10_000).expect("nonzero burst"));
     cfg.torii.require_api_token = true;
-    cfg.torii.api_tokens = vec!["cancellation-client".to_owned()];
+    cfg.torii.api_tokens = vec![API_TOKEN.to_owned()].into();
     let app = build_router(cfg);
 
     let call_request = Request::builder()
@@ -1066,7 +1070,7 @@ async fn mcp_jsonrpc_authenticated_cancellation_stops_exact_live_call() {
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ACCEPT, "application/json, text/event-stream")
         .header("MCP-Protocol-Version", "2025-06-18")
-        .header("x-api-token", "cancellation-client")
+        .header("x-api-token", API_TOKEN)
         .body(Body::from(
             norito::json::to_vec(&norito::json!({
                 "jsonrpc": "2.0",
@@ -1096,7 +1100,7 @@ async fn mcp_jsonrpc_authenticated_cancellation_stops_exact_live_call() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::ACCEPT, "application/json, text/event-stream")
                 .header("MCP-Protocol-Version", "2025-06-18")
-                .header("x-api-token", "cancellation-client")
+                .header("x-api-token", API_TOKEN)
                 .body(Body::from(
                     norito::json::to_vec(&norito::json!({
                         "jsonrpc": "2.0",
@@ -2023,11 +2027,12 @@ async fn mcp_jsonrpc_tools_call_openapi_healthcheck_dispatches_route() {
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_openapi_healthcheck_requires_token_when_enabled() {
+    const API_TOKEN: &str = "mcp-token-00000000000000000000000";
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     cfg.torii.require_api_token = true;
-    cfg.torii.api_tokens = vec!["mcp-token".to_owned()];
+    cfg.torii.api_tokens = vec![API_TOKEN.to_owned()].into();
     let app = build_router(cfg);
     let response = app
         .clone()
@@ -2070,11 +2075,12 @@ async fn retired_transaction_status_alias_is_not_mounted() {
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_openapi_healthcheck_accepts_token_from_mcp_request_headers() {
+    const API_TOKEN: &str = "mcp-token-00000000000000000000000";
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     cfg.torii.require_api_token = true;
-    cfg.torii.api_tokens = vec!["mcp-token".to_owned()];
+    cfg.torii.api_tokens = vec![API_TOKEN.to_owned()].into();
     let app = build_router(cfg);
     let (status, call) = post_mcp_with_headers(
         &app,
@@ -2086,7 +2092,7 @@ async fn mcp_jsonrpc_tools_call_openapi_healthcheck_accepts_token_from_mcp_reque
                 "name": "torii.get_health"
             }
         }),
-        &[("x-api-token", "mcp-token")],
+        &[("x-api-token", API_TOKEN)],
     )
     .await;
     assert_eq!(status, StatusCode::OK);

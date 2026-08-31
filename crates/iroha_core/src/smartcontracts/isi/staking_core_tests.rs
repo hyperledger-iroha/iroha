@@ -143,7 +143,6 @@ fn seed_validator_consensus_key(
         pop: None,
         activation_height: stx.block_height(),
         expiry_height: None,
-        hsm: None,
         replaces: None,
         status,
     };
@@ -179,7 +178,6 @@ fn seed_validator_consensus_key_with_heights(
         pop: None,
         activation_height,
         expiry_height,
-        hsm: None,
         replaces: None,
         status,
     };

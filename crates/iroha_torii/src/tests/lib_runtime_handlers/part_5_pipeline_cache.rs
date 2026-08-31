@@ -47,6 +47,49 @@ fn pipeline_status_cache_records_transaction_event() {
     assert_eq!(stored.block_height, Some(height));
     assert!(stored.rejection.is_none());
 }
+#[test]
+fn pipeline_status_cache_ignores_candidate_rejection() {
+    let cache = PipelineStatusCache::new();
+    let (block, _) = make_signed_block(1, None);
+    let tx_hash = block.external_transactions().next().expect("tx").hash();
+    let event = TransactionEvent {
+        hash: tx_hash,
+        block_height: NonZeroU64::new(2),
+        lane_id: LaneId::new(1),
+        dataspace_id: DataSpaceId::new(1),
+        status: TransactionStatus::Rejected(Box::new(TransactionRejectionReason::Validation(
+            ValidationFail::TooComplex,
+        ))),
+    };
+    cache.record_transaction_event(&event);
+    assert!(
+        cache.lookup(&tx_hash).is_none(),
+        "candidate execution must not become a terminal status"
+    );
+}
+#[test]
+fn pipeline_status_cache_stops_serving_hints_after_lag() {
+    let cache = PipelineStatusCache::new();
+    let (block, _) = make_signed_block(1, None);
+    let tx_hash = block.external_transactions().next().expect("tx").hash();
+    cache.record_entry(
+        tx_hash,
+        PipelineStatusEntry::fresh(PipelineStatusKind::Approved, None, None),
+    );
+    assert!(cache.lookup(&tx_hash).is_some());
+    cache.invalidate_event_hints();
+    assert!(cache.lookup(&tx_hash).is_none());
+
+    let event = TransactionEvent {
+        hash: tx_hash,
+        block_height: None,
+        lane_id: LaneId::new(1),
+        dataspace_id: DataSpaceId::new(1),
+        status: TransactionStatus::Queued,
+    };
+    cache.record_transaction_event(&event);
+    assert!(cache.lookup(&tx_hash).is_none());
+}
 #[tokio::test]
 async fn pipeline_status_cache_records_block_event() {
     let app = mk_app_state_for_tests();

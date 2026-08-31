@@ -4866,6 +4866,66 @@ impl ProductionV2Services {
             permit,
         )
     }
+    /// Enqueue one worker-prepared historical body without actor-side body work.
+    pub(crate) fn post_prepared_historical_body_response_on_reply_routes_with_permit(
+        &self,
+        prepared: super::v2_block_sync::PreparedHistoricalBodyOutput,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<super::v2_block_sync::PreparedHistoricalBodyPostOutcome, String> {
+        let retry = prepared.clone_for_exact_output_retry();
+        let (peer, reply_routes, ingress_ownership, message, proof) = prepared.into_post_parts();
+        if !ingress_ownership.validate_exact()
+            || !ingress_ownership.matches_reply_routes(Some(&reply_routes))
+            || reply_routes.semantic_target() != &peer
+            || proof.network_id() != self.context.network_id
+            || proof.source_round().height > self.context.height
+            || proof.responder() != &self.local_peer
+            || !proof.covers_message_in_network(&self.context.network_id, &message)
+        {
+            return Err(
+                "prepared historical body changed its worker-sealed output identity".to_owned(),
+            );
+        }
+        let rollover_claim = ExactOutputRolloverClaim::DurableCertifiedBodyResponse {
+            scope: self.exact_output_scope(),
+            target: peer.clone(),
+            network_id: self.context.network_id,
+            proof,
+        };
+        let messages = vec![message];
+        let peers = vec![peer];
+        rollover_claim.validate_fanout(&messages, &peers)?;
+        durable_history_source_covers(
+            &messages,
+            &rollover_claim,
+            &self.context.network_id,
+            self.context.height,
+            self.kura.as_ref(),
+        )?;
+        let ownership = self.enqueue_owned_exact_reply_routes_while_guarded(
+            messages
+                .into_iter()
+                .next()
+                .expect("prepared historical body is a singleton"),
+            peers
+                .into_iter()
+                .next()
+                .expect("prepared historical body has one target"),
+            reply_routes,
+            Some(ingress_ownership),
+            rollover_claim,
+            permit,
+        )?;
+        if ownership == ExactFanoutOwnership::SourceRetained {
+            iroha_logger::debug!(
+                "retained prepared historical Sumeragi v2 body for exact-output retry"
+            );
+            return Ok(
+                super::v2_block_sync::PreparedHistoricalBodyPostOutcome::SourceRetained(retry),
+            );
+        }
+        Ok(super::v2_block_sync::PreparedHistoricalBodyPostOutcome::Posted)
+    }
     fn post_durable_history_response_with_routes(
         &self,
         peer: PeerId,
@@ -4904,17 +4964,10 @@ impl ProductionV2Services {
                     response_hash: HashOf::new(response),
                 }
             }
-            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response)
-                if response.manifest.round.height <= self.context.height =>
-            {
-                ExactOutputRolloverClaim::DurableCertifiedBodyResponse {
-                    scope: self.exact_output_scope(),
-                    target: peer.clone(),
-                    responder: self.local_peer.clone(),
-                    source_round: response.manifest.round,
-                    source_subject: response.manifest.subject,
-                    response_hash: HashOf::new(response),
-                }
+            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
+                return Err(
+                    "historical body output must cross the bounded prepared-worker seam".to_owned(),
+                );
             }
             _ => {
                 return Err(

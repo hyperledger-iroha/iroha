@@ -34,10 +34,61 @@ fn top_up_is_a_typed_async_command_on_the_final_route() {
 #[test]
 fn retries_use_bounded_recovery_and_confirmed_admission() {
     let commands = production_source(KAGEMUSHA_COMMANDS_SOURCE);
-    assert!(commands.contains("find_pending_offline_operation_by_id"));
-    assert!(commands.contains("get_earliest_block_height_by_offline_operation_id"));
+    assert!(commands.contains("resolve_pending_offline_operation_by_id"));
+    assert!(commands.contains("pending_kagemusha_operation"));
+    assert!(!commands.contains("all_transactions"));
+    assert!(commands.contains("kagemusha_operation_outcome_v4"));
+    assert!(commands.contains("get_merge_entry_by_carrier_height"));
+    assert!(commands.contains("signed_transaction_wire_hash_v4"));
+    assert!(commands.contains("pending.signed_transaction_wire_hash()"));
+    assert!(!commands.contains("outcome.signed_transaction_hash"));
+    assert!(!commands.contains("get_earliest_block_height_by_offline_operation_id"));
     assert!(!commands.contains("while height > 0"));
     assert!(commands.contains("claim_submission"));
     assert!(commands.contains("wait_for_submission_outcome"));
     assert!(commands.contains("let record = submission.accept(tx_hash)"));
+    let resolver = commands
+        .split("fn resolve_pending_offline_operation_by_id")
+        .nth(1)
+        .expect("typed pending resolver")
+        .split("fn find_existing_offline_operation")
+        .next()
+        .expect("typed pending resolver body");
+    assert!(
+        resolver
+            .find("pending_kagemusha_operation")
+            .expect("Queue lookup")
+            < resolver
+                .find("find_terminal_offline_operation_by_id")
+                .expect("terminal recheck after Queue lookup")
+    );
+    assert_eq!(
+        resolver
+            .matches("find_terminal_offline_operation_by_id")
+            .count(),
+        2,
+        "Queue miss and transient unavailability must each recheck terminal consensus state"
+    );
+    assert!(resolver.contains("PendingKagemushaOperationLookupError::Inconsistent"));
+}
+#[test]
+fn status_checks_consensus_outcome_before_process_local_hints() {
+    let commands = production_source(KAGEMUSHA_COMMANDS_SOURCE);
+    let status = commands
+        .split("pub(crate) fn handle_operation_status")
+        .nth(1)
+        .expect("operation status handler")
+        .split("struct KagemushaV2CommittedFinality")
+        .next()
+        .expect("operation status handler body");
+    let outcome = status
+        .find("find_terminal_offline_operation_by_id")
+        .expect("terminal outcome preflight");
+    let admission = status
+        .find("issuer.admission.lock")
+        .expect("process-local admission lookup");
+    let pending = status
+        .find("resolve_pending_offline_operation_by_id")
+        .expect("typed Queue pending lookup");
+    assert!(outcome < admission && outcome < pending);
 }

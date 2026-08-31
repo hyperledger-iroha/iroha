@@ -666,6 +666,70 @@ fn applied_height_handoff_rejects_wrong_height_global_output() {
     assert!(error.contains("not bound to the applied height"));
     assert!(pending.is_pending());
 }
+
+fn prepared_historical_body_output(
+    history: &crate::sumeragi::v2_block_sync::tests::DurableHistoryFixture,
+    route_fixture: &mut NetworkReplyRouteTestFixture,
+) -> (
+    crate::sumeragi::v2_block_sync::V2BlockSyncServer,
+    crate::sumeragi::v2_block_sync::PreparedHistoricalBodyOutput,
+) {
+    let route = route_fixture.mint(history.requester.clone());
+    let request_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::CertifiedBodyRequest(history.body_request.clone()),
+    ));
+    let (reply_routes, ingress_ownership) = fair_ingress_route_owner(
+        request_message,
+        history.requester.clone(),
+        history.requester.clone(),
+        route,
+    );
+    let task = crate::sumeragi::v2_block_sync::HistoricalBodyServeTask::from_bound_ingress(
+        history.body_request.clone(),
+        history.requester.clone(),
+        history.requester.clone(),
+        reply_routes,
+        ingress_ownership,
+    )
+    .expect("bind exact historical-body worker input");
+    let limits = crate::sumeragi::v2_block_sync::HistoricalBodyServeLimits::first_release(1)
+        .expect("valid fixed historical-body worker limits");
+    let mut server =
+        crate::sumeragi::v2_block_sync::V2BlockSyncServer::new_with_historical_body_service(
+            history.artifact.height_context.network_id,
+            1,
+            Arc::clone(&history.kura),
+            history.validators[3].clone(),
+            limits,
+        )
+        .expect("spawn bounded historical-body worker");
+    assert_eq!(
+        server
+            .try_enqueue_historical_body(task)
+            .expect("admit historical-body worker input"),
+        crate::sumeragi::v2_block_sync::HistoricalBodyServeAdmission::Queued
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let prepared = loop {
+        match server.try_recv_historical_body_completion() {
+            Ok(Some(crate::sumeragi::v2_block_sync::HistoricalBodyServeCompletion::Prepared(
+                prepared,
+            ))) => break prepared,
+            Ok(Some(
+                crate::sumeragi::v2_block_sync::HistoricalBodyServeCompletion::NoResponse(_),
+            )) => panic!("historical-body fixture unexpectedly had no durable response"),
+            Ok(Some(crate::sumeragi::v2_block_sync::HistoricalBodyServeCompletion::Failed(
+                _,
+                error,
+            ))) => panic!("historical-body worker failed: {error}"),
+            Ok(None) if Instant::now() < deadline => std::thread::yield_now(),
+            Ok(None) => panic!("historical-body worker did not finish before the test deadline"),
+            Err(error) => panic!("historical-body completion failed: {error}"),
+        }
+    };
+    (server, prepared)
+}
+
 #[test]
 fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() {
     let history = durable_history_fixture();
@@ -702,23 +766,42 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
     assert!(error.contains("no typed applied-height rollover claim"));
     assert!(manual.is_pending());
     install_exact_output_backpressure(&mut service);
-    for response in [
-        history.commit_response.clone(),
-        history.body_response.clone(),
-    ] {
-        let guard = Arc::clone(&service.output_guard);
-        let operation = guard
-            .begin_fail_stop_operation()
-            .expect("valid historical response operation");
-        service
-            .post_durable_history_response_with_permit(
-                history.requester.clone(),
-                response,
-                operation.permit(),
-            )
-            .expect("live emitter accepts exact Kura response");
-        operation.complete();
+    let guard = Arc::clone(&service.output_guard);
+    let operation = guard
+        .begin_fail_stop_operation()
+        .expect("valid historical CommitQC response operation");
+    service
+        .post_durable_history_response_with_permit(
+            history.requester.clone(),
+            history.commit_response.clone(),
+            operation.permit(),
+        )
+        .expect("live emitter accepts exact Kura CommitQC response");
+    operation.complete();
+    let mut route_fixture = NetworkReplyRouteTestFixture::new(history.requester.clone());
+    let (historical_body_server, prepared_body) =
+        prepared_historical_body_output(&history, &mut route_fixture);
+    let guard = Arc::clone(&service.output_guard);
+    let operation = guard
+        .begin_fail_stop_operation()
+        .expect("valid prepared historical-body response operation");
+    match service
+        .post_prepared_historical_body_response_on_reply_routes_with_permit(
+            prepared_body,
+            operation.permit(),
+        )
+        .expect("prepared worker output crosses exact-output admission")
+    {
+        crate::sumeragi::v2_block_sync::PreparedHistoricalBodyPostOutcome::Posted => {}
+        crate::sumeragi::v2_block_sync::PreparedHistoricalBodyPostOutcome::SourceRetained(_) => {
+            panic!("two-slot regression corridor must retain the prepared response")
+        }
     }
+    operation.complete();
+    assert!(
+        !historical_body_server.has_pending_historical_body_serve(),
+        "posted worker output releases its bounded service ownership"
+    );
     let pending = service
         .lock_pending_exact_output()
         .expect("inspect live historical output");
@@ -761,7 +844,7 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
                 &applied_artifact,
                 &lane_authority,
             )
-            .expect("rollover independently rereads both Kura sources"),
+            .expect("rollover revalidates CommitQC Kura and worker-sealed body sources"),
         2
     );
     assert!(!service.has_pending_exact_output().expect("inspect handoff"));
@@ -827,79 +910,147 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
         "differs from its Kura finality source",
         "inspect rejected CommitQC response",
     );
-    let mut rejected_service = archive_successor();
-    let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(mut wrong_responder) =
-        history.body_response.payload.clone()
-    else {
-        panic!("history fixture must contain a certified body response")
-    };
-    wrong_responder.responder = PeerId::new(history.validators[1].public_key().clone());
-    wrong_responder.signature = Signature::new(
-        history.validators[1].private_key(),
-        &wrong_responder.signature_preimage(),
-    )
-    .payload()
-    .to_vec();
-    assert_rejected_before_actor_admission(
-        &mut rejected_service,
-        |service| {
-            post_history_response_for_rejection(
-                service,
-                history.requester.clone(),
-                wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(wrong_responder),
-                ),
-                "invalid historical response operation",
-            )
-        },
-        "wrong historical responder must fail before actor admission",
-        "serving network identity",
-        "inspect rejected body response",
-    );
     let mut rejected_body_service = archive_successor();
-    let _ = archive_successor;
-    let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(mut substituted_body) =
-        history.body_response.payload
-    else {
-        panic!("history fixture must contain a certified body response")
-    };
-    substituted_body.body[0] ^= 0x01;
-    let substituted_subject = wire::BlockSubject {
-        payload_hash: Hash::new(&substituted_body.body),
-        ..substituted_body.manifest.subject
-    };
-    let (substituted_manifest, _) = encode_payload(
-        &history.artifact.height_context,
-        substituted_body.manifest.round,
-        substituted_subject,
-        &substituted_body.body,
-    )
-    .expect("encode self-consistent substituted historical body")
-    .into_parts();
-    substituted_body.manifest = substituted_manifest;
-    substituted_body.signature = Signature::new(
-        history.validators[3].private_key(),
-        &substituted_body.signature_preimage(),
-    )
-    .payload()
-    .to_vec();
     assert_rejected_before_actor_admission(
         &mut rejected_body_service,
         |service| {
             post_history_response_for_rejection(
                 service,
-                history.requester,
-                wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(substituted_body),
-                ),
-                "invalid body response operation",
+                history.requester.clone(),
+                history.body_response.clone(),
+                "legacy historical-body response operation",
             )
         },
-        "substituted canonical body must fail before actor admission",
-        "differs from its Kura finality source",
-        "inspect rejected canonical body response",
+        "actor-built historical bodies must not bypass the prepared-worker seam",
+        "bounded prepared-worker seam",
+        "inspect rejected legacy body response",
     );
 }
+
+#[test]
+fn prepared_historical_body_retries_after_exact_output_capacity_rejection() {
+    let history = durable_history_fixture();
+    let mut service = successor_service_for_history_as(
+        Arc::clone(&history.kura),
+        &history.artifact,
+        &history.validators,
+        3,
+    );
+    service
+        .set_exact_output_shared_unit_capacity_for_test(1)
+        .expect("install one shared exact-output ownership unit");
+    install_exact_output_backpressure(&mut service);
+
+    let guard = Arc::clone(&service.output_guard);
+    let operation = guard
+        .begin_fail_stop_operation()
+        .expect("valid historical CommitQC response operation");
+    service
+        .post_durable_history_response_with_permit(
+            history.requester.clone(),
+            history.commit_response.clone(),
+            operation.permit(),
+        )
+        .expect("fill the only shared exact-output ownership unit");
+    operation.complete();
+
+    let mut route_fixture = NetworkReplyRouteTestFixture::new(history.requester.clone());
+    let (mut historical_body_server, prepared_body) =
+        prepared_historical_body_output(&history, &mut route_fixture);
+    let guard = Arc::clone(&service.output_guard);
+    let operation = guard
+        .begin_fail_stop_operation()
+        .expect("valid capacity-rejected body operation");
+    let retained = match service
+        .post_prepared_historical_body_response_on_reply_routes_with_permit(
+            prepared_body,
+            operation.permit(),
+        )
+        .expect("capacity rejection remains retryable")
+    {
+        crate::sumeragi::v2_block_sync::PreparedHistoricalBodyPostOutcome::SourceRetained(
+            retained,
+        ) => retained,
+        crate::sumeragi::v2_block_sync::PreparedHistoricalBodyPostOutcome::Posted => {
+            panic!("a full one-unit corridor cannot own the prepared body")
+        }
+    };
+    historical_body_server
+        .defer_prepared_historical_body_output(retained)
+        .expect("retain the exact worker completion for another actor turn");
+    operation.complete();
+    assert!(
+        historical_body_server.has_pending_historical_body_serve(),
+        "the deferred response must keep rollover blocked"
+    );
+    assert_eq!(
+        service
+            .lock_pending_exact_output()
+            .expect("inspect the capacity blocker")
+            .fanouts
+            .len(),
+        1,
+        "capacity rejection must not insert or lose the prepared response"
+    );
+
+    let admitted = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&admitted);
+    service.set_exact_output_admission_hook(move |_post, _ticket| {
+        observed.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    });
+    assert!(
+        !service
+            .retry_pending_exact_output()
+            .expect("drain the capacity blocker")
+    );
+    assert_eq!(admitted.load(Ordering::Relaxed), 1);
+
+    let prepared_body = match historical_body_server
+        .try_recv_historical_body_completion()
+        .expect("take the retained worker completion")
+        .expect("the retained worker completion remains present")
+    {
+        crate::sumeragi::v2_block_sync::HistoricalBodyServeCompletion::Prepared(prepared) => {
+            prepared
+        }
+        crate::sumeragi::v2_block_sync::HistoricalBodyServeCompletion::NoResponse(_) => {
+            panic!("a prepared retry cannot become no-response")
+        }
+        crate::sumeragi::v2_block_sync::HistoricalBodyServeCompletion::Failed(_, error) => {
+            panic!("a prepared retry cannot become failure: {error}")
+        }
+    };
+    let guard = Arc::clone(&service.output_guard);
+    let operation = guard
+        .begin_fail_stop_operation()
+        .expect("valid retried body operation");
+    assert!(matches!(
+        service
+            .post_prepared_historical_body_response_on_reply_routes_with_permit(
+                prepared_body,
+                operation.permit(),
+            )
+            .expect("retry the exact prepared response"),
+        crate::sumeragi::v2_block_sync::PreparedHistoricalBodyPostOutcome::Posted
+    ));
+    operation.complete();
+    assert_eq!(
+        admitted.load(Ordering::Relaxed),
+        2,
+        "the retained prepared response reaches actor admission exactly once"
+    );
+    assert!(
+        !historical_body_server.has_pending_historical_body_serve(),
+        "successful retry releases the worker-owned ingress carrier"
+    );
+    assert!(
+        !service
+            .has_pending_exact_output()
+            .expect("inspect the drained exact-output corridor")
+    );
+}
+
 #[test]
 fn applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output() {
     let lane_history = durable_lane_history_fixture();

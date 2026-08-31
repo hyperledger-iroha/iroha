@@ -46,7 +46,7 @@ schema-closed, payload-free plan containing:
 - exactly two Governance DAG instances with distinct Kubo runtime handles and
   administrator identities;
 - distinct production runtime handles for monitoring, an authenticated external
-  signer, KMS, and WebAuthn;
+  signer, a key-custody provider, and WebAuthn;
 - between one and 64 signed model artifacts, each bound by a production
   identifier, positive revision, artifact digest, detached-signature digest,
   verified Ed25519 or ML-DSA-87 algorithm, and signer public-key fingerprint;
@@ -63,7 +63,7 @@ three fields must equal the canonical public Taira constants. Validator rows con
 `provider_id` and `operator_id`. Gateway rows contain `gateway_id`, `region`,
 and `administrator_id`. Governance DAG rows contain `instance_id`,
 `kubo_handle`, and `administrator_id`. `runtime_handles` has exactly the
-`monitoring`, `external_signer`, `kms`, and `webauthn` keys.
+`monitoring`, `external_signer`, `key_custody`, and `webauthn` keys.
 `runtime_material_policy`
 sets `configuration_contains_credentials=false`,
 `configuration_contains_private_material=false`, and
@@ -142,8 +142,9 @@ signature covers the distinct service and administrator identities, positive
 key and policy revisions, non-zero policy digest, public-key fingerprint, and
 the exact topology binding. Local or non-software backends, same-identity
 administration, and key reuse with a resilience, lane, or promotion signer fail
-qualification even when a detached signature is otherwise valid. A later HSM
-migration requires new deployment evidence and must not relabel this release.
+qualification even when a detached signature is otherwise valid. Iroha has no
+HSM-specific backend or migration mode; deployment-owned custody behind the
+external signer must not relabel this release.
 
 The binding also carries the exact Taira network, chain ID, discriminator, and
 SHA-256 of the canonical ordered four-validator identity array.
@@ -169,8 +170,8 @@ reverified by the aggregate and replay runner. It remains outside both the
 Configuration qualification does not provision or test infrastructure.
 Operators still must deploy the reviewed four-validator topology, exercise
 DA/RBC and recovery, bring up independently administered gateways and
-Governance DAG/Kubo instances, inject isolated authenticated software-signing,
-KMS, and WebAuthn dependencies from runtime-only secret stores, operate
+Governance DAG/Kubo instances, inject isolated authenticated signing,
+key-custody, and WebAuthn providers from runtime-only secret stores, operate
 multiple storage providers, complete the 1,000-stream and 24-hour soak
 exercises, and collect one valid fresh summary for every lane. L2 remains
 blocked until the trusted external software Ed25519 signer signs the ordered

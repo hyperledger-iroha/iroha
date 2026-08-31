@@ -3259,7 +3259,7 @@ impl std::fmt::Debug for NodeRuntimeDeps {
     }
 }
 impl NodeRuntimeDeps {
-    /// Attach the runtime-only PKCS#11/KMS quarantine-key wrapper.
+    /// Attach the runtime-only deployment-owned quarantine-key wrapper.
     ///
     /// Startup also requires its exact public provider binding in
     /// [`StorageConfig`]; the injected adapter is never allowed to self-pin.
@@ -3322,7 +3322,7 @@ impl NodeRuntimeDeps {
         self.fenced_transparency_head_reader = Some(reader);
         self
     }
-    /// Attach the production HSM/KMS signer for local Governance DAG blocks.
+    /// Attach the qualified production signer for local Governance DAG blocks.
     #[must_use]
     pub fn with_governance_dag_signer(
         mut self,
@@ -4937,10 +4937,8 @@ pub enum NodeInitError {
         message: String,
     },
     /// Authenticated screening was enabled without its runtime-only
-    /// PKCS#11/KMS quarantine-key dependency.
-    #[error(
-        "SoraFS moderation screening requires an injected runtime-only PKCS#11/KMS quarantine key wrapper"
-    )]
+    /// deployment-owned quarantine-key dependency.
+    #[error("SoraFS moderation screening requires an injected runtime-only quarantine key wrapper")]
     ModerationQuarantineKeyWrapperUnavailable,
     /// The injected quarantine-key wrapper failed its exact public provider binding.
     #[error("failed to qualify the SoraFS moderation quarantine key wrapper: {message}")]
@@ -5316,7 +5314,7 @@ impl NodeHandle {
     pub fn try_new(config: StorageConfig) -> Result<Self, NodeInitError> {
         Self::try_new_with_policies(config, RepairConfig::default(), GcConfig::default())
     }
-    /// Construct a new handle with a runtime-only PKCS#11/KMS quarantine-key wrapper.
+    /// Construct a new handle with a runtime-only deployment-owned quarantine-key wrapper.
     ///
     /// # Errors
     ///
@@ -5382,7 +5380,7 @@ impl NodeHandle {
         )
     }
     /// Construct a new handle with explicit policies and a runtime-only
-    /// PKCS#11/KMS quarantine-key wrapper.
+    /// deployment-owned quarantine-key wrapper.
     ///
     /// # Errors
     ///
@@ -10471,7 +10469,7 @@ impl NodeHandle {
     pub fn moderation_screening_authority_bundle_digest(&self) -> Option<[u8; 32]> {
         self.config.moderation_screening_authority_bundle_digest()
     }
-    /// Return the active non-secret PKCS#11/KMS quarantine key handle.
+    /// Return the active non-secret production quarantine key handle.
     ///
     /// The wrapping provider and its credentials remain runtime-only.
     #[must_use]
@@ -11252,7 +11250,7 @@ impl NodeHandle {
     /// # Errors
     ///
     /// Returns an error if the range is invalid, storage or the runtime
-    /// PKCS#11/KMS wrapper is unavailable or unqualified, the object is
+    /// quarantine-key wrapper is unavailable or unqualified, the object is
     /// missing, or any envelope/chunk authentication check fails.
     pub fn read_moderation_quarantine_object_range(
         &self,
@@ -11304,7 +11302,7 @@ impl NodeHandle {
     ///
     /// # Errors
     ///
-    /// Returns an error if storage or the runtime PKCS#11/KMS wrapper is unavailable or
+    /// Returns an error if storage or the runtime quarantine-key wrapper is unavailable or
     /// unqualified, the object is missing, old/new key operations fail, the replacement cannot be
     /// authenticated, or the atomic write fails.
     pub fn rewrap_moderation_quarantine_object_dek(
@@ -12090,7 +12088,7 @@ impl NodeHandle {
             return Err(NodeInitError::checkpoint(
                 "moderation quarantine key wrapper",
                 root,
-                "runtime PKCS#11/KMS key wrapper or its configured binding is missing while indexed objects exist",
+                "runtime quarantine key wrapper or its configured binding is missing while indexed objects exist",
             ));
         }
         let mut expected_files = BTreeSet::from([index_path.clone()]);
@@ -16417,8 +16415,7 @@ fn moderation_evidence_viewer_error_from_object_error(
         ModerationQuarantineObjectError::KeyWrapperUnavailable
         | ModerationQuarantineObjectError::KeyWrapperUnqualified => {
             ModerationEvidenceViewerError::InvalidInput {
-                message: "runtime PKCS#11/KMS quarantine key wrapper is unavailable or unqualified"
-                    .to_owned(),
+                message: "runtime quarantine key wrapper is unavailable or unqualified".to_owned(),
             }
         }
         ModerationQuarantineObjectError::KeyWrapping { key_id, failure } => {

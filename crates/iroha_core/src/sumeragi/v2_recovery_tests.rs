@@ -115,7 +115,7 @@ fn verified_context() -> (VerifiedHeightContext, Vec<KeyPair>) {
     )
 }
 #[test]
-fn lifecycle_storage_mint_permit_binds_kura_context_and_policy() {
+fn lifecycle_storage_mint_permit_binds_kura_context_policy_and_payload_directory() {
     let (verified, keys) = verified_context();
     let kura = Kura::blank_kura_for_testing();
     let foreign_kura = Kura::blank_kura_for_testing();
@@ -128,12 +128,25 @@ fn lifecycle_storage_mint_permit_binds_kura_context_and_policy() {
         &policy,
         &genesis_account,
     );
+    let lifecycle_root = kura.sumeragi_v2_storage_root().join("lifecycle-v1");
+    let payload_directory = lifecycle_root
+        .join(hex::encode(verified.context().id().0.as_ref()))
+        .join("certified-serve-payload-v1");
+    assert!(
+        !lifecycle_root.exists(),
+        "the blank Kura must begin without lifecycle ancestry"
+    );
     let _authority = RecoveredLifecycleStorageAuthorityV1::mint_from_recovered_height(
         kura.as_ref(),
         &verified,
         &policy,
         &genesis_account,
         exact,
+    )
+    .expect("mint the recovery-bound Certified-Serve payload authority");
+    assert!(
+        payload_directory.is_dir(),
+        "authenticated recovery must materialize the exact descriptor-bound payload directory"
     );
     let foreign = RecoveredLifecycleStorageMintPermitV1::new(
         kura.as_ref(),
@@ -158,6 +171,35 @@ fn lifecycle_storage_mint_permit_binds_kura_context_and_policy() {
     );
     assert!(!substituted.authorizes(kura.as_ref(), &verified, &policy, &foreign_genesis_account,));
 }
+
+#[test]
+fn emergency_fast_lifecycle_storage_mint_does_not_materialize_payload_directory() {
+    let (verified, keys) = verified_context();
+    let kura = Kura::blank_kura_for_testing_in_emergency_fast_mode();
+    let policy = BlockSignaturePolicy::RotatingLeader;
+    let genesis_account = AccountId::new(keys[0].public_key().clone());
+    let permit = RecoveredLifecycleStorageMintPermitV1::new(
+        kura.as_ref(),
+        &verified,
+        &policy,
+        &genesis_account,
+    );
+    let lifecycle_root = kura.sumeragi_v2_storage_root().join("lifecycle-v1");
+
+    let _authority = RecoveredLifecycleStorageAuthorityV1::mint_from_recovered_height(
+        kura.as_ref(),
+        &verified,
+        &policy,
+        &genesis_account,
+        permit,
+    )
+    .expect("mint inert emergency recovery storage authority");
+
+    assert!(
+        !lifecycle_root.exists(),
+        "emergency Fast recovery must not create lifecycle or payload-store ancestry"
+    );
+}
 fn state_for(kura: &Arc<Kura>, network_id: iroha_data_model::NetworkId) -> State {
     State::new_with_chain_and_network_id_for_testing(
         World::new(),
@@ -180,7 +222,6 @@ fn world_with_consensus_keys(keys: &[KeyPair]) -> World {
             ),
             activation_height: 0,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };
@@ -533,7 +574,7 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
         "the production-shaped predecessor lifecycle must begin genuinely empty"
     );
     let retirement = complete_tip
-        .into_canonical_predecessor_storage(&keys[0])
+        .into_kura_bound_canonical_predecessor_storage(kura.as_ref(), &keys[0])
         .and_then(
             crate::sumeragi::v2_lifecycle_coordinator::AuthenticatedCompleteTipPredecessorStorageV1::retire,
         )

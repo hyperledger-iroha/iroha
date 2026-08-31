@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 from typing import Any, Dict, List, Mapping, Optional
 
 from iroha_torii_client import KagemushaRedeemRequestV4, KagemushaTopUpRequestV4
@@ -15,8 +16,8 @@ _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
 )
 
 
-def _canonical_hash(seed: int) -> str:
-    body_bytes = bytearray([seed & 0xFF] * 32)
+def _hash_literal(raw: bytes) -> str:
+    body_bytes = bytearray(raw)
     body_bytes[-1] |= 1
     body = body_bytes.hex().upper()
     crc = 0xFFFF
@@ -29,6 +30,17 @@ def _canonical_hash(seed: int) -> str:
                 else (crc << 1) & 0xFFFF
             )
     return f"hash:{body}#{crc:04X}"
+
+
+def _canonical_hash(seed: int) -> str:
+    body_bytes = bytearray([seed & 0xFF] * 32)
+    return _hash_literal(body_bytes)
+
+
+def _iroha_hash(*chunks: bytes) -> bytes:
+    digest = bytearray(hashlib.blake2b(b"".join(chunks), digest_size=32).digest())
+    digest[-1] |= 1
+    return bytes(digest)
 
 
 def offline_capability_payload(**overrides: Any) -> Dict[str, Any]:
@@ -178,10 +190,13 @@ def offline_top_up_finality_proof(
     context_id = _canonical_hash(0xA0)
 
     def execution_commitment(*, includes_top_up: bool, seed: int) -> Dict[str, Any]:
+        ordinary_root_bytes = bytearray([(seed + 2) & 0xFF] * 32)
+        ordinary_root_bytes[-1] |= 1
+        ordinary_root = bytes(ordinary_root_bytes)
         commitment = {
             "parent_state_root": _canonical_hash(seed),
             "post_state_root": _canonical_hash(seed + 1),
-            "ordinary_writes_root": _canonical_hash(seed + 2),
+            "ordinary_writes_root": _hash_literal(ordinary_root),
             "topup_anchor_root": None,
             "topup_anchor_count": 0,
             "native_amx_application_manifest_version": 1,
@@ -195,8 +210,25 @@ def offline_top_up_finality_proof(
             "executed_block_wire_hash": _canonical_hash(seed + 3),
         }
         if includes_top_up:
-            commitment["topup_anchor_root"] = _canonical_hash(seed + 4)
+            operation_id = bytes(
+                bound_anchor.get("topup_operation_id", OFFLINE_OPERATION_BYTES)
+            )
+            anchor_digest = bytes(
+                bound_anchor.get("anchor_digest", offline_fixed_bytes(0x71))
+            )
+            key_hash = _iroha_hash(b"\xd2" + operation_id)
+            value_hash = _iroha_hash(anchor_digest)
+            topup_root = _iroha_hash(b"\x00", key_hash, value_hash)
+            commitment["topup_anchor_root"] = _hash_literal(topup_root)
             commitment["topup_anchor_count"] = 1
+            commitment["post_state_root"] = _hash_literal(
+                _iroha_hash(
+                    b"iroha:kagemusha:v2:post-state-root\x00",
+                    (1).to_bytes(4, "little"),
+                    ordinary_root,
+                    topup_root,
+                )
+            )
         return commitment
 
     def certificate(
@@ -300,7 +332,6 @@ def offline_applied_top_up_status(
     result = {
         "transaction_hash": OFFLINE_TRANSACTION_HASH,
         "finalized_block_height": finalized_height,
-        "server_time_ms": 13,
         "anchor": bound_anchor,
         "finality_proof": offline_top_up_finality_proof(
             bound_anchor,

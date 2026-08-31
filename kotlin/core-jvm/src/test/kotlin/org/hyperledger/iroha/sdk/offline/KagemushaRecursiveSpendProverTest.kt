@@ -1816,7 +1816,6 @@ class KagemushaRecursiveSpendProverTest {
                     null,
                     null,
                     null,
-                    null,
                 )
             },
         )
@@ -1916,7 +1915,7 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
-    fun operationStatusProjectionRejectsZeroTimesAndUnstableCodes() {
+    fun operationStatusProjectionRejectsZeroPendingTimeFinalizedHeightAndUnstableCodes() {
         val digest = ByteArray(32) { 1 }
         fun projection(
             state: KagemushaRecursiveSpendProver.OperationState,
@@ -1924,7 +1923,6 @@ class KagemushaRecursiveSpendProverTest {
             transactionHash: ByteArray = digest,
             submittedAt: Long? = null,
             finalizedHeight: Long? = null,
-            serverTime: Long? = null,
             rejection: KagemushaRecursiveSpendProver.OperationRejection? = null,
         ) = KagemushaRecursiveSpendProver.OperationStatusProjection(
             state,
@@ -1933,7 +1931,6 @@ class KagemushaRecursiveSpendProverTest {
             transactionHash,
             submittedAt,
             finalizedHeight,
-            serverTime,
             null,
             rejection,
         )
@@ -1966,15 +1963,6 @@ class KagemushaRecursiveSpendProverTest {
                 KagemushaRecursiveSpendProver.OperationState.APPLIED,
                 KagemushaRecursiveSpendProver.OperationKind.REDEEM,
                 finalizedHeight = 0,
-                serverTime = 1,
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            projection(
-                KagemushaRecursiveSpendProver.OperationState.APPLIED,
-                KagemushaRecursiveSpendProver.OperationKind.REDEEM,
-                finalizedHeight = 1,
-                serverTime = 0,
             )
         }
         for (code in listOf("_invalid", "UPPER", "bad-code", "a".repeat(65))) {
@@ -2125,7 +2113,6 @@ class KagemushaRecursiveSpendProverTest {
             null,
             null,
             null,
-            null,
         )
         KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(status, handle)
         assertFailsWith<IllegalStateException> {
@@ -2178,7 +2165,6 @@ class KagemushaRecursiveSpendProverTest {
             operationId,
             operationId,
             null,
-            1,
             1,
             null,
             null,

@@ -113,6 +113,72 @@ export interface KagemushaOperationReference {
   readonly submitted_at_ms: number;
 }
 
+export interface KagemushaTopUpAnchorRef {
+  readonly topup_operation_id: number[];
+  readonly anchor_digest: number[];
+}
+
+export interface KagemushaTopUpAnchorMerkleProof {
+  readonly leaf_index: number;
+  readonly leaf_count: number;
+  readonly siblings: number[][];
+}
+
+export type KagemushaTopUpExecutionCommitment = Readonly<
+  Record<string, JsonValue>
+> & Readonly<{
+  post_state_root: string;
+  ordinary_writes_root: string;
+  topup_anchor_root: string;
+  topup_anchor_count: number;
+}>;
+
+/**
+ * Top-up proof whose anchor path and advertised execution post-state projection
+ * match. The JavaScript transport parser does not authenticate the QC signature
+ * or validator roster.
+ */
+export interface KagemushaTopUpFinalityProof {
+  readonly version: 1;
+  readonly anchor: KagemushaTopUpAnchorRef;
+  readonly anchor_path: KagemushaTopUpAnchorMerkleProof;
+  readonly commit_qc: Readonly<{
+    height_context: Readonly<Record<string, JsonValue>> & Readonly<{
+      height: number;
+      network_id: string;
+    }>;
+    certificate: Readonly<Record<string, JsonValue>> & Readonly<{
+      execution_commitment: KagemushaTopUpExecutionCommitment;
+    }>;
+  }>;
+}
+
+export type KagemushaTopUpAnchor = Readonly<Record<string, JsonValue>> & Readonly<{
+  version: 4;
+  network_id: string;
+  topup_operation_id: number[];
+  anchor_digest: number[];
+  finalized_height: number;
+  finalized_tx_hash: number[];
+  artifact_binding: Readonly<Record<string, JsonValue>> & Readonly<{ version: 4 }>;
+}>;
+
+export interface KagemushaTopUpResult {
+  readonly transaction_hash: string;
+  readonly finalized_block_height: number;
+  readonly anchor: KagemushaTopUpAnchor;
+  readonly finality_proof: KagemushaTopUpFinalityProof;
+}
+
+export interface KagemushaRedeemResult {
+  readonly transaction_hash: string;
+  readonly finalized_block_height: number;
+}
+
+export type KagemushaOperationResult =
+  | Readonly<{ kind: "top_up"; result: Readonly<KagemushaTopUpResult> }>
+  | Readonly<{ kind: "redeem"; result: Readonly<KagemushaRedeemResult> }>;
+
 export type KagemushaOperationStatus =
   | Readonly<{
       state: "pending";
@@ -127,10 +193,7 @@ export type KagemushaOperationStatus =
       state: "applied";
       value: Readonly<{
         operation_id: string;
-        result: Readonly<{
-          kind: "top_up" | "redeem";
-          result: Readonly<Record<string, JsonValue>>;
-        }>;
+        result: KagemushaOperationResult;
       }>;
     }>
   | Readonly<{
@@ -161,7 +224,7 @@ export function normalizeOfflineStatus(
 ): OfflineStatus;
 export function normalizeKagemushaOperationReference(
   payload: Record<string, unknown>,
-  expected: {
+  expected?: {
     expectedOperationId: string;
     expectedKind: "top_up" | "redeem";
     location: string | null;
@@ -170,7 +233,7 @@ export function normalizeKagemushaOperationReference(
 ): KagemushaOperationReference;
 export function normalizeKagemushaOperationStatus(
   payload: Record<string, unknown>,
-  expectedOperationId: string,
+  acceptedReference: KagemushaOperationReference,
 ): KagemushaOperationStatus;
 
 export const CRYPTO_ALGORITHMS: Readonly<{
@@ -4983,6 +5046,7 @@ export type ToriiGovernanceProposalStatus =
   | "ExecutionFailed";
 
 export interface ToriiGovernanceDeployContractProposal {
+  proposal_operator: string;
   contract_address: string;
   code_hash: string;
   abi_hash: string;
@@ -5015,6 +5079,7 @@ export interface ToriiGovernanceRuntimeUpgradeManifest {
 }
 
 export interface ToriiGovernanceRuntimeUpgradeProposal {
+  proposal_operator: string;
   manifest: ToriiGovernanceRuntimeUpgradeManifest;
 }
 
@@ -5214,6 +5279,7 @@ export type ToriiGovernanceContractLifecycleAction = Readonly<
 >;
 
 export interface ToriiGovernanceContractLifecycleProposal {
+  proposal_operator: string;
   contract_address: string;
   expected_revision: number;
   action: ToriiGovernanceContractLifecycleAction;
@@ -6018,6 +6084,7 @@ export interface ToriiGovernanceManifestProvenanceInput {
 }
 
 export interface ToriiGovernanceDeployContractProposalRequest {
+  proposalOperator: string;
   contractAddress?: string;
   contractAlias?: string;
   codeHash: string | BinaryLike;
@@ -8264,6 +8331,7 @@ export interface ReportKaigiRelayHealthInput {
 }
 
 export interface ProposeDeployContractInstructionInput {
+  proposalOperator: string;
   contractAddress: string;
   codeHash: HashLike;
   abiHash: HashLike;
@@ -10759,7 +10827,7 @@ export declare class ToriiBrowserClient {
     options?: { signal?: AbortSignal },
   ): Promise<KagemushaOperationReference>;
   getKagemushaOperationStatus(
-    operationId: string,
+    operationReference: KagemushaOperationReference,
     options?: { signal?: AbortSignal },
   ): Promise<KagemushaOperationStatus>;
   listExplorerAccounts<T = unknown>(
@@ -11099,7 +11167,7 @@ export declare class ToriiClient {
     options?: { signal?: AbortSignal },
   ): Promise<KagemushaOperationReference>;
   getKagemushaOperationStatus(
-    operationId: string,
+    operationReference: KagemushaOperationReference,
     options?: { signal?: AbortSignal },
   ): Promise<KagemushaOperationStatus>;
   listAccounts<T = ToriiAccountListItem>(

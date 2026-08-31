@@ -390,18 +390,22 @@ fn casting_context_authorization_replays_all_prefix_phases_and_rejects_tampering
     }
 
     let mut malformed_schedule = state.clone();
-    malformed_schedule
-        .ballots
-        .get_mut(&ballot_attempt_id)
-        .expect("casting-context ballot")
-        .registration_close_height = 27;
-    let malformed_schedule_state = casting_state_at_height(
-        malformed_schedule,
+    let mut malformed_schedule_state = casting_state_at_height(
+        malformed_schedule.clone(),
         lifecycle.clone(),
         Some(&tle_key),
         Some(tle_key_session_id),
         30,
     );
+    malformed_schedule
+        .ballots
+        .get_mut(&ballot_attempt_id)
+        .expect("casting-context ballot")
+        .registration_close_height = 27;
+    malformed_schedule_state
+        .world
+        .parliament_attempts
+        .insert(governance_attempt_id, malformed_schedule);
     assert_eq!(
         authorize_parliament_timed_ovn_casting_context_v1(
             &malformed_schedule_state.query_view(),
@@ -781,42 +785,33 @@ fn ballot_transition_table_freezes_corpus_and_retries_without_fallback() {
             ParliamentReducerEntityV1::BallotAttempt
         ))
     );
-    state
-        .freeze_ballot_survivors(id, ballot, root(21), root(29), 2, root(22), 34)
-        .expect("freeze nonempty survivor roster");
     assert_eq!(
-        state.freeze_timed_ovn_corpus(id, ballot, root(20), root(28), 2, root(25), 36),
-        Err(ParliamentReducerErrorV1::AcceptedCorpusMutation)
+        state.freeze_ballot_survivors(id, ballot, root(21), root(29), 2, root(22), 34),
+        Err(ParliamentReducerErrorV1::InvalidBallotCount),
+        "the two-survivor exact-tally disclosure must fail before ballot acceptance"
     );
-    state
-        .freeze_timed_ovn_corpus(id, ballot, root(20), root(29), 2, root(25), 36)
-        .expect("freeze complete intrinsic timed OVN corpus");
+    let privacy_failed = state.ballot(&ballot).expect("active ballot");
     assert_eq!(
-        state.finalize_opened_ballot(
-            id,
-            ballot,
-            root(20),
-            root(22),
-            first_tle_session_id,
-            root(26),
-            2,
-            ParliamentAggregateTallyV1 {
-                original_seats: 3,
-                accepted_ballots: 2,
-                aye: 1,
-                nay: 1,
-                abstain: 0,
-            },
-            2,
-            41,
-        ),
-        Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
-            ParliamentReducerEntityV1::BallotAttempt
-        ))
+        privacy_failed.attempt.status,
+        BallotAttemptStatusV1::SurvivorFreeze
     );
+    assert!(privacy_failed.survivors.is_none());
+    assert!(privacy_failed.accepted_ballots.is_none());
+    assert!(privacy_failed.corpus_root.is_none());
+    assert!(privacy_failed.opening_root.is_none());
+    assert!(privacy_failed.tally.is_none());
     state
-        .fail_ballot_no_result(id, ballot, false, 41)
-        .expect("pulse/TLE failure is NoResult");
+        .fail_ballot_no_result(id, ballot, false, 35)
+        .expect("sub-floor survivor freeze reaches deterministic deadline NoResult");
+    let no_result = state.ballot(&ballot).expect("failed ballot");
+    assert_eq!(no_result.attempt.status, BallotAttemptStatusV1::NoResult);
+    assert_eq!(
+        no_result.failure_kind,
+        Some(ParliamentBallotFailureKindV1::SurvivorDeadlineExpired)
+    );
+    assert!(no_result.accepted_ballots.is_none());
+    assert!(no_result.opening_root.is_none());
+    assert!(no_result.tally.is_none());
     let retry = BallotAttemptId::derive_v1(body_id, 1);
     assert_eq!(
         state.register_ballot_attempt(
@@ -924,8 +919,10 @@ fn tle_key_session_retention_attempt_fixture_with_retry_schedule_v1(
         )
         .expect("register first ballot");
     assert_eq!(
-        state.tle_key_session_retention_deadline(key_session_id),
-        Some(42)
+        state
+            .tle_key_session_retention_contributions_v1()
+            .get(&key_session_id),
+        Some(&42)
     );
 
     state
@@ -961,13 +958,12 @@ fn tle_key_session_retention_attempt_fixture_with_retry_schedule_v1(
 fn tle_custody_retention_uses_maximum_deadline_across_ballot_retries() {
     let key_session_id = tle_key_session(86);
     let state = tle_key_session_retention_attempt_fixture_v1(key_session_id);
+    let contributions = state.tle_key_session_retention_contributions_v1();
+    assert_eq!(contributions.get(&key_session_id), Some(&62));
     assert_eq!(
-        state.tle_key_session_retention_deadline(key_session_id),
-        Some(62)
-    );
-    assert_eq!(
-        state.tle_key_session_retention_deadline(tle_key_session(89)),
-        None
+        contributions.get(&tle_key_session(89)),
+        None,
+        "unreferenced sessions must not contribute to the retention index"
     );
 }
 

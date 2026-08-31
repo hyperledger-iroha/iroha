@@ -144,7 +144,6 @@ fn new_genesis_account(
 }
 fn configure_replay_fixture_parameters(state: &State) {
     let mut parameters = state.world.parameters.block();
-    parameters.sumeragi.key_require_hsm = false;
     parameters.set_parameter(iroha_data_model::parameter::system::Parameter::Custom(
         SumeragiNposParameters::default().into_custom_parameter(),
     ));
@@ -393,7 +392,10 @@ fn commit_replay_validated_block(
         false,
     )
 }
-fn configure_private_replay_route(state: &mut State, lane_id: LaneId, dataspace_id: DataSpaceId) {
+fn private_replay_nexus(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> iroha_config::parameters::actual::Nexus {
     let lane_catalog = LaneCatalog::new(
         std::num::NonZeroU32::new(4).expect("non-zero lane count"),
         vec![
@@ -418,34 +420,56 @@ fn configure_private_replay_route(state: &mut State, lane_id: LaneId, dataspace_
         },
     ])
     .expect("dataspace catalog");
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.lane_catalog = lane_catalog;
-        nexus.dataspace_catalog = dataspace_catalog.clone();
-        nexus.routing_policy.default_lane = lane_id;
-        nexus.routing_policy.default_dataspace = dataspace_id;
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    nexus.configured_lane_catalog = lane_catalog.clone();
+    nexus.lane_catalog = lane_catalog;
+    nexus.dataspace_catalog = dataspace_catalog;
+    nexus.routing_policy.default_lane = lane_id;
+    nexus.routing_policy.default_dataspace = dataspace_id;
+    nexus
 }
 fn replay_fixture_state(
-    kura: Arc<Kura>,
     chain_id: ChainId,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
-) -> State {
+) -> (State, Arc<Kura>) {
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let world = World::with(
         [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
         [new_genesis_account(&genesis_id).build(&genesis_id)],
         [],
     );
-    let mut state = State::new_with_chain(
+    let configured_nexus = private_replay_nexus(lane_id, dataspace_id);
+    let kura_config = iroha_config::parameters::actual::Kura {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        // The authenticated temporary constructor replaces this placeholder.
+        store_dir: iroha_config::base::WithOrigin::inline(std::path::PathBuf::new()),
+        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity:
+            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: iroha_config::kura::FsyncMode::Batched,
+        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+    };
+    let kura = Kura::new_temporary_with_configured_lane_catalog(
+        &kura_config,
+        &configured_nexus.lane_config,
+        &configured_nexus.configured_lane_catalog,
+    )
+    .expect("initialize authenticated private-replay Kura");
+    let mut state = State::try_new_with_chain(
         world,
-        kura,
+        Arc::clone(&kura),
         crate::query::store::LiveQueryStore::start_test(),
         chain_id,
-    );
-    configure_private_replay_route(&mut state, lane_id, dataspace_id);
-    let configured_nexus = state.nexus.get_mut().clone();
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
+    )
+    .expect("initialize authenticated private-replay State");
     state.install_pre_genesis_nexus_for_testing(configured_nexus);
     let manifests = {
         let nexus = state.nexus.get_mut();
@@ -453,7 +477,7 @@ fn replay_fixture_state(
     };
     state.install_lane_manifests(&manifests);
     configure_replay_fixture_parameters(&state);
-    state
+    (state, kura)
 }
 fn install_replay_manifest_validator_authority(
     state: &State,
@@ -492,7 +516,6 @@ fn install_replay_manifest_validator_authority(
             pop: Some(pop),
             activation_height: 0,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };
@@ -1132,8 +1155,7 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         chain_id.clone(),
     );
     {
-        let mut params_block = state.world.parameters.block();
-        params_block.sumeragi.key_require_hsm = false;
+        let params_block = state.world.parameters.block();
         params_block.commit();
     }
     replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Npos)
@@ -1575,9 +1597,7 @@ fn replay_rejects_retired_space_directory_checkpoint_surface_impl() {
                 .expect("deterministic replay validator keypair")
         })
         .collect::<Vec<_>>();
-    let kura = Kura::blank_kura_for_testing();
-    let original_state =
-        replay_fixture_state(Arc::clone(&kura), chain_id.clone(), lane_id, dataspace_id);
+    let (original_state, kura) = replay_fixture_state(chain_id.clone(), lane_id, dataspace_id);
     let peers = install_replay_manifest_validator_authority(&original_state, &validator_keypairs);
     seed_space_directory_manifest_for_retired_checkpoint_test(&original_state, dataspace_id);
     let proof_policies = |height| {
@@ -1739,9 +1759,7 @@ fn replay_rejects_retired_space_directory_checkpoint_surface_impl() {
     );
     kura.overwrite_wsv_checkpoint_without_validation_for_tests(3, retired_checkpoint, None)
         .expect("overwrite final WSV checkpoint with retired surface hash");
-    let replay_kura = Kura::blank_kura_for_testing();
-    let mut replay_state =
-        replay_fixture_state(Arc::clone(&replay_kura), chain_id, lane_id, dataspace_id);
+    let (mut replay_state, replay_kura) = replay_fixture_state(chain_id, lane_id, dataspace_id);
     install_replay_manifest_validator_authority(&replay_state, &validator_keypairs);
     seed_space_directory_manifest_for_retired_checkpoint_test(&replay_state, dataspace_id);
     for height in 1..=3 {

@@ -512,10 +512,10 @@ fn rekey_account_id(
         .cloned()
         .ok_or_else(|| InstructionExecutionError::Find(FindError::Account(old_account.clone())))?;
     // Parliament candidate roots, seat assignments, proposal fingerprints, and live,
-    // operational, or retryable validation-fee bindings are immutable. Rewriting those records
-    // would invalidate their hashes, while moving only the account/citizenship record would
-    // strand member actions or release the retained bond under the replacement identity. Reject
-    // before any rekey write.
+    // operational, or retryable operator-bound proposal references are immutable. Rewriting
+    // those records would invalidate their hashes, while moving only the account/citizenship
+    // record would strand member actions or release the retained bond under the replacement
+    // identity. Reject before any rekey write.
     parliament_rekey::ensure_account_rekey_preserves_bindings(state_transaction, old_account)?;
     let mut labels_to_repoint: BTreeSet<_> = state_transaction
         .world
@@ -1298,11 +1298,11 @@ fn replace_account_id_in_governance(
             .governance_proposals
             .get_mut(&proposal_id)
         {
-            // A validation-fee proposal's retained proposer is also its embedded operator and is
-            // covered by the proposal fingerprint. Live/operational/retryable records were
+            // An operator-bound proposal's retained proposer is also its embedded operator and
+            // is covered by the proposal fingerprint. Live/operational/retryable records were
             // rejected during rekey preflight; exhausted terminal records remain immutable
             // historical evidence and must survive restore-time operator checks byte-for-byte.
-            if !parliament_rekey::is_validation_fee_proposal(&record.kind) {
+            if !parliament_rekey::is_operator_bound_proposal(&record.kind) {
                 replace_account_id(&mut record.proposer, old, new);
             }
         }

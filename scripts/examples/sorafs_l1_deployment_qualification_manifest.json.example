@@ -70,7 +70,7 @@
   "runtime_handles": {
     "monitoring": "monitoring-prod-fleet",
     "external_signer": "external-signer-prod-release",
-    "kms": "kms-prod-envelope",
+    "key_custody": "key-custody-prod-envelope",
     "webauthn": "webauthn-prod-operators"
   },
   "runtime_material_policy": {

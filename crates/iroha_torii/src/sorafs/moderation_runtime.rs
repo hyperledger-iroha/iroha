@@ -319,7 +319,7 @@ pub(crate) fn moderation_projection_freshness_limit(worker_interval: Duration) -
 /// Fixed runtime signing failures that are safe to surface to the orchestrator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationSigningFailureV1 {
-    /// The HSM or signer service is temporarily unavailable.
+    /// The signing service is temporarily unavailable.
     Unavailable,
     /// The signer queue is full and no signature was produced.
     Backpressure,
@@ -328,9 +328,9 @@ pub enum ModerationSigningFailureV1 {
 }
 /// Runtime-only signer for one exact native moderation transaction.
 ///
-/// Implementations may delegate to PKCS#11 or a remote HSM. A returned
-/// envelope is durably retained by the orchestrator before ingress; signing
-/// itself is never used as an idempotency or crash-recovery boundary.
+/// Implementations may delegate to a deployment-owned signing service. A
+/// returned envelope is durably retained by the orchestrator before ingress;
+/// signing itself is never used as an idempotency or crash-recovery boundary.
 pub trait ModerationSignedTransactionSignerV1: ModerationRuntimeProviderV1 {
     /// Sign the exact fee-quoted payload supplied by Torii.
     ///
@@ -863,10 +863,13 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
                     Err(ModerationStrictIngressFailureV1::Ambiguous)
                 }
                 iroha_core::queue::Error::PlanJournalDurabilityRejected { .. }
+                | iroha_core::queue::Error::KagemushaOperationIndexInconsistent { .. }
                 | iroha_core::queue::Error::UnresolvedRoute { .. } => {
                     Err(ModerationStrictIngressFailureV1::Unavailable)
                 }
                 iroha_core::queue::Error::Expired
+                | iroha_core::queue::Error::KagemushaOperationCarrierRejected { .. }
+                | iroha_core::queue::Error::KagemushaOperationIdConflict { .. }
                 | iroha_core::queue::Error::UnregisteredAuthority { .. }
                 | iroha_core::queue::Error::Governance(_)
                 | iroha_core::queue::Error::GovernanceNotPermitted { .. }

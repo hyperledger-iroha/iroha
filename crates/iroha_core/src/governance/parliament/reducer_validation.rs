@@ -200,7 +200,9 @@ impl ParliamentAttemptStateV1 {
                         failure.sequence,
                     )
                 || failure.sequence > MAX_PARLIAMENT_SORTITION_RETRIES_V1
-                || failure.candidate_snapshot.len() >= 2
+                || hidden_ballot_population_meets_anonymity_floor_v1(
+                    failure.candidate_snapshot.len(),
+                )
                 || !candidate_snapshot_fits_resource_bounds_v1(&failure.candidate_snapshot)
                 || !failure
                     .candidate_snapshot
@@ -217,7 +219,7 @@ impl ParliamentAttemptStateV1 {
                 || failure.target_seats == 0
                 || failure.target_seats > MAX_PARLIAMENT_BODY_TARGET_SEATS_V1
                 || (requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot
-                    && failure.target_seats < 2)
+                    && failure.target_seats < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
                 || failure
                     .request_height
                     .checked_add(self.sortition_pulse_delay_blocks)
@@ -320,10 +322,10 @@ impl ParliamentAttemptStateV1 {
             }
             let requirement = self.requirement_for_body(request.body)?;
             if requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot {
-                if request.target_seats < 2 {
+                if request.target_seats < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1 {
                     return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
                 }
-                if candidate_snapshot.len() < 2 {
+                if !hidden_ballot_population_meets_anonymity_floor_v1(candidate_snapshot.len()) {
                     return Err(ParliamentReducerErrorV1::InvalidCandidateSnapshot);
                 }
             }
@@ -441,7 +443,7 @@ impl ParliamentAttemptStateV1 {
                         if roster.is_empty()
                             || (requirement.decision_mode
                                 == ParliamentDecisionModeV1::HiddenBindingBallot
-                                && roster.len() < 2)
+                                && !hidden_ballot_population_meets_anonymity_floor_v1(roster.len()))
                         {
                             return Err(ParliamentReducerErrorV1::InvalidRoster);
                         }
@@ -461,7 +463,8 @@ impl ParliamentAttemptStateV1 {
                         && invitation_window_is_valid
                         && requirement.decision_mode
                             == ParliamentDecisionModeV1::HiddenBindingBallot
-                        && accepted_roster_len == 1;
+                        && accepted_roster_len > 0
+                        && !hidden_ballot_population_meets_anonymity_floor_v1(accepted_roster_len);
                     let failure_is_valid = match (election.failure_kind, election.failure_height) {
                         (Some(ParliamentElectionFailureKindV1::PulseUnavailable), Some(height)) => {
                             pulse_missing_terminal && height > request.pulse_height
@@ -1237,14 +1240,15 @@ impl ParliamentAttemptStateV1 {
                 }
             }
             if let Some(survivors) = ballot.survivors
-                && (survivors == 0
+                && (survivors < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
                     || survivors > ballot.registered_voters.unwrap_or(0)
                     || survivors > ballot.max_corpus_entries)
             {
                 return Err(ParliamentReducerErrorV1::InvalidBallotCount);
             }
             if let Some(accepted) = ballot.accepted_ballots {
-                if accepted > ballot.registered_voters.unwrap_or(0)
+                if accepted < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+                    || accepted > ballot.registered_voters.unwrap_or(0)
                     || accepted > ballot.max_corpus_entries
                     || ballot.survivors != Some(accepted)
                 {
@@ -1401,7 +1405,9 @@ impl ParliamentAttemptStateV1 {
                         || ballot.dropout_root.is_none()
                         || ballot.survivor_root.is_none()
                         || ballot.survivors.is_none()
-                        || ballot.survivors == Some(0)
+                        || ballot.survivors.is_none_or(|survivors| {
+                            survivors < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+                        })
                         || ballot.no_recovery_root.is_none()
                         || ballot.corpus_root.is_some()
                         || ballot.accepted_ballots.is_some()

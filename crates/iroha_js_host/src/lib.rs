@@ -7083,14 +7083,12 @@ fn validation_fee_proposal_operator(value: &str) -> napi::Result<AccountId> {
             "proposal operator must be one canonical domainless AccountId",
         ));
     }
-    let account = AccountId::parse_encoded(value)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|error| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("invalid proposal operator: {error}"),
-            )
-        })?;
+    let account = AccountId::parse_encoded(value).map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid proposal operator: {error}"),
+        )
+    })?;
     if account.to_string() != value {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,

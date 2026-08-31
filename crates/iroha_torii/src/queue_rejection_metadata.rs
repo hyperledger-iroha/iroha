@@ -5,9 +5,14 @@ impl Error {
             | queue::Error::LatencySaturated
             | queue::Error::MaximumTransactionsPerUser => StatusCode::TOO_MANY_REQUESTS,
             queue::Error::Expired => StatusCode::BAD_REQUEST,
+            queue::Error::KagemushaOperationCarrierRejected { .. } => StatusCode::BAD_REQUEST,
             queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
             queue::Error::InBlockchain => StatusCode::CONFLICT,
             queue::Error::IsInQueue => StatusCode::CONFLICT,
+            queue::Error::KagemushaOperationIdConflict { .. } => StatusCode::CONFLICT,
+            queue::Error::KagemushaOperationIndexInconsistent { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             queue::Error::UnregisteredAuthority { .. } => StatusCode::FORBIDDEN,
             queue::Error::Governance(_) => StatusCode::INTERNAL_SERVER_ERROR,
             queue::Error::GovernanceNotPermitted { .. } => StatusCode::FORBIDDEN,
@@ -37,6 +42,10 @@ impl Error {
                 "transaction_expired",
                 "transaction expired before admission",
             ),
+            queue::Error::KagemushaOperationCarrierRejected { .. } => (
+                "kagemusha_operation_carrier_rejected",
+                "Kagemusha operation carrier failed canonical admission",
+            ),
             queue::Error::UnresolvedRoute { .. } => (
                 "queue_unresolved_route",
                 "transaction route could not be resolved",
@@ -48,6 +57,14 @@ impl Error {
             queue::Error::IsInQueue => (
                 "already_enqueued",
                 "transaction already present in the queue",
+            ),
+            queue::Error::KagemushaOperationIdConflict { .. } => (
+                "kagemusha_operation_id_conflict",
+                "Kagemusha operation identifier is already pending for this authority",
+            ),
+            queue::Error::KagemushaOperationIndexInconsistent { .. } => (
+                "kagemusha_operation_index_inconsistent",
+                "Kagemusha pending-operation index requires recovery",
             ),
             queue::Error::UnregisteredAuthority { .. } => (
                 "unregistered_authority",
@@ -179,6 +196,10 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "authority reached per-user queue capacity".to_owned(),
         ),
         queue::Error::Expired => ("ED07", "transaction expired before admission".to_owned()),
+        queue::Error::KagemushaOperationCarrierRejected { reason } => (
+            "PRTRY:KAGEMUSHA_OPERATION_CARRIER_REJECTED",
+            format!("Kagemusha operation carrier failed canonical admission: {reason}"),
+        ),
         queue::Error::UnresolvedRoute { reason } => (
             "PRTRY:ROUTE_UNRESOLVED",
             format!("transaction route could not be resolved: {reason}"),
@@ -190,6 +211,21 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
         queue::Error::IsInQueue => (
             "PRTRY:ALREADY_ENQUEUED",
             "transaction already present in the queue".to_owned(),
+        ),
+        queue::Error::KagemushaOperationIdConflict {
+            authority,
+            operation_id,
+            existing_entrypoint_hash,
+        } => (
+            "PRTRY:KAGEMUSHA_OPERATION_ID_CONFLICT",
+            format!(
+                "Kagemusha operation {} is already pending for authority {authority} as entrypoint {existing_entrypoint_hash}",
+                hex::encode(operation_id)
+            ),
+        ),
+        queue::Error::KagemushaOperationIndexInconsistent { reason } => (
+            "PRTRY:KAGEMUSHA_OPERATION_INDEX_INCONSISTENT",
+            format!("Kagemusha pending-operation index requires recovery: {reason}"),
         ),
         queue::Error::UnregisteredAuthority { authority } => (
             "PRTRY:UNREGISTERED_AUTHORITY",

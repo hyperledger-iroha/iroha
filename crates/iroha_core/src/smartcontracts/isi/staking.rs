@@ -6060,7 +6060,6 @@ mod tests {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
-            consensus_admitted_at_height: None,
         };
         let key = evidence_key(&record.evidence);
         {

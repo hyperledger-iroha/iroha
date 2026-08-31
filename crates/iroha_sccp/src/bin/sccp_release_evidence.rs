@@ -1,9 +1,9 @@
 //! Offline canonical validator for public SCCP release-lane evidence.
 //!
-//! This binary is intentionally read-only and deterministic. It accepts one
-//! bounded canonical Norito JSON file, invokes the same typed native verifier
-//! used by admission, and emits one bounded machine-readable validation
-//! receipt. It never accesses a network, signs data, or writes files.
+//! This binary is intentionally read-only and deterministic. Its subcommands
+//! accept only command-specific bounded canonical inputs and emit one bounded
+//! machine-readable validator identity or validation receipt. It never accesses
+//! a network, signs data, or writes files.
 use iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as SUMERAGI_V2_PROTOCOL_VERSION;
 use iroha_data_model::bridge::{
     BridgeSccpDestinationProofBackendV1, SCCP_REPLAY_SMT_DEPTH_V1, SCCP_TON_BASECHAIN_WORKCHAIN_V1,

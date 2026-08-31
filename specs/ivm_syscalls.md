@@ -128,7 +128,7 @@ This section documents the TLV shapes and minimal JSON payloads accepted by the 
 - REGISTER_PEER / UNREGISTER_PEER
   - Args: `r10=&Json`
   - Example JSON: `{ "peer": "peer-id-or-info" }`
-  - CoreHost note: `REGISTER_PEER` expects a `RegisterPeerWithPop` JSON object with `peer` + `pop` bytes (optional `activation_at`, `expiry_at`, `hsm`); `UNREGISTER_PEER` accepts a peer-id string or `{ "peer": "..." }`.
+  - CoreHost note: `REGISTER_PEER` expects a `RegisterPeerWithPop` JSON object with `peer` + `pop` bytes (optional `activation_at`, `expiry_at`); `UNREGISTER_PEER` accepts a peer-id string or `{ "peer": "..." }`.
 
 - CREATE_TRIGGER / REMOVE_TRIGGER / SET_TRIGGER_ENABLED
   - CREATE_TRIGGER:

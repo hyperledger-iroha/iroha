@@ -431,9 +431,13 @@ private extension UInt8 {
 
 /// Stored payload for a governed runtime-upgrade proposal.
 public struct ToriiGovernanceRuntimeUpgradeProposal: Decodable, Sendable, Equatable {
+    public let proposalOperator: String
     public let manifest: ToriiGovernanceRuntimeUpgradeManifest
 
-    private enum CodingKeys: String, CodingKey, CaseIterable { case manifest }
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case proposalOperator = "proposal_operator"
+        case manifest
+    }
 
     public init(from decoder: Decoder) throws {
         try governanceRejectUnknownFields(
@@ -441,8 +445,13 @@ public struct ToriiGovernanceRuntimeUpgradeProposal: Decodable, Sendable, Equata
             allowed: Set(CodingKeys.allCases.map(\.stringValue)),
             name: "runtime-upgrade proposal"
         )
-        manifest = try decoder.container(keyedBy: CodingKeys.self)
-            .decode(ToriiGovernanceRuntimeUpgradeManifest.self, forKey: .manifest)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        proposalOperator = try governanceCanonicalAccount(
+            container.decode(String.self, forKey: .proposalOperator),
+            codingPath: container.codingPath + [CodingKeys.proposalOperator],
+            field: "proposal_operator"
+        )
+        manifest = try container.decode(ToriiGovernanceRuntimeUpgradeManifest.self, forKey: .manifest)
     }
 }
 
@@ -4155,11 +4164,13 @@ public enum ToriiGovernanceContractLifecycleActionV1: Decodable, Sendable, Equat
 
 /// Complete compare-and-swap proposal for one governed contract-lifecycle transition.
 public struct ToriiGovernanceContractLifecycleProposalV1: Decodable, Sendable, Equatable {
+    public let proposalOperator: String
     public let contractAddress: String
     public let expectedRevision: UInt64
     public let action: ToriiGovernanceContractLifecycleActionV1
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
+        case proposalOperator = "proposal_operator"
         case contractAddress = "contract_address"
         case expectedRevision = "expected_revision"
         case action
@@ -4172,6 +4183,11 @@ public struct ToriiGovernanceContractLifecycleProposalV1: Decodable, Sendable, E
             name: "contract lifecycle governance proposal"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        proposalOperator = try governanceCanonicalAccount(
+            container.decode(String.self, forKey: .proposalOperator),
+            codingPath: container.codingPath + [CodingKeys.proposalOperator],
+            field: "proposal_operator"
+        )
         contractAddress = try governanceCanonicalContractAddress(
             container.decode(String.self, forKey: .contractAddress),
             codingPath: container.codingPath + [CodingKeys.contractAddress],

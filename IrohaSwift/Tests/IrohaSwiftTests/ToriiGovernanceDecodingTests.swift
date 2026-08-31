@@ -301,25 +301,27 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         let deploy = proposalKindJSON(
             kind: "DeployContract",
             payload: """
-            {"contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}
+            {"proposal_operator":"\(Self.governanceOwner)","contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}
             """
         )
         guard case .deployContract(let deployPayload) = try JSONDecoder().decode(
             ToriiGovernanceProposalKind.self,
             from: deploy
         ) else { return XCTFail("expected DeployContract") }
+        XCTAssertEqual(deployPayload.proposalOperator, Self.governanceOwner)
         XCTAssertEqual(deployPayload.codeHash, Data(repeating: 0x11, count: 32))
 
         let runtime = proposalKindJSON(
             kind: "RuntimeUpgrade",
             payload: """
-            {"manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":10,"end_height":20,"sbom_digests":[],"slsa_attestation":"","provenance":[]}}
+            {"proposal_operator":"\(Self.governanceOwner)","manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":10,"end_height":20,"sbom_digests":[],"slsa_attestation":"","provenance":[]}}
             """
         )
         guard case .runtimeUpgrade(let runtimePayload) = try JSONDecoder().decode(
             ToriiGovernanceProposalKind.self,
             from: runtime
         ) else { return XCTFail("expected RuntimeUpgrade") }
+        XCTAssertEqual(runtimePayload.proposalOperator, Self.governanceOwner)
         XCTAssertEqual(runtimePayload.manifest.endHeight, 20)
 
         let removeRoute = """
@@ -390,7 +392,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         let contractLifecycle = proposalKindJSON(
             kind: "ContractLifecycleGovernance",
             payload: """
-            {"contract_address":"\(Self.contractAddress)","expected_revision":1,"action":{"action":"CompleteEmergencyHoldRetrospective","payload":{"hold_proposal_content_id":\(fixedBytes(17)),"hold_governance_attempt_id":\(fixedBytes(34)),"incident_digest":\(fixedBytes(51)),"retrospective_finding_root":\(fixedBytes(68))}}}
+            {"proposal_operator":"\(Self.governanceOwner)","contract_address":"\(Self.contractAddress)","expected_revision":1,"action":{"action":"CompleteEmergencyHoldRetrospective","payload":{"hold_proposal_content_id":\(fixedBytes(17)),"hold_governance_attempt_id":\(fixedBytes(34)),"incident_digest":\(fixedBytes(51)),"retrospective_finding_root":\(fixedBytes(68))}}}
             """
         )
         guard case .contractLifecycleGovernance(let contractLifecyclePayload) =
@@ -399,6 +401,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
                 contractLifecyclePayload.action else {
             return XCTFail("expected contract emergency-hold retrospective")
         }
+        XCTAssertEqual(contractLifecyclePayload.proposalOperator, Self.governanceOwner)
         XCTAssertEqual(retrospective.holdProposalContentId, Data(repeating: 17, count: 32))
         XCTAssertEqual(retrospective.holdGovernanceAttemptId, Data(repeating: 34, count: 32))
         XCTAssertEqual(retrospective.incidentDigest, Data(repeating: 51, count: 32))
@@ -745,25 +748,37 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         let legacyDeploy = proposalKindJSON(
             kind: "DeployContract",
             payload: """
-            {"contract_address":"\(Self.contractAddress)","code_hash_hex":"\(String(repeating: "11", count: 32))","abi_hash_hex":"\(String(repeating: "22", count: 32))","abi_version":"1","manifest_provenance":null}
+            {"proposal_operator":"\(Self.governanceOwner)","contract_address":"\(Self.contractAddress)","code_hash_hex":"\(String(repeating: "11", count: 32))","abi_hash_hex":"\(String(repeating: "22", count: 32))","abi_version":"1","manifest_provenance":null}
             """
         )
         let missingProvenance = proposalKindJSON(
             kind: "DeployContract",
             payload: """
-            {"contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1}
+            {"proposal_operator":"\(Self.governanceOwner)","contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1}
+            """
+        )
+        let missingOperator = proposalKindJSON(
+            kind: "DeployContract",
+            payload: """
+            {"contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}
+            """
+        )
+        let malformedOperator = proposalKindJSON(
+            kind: "ContractLifecycleGovernance",
+            payload: """
+            {"proposal_operator":"not-an-account","contract_address":"\(Self.contractAddress)","expected_revision":1,"action":{"action":"AcceptParliamentOwnership","payload":null}}
             """
         )
         let runtimeWithImplicitDefaults = proposalKindJSON(
             kind: "RuntimeUpgrade",
             payload: """
-            {"manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":10,"end_height":20}}
+            {"proposal_operator":"\(Self.governanceOwner)","manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":10,"end_height":20}}
             """
         )
         let runtimeBeyondExactJSON = proposalKindJSON(
             kind: "RuntimeUpgrade",
             payload: """
-            {"manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":9007199254740992,"end_height":9007199254740993,"sbom_digests":[],"slsa_attestation":"","provenance":[]}}
+            {"proposal_operator":"\(Self.governanceOwner)","manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":9007199254740992,"end_height":9007199254740993,"sbom_digests":[],"slsa_attestation":"","provenance":[]}}
             """
         )
         for json in [
@@ -771,6 +786,8 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             oldSingleKey,
             legacyDeploy,
             missingProvenance,
+            missingOperator,
+            malformedOperator,
             runtimeWithImplicitDefaults,
             runtimeBeyondExactJSON,
         ] {
@@ -804,7 +821,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
 
     func testGovernanceProposalRecordIsExactAndStatusesAreClosed() throws {
         let kind = """
-        {"kind":"DeployContract","payload":{"contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}}
+        {"kind":"DeployContract","payload":{"proposal_operator":"\(Self.governanceOwner)","contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}}
         """
         for status in ["Proposed", "Rejected", "Enacted", "Superseded", "ExecutionFailed"] {
             let data = Data(

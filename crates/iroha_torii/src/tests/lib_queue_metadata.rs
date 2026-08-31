@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests_queue_metadata {
     use super::*;
+    use iroha_test_samples::ALICE_ID;
     #[test]
     fn queue_errors_map_to_reason_codes() {
         let cases = [
@@ -20,6 +21,13 @@ mod tests_queue_metadata {
                 "transaction expired before admission",
             ),
             (
+                queue::Error::KagemushaOperationCarrierRejected {
+                    reason: "non-canonical carrier".to_owned(),
+                },
+                "PRTRY:KAGEMUSHA_OPERATION_CARRIER_REJECTED",
+                "Kagemusha operation carrier failed canonical admission: non-canonical carrier",
+            ),
+            (
                 queue::Error::UnresolvedRoute {
                     reason: "lane 9 is unknown".to_owned(),
                 },
@@ -36,6 +44,13 @@ mod tests_queue_metadata {
                 "PRTRY:ALREADY_ENQUEUED",
                 "transaction already present in the queue",
             ),
+            (
+                queue::Error::KagemushaOperationIndexInconsistent {
+                    reason: "reverse owner missing".to_owned(),
+                },
+                "PRTRY:KAGEMUSHA_OPERATION_INDEX_INCONSISTENT",
+                "Kagemusha pending-operation index requires recovery: reverse owner missing",
+            ),
         ];
         for (error, expected_code, expected_detail) in cases {
             // array copy, pattern moves
@@ -43,6 +58,43 @@ mod tests_queue_metadata {
             assert_eq!(code, expected_code);
             assert_eq!(detail, expected_detail);
         }
+    }
+    #[test]
+    fn kagemusha_queue_conflict_has_stable_code_and_status() {
+        let existing_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            Hash::new(b"existing-kagemusha-entrypoint"),
+        );
+        let operation_id = [0xA5; 32];
+        let authority = ALICE_ID.clone();
+        let error = queue::Error::KagemushaOperationIdConflict {
+            authority: authority.clone(),
+            operation_id,
+            existing_entrypoint_hash,
+        };
+        let (code, detail) = queue_rejection_metadata(&error);
+        assert_eq!(code, "PRTRY:KAGEMUSHA_OPERATION_ID_CONFLICT");
+        assert!(detail.contains(&authority.to_string()));
+        assert!(detail.contains(&hex::encode(operation_id)));
+        assert!(detail.contains(&existing_entrypoint_hash.to_string()));
+        assert_eq!(
+            super::Error::queue_error_summary(&error),
+            (
+                "kagemusha_operation_id_conflict",
+                "Kagemusha operation identifier is already pending for this authority",
+            )
+        );
+        assert_eq!(
+            super::Error::status_code_for_queue_error(&error),
+            StatusCode::CONFLICT
+        );
+
+        let inconsistent = queue::Error::KagemushaOperationIndexInconsistent {
+            reason: "reverse owner missing".to_owned(),
+        };
+        assert_eq!(
+            super::Error::status_code_for_queue_error(&inconsistent),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
     #[test]
     fn queue_plan_journal_outcome_unknown_has_stable_code_and_exact_hash() {

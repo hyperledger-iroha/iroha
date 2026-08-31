@@ -49,10 +49,10 @@ pub(crate) const MAX_TOKEN_FUTURE_SKEW_SECS: u64 = 60;
 /// Payload-free failure categories exposed by a runtime-only stream-token signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum StreamTokenSigningError {
-    /// The HSM/KMS provider could not complete the bounded signing operation.
+    /// The signing provider could not complete the bounded operation.
     #[error("stream-token runtime signer unavailable")]
     Unavailable,
-    /// The HSM/KMS provider refused the canonical signing request.
+    /// The signing provider refused the canonical request.
     #[error("stream-token runtime signer refused request")]
     Refused,
 }
@@ -109,7 +109,7 @@ pub enum StreamTokenRuntimeSignerQualificationValueErrorV1 {
 /// Payload-free failure while probing a runtime stream-token signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum StreamTokenRuntimeSignerProbeErrorV1 {
-    /// The signer or its backing HSM/KMS is temporarily unavailable.
+    /// The configured signing provider is temporarily unavailable.
     #[error("stream-token runtime signer probe unavailable")]
     Unavailable,
     /// The signer identity is stale or revoked.
@@ -634,13 +634,13 @@ pub enum StreamTokenIssuerError {
     /// The provider identity changed across probes or one signing boundary.
     #[error("stream-token runtime signer qualification changed")]
     RuntimeSignerQualificationChanged,
-    /// The bounded HSM/KMS signing operation was unavailable.
+    /// The bounded provider signing operation was unavailable.
     #[error("stream-token runtime signer unavailable")]
     RuntimeSignerUnavailable,
-    /// The HSM/KMS provider refused the canonical signing request.
+    /// The signing provider refused the canonical signing request.
     #[error("stream-token runtime signer refused request")]
     RuntimeSignerRefused,
-    /// The HSM/KMS output was malformed or did not verify under the configured public key.
+    /// The signing-provider output was malformed or did not verify under the configured public key.
     #[error("stream-token runtime signer produced invalid output")]
     RuntimeSignerOutputInvalid,
     /// A configured or requested token policy was zero, unsafe, or above its ceiling.

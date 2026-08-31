@@ -50,7 +50,7 @@ async fn configured_proof_body_layer_accepts_above_axum_default_and_rejects_limi
         .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
         .body(Body::from(vec![
             0_u8;
-            app.proof_limits.max_body_bytes as usize + 1
+            app.proof_limits.max_body_bytes + 1
         ]))
         .expect("request");
     let response = router
@@ -1640,7 +1640,7 @@ async fn zk_ivm_prove_handlers_authenticate_before_job_gc_or_lookup() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::new());
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
         state.zk_ivm_prove_job_ttl_ms = 1;
     }
     let get_job_id = "11111111111111111111111111111111".to_owned();

@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **786** · Unique variables: **188**
+Total references: **784** · Unique variables: **186**
 
 ## CARGO (prod: 2, test: 3)
 
@@ -873,10 +873,6 @@ Total references: **786** · Unique variables: **188**
 
 - test: integration_tests/tests/sumeragi_localnet_smoke.rs:471 — `if let Ok(delay) = std::env::var("IROHA_THROUGHPUT_DELAY_MS") {`
 
-## IROHA_TORII_ALLOW_LIVE_ASSET_HOLDER_AGGREGATE (test: 1)
-
-- test: crates/iroha_torii/src/routing.rs:66182 — `|| std::env::var("IROHA_TORII_ALLOW_LIVE_ASSET_HOLDER_AGGREGATE")`
-
 ## IROHA_TORII_OPENAPI_ACTUAL (test: 1)
 
 - test: crates/iroha_torii/tests/router_feature_matrix.rs:79 — `if let Ok(actual_path) = std::env::var("IROHA_TORII_OPENAPI_ACTUAL") {`
@@ -890,10 +886,6 @@ Total references: **786** · Unique variables: **188**
 
 - tool: xtask/src/main.rs:13615 — `if let Some(env_tokens) = std::env::var_os("IROHA_TORII_OPENAPI_TOKENS") {`
 - tool: xtask/src/main.rs:13674 — `token_header = std::env::var("IROHA_TORII_OPENAPI_TOKENS")`
-
-## IROHA_TORII_PUBLIC_DATASPACE_UPSTREAMS (prod: 1)
-
-- prod: crates/iroha_torii/src/lib.rs:2203 — `let Ok(raw) = std::env::var("IROHA_TORII_PUBLIC_DATASPACE_UPSTREAMS") else {`
 
 ## IROHA_TORII_URL (prod: 1)
 

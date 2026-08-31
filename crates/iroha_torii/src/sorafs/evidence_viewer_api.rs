@@ -1067,12 +1067,24 @@ fn optional_query(
 ) -> Result<BTreeMap<String, String>, Response> {
     let mut values = BTreeMap::new();
     if let Some(raw) = uri.query() {
-        for (key, value) in url::form_urlencoded::parse(raw.as_bytes()) {
-            if !allowed.contains(&key.as_ref())
+        if raw.is_empty()
+            || raw.len() > MAX_AUDIT_QUERY_BYTES
+            || raw.bytes().any(|byte| matches!(byte, b'%' | b'+'))
+        {
+            return Err(fixed_error(StatusCode::BAD_REQUEST, "invalid_query"));
+        }
+        for (index, segment) in raw.split('&').enumerate() {
+            if index >= allowed.len() || segment.is_empty() {
+                return Err(fixed_error(StatusCode::BAD_REQUEST, "invalid_query"));
+            }
+            let Some((key, value)) = segment.split_once('=') else {
+                return Err(fixed_error(StatusCode::BAD_REQUEST, "invalid_query"));
+            };
+            if key.is_empty()
                 || value.is_empty()
-                || values
-                    .insert(key.into_owned(), value.into_owned())
-                    .is_some()
+                || value.contains('=')
+                || !allowed.contains(&key)
+                || values.insert(key.to_owned(), value.to_owned()).is_some()
             {
                 return Err(fixed_error(StatusCode::BAD_REQUEST, "invalid_query"));
             }
@@ -1731,6 +1743,42 @@ mod tests {
         assert!(parse_nonzero_digest(&"00".repeat(32), "digest").is_err());
         assert!(parse_interaction_kind("viewed").is_ok());
         assert!(parse_interaction_kind("session_expired").is_err());
+    }
+    #[test]
+    fn evidence_simple_queries_have_one_bounded_literal_wire_spelling() {
+        let digest = hex::encode([0xab; 32]);
+        let canonical: Uri =
+            format!("/v1/evidence/sessions/00/manifest?idempotency_key_hex={digest}")
+                .parse()
+                .expect("canonical evidence query URI");
+        assert_eq!(
+            exact_query(&canonical, &["idempotency_key_hex"]).expect("canonical evidence query")["idempotency_key_hex"],
+            digest
+        );
+
+        let invalid_queries = [
+            String::new(),
+            "idempotency_key_hex".to_owned(),
+            "idempotency_key_hex=".to_owned(),
+            format!("idempotency_key_hex={digest}&"),
+            format!("&idempotency_key_hex={digest}"),
+            format!("idempotency_key_hex={digest}&&limit=1"),
+            format!("idempotency_key_hex={digest}&idempotency_key_hex={digest}"),
+            format!("idempotency_key_hex={digest}=suffix"),
+            format!("idempotency_key_hex=%61{}", &digest[1..]),
+            format!("idempotency+key+hex={digest}"),
+            format!("unknown={digest}"),
+            "x".repeat(MAX_AUDIT_QUERY_BYTES + 1),
+        ];
+        for raw in invalid_queries {
+            let uri: Uri = format!("/v1/evidence/sessions/00/manifest?{raw}")
+                .parse()
+                .expect("query corpus is URI-safe");
+            assert!(
+                exact_query(&uri, &["idempotency_key_hex"]).is_err(),
+                "query unexpectedly accepted: {raw}"
+            );
+        }
     }
     #[test]
     fn evidence_audit_query_has_one_canonical_checkpoint_bound_wire() {

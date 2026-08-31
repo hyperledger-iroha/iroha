@@ -1,6 +1,6 @@
 - [ ] Review hardware spec: 8+ cores, 16 GiB RAM, NVMe storage ≥ 500 MiB/s.
 - [ ] Confirm two IPv4 + IPv6 addresses and upstream permits QUIC/UDP 443.
-- [ ] Provision HSM or dedicated secure enclave for relay identity keys.
+- [ ] Provision an isolated signing service with least-privilege access for relay identity keys.
 - [ ] Sync canonical opt-out catalogue (`governance/compliance/soranet_opt_outs.json`).
 - [ ] Merge compliance block into orchestrator config (see `03-config-example.toml`).
 - [ ] Capture jurisdiction/global compliance attestations and populate the `attestations` list.

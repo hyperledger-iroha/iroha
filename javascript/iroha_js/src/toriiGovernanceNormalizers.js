@@ -42,6 +42,7 @@ export function createToriiGovernanceNormalizers({
   requireNonEmptyString,
 }) {
   const GOVERNANCE_DEPLOY_CONTRACT_REQUEST_KEYS = new Set([
+    "proposalOperator",
     "contractAddress",
     "contractAlias",
     "abiVersion",
@@ -722,6 +723,10 @@ export function createToriiGovernanceNormalizers({
     const record = ensureRecord(input, context);
     rejectGovernancePrivateKeyFieldsDeep(record, context);
     assertSupportedOptionKeys(record, GOVERNANCE_DEPLOY_CONTRACT_REQUEST_KEYS, context);
+    const proposalOperator = ensureCanonicalAccountId(
+      record.proposalOperator,
+      `${context}.proposalOperator`,
+    );
     const contractAddressValue = record.contractAddress ?? null;
     const contractAliasValue = record.contractAlias ?? null;
     if ((contractAddressValue == null) === (contractAliasValue == null)) {
@@ -746,6 +751,7 @@ export function createToriiGovernanceNormalizers({
       throw new TypeError("governanceProposeDeployContract.abiHash is required");
     }
     const payload = {
+      proposal_operator: proposalOperator,
       abi_version: abiVersion,
       code_hash: normalizeHex32String(
         codeHashValue,

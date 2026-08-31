@@ -33,7 +33,7 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     if let Some(api_token) = api_token {
         cfg.torii.require_api_token = true;
-        cfg.torii.api_tokens = vec![api_token.to_owned()];
+        cfg.torii.api_tokens = vec![api_token.to_owned()].into();
     }
     let kura = Kura::blank_kura_for_testing();
     let world = iroha_core::prelude::World::with(
@@ -166,7 +166,8 @@ async fn lifecycle_get_returns_valid_exact_norito_status() {
 }
 #[tokio::test]
 async fn lifecycle_get_honors_api_token_access_policy() {
-    let harness = build_app_with_api_token(Some("lifecycle-status-token"));
+    const API_TOKEN: &str = "lifecycle-status-token-00000000000";
+    let harness = build_app_with_api_token(Some(API_TOKEN));
     for supplied_token in [None, Some("wrong-token")] {
         let mut request = Request::builder()
             .uri(NEXUS_LANE_LIFECYCLE)
@@ -185,7 +186,7 @@ async fn lifecycle_get_honors_api_token_access_policy() {
         Request::builder()
             .uri(NEXUS_LANE_LIFECYCLE)
             .header("accept", "application/json")
-            .header("x-api-token", "lifecycle-status-token")
+            .header("x-api-token", API_TOKEN)
             .body(Body::empty())
             .expect("request"),
     )

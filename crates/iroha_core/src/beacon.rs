@@ -1474,8 +1474,8 @@ pub trait GlobalThresholdBeaconPartialSignerV1: Send + Sync {
 ///
 /// This is an injection adapter for deployments whose secure runtime unwraps a
 /// share into process memory. It deliberately has no `Clone`, `Debug`, byte
-/// export, or serialization implementation. HSM/KMS integrations may instead
-/// implement [`GlobalThresholdBeaconPartialSignerV1`] directly.
+/// export, or serialization implementation. Deployment-owned providers may
+/// instead implement [`GlobalThresholdBeaconPartialSignerV1`] directly.
 pub struct InMemoryGlobalThresholdBeaconPartialSignerV1 {
     session: ValidatedGlobalThresholdBeaconSessionV1,
     share: AdaptiveThresholdBlsSecretShare<BeaconPurpose>,

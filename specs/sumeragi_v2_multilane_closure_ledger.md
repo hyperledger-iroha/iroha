@@ -1772,9 +1772,9 @@ The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
 5, Kotlin 7, and Java 6 tests. The current recursive mutable-tree closure
 contains exactly 1,451 grouped and 1,453 diagnostics records. Its grouped and
 diagnostics suite-source SHA-256 values are
-`bdf4efd88885521e3806cfe610e7ab3d72d690ebe329a4b7acfc0b2fe9b22ae0`
+`ecef1796ff203f77891e91e6b492d85d13f70f10df6d85e8f9e1dfebf167d52b`
 and
-`90235165ad20cc6e4363d4fd6935b8c25bc2e1856cdbbad3323dcc5c4843c2a3`.
+`33e2610b3878a45d58052448b394787df693dd4bb402e153ea8cc92126a8bc77`.
 The checked-in grouped fixture has SHA-256
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -1851,7 +1851,9 @@ the then-current count; the autonomous-retirement regression added here raised
 that checkpoint to 857 tests. The retired-attempt, mixed-carrier, and two-link
 cold-restart rows plus the two predecessor-durability handoff rows, followed by
 retirement of the dormant generic persisted-continuation regression, leave the
-current production inventory at 864 tests while
+864-test checkpoint. The two sealed Certified-Serve storage regressions and
+the CompleteTip payload-before-ledger-repair regression leave the current
+production inventory at 867 tests while
 the G-UNIT inventory contains 522 tests. Source binding is not an execution receipt.
 The finalized predecessor remains active while the shared ordinary/PendingKura
 preflight rehydrates late canonical lane ownership, services bounded
@@ -1924,7 +1926,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 864 tests across 44 modules, including 448
+inventory contains exactly 867 tests across 44 modules, including 453
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -2084,9 +2086,9 @@ grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
 mutable-tree closure contains exactly 1,451 grouped and 1,453 diagnostics
 records, with grouped and diagnostics suite-source SHA-256 values
-`bdf4efd88885521e3806cfe610e7ab3d72d690ebe329a4b7acfc0b2fe9b22ae0`
+`ecef1796ff203f77891e91e6b492d85d13f70f10df6d85e8f9e1dfebf167d52b`
 and
-`90235165ad20cc6e4363d4fd6935b8c25bc2e1856cdbbad3323dcc5c4843c2a3`.
+`33e2610b3878a45d58052448b394787df693dd4bb402e153ea8cc92126a8bc77`.
 The current grouped JSON and wire TSV SHA-256 values are
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and
@@ -2184,7 +2186,7 @@ marker must be classified here before release.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 864-production-test,
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 867-production-test,
   522-G-UNIT-test, and 56-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not

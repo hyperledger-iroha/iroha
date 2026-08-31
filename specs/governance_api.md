@@ -208,8 +208,14 @@ atomically commits its exact Core-derived candidate snapshot, configured target,
 current request height, and deterministic future logical-beacon slot alongside
 the Policy result. Later eligibility changes therefore cannot strand the active
 attempt before its first Confirmation draw. Hidden-ballot sortition requires at
-least two eligible candidates; the Policy and Confirmation Jury configuration
-sizes therefore also have a minimum of two.
+least three eligible candidates; the Policy and Confirmation Jury configuration
+sizes therefore also have a minimum of three.
+The first-release citizen registry is capped at 65,536 entries, and one
+canonical Norito candidate-snapshot payload is capped at 8 MiB. Core checks the
+registry cardinality before collection and the running encoded size before
+cloning each eligible account. These are fail-closed complete-electorate bounds:
+Core never truncates, samples, or otherwise biases the eligible set, and restore
+plus reducer admission revalidate the same limits.
 
 The public threshold-key lifecycle instruction carries an exact-roster
 `2f + 1` certificate over the network, ordered roster, threshold, complete
@@ -330,7 +336,10 @@ compare-and-set head. Head drift produces `Superseded` without effect. With an
 equal head, Core applies the typed effect in a rollback-isolated transaction and
 records `Enacted`. If the effect rejects, Core drops that transaction and uses a
 fresh transaction to record `ExecutionFailed` with a deterministic failure root
-derived from the certificate and due height.
+derived from the certificate and due height. A snapshot-skipped index maps exact
+enactment heights to certified attempt ids; it is rebuilt from validated attempts
+on restore and updated with every attempt transition, so block construction does
+not scan historical reducer payloads to discover the current due set.
 
 Certificate construction and all three terminal outcomes are consensus-owned;
 none is a manager action or a variant accepted by
@@ -369,11 +378,11 @@ expiry, the five phase/release private-ballot failures, and
 `ConfirmationJuryCapacityUnavailable`, and proposal-wide randomness-redraw
 exhaustion before a required Confirmation draw. Before committing a narrow Policy Jury
 approval, Core derives the current eligible citizen snapshot, removes every
-sealed Policy Jury member, and requires at least two remaining candidates. A
-count of zero or one persists with the verified narrow opening and terminally
+sealed Policy Jury member, and requires at least three remaining candidates. A
+count below three persists with the verified narrow opening and terminally
 rejects the attempt as typed `ConfirmationJuryCapacityUnavailable`; it does not
 commit the Policy body binding or append an unfillable Confirmation stage. At
-the proposal-wide redraw ceiling, a count of at least two instead persists the
+the proposal-wide redraw ceiling, a count of at least three instead persists the
 same opening as typed `RandomnessRedrawBudgetExhausted` before the fresh draw is
 attempted. Otherwise, the same atomic transition freezes and registers the
 disjoint Confirmation snapshot and future pulse request. Its sequence-zero request height must equal the Policy
@@ -455,20 +464,23 @@ hash, and participant index must all match independently. The authenticated
 external-provider operation requalifies before and after the lookup and poisons
 the session on a substituted result. The active session must additionally match
 the exact startup network and topology. This attestation proves only a
-point-in-time exact custody lookup, not future availability, HSM provenance, or
-secure erasure. An opaque Core
+point-in-time exact custody lookup, not future availability, hardware backing,
+or secure erasure. An opaque Core
 authorization can produce one bounded Norito broker projection containing the
 complete public transcript and exact fixed release payload, digest, and height
 bindings. The broker revalidates those bindings into a nonserializable projected
 signer input, but that public projection does not prove committed-state origin;
 an operational transport must authenticate and scope the daemon, and the daemon
-must independently verify the returned share. This is not an OS, HSM,
-secure-erasure, or operational-availability guarantee. A qualified authenticated
-broker transport/HSM, restart evidence, and four-peer execution of the
-source-implemented canonical multi-peer collection and operator transaction
-signing remain release gates. Aggregate opening is therefore not yet an operationally
-automatic four-peer runtime path, and the intended V1 corridor remains
-operator-coordinated rather than a daemon signing with account keys.
+must independently verify the returned share. This is not an OS-custody,
+hardware-backed, secure-erasure, or operational-availability guarantee.
+Qualification of the deployment-selected signer—software custody or an
+authenticated external broker—plus restart evidence and four-peer execution of
+the source-implemented canonical multi-peer collection and operator transaction
+signing remain release gates. Signer implementation details are deployment-owned, and neither
+signer mode permits a plaintext ballot or manual-release fallback. Aggregate
+opening is therefore not yet an operationally automatic four-peer runtime path,
+and the intended V1 corridor remains operator-coordinated rather than a daemon
+signing with account keys.
 
 The app-signed
 `GET /v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context` source path
@@ -480,7 +492,15 @@ only when its finalized height `H` lies in the exact reducer window:
 `registered_at <= H < registration_close`,
 `registration_close <= H < survivor_freeze`, or
 `survivor_freeze <= H < commitment_close`, respectively. A persisted schedule
-that is not strictly increasing through the release height is rejected. The response also
+that is not strictly increasing through the release height is rejected. Compact
+snapshot construction reads a snapshot-skipped
+`BallotAttemptId -> ParliamentTimedOvnCastingCandidateV1` index derived from the
+active hidden-ballot reducer state. Each row carries the exact governance
+attempt and one of those half-open phase windows; attempt replacement and
+restore rebuild keep it exact. Core filters the window before point lookups,
+then rejects a missing or cross-bound attempt/evidence row instead of scanning
+all historical timed-OVN evidence.
+The response also
 carries the sole padded-standard-base64 encoding of the canonical
 `ParliamentTimedOvnCastingContextArchiveV1`, whose complete header-framed Norito
 encoding is bounded at 4,194,304 bytes. The archive's public validator replays
@@ -527,7 +547,7 @@ wrong-network, wrong-context, wrong-ballot, intermediate-page, and archive-bindi
 tampering. These checks are not native artifact execution: native Cargo
 qualification and a rebuilt same-source ABI-23 XCFramework remain required. The
 packaged ABI-21 XCFramework is intentionally not relabeled. Four-peer end-to-end
-evidence also remains a release gate. No OS/HSM-backed erasure of caller or
+evidence also remains a release gate. No OS-backed erasure of caller or
 cryptographic-library temporaries is claimed.
 
 - POST `/v1/gov/proposals/deploy-contract`
@@ -745,8 +765,12 @@ Governance execution is parameterised via `iroha_config`:
 `survivor_freeze_phase_blocks` must be at least `max_corpus_entries`, and
 `commitment_phase_blocks` must be at least
 `ceil(max_corpus_entries / 32)`. The corpus bound must cover both configured
-jury sizes. Configuration, reducer admission, restored state, and certificate
-validation fail closed when any window cannot carry its maximum bounded work.
+jury sizes and must itself be at least the canonical V1 hidden-ballot floor of
+three. Policy and Confirmation targets, candidate snapshots, sealed rosters,
+frozen survivors, accepted ballot corpora, openings, and exact tallies must all
+meet that same floor. Configuration, reducer admission, restored state, and
+certificate validation fail closed when any window cannot carry its maximum
+bounded work.
 Every active hidden ballot also reserves its closed registration-through-
 commitment and release-through-opening windows globally. A new or restored
 ballot whose reservation intersects another nonterminal ballot is rejected, so

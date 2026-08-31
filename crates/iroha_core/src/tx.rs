@@ -2986,6 +2986,11 @@ impl StateBlock<'_> {
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> Result<StatefulAdmission, TransactionRejectionReason> {
         let authority = tx.authority().clone();
+        crate::kagemusha_operation::validate_kagemusha_operation_reservation_v4(
+            tx,
+            state_transaction,
+        )
+        .map_err(TransactionRejectionReason::Validation)?;
         if code::is_historical_contract_subject(&state_transaction.world, &authority) {
             warn!(
                 authority = %authority,
@@ -3192,7 +3197,7 @@ impl StateBlock<'_> {
         tx: AcceptedTransaction<'_>,
         ivm_cache: &mut IvmCache,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
-        self.validate_transaction_at_entrypoint_index_and_routing(tx, ivm_cache, None, None)
+        self.validate_transaction_at_entrypoint_index_and_routing(tx, ivm_cache, None, None, None)
     }
     /// Validate and apply a transaction with both its original block entrypoint index and routing context.
     ///
@@ -3209,6 +3214,12 @@ impl StateBlock<'_> {
             ivm_cache,
             Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX)),
             Some(routing),
+            Some(
+                crate::kagemusha_operation::KagemushaOperationExecutionLocatorV4::new(
+                    crate::kagemusha_operation::KagemushaOperationExecutionPhaseV4::Ordinary,
+                    u64::try_from(entrypoint_index).unwrap_or(u64::MAX),
+                ),
+            ),
         )
     }
     /// Validate recovered standalone lane-block execution input in descriptor order.
@@ -3221,6 +3232,20 @@ impl StateBlock<'_> {
         &mut self,
         artifact: &crate::kura::LaneBlockExecutionInputArtifact,
         ivm_cache: &mut IvmCache,
+    ) -> core::result::Result<
+        Vec<(u64, HashOf<TransactionEntrypoint>, TransactionResultInner)>,
+        &'static str,
+    > {
+        self.validate_lane_block_execution_input_with_routing_and_kagemusha_context(
+            artifact, ivm_cache, 0,
+        )
+    }
+    /// Validate recovered lane input at its canonical flattened merge-phase base.
+    pub(crate) fn validate_lane_block_execution_input_with_routing_and_kagemusha_context(
+        &mut self,
+        artifact: &crate::kura::LaneBlockExecutionInputArtifact,
+        ivm_cache: &mut IvmCache,
+        kagemusha_phase_index_base: u64,
     ) -> core::result::Result<
         Vec<(u64, HashOf<TransactionEntrypoint>, TransactionResultInner)>,
         &'static str,
@@ -3238,6 +3263,11 @@ impl StateBlock<'_> {
             .zip(artifact.entrypoints.iter())
             .enumerate()
         {
+            let phase_offset =
+                u64::try_from(position).map_err(|_| "Kagemusha merge phase index exceeds u64")?;
+            let kagemusha_phase_index = kagemusha_phase_index_base
+                .checked_add(phase_offset)
+                .ok_or("Kagemusha merge phase index exceeds u64")?;
             let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(entrypoint));
             let plan = if let Some(bound) = artifact.routing_plans.get(position) {
                 // Autonomous payloads carry a producer-authenticated plan bound
@@ -3264,6 +3294,12 @@ impl StateBlock<'_> {
                     ivm_cache,
                     Some(raw_entrypoint_index),
                     Some(routing),
+                    Some(
+                        crate::kagemusha_operation::KagemushaOperationExecutionLocatorV4::new(
+                            crate::kagemusha_operation::KagemushaOperationExecutionPhaseV4::Merge,
+                            kagemusha_phase_index,
+                        ),
+                    ),
                 );
             results.push((raw_entrypoint_index, entrypoint_hash, result));
         }
@@ -3311,6 +3347,9 @@ impl StateBlock<'_> {
         ivm_cache: &mut IvmCache,
         entrypoint_index: Option<u64>,
         routing_decision: Option<crate::queue::RoutingDecision>,
+        kagemusha_operation_execution_locator: Option<
+            crate::kagemusha_operation::KagemushaOperationExecutionLocatorV4,
+        >,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         let signed_transaction = match tx.entrypoint() {
             TransactionEntrypoint::External(signed) => Some(signed.clone()),
@@ -3324,6 +3363,8 @@ impl StateBlock<'_> {
         let gas_limit = self.gas_limit_per_block;
         let mut state_transaction = self.transaction();
         state_transaction.current_entrypoint_index = entrypoint_index;
+        state_transaction
+            .bind_kagemusha_operation_execution_locator_v4(kagemusha_operation_execution_locator);
         state_transaction.kagemusha_taira_canary_external_entrypoint =
             matches!(tx.entrypoint(), TransactionEntrypoint::External(_));
         if let Some(routing) = routing_decision {
@@ -3463,6 +3504,12 @@ impl StateBlock<'_> {
         ivm_cache: &mut IvmCache,
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> TransactionResultInner {
+        iroha_data_model::offline::classify_kagemusha_operation_entrypoint_v4(tx.entrypoint())
+            .map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                    "invalid Kagemusha operation carrier: {error}"
+                )))
+            })?;
         if let TransactionEntrypoint::SealedCommitment(commitment) = tx.entrypoint() {
             return Self::validate_sealed_transaction_commitment(commitment, state_transaction);
         }
@@ -8303,6 +8350,7 @@ pub mod tests {
             iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
                 proposal: iroha_data_model::governance::types::ProposalKind::DeployContract(
                     iroha_data_model::governance::types::DeployContractProposal {
+                        proposal_operator: authority.clone(),
                         contract_address: ContractAddress::derive(
                             &test_network_id(),
                             &authority,
@@ -8538,6 +8586,7 @@ pub mod tests {
         let attempt = iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
             proposal: iroha_data_model::governance::types::ProposalKind::DeployContract(
                 iroha_data_model::governance::types::DeployContractProposal {
+                    proposal_operator: authority.clone(),
                     contract_address: ContractAddress::derive(
                         &test_network_id(),
                         &authority,
@@ -8601,6 +8650,7 @@ pub mod tests {
         let attempt = iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
             proposal: iroha_data_model::governance::types::ProposalKind::DeployContract(
                 iroha_data_model::governance::types::DeployContractProposal {
+                    proposal_operator: authority.clone(),
                     contract_address: ContractAddress::derive(
                         &test_network_id(),
                         &authority,

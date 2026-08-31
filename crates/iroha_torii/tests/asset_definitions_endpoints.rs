@@ -121,7 +121,9 @@ fn build_app(state: Arc<State>) -> axum::Router {
         None,
         iroha_torii::MaybeTelemetry::disabled(),
     )
+    .expect("valid Torii asset-definition fixture")
     .api_router_for_tests()
+    .expect("test Torii router initializes")
 }
 fn loopback_connect_info() -> ConnectInfo<std::net::SocketAddr> {
     ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))

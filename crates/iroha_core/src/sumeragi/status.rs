@@ -5298,12 +5298,8 @@ mod public_lane_staking_status_overlay_tests {
 /// Reasons a peer-consensus-key admission can be rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PeerKeyPolicyRejectReason {
-    /// Required HSM binding missing.
-    MissingHsm,
     /// Public-key algorithm not allowed by policy.
     DisallowedAlgorithm,
-    /// HSM provider not allowed by policy.
-    DisallowedProvider,
     /// Activation height violates lead-time policy.
     LeadTimeViolation,
     /// Activation height is in the past.
@@ -5318,9 +5314,7 @@ impl PeerKeyPolicyRejectReason {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::MissingHsm => "missing_hsm",
             Self::DisallowedAlgorithm => "disallowed_algorithm",
-            Self::DisallowedProvider => "disallowed_provider",
             Self::LeadTimeViolation => "lead_time_violation",
             Self::ActivationInPast => "activation_in_past",
             Self::ExpiryBeforeActivation => "expiry_before_activation",

@@ -260,14 +260,14 @@ identities, or free-form text. The legacy-shaped `notes` request and record
 field is reserved and must be absent in V1; requests or checkpoints that
 populate it fail closed.
 
-`ToriiRuntimeDeps` and `IrohaRuntimeDeps` expose the PKCS#11/managed-KMS
-adapter boundary and validate the injected node's screening enablement,
+`ToriiRuntimeDeps` and `IrohaRuntimeDeps` expose a deployment-owned key-wrapper
+boundary and validate the injected node's screening enablement,
 authority digest, and exact non-secret quarantine provider handle, revision,
 and public-policy digest. The node requalifies the wrapper around every
 wrap/unwrap operation and discards recovered key material on drift. On Linux
 and macOS, stock `irohad` resolves the wrapper through the fixed authenticated
 runtime-provider broker. The handshake additionally pins the active public
-`pkcs11:`/`kms:` key handle, and the bounded canonical operations revalidate it
+provider key handle, and the bounded canonical operations revalidate it
 around each use. Wrap failures retain a fixed payload-free ambiguity class and
 are never replayed after uncertain dispatch; unwrap is read-only and maps
 transport uncertainty to unavailable. The broker overwrites every

@@ -71,6 +71,13 @@ impl AuditDeployArgs {
         let active = validated.active;
         let dataspace = validated.dataspace;
         let code_hash_raw = validated.code_hash_hex;
+        let proposal_operator = binding
+            .get("lifecycle")
+            .and_then(|lifecycle| lifecycle.get("origin_account"))
+            .and_then(Value::as_str)
+            .map(AccountId::parse_encoded)
+            .transpose()
+            .map_err(|error| eyre!("invalid governed-contract origin account: {error}"))?;
         let mut record = Map::new();
         record.insert(
             "contract_address".into(),
@@ -127,6 +134,7 @@ impl AuditDeployArgs {
         audit_code_map(client, &code_hash, &mut code_map, &mut issues);
         audit_proposal_map(
             client,
+            proposal_operator.as_ref(),
             contract_address,
             &code_hash,
             manifest_proposal_binding.as_ref(),
@@ -771,6 +779,7 @@ fn audit_code_map(client: &Client, code_hash: &str, code_map: &mut Map, issues: 
 }
 fn audit_proposal_map(
     client: &Client,
+    proposal_operator: Option<&AccountId>,
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &str,
     manifest_binding: Option<&(
@@ -780,12 +789,15 @@ fn audit_proposal_map(
     proposal_map: &mut Map,
     issues: &mut Vec<String>,
 ) {
-    let Some((abi_hash_hex, manifest_provenance)) = manifest_binding else {
+    let (Some(proposal_operator), Some((abi_hash_hex, manifest_provenance))) =
+        (proposal_operator, manifest_binding)
+    else {
         proposal_map.insert("expected_id".into(), Value::Null);
         proposal_map.insert("found".into(), Value::from(false));
         return;
     };
     if let Some(expected_id) = resolve_proposal_id(
+        proposal_operator,
         contract_address,
         code_hash,
         abi_hash_hex,
@@ -806,6 +818,7 @@ fn audit_proposal_map(
     }
 }
 fn resolve_proposal_id(
+    proposal_operator: &AccountId,
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &str,
     abi_hash_hex: &str,
@@ -816,6 +829,7 @@ fn resolve_proposal_id(
     match (decode_hex32(code_hash), decode_hex32(abi_hash_hex)) {
         (Ok(code_bytes), Ok(abi_bytes)) => {
             let proposal_id_bytes = compute_proposal_id(
+                proposal_operator,
                 contract_address,
                 &code_bytes,
                 &abi_bytes,

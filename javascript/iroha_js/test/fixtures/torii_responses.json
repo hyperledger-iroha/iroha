@@ -19,6 +19,7 @@
         "kind": {
           "kind": "DeployContract",
           "payload": {
+            "proposal_operator": "sorauﾛ1P738ｷﾈｹｵﾙﾍﾉﾂUｿﾚｹﾑbﾄ1xYﾆｷvWzﾒkﾒ5ﾛﾘuE1ﾌsﾛXB6V1Y",
             "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             "code_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "abi_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
