@@ -42,7 +42,9 @@ PREDECESSOR_SCHEMA = "inori.taira.reset17-predecessor-snapshot.v1"
 GENERATION = "reset17"
 SIGNING_IDENTITY = "taira-reset17-release"
 SIGNING_NAMESPACE = "taira-reset17"
-EXPECTED_COMMIT_SIGNER_FINGERPRINT = "9D1C8BFA5A0C1FEF5A8B1E5F552C2D0FD7C40BEB"
+EXPECTED_COMMIT_SIGNER_FINGERPRINT = (
+    "SHA256:ykCGGqELtdtBpdJ/DTT6ROwpqCCGKYACMhUfdzTxi+g"
+)
 
 TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 TAIRA_CHAIN_DISCRIMINANT = 369
@@ -97,7 +99,7 @@ PLAN_CONFIRMATION_PREFIX = "FAIL-STOP-TAIRA-RESET17:"
 
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
-FINGERPRINT_RE = re.compile(r"[0-9A-F]{40}")
+SSH_FINGERPRINT_RE = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
 RUN_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,95}")
 PUBLIC_KEY_RE = re.compile(r"[0-9a-f]{64}")
 NETWORK_ID_RE = re.compile(r"[0-9a-f]{64}")
@@ -721,7 +723,7 @@ def _parse_source(value: Any, expected_source_commit: str) -> str:
         source["commit_signer_fingerprint"], "commit signer fingerprint"
     )
     if (
-        FINGERPRINT_RE.fullmatch(fingerprint) is None
+        SSH_FINGERPRINT_RE.fullmatch(fingerprint) is None
         or fingerprint != EXPECTED_COMMIT_SIGNER_FINGERPRINT
     ):
         raise Reset17Error("clean source commit signer is not trusted")

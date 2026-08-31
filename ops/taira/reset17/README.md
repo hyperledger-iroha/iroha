@@ -54,9 +54,11 @@ ssh-keygen -Y sign -f /runtime-only/operator-key \
 ```
 
 The allowed-signers entry must authorize identity `taira-reset17-release`.
-Record the manifest SHA-256, allowed-signers SHA-256, and clean signed source
-commit out of band. Never place runtime secrets in the bundle, manifest, plan,
-result, command line, or environment.
+Record the manifest SHA-256, allowed-signers SHA-256, and clean SSH-signed source
+commit out of band. The source identity must verify to the reviewed Taira release
+key fingerprint `SHA256:ykCGGqELtdtBpdJ/DTT6ROwpqCCGKYACMhUfdzTxi+g`;
+the retired OpenPGP fingerprint is rejected. Never place runtime secrets in the
+bundle, manifest, plan, result, command line, or environment.
 
 ## Plan, review, and check
 

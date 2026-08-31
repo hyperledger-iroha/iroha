@@ -564,6 +564,14 @@ policy_digest_hex = {json.dumps(validator.signer_policy_digest_hex)}
             "build_commands": [list(command) for command in controller.EXPECTED_BUILD_COMMANDS],
         }
         self.assertEqual(controller._parse_source(source, "1" * 40), "1" * 40)
+        source["commit_signer_fingerprint"] = (
+            "9D1C8BFA5A0C1FEF5A8B1E5F552C2D0FD7C40BEB"
+        )
+        with self.assertRaisesRegex(controller.Reset17Error, "signer is not trusted"):
+            controller._parse_source(source, "1" * 40)
+        source["commit_signer_fingerprint"] = (
+            controller.EXPECTED_COMMIT_SIGNER_FINGERPRINT
+        )
         source["build_commands"].append(["cargo", "build"])
         with self.assertRaisesRegex(controller.Reset17Error, "exact reviewed sequence"):
             controller._parse_source(source, "1" * 40)
