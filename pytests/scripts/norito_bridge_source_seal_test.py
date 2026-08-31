@@ -108,7 +108,7 @@ def test_explicit_symlink_is_rejected(source_fixture: Path) -> None:
 
     with pytest.raises(
         RuntimeError,
-        match="selected Cargo lock must be a non-symbolic regular file",
+        match="selected Cargo lock must be a singly linked non-symbolic regular file",
     ):
         SOURCE_SEAL.listed_files(source_fixture, ["Cargo.lock", "Cargo.toml"])
 

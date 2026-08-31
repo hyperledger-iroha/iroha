@@ -95,6 +95,20 @@ that workflow for local release verification.
    with its embedded manifest and canonical public manifest symlink already in
    the first-release layout; the builder does not migrate an older layout.
 
+   The hosted Apple CI lane uses the same owner in an explicit five-job build
+   matrix because one release build can consume nearly all memory on a standard
+   macOS runner. Each job selects one closed slice ID with `--produce-slice` and
+   writes exactly one library plus `slice-evidence.json` beneath a fresh
+   `--slice-output-root`. The evidence binds the workflow run/attempt, source and
+   lock seals, Rust and Xcode identities, SDK and deployment target, feature
+   state, architecture, symbols, size, and library digest. The verifier job
+   downloads the five immutable same-run artifacts into one fresh root and
+   invokes `--assemble-slices`; assembly recomputes the complete local envelope,
+   requires the exact five-directory/two-file inventory, and authenticates every
+   byte before lipo or XCFramework publication. These closed producer/assembler
+   modes are not a prebuilt-library fallback and cannot accept caller-selected
+   target tuples.
+
 2. Confirm the builder-owned archive publication:
 
    ```bash

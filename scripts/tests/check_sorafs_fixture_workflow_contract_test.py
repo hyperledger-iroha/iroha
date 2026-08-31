@@ -647,9 +647,26 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
         in csharp
     )
     assert "package_csharp_native_artifacts.py verify-package" in csharp
-    assert mobile.count('IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"') == 2
-    assert "name: Build NoritoBridge XCFramework" in mobile
-    assert "name: Build host SoraFS reference native bridge" in mobile
+    assert mobile.count('IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"') == 3
+    assert "name: Build authenticated NoritoBridge slice" in mobile
+    assert "name: Assemble authenticated NoritoBridge XCFramework" in mobile
+    assert "  apple-slice:" in mobile
+    for slice_id in (
+        "ios-arm64",
+        "ios-sim-arm64",
+        "ios-sim-x64",
+        "macos-arm64",
+        "macos-x64",
+    ):
+        assert slice_id in mobile
+    assert "name: Build host SoraFS reference native bridge" not in mobile
+    assert 'key: "android-external-cargo-v2"' in mobile
+    assert 'env-vars: "ANDROID_HOST_CACHE_"' in mobile
+    assert mobile.count('cache-bin: "false"') >= 3
+    assert 'workspaces: ". -> ../iroha-mobile-android-cargo"' in mobile
+    assert "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR=\"$CARGO_TARGET_DIR\"" in mobile
+    assert "KAGEMUSHA_JVM_NATIVE_RETAIN_DIR=\"$retained_native\"" in mobile
+    assert 'echo "IROHA_NATIVE_LIBRARY_PATH=$retained_native" >> "$GITHUB_ENV"' in mobile
     parity_runner = read("ci/sdk_sorafs_orchestrator.sh")
     assert parity_runner.count("npm run build:native") == 1
     assert parity_runner.count("IROHA_JS_NATIVE_BUILD_PROFILE=") == 1

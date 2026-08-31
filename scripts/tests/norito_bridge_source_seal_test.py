@@ -319,7 +319,24 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
 
     def test_apple_builder_uses_one_selected_lock_for_all_five_builds(self) -> None:
         builder = APPLE_BUILDER.read_text(encoding="utf-8")
-        self.assertEqual(builder.count("run_hermetic_apple_cargo \\\n"), 5)
+        self.assertEqual(builder.count("run_hermetic_apple_cargo \\\n"), 1)
+        self.assertNotIn("run_apple_slice_wave", builder)
+        self.assertNotIn("APPLE_SLICE_BUILD_PARALLELISM", builder)
+        for slice_id in (
+            "ios-arm64",
+            "ios-sim-arm64",
+            "ios-sim-x64",
+            "macos-arm64",
+            "macos-x64",
+        ):
+            self.assertEqual(
+                builder.count(f"build_one_apple_slice {slice_id}"),
+                1,
+            )
+        self.assertIn(
+            'local slice_target_dir="$CARGO_TARGET_DIR/$target_triple"',
+            builder,
+        )
         self.assertIn(
             '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
             builder,
@@ -328,7 +345,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertIn('--set "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"', builder)
         self.assertIn('--set "RUSTDOC=$RUSTDOC_BINARY"', builder)
         self.assertEqual(
-            builder.count('--set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"'),
+            builder.count('--set "CARGO_TARGET_DIR=$slice_target_dir"'),
             1,
         )
         self.assertNotIn("CARGO_BUILD_DIR_", builder)
@@ -344,6 +361,13 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         )
         self.assertIn(
             '"cargo_lock_sha256": "$CARGO_LOCK_SHA256_START"',
+            builder,
+        )
+        self.assertIn("iroha.norito-bridge.apple-slice-context.v1", builder)
+        self.assertIn("iroha.norito-bridge.apple-slice-evidence.v1", builder)
+        self.assertIn("NORITO_BRIDGE_SLICE_BUILD_ID", builder)
+        self.assertIn(
+            "slice assembly root does not contain exactly five canonical bundles",
             builder,
         )
 

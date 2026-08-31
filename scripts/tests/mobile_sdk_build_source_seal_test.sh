@@ -17,6 +17,8 @@ test_build_source_seal() {
     "$root/scripts/norito_bridge_source_seal.py"
   cp "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
     "$root/scripts/run_mobile_hermetic_command.py"
+  cp "$SCRIPT_DIR/validate_norito_bridge_xcframework.py" \
+    "$root/scripts/validate_norito_bridge_xcframework.py"
   cp "$SCRIPT_DIR/../IrohaSwift/Package.resolved" \
     "$root/IrohaSwift/Package.resolved"
   printf '[toolchain]\nchannel = "1.93.1"\n' >"$root/rust-toolchain.toml"

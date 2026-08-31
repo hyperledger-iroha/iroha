@@ -64,7 +64,7 @@ The build requires Python 3.12. Ordinary builds select the repository-root
 external frozen `Cargo.lock` through `IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH`.
 Both paths are identity-sealed, and the builder rejects in-tree or symbolic Cargo targets. A nonempty external isolated target
 is supported; builds sharing that target or output are serialized by held locks,
-and every Apple slice is freshly invoked. The archive owner requires the explicit
+and every Apple target is freshly invoked. The archive owner requires the explicit
 epoch, snapshots the complete authenticated generation under the output lock, and
 atomically publishes a sorted ZIP with normalized modes and timestamps.
 
@@ -193,9 +193,14 @@ scripts/build_norito_xcframework.sh --privacy-production-enabled
 That option passes the existing `privacy-production-enabled` Cargo feature to
 every Apple slice and marks the XCFramework plus its artifact manifest. The
 `Mobile SDK Artifacts` manual workflow exposes the same default-off option.
-The builder always compiles all four slices into the one caller-selected target,
-uses the ordinary root lock or the authenticated privacy-lane external lock, and
-fails closed if `xcodebuild` cannot package them. There is no skip-build,
+The ordinary local builder compiles all five target libraries sequentially under
+one caller-selected Cargo root, uses the ordinary root lock or the authenticated
+privacy-lane external lock, and fails closed if `xcodebuild` cannot package the
+three resulting XCFramework slices. Hosted CI instead runs the same owner as a
+five-entry `--produce-slice` matrix and a single `--assemble-slices` verifier so
+each memory-heavy target has its own macOS runner. Every transported library is
+bound to the exact run/attempt, source, lock, Rust/Xcode/SDK envelope, features,
+architecture, ABI symbols, and digest before assembly. There is no skip-build,
 preserved-target, arbitrary CLI alternate-lock, or manual-packaging mode.
 
 CI runs `.github/workflows/mobile_sdk_artifacts.yml` to authenticate the exact

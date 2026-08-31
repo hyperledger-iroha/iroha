@@ -1425,6 +1425,160 @@ def test_kotlin_localnet_release_lane_is_mandatory_and_payload_free() -> None:
     } <= kagemusha_paths
 
 
+def test_jvm_native_gate_reuses_only_a_scrubbed_external_dependency_cache() -> None:
+    """Cached dependencies cannot substitute for fresh source-bound Iroha outputs."""
+
+    gate = (REPO_ROOT / "ci/check_kagemusha_jvm_native_bridge.sh").read_text(
+        encoding="utf-8"
+    )
+
+    for invariant in (
+        "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR",
+        "KAGEMUSHA_JVM_NATIVE_RETAIN_DIR",
+        "metadata.st_uid != os.geteuid()",
+        "stat.S_IMODE(metadata.st_mode) & 0o077",
+        "source_root in candidate.parents",
+        "candidate in source_root.parents",
+        "must not contain immediate symbolic entries",
+        "resolved_host_target.parent != candidate",
+        "stat.S_IMODE(host_metadata.st_mode) & 0o077",
+        "verify_cargo_target_identity",
+        'NATIVE_EVIDENCE="$STAGED_NATIVE_DIR/c-jni-native-abi22.json"',
+    ):
+        assert invariant in gate
+
+    cache_admission = gate.index(
+        'CARGO_TARGET_DIR="$(resolve_external_cargo_target "$HOST_TRIPLE")"'
+    )
+    scrub = gate.index("scrub_external_workspace_outputs()")
+    snapshot = gate.index("source_seal snapshot")
+    bridge_build = gate.index("building fresh host ABI-22 bridge")
+    localnet_build = gate.index("building fresh four-peer localnet tools")
+    assert cache_admission < scrub < snapshot < bridge_build < localnet_build
+    scrub_lane = gate[scrub:snapshot]
+    for token in (
+        '"$CARGO_BINARY" clean --locked --offline --workspace',
+        '--target "$HOST_TRIPLE"',
+        '--target-dir "$CARGO_TARGET_DIR"',
+        '--manifest-path "$ROOT_DIR/Cargo.toml"',
+    ):
+        assert token in scrub_lane
+
+    # The cache target survives the gate, while a failed retained artifact is
+    # removed and a successful one remains available to downstream JVM tests.
+    assert 'rm -rf -- "$CARGO_TARGET_DIR"' not in gate
+    assert '[[ "$status" != "0" && "$RETAINED_NATIVE_DIR_CREATED" == "1" ]]' in gate
+    assert gate.count('"$ABI22_ARTIFACT_CHECKER" verify') == 2
+    assert gate.count("--rerun-tasks") >= 4
+
+
+def _trusted_python312_for_jvm_gate_probe() -> Path:
+    candidates = (
+        Path(sys.executable),
+        Path("/opt/homebrew/opt/python@3.12/bin/python3.12"),
+        Path("/opt/homebrew/bin/python3.12"),
+        Path("/usr/local/opt/python@3.12/bin/python3.12"),
+        Path("/usr/local/bin/python3.12"),
+        Path("/usr/bin/python3.12"),
+    )
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        probe = subprocess.run(
+            [
+                str(resolved),
+                "-I",
+                "-S",
+                "-c",
+                "import sys; raise SystemExit(sys.version_info[:2] != (3, 12))",
+            ],
+            stdin=subprocess.DEVNULL,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return resolved
+    raise AssertionError("an isolated canonical Python 3.12 is required")
+
+
+def _probe_jvm_external_cargo_target(
+    target: Path,
+    host_triple: str = "x86_64-unknown-linux-gnu",
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "/bin/bash",
+            str(REPO_ROOT / "ci/check_kagemusha_jvm_native_bridge.sh"),
+            "--resolve-external-cargo-target-for-test",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR": str(target),
+            "KAGEMUSHA_JVM_NATIVE_HOST_TRIPLE_FOR_TEST": host_triple,
+            "MOBILE_SDK_PYTHON_BINARY": str(_trusted_python312_for_jvm_gate_probe()),
+            "PATH": "/usr/bin:/bin",
+        },
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "symbolic_name",
+    ("debug", "x86_64-unknown-linux-gnu"),
+)
+def test_jvm_external_cargo_target_rejects_immediate_symbolic_entries(
+    tmp_path: Path,
+    symbolic_name: str,
+) -> None:
+    target = tmp_path / "external-cargo-target"
+    target.mkdir(mode=0o700)
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    (target / symbolic_name).symlink_to(outside, target_is_directory=True)
+
+    result = _probe_jvm_external_cargo_target(target)
+
+    assert result.returncode != 0
+    assert "must not contain immediate symbolic entries" in result.stderr
+
+
+@pytest.mark.parametrize("host_entry_kind", ("regular-file", "non-private-directory"))
+def test_jvm_external_cargo_target_rejects_unsafe_host_child(
+    tmp_path: Path,
+    host_entry_kind: str,
+) -> None:
+    target = tmp_path / "external-cargo-target"
+    target.mkdir(mode=0o700)
+    host_target = target / "x86_64-unknown-linux-gnu"
+    if host_entry_kind == "regular-file":
+        host_target.write_bytes(b"not a Cargo target directory\n")
+    else:
+        host_target.mkdir(mode=0o700)
+        host_target.chmod(0o750)
+
+    result = _probe_jvm_external_cargo_target(target)
+
+    assert result.returncode != 0
+    assert "must be one owned private non-symbolic canonical directory" in result.stderr
+
+
+def test_jvm_external_cargo_target_accepts_private_host_child(tmp_path: Path) -> None:
+    target = tmp_path / "external-cargo-target"
+    target.mkdir(mode=0o700)
+    (target / "x86_64-unknown-linux-gnu").mkdir(mode=0o700)
+
+    result = _probe_jvm_external_cargo_target(target)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{target}\n"
+
+
 def kotlin_localnet_evidence_program() -> str:
     """Extract the dependency-free JUnit/evidence checker embedded in the gate."""
 
@@ -1848,6 +2002,13 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
 
     mobile_checker = read("scripts/check_mobile_sdk_artifacts.sh")
     mobile_workflow = read(".github/workflows/mobile_sdk_artifacts.yml")
+    for apple_pytest_fixture in (
+        "pytests/scripts/build_norito_xcframework_fallback_test.py",
+        "pytests/scripts/norito_bridge_source_seal_test.py",
+    ):
+        assert f'      - "{apple_pytest_fixture}"' in mobile_workflow
+        assert mobile_workflow.count(apple_pytest_fixture) >= 3
+    assert "Apple matrix tamper and source-seal pytest fixtures" in mobile_workflow
     assert '"native_bridge_abi_version"] != 22' in mobile_checker
     assert "check_mobile_sdk_artifacts.sh --apple-only" in mobile_workflow
     assert "check_kagemusha_jvm_native_bridge.sh" in mobile_workflow
@@ -1857,9 +2018,67 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert '- "scripts/dev_workflow.sh"' in mobile_workflow
     assert "build_offline_cash_swift_fixture.sh --locked --offline" in mobile_workflow
     assert "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN=$fixture" in mobile_workflow
+    apple_slice_job_start = mobile_workflow.index("  apple-slice:")
     apple_job_start = mobile_workflow.index("  apple-mobile-sdk:")
     android_job_start = mobile_workflow.index("  android-mobile-sdk:")
+    publish_job_start = mobile_workflow.index("  publish-release-assets:")
+    apple_slice_job = mobile_workflow[apple_slice_job_start:apple_job_start]
     apple_job = mobile_workflow[apple_job_start:android_job_start]
+    android_job = mobile_workflow[android_job_start:publish_job_start]
+    publish_job = mobile_workflow[publish_job_start:]
+    assert "timeout-minutes: 180" in apple_slice_job
+    assert "max-parallel: 5" in apple_slice_job
+    assert "fail-fast: false" in apple_slice_job
+    for slice_id in (
+        "ios-arm64",
+        "ios-sim-arm64",
+        "ios-sim-x64",
+        "macos-arm64",
+        "macos-x64",
+    ):
+        assert apple_slice_job.count(f"          - {slice_id}\n") == 1
+    assert '--produce-slice "${{ matrix.slice }}"' in apple_slice_job
+    assert "NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}" in apple_slice_job
+    assert 'cache-targets: "false"' in apple_slice_job
+    assert 'cache-bin: "false"' in apple_slice_job
+    assert 'cache-on-failure: "false"' in apple_slice_job
+    assert 'workspaces: ". ->' not in apple_slice_job
+    assert "timeout-minutes: 300" in apple_job
+    assert "NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}" in apple_job
+    assert '--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"' in apple_job
+    assert apple_job.count("actions/download-artifact@") == 5
+    intermediate_prefix = (
+        "norito-bridge-apple-slice-${{ github.run_id }}-${{ github.run_attempt }}-"
+    )
+    assert apple_slice_job.count(intermediate_prefix) == 1
+    assert apple_job.count(intermediate_prefix) == 5
+    assert "mobile-sdk-apple-slice-" not in mobile_workflow
+    assert "pattern: mobile-sdk-*" in publish_job
+    assert "norito-bridge-apple-slice-" not in publish_job
+    assert 'cache-targets: "false"' in apple_job
+    assert 'cache-bin: "false"' in apple_job
+    assert apple_job.index("Bind the Apple assembly Cargo envelope") < (
+        apple_job.index("Make reviewed Iroha source read-only")
+    )
+    assert 'key: "android-external-cargo-v2"' in android_job
+    assert 'env-vars: "ANDROID_HOST_CACHE_"' in android_job
+    assert 'cache-bin: "false"' in android_job
+    assert 'cache-on-failure: "false"' in android_job
+    assert 'workspaces: ". -> ../iroha-mobile-android-cargo"' in android_job
+    assert 'cargo_target="$GITHUB_WORKSPACE/../iroha-mobile-android-cargo"' in android_job
+    assert 'chmod 0700 "$cargo_target"' in android_job
+    assert "$RUNNER_TEMP/iroha-mobile-android-cargo" not in android_job
+    assert "Build host SoraFS reference native bridge" not in android_job
+    assert 'retained_native="$RUNNER_TEMP/iroha-mobile-android-host-native-abi22"' in android_job
+    assert 'KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR="$CARGO_TARGET_DIR"' in android_job
+    assert 'KAGEMUSHA_JVM_NATIVE_RETAIN_DIR="$retained_native"' in android_job
+    assert 'echo "IROHA_NATIVE_LIBRARY_PATH=$retained_native" >> "$GITHUB_ENV"' in android_job
+    assert android_job.index("Swatinem/rust-cache@") < android_job.index(
+        "Bind the first-release Android Cargo envelope"
+    )
+    assert android_job.index(
+        "Require fresh ABI-22 JNI bridge in complete Kotlin and Java suites"
+    ) < android_job.index("Make reviewed Iroha source read-only")
     assert apple_job.index("build_offline_cash_swift_fixture.sh") < apple_job.index(
         "swift test"
     )
@@ -1925,7 +2144,12 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         'NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR"'
         in source_seal_lane
     )
-    assert jni_lane.index('mkdir -p "$EMPTY_NATIVE_DIR" "$CARGO_TARGET_DIR"') < (
+    assert jni_lane.index('mkdir -m 0700 -- "$EMPTY_NATIVE_DIR"') < (
+        jni_lane.index("source_seal snapshot")
+    )
+    assert jni_lane.index(
+        'CARGO_TARGET_IDENTITY="$(cargo_target_identity "$CARGO_TARGET_DIR")"'
+    ) < (
         jni_lane.index("source_seal snapshot")
     )
     java_home_resolution = (

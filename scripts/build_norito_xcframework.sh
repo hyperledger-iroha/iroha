@@ -93,18 +93,27 @@ run_python312_clean() {
     "$PYTHON_BINARY" -I -S -B "$@"
 }
 
-# Build a NoritoBridge.xcframework from the Rust connect_norito_bridge crate.
+# Purpose: build or assemble a release-authenticated NoritoBridge.xcframework
+# from the Rust connect_norito_bridge crate. Matrix producers compile one thin
+# Apple slice; the assembler accepts only five run-bound evidence bundles and
+# never compiles Rust.
 # - Produces a static-library XCFramework with iOS device, universal iOS
 #   simulator, and universal macOS slices so Xcode links it without trying to
 #   embed/sign a framework inside simulator app bundles.
 # - Bridge packaging skips the broader Norito bindings sync gate because unrelated
 #   Kotlin/Java parity drift should not block rebuilding the Swift bridge artifact.
-# - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo, and the exact
-#   externally selected Cargo target/rustc/rustdoc build envelope.
+# Prerequisites: macOS with Python 3.12, Git, Xcode (xcodebuild/xcrun/lipo/nm),
+# rustup, exact Rust 1.93.1 Cargo/rustc/rustdoc, installed canonical Apple Rust
+# targets, and an offline-populated Cargo home.
 # - IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH selects the authenticated external
 #   privacy-release lock; ordinary builds consume the repository-root lock.
 # - MOBILE_SDK_PYTHON_BINARY may select an absolute canonical Python 3.12
 #   executable when the fixed Homebrew/system locators are unavailable.
+# - Required environment: NORITO_BRIDGE_OUT_DIR, NORITO_BRIDGE_BUILD_DIR,
+#   CARGO_TARGET_DIR, RUSTC, RUSTDOC, CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0,
+#   CARGO_NET_OFFLINE=true, and RUSTC_BOOTSTRAP=1.
+# - Matrix-only environment: NORITO_BRIDGE_SLICE_BUILD_ID must be the same
+#   canonical run-attempt token for all five producers and their assembler.
 #
 # Usage:
 #   scripts/build_norito_xcframework.sh
@@ -112,10 +121,25 @@ run_python312_clean() {
 #   scripts/build_norito_xcframework.sh --archive-output /absolute/NoritoBridge.xcframework.zip
 #   scripts/build_norito_xcframework.sh --privacy-production-enabled
 #   scripts/build_norito_xcframework.sh --privacy-production-enabled --allow-dirty-source
+#   scripts/build_norito_xcframework.sh --produce-slice ios-arm64 --slice-output-root /absolute/fresh-root
+#   scripts/build_norito_xcframework.sh --assemble-slices /absolute/fresh-common-root
 #
 # NORITO_BRIDGE_OUT_DIR and NORITO_BRIDGE_BUILD_DIR are mandatory external
 # cache roots. The first-release owner never creates build or artifact output
 # inside the reviewed repository.
+
+print_usage() {
+  cat <<EOF
+Usage:
+  $0 [--bridge-version <version>] [--archive-output <absolute.zip>] [--privacy-production-enabled] [--allow-dirty-source]
+  $0 --produce-slice <ios-arm64|ios-sim-arm64|ios-sim-x64|macos-arm64|macos-x64> --slice-output-root <absolute-empty-root> [--bridge-version <version>] [--privacy-production-enabled] [--allow-dirty-source]
+  $0 --assemble-slices <absolute-common-root> [--bridge-version <version>] [--archive-output <absolute.zip>] [--privacy-production-enabled] [--allow-dirty-source]
+EOF
+}
+if [[ $# -eq 1 && ( "$1" == --help || "$1" == -h ) ]]; then
+  print_usage
+  exit 0
+fi
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
@@ -339,6 +363,9 @@ BRIDGE_VERSION=""
 ARCHIVE_OUTPUT=""
 PRIVACY_PRODUCTION_ENABLED=0
 ALLOW_DIRTY_SOURCE=0
+PRODUCE_SLICE_ID=""
+SLICE_OUTPUT_ROOT=""
+ASSEMBLE_SLICE_ROOT=""
 if [[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]; then
   if [[ -z "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH}" ]]; then
     echo "[-] IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH must not be empty" >&2
@@ -382,14 +409,140 @@ while [[ $# -gt 0 ]]; do
     --allow-dirty-source)
       ALLOW_DIRTY_SOURCE=1
       ;;
+    --produce-slice)
+      shift
+      PRODUCE_SLICE_ID="${1:-}"
+      if [[ -z "$PRODUCE_SLICE_ID" ]]; then
+        echo "[-] --produce-slice requires a canonical Apple slice id" >&2
+        exit 1
+      fi
+      ;;
+    --produce-slice=*)
+      PRODUCE_SLICE_ID="${1#*=}"
+      if [[ -z "$PRODUCE_SLICE_ID" ]]; then
+        echo "[-] --produce-slice requires a canonical Apple slice id" >&2
+        exit 1
+      fi
+      ;;
+    --slice-output-root)
+      shift
+      SLICE_OUTPUT_ROOT="${1:-}"
+      if [[ -z "$SLICE_OUTPUT_ROOT" ]]; then
+        echo "[-] --slice-output-root requires an absolute existing empty directory" >&2
+        exit 1
+      fi
+      ;;
+    --slice-output-root=*)
+      SLICE_OUTPUT_ROOT="${1#*=}"
+      if [[ -z "$SLICE_OUTPUT_ROOT" ]]; then
+        echo "[-] --slice-output-root requires an absolute existing empty directory" >&2
+        exit 1
+      fi
+      ;;
+    --assemble-slices)
+      shift
+      ASSEMBLE_SLICE_ROOT="${1:-}"
+      if [[ -z "$ASSEMBLE_SLICE_ROOT" ]]; then
+        echo "[-] --assemble-slices requires an absolute existing common directory" >&2
+        exit 1
+      fi
+      ;;
+    --assemble-slices=*)
+      ASSEMBLE_SLICE_ROOT="${1#*=}"
+      if [[ -z "$ASSEMBLE_SLICE_ROOT" ]]; then
+        echo "[-] --assemble-slices requires an absolute existing common directory" >&2
+        exit 1
+      fi
+      ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source]" >&2
+      echo "    Usage: $0 [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source] [--produce-slice <id> --slice-output-root <absolute-path> | --assemble-slices <absolute-path>]" >&2
       exit 1
       ;;
   esac
   shift
 done
+
+MATRIX_MODE=ordinary
+if [[ -n "$PRODUCE_SLICE_ID" || -n "$SLICE_OUTPUT_ROOT" ]]; then
+  if [[ -z "$PRODUCE_SLICE_ID" || -z "$SLICE_OUTPUT_ROOT" ]]; then
+    echo "[-] --produce-slice and --slice-output-root must be supplied together" >&2
+    exit 1
+  fi
+  MATRIX_MODE=produce
+fi
+if [[ -n "$ASSEMBLE_SLICE_ROOT" ]]; then
+  if [[ "$MATRIX_MODE" != ordinary ]]; then
+    echo "[-] Slice production and assembly modes are mutually exclusive" >&2
+    exit 1
+  fi
+  MATRIX_MODE=assemble
+fi
+if [[ "$MATRIX_MODE" == produce && -n "$ARCHIVE_OUTPUT" ]]; then
+  echo "[-] --archive-output is valid only for ordinary or slice-assembly mode" >&2
+  exit 1
+fi
+if [[ "$MATRIX_MODE" != ordinary ]]; then
+  MATRIX_BUILD_ID="${NORITO_BRIDGE_SLICE_BUILD_ID:-}"
+  if [[ ! "$MATRIX_BUILD_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+    echo "[-] NORITO_BRIDGE_SLICE_BUILD_ID is required and must be a canonical run-attempt token in matrix mode" >&2
+    exit 1
+  fi
+else
+  MATRIX_BUILD_ID=""
+fi
+
+canonical_matrix_root() {
+  run_python312_clean - "$1" "$2" "$3" "$ROOT_DIR" \
+    "$CARGO_TARGET_DIR" "$BUILD_DIR" "$OUT_DIR" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+candidate = Path(sys.argv[1])
+label = sys.argv[2]
+mode = sys.argv[3]
+source_root = Path(sys.argv[4])
+disjoint_roots = tuple(Path(value) for value in sys.argv[5:])
+if not candidate.is_absolute() or candidate != Path(os.path.abspath(candidate)):
+    raise SystemExit(f"{label} must be an absolute canonical directory")
+try:
+    metadata = candidate.lstat()
+    resolved = candidate.resolve(strict=True)
+except OSError:
+    raise SystemExit(f"{label} must already exist") from None
+if (
+    resolved != candidate
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or metadata.st_mode & 0o022
+    or not os.access(candidate, os.R_OK | os.X_OK)
+    or (mode == "produce" and not os.access(candidate, os.W_OK))
+    or candidate == source_root
+    or source_root in candidate.parents
+    or candidate in source_root.parents
+):
+    raise SystemExit(
+        f"{label} must be an owner-controlled, non-symbolic canonical directory "
+        "outside the Iroha source tree"
+    )
+for other in disjoint_roots:
+    if candidate == other or candidate in other.parents or other in candidate.parents:
+        raise SystemExit(f"{label} must be disjoint from every build/cache/output root")
+if mode == "produce" and any(candidate.iterdir()):
+    raise SystemExit(f"{label} must be empty before slice production")
+print(candidate)
+PY
+}
+if [[ "$MATRIX_MODE" == produce ]]; then
+  SLICE_OUTPUT_ROOT="$(canonical_matrix_root \
+    "$SLICE_OUTPUT_ROOT" NORITO_BRIDGE_SLICE_OUTPUT_ROOT produce)" || exit 1
+elif [[ "$MATRIX_MODE" == assemble ]]; then
+  ASSEMBLE_SLICE_ROOT="$(canonical_matrix_root \
+    "$ASSEMBLE_SLICE_ROOT" NORITO_BRIDGE_ASSEMBLE_SLICE_ROOT assemble)" || exit 1
+fi
 
 if [[ -n "$ARCHIVE_OUTPUT" ]]; then
   ARCHIVE_OUTPUT="$(run_python312_clean - \
@@ -457,6 +610,7 @@ fi
 PINNED_RUST_TOOLCHAIN="1.93.1"
 SOURCE_SEAL_SCRIPT="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
+APPLE_ARTIFACT_VALIDATOR="$ROOT_DIR/scripts/validate_norito_bridge_xcframework.py"
 USER_HOME_DIR="$(run_python312_clean -c \
   'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
 USER_HOME_DIR="$(run_python312_clean -c \
@@ -477,7 +631,9 @@ for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_CANONICAL_BINARY"; do
     exit 1
   }
 done
-for required_input in "$SOURCE_SEAL_SCRIPT" "$HERMETIC_RUNNER" "$ROOT_DIR/rust-toolchain.toml"; do
+for required_input in \
+  "$SOURCE_SEAL_SCRIPT" "$HERMETIC_RUNNER" "$APPLE_ARTIFACT_VALIDATOR" \
+  "$ROOT_DIR/rust-toolchain.toml"; do
   [[ -f "$required_input" && ! -L "$required_input" ]] || {
     echo "[-] Required NoritoBridge build input is unavailable: $required_input" >&2
     exit 1
@@ -796,6 +952,8 @@ PYTHON_BINARY_SHA256="$(sha256_file "$PYTHON_BINARY")"
 GIT_BINARY_SHA256="$(sha256_file "$GIT_BINARY")"
 RUSTUP_BINARY_SHA256="$(sha256_file "$RUSTUP_BINARY")"
 HERMETIC_RUNNER_SHA256="$(sha256_file "$HERMETIC_RUNNER")"
+SOURCE_SEAL_SCRIPT_SHA256="$(sha256_file "$SOURCE_SEAL_SCRIPT")"
+APPLE_ARTIFACT_VALIDATOR_SHA256="$(sha256_file "$APPLE_ARTIFACT_VALIDATOR")"
 
 CARGO_VERSION_VERBOSE="$(
   env -i \
@@ -895,6 +1053,7 @@ IPHONEOS_SDK_VERSION="$(xcrun_value --sdk iphoneos --show-sdk-version)"
 IPHONESIMULATOR_SDK_VERSION="$(xcrun_value --sdk iphonesimulator --show-sdk-version)"
 MACOSX_SDK_VERSION="$(xcrun_value --sdk macosx --show-sdk-version)"
 LIPO_BINARY="$(xcrun_value --find lipo)"
+NM_BINARY="$(xcrun_value --find nm)"
 for sdk_variable in IPHONEOS_SDKROOT IPHONESIMULATOR_SDKROOT MACOSX_SDKROOT; do
   sdkroot="${!sdk_variable}"
   printf -v "$sdk_variable" '%s' "$(run_python312_clean -c \
@@ -910,10 +1069,16 @@ done
 LIPO_BINARY="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$LIPO_BINARY")"
-[[ -x "$LIPO_BINARY" ]] || {
-  echo "[-] Xcode lipo executable is unavailable" >&2
+NM_BINARY="$(run_python312_clean -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$NM_BINARY")"
+[[ -f "$LIPO_BINARY" && ! -L "$LIPO_BINARY" && -x "$LIPO_BINARY" \
+    && -f "$NM_BINARY" && ! -L "$NM_BINARY" && -x "$NM_BINARY" ]] || {
+  echo "[-] Xcode lipo/nm executables are unavailable" >&2
   exit 1
 }
+LIPO_BINARY_SHA256="$(sha256_file "$LIPO_BINARY")"
+NM_BINARY_SHA256="$(sha256_file "$NM_BINARY")"
 XCODE_VERSION_OUTPUT="$(
   env -i \
     HOME="$USER_HOME_DIR" \
@@ -944,37 +1109,163 @@ echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_T
 
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR" "$OUT_DIR"
-PUBLISH_ROOT="$(mktemp -d "$OUT_DIR/.NoritoBridge.publish.XXXXXX")"
-PUBLISH_XCFRAMEWORK="$PUBLISH_ROOT/${FRAMEWORK_NAME}.xcframework"
-PUBLISH_MANIFEST="$PUBLISH_XCFRAMEWORK/${FRAMEWORK_NAME}.artifacts.json"
-PUBLISH_MANIFEST_LINK="$PUBLISH_ROOT/${FRAMEWORK_NAME}.artifacts.json"
-FINAL_XCFRAMEWORK="$OUT_DIR/${FRAMEWORK_NAME}.xcframework"
-FINAL_MANIFEST="$OUT_DIR/${FRAMEWORK_NAME}.artifacts.json"
-CANONICAL_MANIFEST_RELATIVE_TARGET="${FRAMEWORK_NAME}.xcframework/${FRAMEWORK_NAME}.artifacts.json"
 
 DEVICE_TRIPLE="aarch64-apple-ios"
 SIM_ARM_TRIPLE="aarch64-apple-ios-sim"
 SIM_X64_TRIPLE="x86_64-apple-ios"
 MACOS_ARM_TRIPLE="aarch64-apple-darwin"
 MACOS_X64_TRIPLE="x86_64-apple-darwin"
+
+if [[ -z "${BRIDGE_VERSION}" ]]; then
+  VERSION_SOURCE="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+  BRIDGE_VERSION=$(sed -nE \
+    's/.*expectedVersion[^\"]*\"([^\"]+)\".*/\1/p' \
+    "$VERSION_SOURCE" | head -n1)
+fi
+if [[ -z "${BRIDGE_VERSION}" ]]; then
+  echo "[-] Unable to determine NoritoBridge version for artifact manifest" >&2
+  exit 1
+fi
+BRIDGE_BUNDLE_VERSION="${BRIDGE_VERSION%%-*}"
+if [[ -z "$BRIDGE_BUNDLE_VERSION" ]]; then
+  BRIDGE_BUNDLE_VERSION="1"
+fi
+
+slice_configuration() {
+  SLICE_ID="$1"
+  case "$SLICE_ID" in
+    ios-arm64)
+      SLICE_PROFILE=apple-ios-device
+      SLICE_SDKROOT="$IPHONEOS_SDKROOT"
+      SLICE_SDK_NAME=iphoneos
+      SLICE_SDK_VERSION="$IPHONEOS_SDK_VERSION"
+      SLICE_DEPLOYMENT_TARGET="$IPHONEOS_DEPLOYMENT_TARGET"
+      SLICE_TARGET_TRIPLE="$DEVICE_TRIPLE"
+      SLICE_ARCHITECTURE=arm64
+      SLICE_LABEL="iOS device"
+      ;;
+    ios-sim-arm64)
+      SLICE_PROFILE=apple-ios-simulator
+      SLICE_SDKROOT="$IPHONESIMULATOR_SDKROOT"
+      SLICE_SDK_NAME=iphonesimulator
+      SLICE_SDK_VERSION="$IPHONESIMULATOR_SDK_VERSION"
+      SLICE_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET"
+      SLICE_TARGET_TRIPLE="$SIM_ARM_TRIPLE"
+      SLICE_ARCHITECTURE=arm64
+      SLICE_LABEL="arm64 simulator"
+      ;;
+    ios-sim-x64)
+      SLICE_PROFILE=apple-ios-simulator
+      SLICE_SDKROOT="$IPHONESIMULATOR_SDKROOT"
+      SLICE_SDK_NAME=iphonesimulator
+      SLICE_SDK_VERSION="$IPHONESIMULATOR_SDK_VERSION"
+      SLICE_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET"
+      SLICE_TARGET_TRIPLE="$SIM_X64_TRIPLE"
+      SLICE_ARCHITECTURE=x86_64
+      SLICE_LABEL="x86_64 simulator"
+      ;;
+    macos-arm64)
+      SLICE_PROFILE=apple-macos
+      SLICE_SDKROOT="$MACOSX_SDKROOT"
+      SLICE_SDK_NAME=macosx
+      SLICE_SDK_VERSION="$MACOSX_SDK_VERSION"
+      SLICE_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
+      SLICE_TARGET_TRIPLE="$MACOS_ARM_TRIPLE"
+      SLICE_ARCHITECTURE=arm64
+      SLICE_LABEL="arm64 macOS"
+      ;;
+    macos-x64)
+      SLICE_PROFILE=apple-macos
+      SLICE_SDKROOT="$MACOSX_SDKROOT"
+      SLICE_SDK_NAME=macosx
+      SLICE_SDK_VERSION="$MACOSX_SDK_VERSION"
+      SLICE_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
+      SLICE_TARGET_TRIPLE="$MACOS_X64_TRIPLE"
+      SLICE_ARCHITECTURE=x86_64
+      SLICE_LABEL="x86_64 macOS"
+      ;;
+    *)
+      echo "[-] Unknown canonical Apple slice id: $SLICE_ID" >&2
+      return 1
+      ;;
+  esac
+}
+
 stage_cargo_library() {
   local target_triple="$1"
   local label="$2"
-  local source_library="$CARGO_TARGET_DIR/$target_triple/release/lib${LIB_CRATE_NAME}.a"
+  local cargo_build_root="$3"
+  local source_library="$cargo_build_root/$target_triple/release/lib${LIB_CRATE_NAME}.a"
   local staged_library="$STAGE_DIR/cargo-libraries/$target_triple/lib${LIB_CRATE_NAME}.a"
-  if [[ ! -f "$source_library" ]]; then
-    echo "[-] Missing $label static library after Cargo build: $source_library" >&2
+  if ! run_isolated_python - "$source_library" "$staged_library" <<'PY'
+import os
+from pathlib import Path
+import shutil
+import stat
+import sys
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+try:
+    metadata = source.lstat()
+except OSError:
+    raise SystemExit("Cargo did not produce a readable Apple static library") from None
+if (
+    source.resolve(strict=True) != source
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISREG(metadata.st_mode)
+    or metadata.st_nlink != 1
+    or metadata.st_uid != os.geteuid()
+):
+    raise SystemExit("Cargo Apple static library is not an owner-controlled regular file")
+destination.parent.mkdir(parents=True, mode=0o700, exist_ok=False)
+source_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+source_descriptor = os.open(source, source_flags)
+destination_descriptor = os.open(
+    destination,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+    0o600,
+)
+try:
+    before = os.fstat(source_descriptor)
+    with os.fdopen(os.dup(source_descriptor), "rb", closefd=True) as reader:
+        with os.fdopen(os.dup(destination_descriptor), "wb", closefd=True) as writer:
+            shutil.copyfileobj(reader, writer, 1024 * 1024)
+            writer.flush()
+            os.fsync(writer.fileno())
+    after = os.fstat(source_descriptor)
+finally:
+    os.close(destination_descriptor)
+    os.close(source_descriptor)
+identity = lambda value: (
+    value.st_dev,
+    value.st_ino,
+    value.st_mode,
+    value.st_nlink,
+    value.st_size,
+    value.st_mtime_ns,
+    value.st_ctime_ns,
+)
+visible = source.lstat()
+if (
+    identity(before) != identity(after)
+    or (visible.st_dev, visible.st_ino) != (after.st_dev, after.st_ino)
+):
+    destination.unlink(missing_ok=True)
+    raise SystemExit("Cargo Apple static library changed while it was staged")
+PY
+  then
+    echo "[-] Missing or unauthenticated $label static library after Cargo build: $source_library" >&2
     exit 1
   fi
-  mkdir -p "$(dirname "$staged_library")"
-  cp "$source_library" "$staged_library"
   printf '%s\n' "$staged_library"
 }
 
 run_hermetic_apple_cargo() {
   local profile="$1"
   local sdkroot="$2"
-  shift 2
+  local slice_target_dir="$3"
+  shift 3
   local cargo_subcommand="$1"
   shift
   local cargo_status
@@ -1015,7 +1306,7 @@ run_hermetic_apple_cargo() {
       --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
       --set "CARGO_INCREMENTAL=0" \
       --set "CARGO_NET_OFFLINE=true" \
-      --set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+      --set "CARGO_TARGET_DIR=$slice_target_dir" \
       --set "HOME=$USER_HOME_DIR" \
       --set "LANG=C.UTF-8" \
       --set "LC_ALL=C.UTF-8" \
@@ -1037,73 +1328,773 @@ run_hermetic_apple_cargo() {
   return "$cargo_status"
 }
 
-echo "[+] Building Rust static libraries in the caller's fixed Cargo target (release)" >&2
-echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_ARM_TRIPLE, $MACOS_X64_TRIPLE" >&2
+prepare_slice_target_dir() {
+  local target_triple="$1"
+  local slice_target_dir="$CARGO_TARGET_DIR/$target_triple"
+  run_isolated_python - "$CARGO_TARGET_DIR" "$slice_target_dir" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
 
-echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_ARM_TRIPLE $MACOS_X64_TRIPLE)" >&2
+root = Path(sys.argv[1])
+child = Path(sys.argv[2])
+if child.parent != root:
+    raise SystemExit("Apple slice Cargo root is not a direct child of CARGO_TARGET_DIR")
+try:
+    child.mkdir(mode=0o700)
+except FileExistsError:
+    pass
+metadata = child.lstat()
+if (
+    child.resolve(strict=True) != child
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or metadata.st_mode & 0o022
+    or not os.access(child, os.R_OK | os.W_OK | os.X_OK)
+):
+    raise SystemExit("Apple slice Cargo root is not an owner-controlled canonical directory")
+PY
+  printf '%s\n' "$slice_target_dir"
+}
 
-# Rust uses IPHONEOS_DEPLOYMENT_TARGET for both iOS device and simulator targets,
-# while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
-run_hermetic_apple_cargo \
-  apple-ios-device "$IPHONEOS_SDKROOT" \
-  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-  --target "$DEVICE_TRIPLE" \
-  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-assert_bridge_source_seal "the iOS device build"
-LIB_DEV=$(stage_cargo_library "$DEVICE_TRIPLE" "iOS device")
-run_hermetic_apple_cargo \
-  apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
-  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-  --target "$SIM_ARM_TRIPLE" \
-  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-assert_bridge_source_seal "the arm64 simulator build"
-LIB_SIM_ARM=$(stage_cargo_library "$SIM_ARM_TRIPLE" "arm64 simulator")
-run_hermetic_apple_cargo \
-  apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
-  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-  --target "$SIM_X64_TRIPLE" \
-  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-assert_bridge_source_seal "the x86_64 simulator build"
-LIB_SIM_X64=$(stage_cargo_library "$SIM_X64_TRIPLE" "x86_64 simulator")
-run_hermetic_apple_cargo \
-  apple-macos "$MACOSX_SDKROOT" \
-  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-  --target "$MACOS_ARM_TRIPLE" \
-  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-assert_bridge_source_seal "the arm64 macOS build"
-LIB_MAC_ARM=$(stage_cargo_library "$MACOS_ARM_TRIPLE" "arm64 macOS")
-run_hermetic_apple_cargo \
-  apple-macos "$MACOSX_SDKROOT" \
-  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-  --target "$MACOS_X64_TRIPLE" \
-  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-assert_bridge_source_seal "the x86_64 macOS build"
-LIB_MAC_X64=$(stage_cargo_library "$MACOS_X64_TRIPLE" "x86_64 macOS")
+scrub_cached_slice_library() {
+  local slice_target_dir="$1"
+  local target_triple="$2"
+  run_isolated_python - "$slice_target_dir" "$target_triple" "$LIB_CRATE_NAME" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+root = Path(sys.argv[1])
+target_triple = sys.argv[2]
+crate_name = sys.argv[3]
+relative_parents = (target_triple, "release")
+parent = root
+for component in relative_parents:
+    parent = parent / component
+    try:
+        metadata = parent.lstat()
+    except FileNotFoundError:
+        raise SystemExit(0)
+    if (
+        parent.resolve(strict=True) != parent
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+    ):
+        raise SystemExit("cached Apple target contains an unauthenticated child root")
+library = parent / f"lib{crate_name}.a"
+try:
+    metadata = library.lstat()
+except FileNotFoundError:
+    raise SystemExit(0)
+if metadata.st_uid != os.geteuid():
+    raise SystemExit("cached first-party Apple library is not owned by this runner")
+# unlink removes a symlink itself rather than following it; every parent was
+# authenticated above, so this cannot escape the fixed target-triple root.
+library.unlink()
+PY
+}
+
+build_one_apple_slice() {
+  local slice_id="$1"
+  local slice_target_dir
+  slice_configuration "$slice_id"
+  if [[ "$MATRIX_MODE" == produce ]]; then
+    slice_target_dir="$(prepare_slice_target_dir "$SLICE_TARGET_TRIPLE")" || exit 1
+  else
+    # Ordinary local builds preserve Cargo throughput by sharing the caller's
+    # single warm target. Matrix jobs alone isolate their one producer lane.
+    slice_target_dir="$CARGO_TARGET_DIR"
+  fi
+  # Never accept an old first-party library merely because dependency caches
+  # restored it. Removing the exact output forces Cargo to authenticate and
+  # relink this slice while preserving the warm dependency target.
+  scrub_cached_slice_library "$slice_target_dir" "$SLICE_TARGET_TRIPLE"
+  echo "[+] Building $SLICE_LABEL ($SLICE_TARGET_TRIPLE)" >&2
+  run_hermetic_apple_cargo \
+    "$SLICE_PROFILE" "$SLICE_SDKROOT" "$slice_target_dir" \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    --target "$SLICE_TARGET_TRIPLE" \
+    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the $slice_id Apple slice build"
+}
+
+MATRIX_CONTEXT_PATH="$STAGE_DIR/apple-slice-context.json"
+write_matrix_context() {
+  run_isolated_python - \
+    "$MATRIX_CONTEXT_PATH" "$MATRIX_BUILD_ID" "$BRIDGE_VERSION" \
+    "$SOURCE_COMMIT_START" "$SOURCE_STATUS_START" "$SOURCE_FINGERPRINT_START" \
+    "$CARGO_LOCK_SHA256_START" "$ALLOW_DIRTY_SOURCE" \
+    "$PRIVACY_PRODUCTION_ENABLED" "$PINNED_RUST_TOOLCHAIN" \
+    "$CARGO_RELEASE" "$CARGO_COMMIT_HASH" "$CARGO_BINARY_SHA256" \
+    "$RUSTC_RELEASE" "$RUSTC_COMMIT_HASH" "$RUSTC_BINARY_SHA256" \
+    "$RUSTDOC_RELEASE" "$RUSTDOC_COMMIT_HASH" "$RUSTDOC_BINARY_SHA256" \
+    "$HERMETIC_RUNNER_SHA256" "$SOURCE_SEAL_SCRIPT_SHA256" \
+    "$APPLE_ARTIFACT_VALIDATOR_SHA256" \
+    "$PYTHON_VERSION" "$PYTHON_BINARY_SHA256" \
+    "$GIT_VERSION" "$GIT_BINARY_SHA256" \
+    "$RUSTUP_VERSION" "$RUSTUP_BINARY_SHA256" \
+    "$XCODE_VERSION" "$XCODE_BUILD_VERSION" \
+    "$IPHONEOS_SDK_VERSION" "$IPHONESIMULATOR_SDK_VERSION" \
+    "$MACOSX_SDK_VERSION" "$IPHONEOS_DEPLOYMENT_TARGET" \
+    "$IPHONESIMULATOR_DEPLOYMENT_TARGET" "$MACOSX_DEPLOYMENT_TARGET" \
+    "$LIPO_BINARY_SHA256" "$NM_BINARY_SHA256" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+(
+    output,
+    build_id,
+    bridge_version,
+    source_commit,
+    source_status,
+    source_fingerprint,
+    cargo_lock_sha256,
+    allow_dirty,
+    privacy_enabled,
+    rust_channel,
+    cargo_release,
+    cargo_commit,
+    cargo_sha256,
+    rustc_release,
+    rustc_commit,
+    rustc_sha256,
+    rustdoc_release,
+    rustdoc_commit,
+    rustdoc_sha256,
+    hermetic_runner_sha256,
+    source_seal_script_sha256,
+    apple_artifact_validator_sha256,
+    python_version,
+    python_sha256,
+    git_version,
+    git_sha256,
+    rustup_version,
+    rustup_sha256,
+    xcode_version,
+    xcode_build,
+    iphoneos_sdk,
+    iphonesimulator_sdk,
+    macosx_sdk,
+    iphoneos_deployment,
+    iphonesimulator_deployment,
+    macosx_deployment,
+    lipo_sha256,
+    nm_sha256,
+) = sys.argv[1:]
+privacy = privacy_enabled == "1"
+payload = {
+    "schema": "iroha.norito-bridge.apple-slice-context.v1",
+    "build_id": build_id,
+    "bridge_version": bridge_version,
+    "source": {
+        "commit": source_commit,
+        "status": source_status,
+        "status_sha256": hashlib.sha256(source_status.encode("utf-8")).hexdigest(),
+        "tree_dirty": bool(source_status),
+        "fingerprint_sha256": source_fingerprint,
+        "cargo_lock_sha256": cargo_lock_sha256,
+    },
+    "mode": {
+        "allow_dirty_source": allow_dirty == "1",
+        "privacy_production_enabled": privacy,
+        "cargo_features": ["privacy-production-enabled"] if privacy else [],
+    },
+    "rust": {
+        "channel": rust_channel,
+        "cargo_release": cargo_release,
+        "cargo_commit_hash": cargo_commit,
+        "cargo_binary_sha256": cargo_sha256,
+        "rustc_release": rustc_release,
+        "rustc_commit_hash": rustc_commit,
+        "rustc_binary_sha256": rustc_sha256,
+        "rustdoc_release": rustdoc_release,
+        "rustdoc_commit_hash": rustdoc_commit,
+        "rustdoc_binary_sha256": rustdoc_sha256,
+    },
+    "producer_tools": {
+        "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
+        "hermetic_runner_sha256": hermetic_runner_sha256,
+        "source_seal_schema": "iroha.norito-bridge-source-seal.v1",
+        "source_seal_script_sha256": source_seal_script_sha256,
+        "apple_artifact_validator_sha256": apple_artifact_validator_sha256,
+        "python_version": python_version,
+        "python_binary_sha256": python_sha256,
+        "git_version": git_version,
+        "git_binary_sha256": git_sha256,
+        "rustup_version": rustup_version,
+        "rustup_binary_sha256": rustup_sha256,
+    },
+    "apple": {
+        "xcode_version": xcode_version,
+        "xcode_build_version": xcode_build,
+        "sdk_versions": {
+            "iphoneos": iphoneos_sdk,
+            "iphonesimulator": iphonesimulator_sdk,
+            "macosx": macosx_sdk,
+        },
+        "deployment_targets": {
+            "iphoneos": iphoneos_deployment,
+            "iphonesimulator": iphonesimulator_deployment,
+            "macosx": macosx_deployment,
+        },
+        "lipo_binary_sha256": lipo_sha256,
+        "nm_binary_sha256": nm_sha256,
+    },
+}
+Path(output).write_text(
+    json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
+write_slice_bundle() {
+  local source_library="$1"
+  local bundle_root="$SLICE_OUTPUT_ROOT/$SLICE_ID"
+  run_isolated_python - \
+    "$SLICE_OUTPUT_ROOT" "$bundle_root" "$source_library" \
+    "$MATRIX_CONTEXT_PATH" "$SLICE_ID" "$SLICE_TARGET_TRIPLE" \
+    "$SLICE_PROFILE" "$SLICE_SDK_NAME" "$SLICE_SDK_VERSION" \
+    "$SLICE_DEPLOYMENT_TARGET" "$SLICE_ARCHITECTURE" \
+    "$LIPO_BINARY" "$NM_BINARY" "$XCODE_DEVELOPER_DIR" \
+    "$APPLE_ARTIFACT_VALIDATOR" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import stat
+import subprocess
+import sys
+
+(
+    root_raw,
+    bundle_raw,
+    source_raw,
+    context_raw,
+    slice_id,
+    target_triple,
+    profile,
+    sdk_name,
+    sdk_version,
+    deployment_target,
+    architecture,
+    lipo_raw,
+    nm_raw,
+    developer_dir,
+    validator_raw,
+) = sys.argv[1:]
+root = Path(root_raw)
+bundle = Path(bundle_raw)
+source = Path(source_raw)
+context_path = Path(context_raw)
+if bundle.parent != root or bundle.name != slice_id or any(root.iterdir()):
+    raise SystemExit("slice output root is no longer fresh and empty")
+bundle.mkdir(mode=0o700)
+library = bundle / "libconnect_norito_bridge.a"
+
+source_metadata = source.lstat()
+if (
+    source.resolve(strict=True) != source
+    or stat.S_ISLNK(source_metadata.st_mode)
+    or not stat.S_ISREG(source_metadata.st_mode)
+    or source_metadata.st_nlink != 1
+    or source_metadata.st_uid != os.geteuid()
+):
+    raise SystemExit("staged slice library is not an owner-controlled regular file")
+source_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+source_descriptor = os.open(source, source_flags)
+library_descriptor = os.open(
+    library,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+    0o600,
+)
+try:
+    before = os.fstat(source_descriptor)
+    with os.fdopen(os.dup(source_descriptor), "rb", closefd=True) as reader:
+        with os.fdopen(os.dup(library_descriptor), "wb", closefd=True) as writer:
+            shutil.copyfileobj(reader, writer, 1024 * 1024)
+            writer.flush()
+            os.fsync(writer.fileno())
+    after = os.fstat(source_descriptor)
+finally:
+    os.close(library_descriptor)
+    os.close(source_descriptor)
+identity = lambda value: (
+    value.st_dev,
+    value.st_ino,
+    value.st_mode,
+    value.st_nlink,
+    value.st_size,
+    value.st_mtime_ns,
+    value.st_ctime_ns,
+)
+if identity(before) != identity(after):
+    raise SystemExit("staged slice library changed during bundle production")
+
+tool_environment = {
+    "HOME": "/tmp",
+    "PATH": "/usr/bin:/bin",
+    "TMPDIR": "/tmp",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "DEVELOPER_DIR": developer_dir,
+}
+actual_architectures = subprocess.run(
+    [lipo_raw, "-archs", str(library)],
+    check=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    env=tool_environment,
+).stdout.split()
+if actual_architectures != [architecture]:
+    raise SystemExit(
+        f"slice {slice_id} architecture is not exact: {actual_architectures!r}"
+    )
+symbols_output = subprocess.run(
+    [nm_raw, "-gUj", str(library)],
+    check=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    env=tool_environment,
+).stdout.decode("utf-8", "strict")
+symbols = sorted(
+    {
+        line.strip().removeprefix("_")
+        for line in symbols_output.splitlines()
+        if line.strip()
+    }
+)
+validator = runpy.run_path(validator_raw)
+if validator.get("REQUIRED_NATIVE_BRIDGE_ABI_VERSION") != 22:
+    raise SystemExit("Apple artifact validator does not require exact native ABI 22")
+required_symbols = set(validator["EXPECTED_REQUIRED_SYMBOLS"])
+forbidden_symbols = set(validator["EXPECTED_FORBIDDEN_SYMBOLS"])
+missing = sorted(required_symbols - set(symbols))
+forbidden = sorted(forbidden_symbols & set(symbols))
+expected_kagemusha = {
+    symbol for symbol in required_symbols
+    if symbol.startswith("connect_norito_kagemusha_")
+}
+actual_kagemusha = {
+    symbol for symbol in symbols
+    if symbol.startswith("connect_norito_kagemusha_")
+}
+if missing:
+    raise SystemExit("slice is missing ABI22 required exports: " + ", ".join(missing))
+if forbidden:
+    raise SystemExit("slice contains forbidden exports: " + ", ".join(forbidden))
+if actual_kagemusha != expected_kagemusha:
+    raise SystemExit("slice Kagemusha export inventory is not exact")
+symbol_bytes = (("\n".join(symbols) + "\n") if symbols else "").encode("utf-8")
+required_bytes = ("\n".join(sorted(required_symbols)) + "\n").encode("utf-8")
+forbidden_bytes = ("\n".join(sorted(forbidden_symbols)) + "\n").encode("utf-8")
+library_bytes = library.read_bytes()
+with context_path.open("r", encoding="utf-8") as handle:
+    context = json.load(handle)
+evidence = {
+    "schema": "iroha.norito-bridge.apple-slice-evidence.v1",
+    "context": context,
+    "slice": {
+        "id": slice_id,
+        "target_triple": target_triple,
+        "profile": profile,
+        "sdk_name": sdk_name,
+        "sdk_version": sdk_version,
+        "deployment_target": deployment_target,
+    },
+    "library": {
+        "native_bridge_abi_version": 22,
+        "file_name": library.name,
+        "sha256": hashlib.sha256(library_bytes).hexdigest(),
+        "size": len(library_bytes),
+        "architectures": actual_architectures,
+        "global_defined_symbols_sha256": hashlib.sha256(symbol_bytes).hexdigest(),
+        "global_defined_symbol_count": len(symbols),
+        "required_symbol_inventory_sha256": hashlib.sha256(required_bytes).hexdigest(),
+        "forbidden_symbol_inventory_sha256": hashlib.sha256(forbidden_bytes).hexdigest(),
+    },
+}
+evidence_path = bundle / "slice-evidence.json"
+descriptor = os.open(
+    evidence_path,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+    0o600,
+)
+with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+    json.dump(evidence, handle, sort_keys=True, separators=(",", ":"))
+    handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+for path in (library, evidence_path, bundle, root):
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+PY
+}
+
+assemble_slice_bundles() {
+  local staged_root="$STAGE_DIR/cargo-libraries"
+  run_isolated_python - \
+    "$ASSEMBLE_SLICE_ROOT" "$MATRIX_CONTEXT_PATH" "$staged_root" \
+    "$LIPO_BINARY" "$NM_BINARY" "$XCODE_DEVELOPER_DIR" \
+    "$APPLE_ARTIFACT_VALIDATOR" <<'PY_ASSEMBLE_SLICES'
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import stat
+import subprocess
+import sys
+
+root = Path(sys.argv[1])
+context_path = Path(sys.argv[2])
+staged_root = Path(sys.argv[3])
+lipo = sys.argv[4]
+nm = sys.argv[5]
+developer_dir = sys.argv[6]
+validator_path = sys.argv[7]
+slices = {
+    "ios-arm64": {
+        "target_triple": "aarch64-apple-ios",
+        "profile": "apple-ios-device",
+        "sdk_name": "iphoneos",
+        "architecture": "arm64",
+    },
+    "ios-sim-arm64": {
+        "target_triple": "aarch64-apple-ios-sim",
+        "profile": "apple-ios-simulator",
+        "sdk_name": "iphonesimulator",
+        "architecture": "arm64",
+    },
+    "ios-sim-x64": {
+        "target_triple": "x86_64-apple-ios",
+        "profile": "apple-ios-simulator",
+        "sdk_name": "iphonesimulator",
+        "architecture": "x86_64",
+    },
+    "macos-arm64": {
+        "target_triple": "aarch64-apple-darwin",
+        "profile": "apple-macos",
+        "sdk_name": "macosx",
+        "architecture": "arm64",
+    },
+    "macos-x64": {
+        "target_triple": "x86_64-apple-darwin",
+        "profile": "apple-macos",
+        "sdk_name": "macosx",
+        "architecture": "x86_64",
+    },
+}
+
+def no_duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member: {key}")
+        result[key] = value
+    return result
+
+def regular_owned(path: Path, label: str) -> os.stat_result:
+    metadata = path.lstat()
+    if (
+        path.resolve(strict=True) != path
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o022
+    ):
+        raise SystemExit(f"{label} is not an owner-controlled regular file")
+    return metadata
+
+with context_path.open("r", encoding="utf-8") as handle:
+    expected_context = json.load(handle, object_pairs_hook=no_duplicates)
+validator = runpy.run_path(validator_path)
+if validator.get("REQUIRED_NATIVE_BRIDGE_ABI_VERSION") != 22:
+    raise SystemExit("Apple artifact validator does not require exact native ABI 22")
+required_symbols = set(validator["EXPECTED_REQUIRED_SYMBOLS"])
+forbidden_symbols = set(validator["EXPECTED_FORBIDDEN_SYMBOLS"])
+expected_kagemusha = {
+    symbol for symbol in required_symbols
+    if symbol.startswith("connect_norito_kagemusha_")
+}
+required_bytes = ("\n".join(sorted(required_symbols)) + "\n").encode("utf-8")
+forbidden_bytes = ("\n".join(sorted(forbidden_symbols)) + "\n").encode("utf-8")
+if {entry.name for entry in root.iterdir()} != set(slices):
+    raise SystemExit("slice assembly root does not contain exactly five canonical bundles")
+staged_root.mkdir(mode=0o700)
+tool_environment = {
+    "HOME": "/tmp",
+    "PATH": "/usr/bin:/bin",
+    "TMPDIR": "/tmp",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "DEVELOPER_DIR": developer_dir,
+}
+for slice_id, expected in slices.items():
+    bundle = root / slice_id
+    bundle_metadata = bundle.lstat()
+    if (
+        bundle.resolve(strict=True) != bundle
+        or stat.S_ISLNK(bundle_metadata.st_mode)
+        or not stat.S_ISDIR(bundle_metadata.st_mode)
+        or bundle_metadata.st_uid != os.geteuid()
+        or bundle_metadata.st_mode & 0o022
+        or {entry.name for entry in bundle.iterdir()}
+        != {"libconnect_norito_bridge.a", "slice-evidence.json"}
+    ):
+        raise SystemExit(f"slice bundle has a non-canonical inventory: {slice_id}")
+    source = bundle / "libconnect_norito_bridge.a"
+    evidence_path = bundle / "slice-evidence.json"
+    source_metadata = regular_owned(source, f"slice {slice_id} library")
+    evidence_metadata = regular_owned(evidence_path, f"slice {slice_id} evidence")
+    if evidence_metadata.st_size > 2 * 1024 * 1024:
+        raise SystemExit(f"slice {slice_id} evidence exceeds the closed size limit")
+    evidence_descriptor = os.open(
+        evidence_path,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        evidence_before = os.fstat(evidence_descriptor)
+        chunks = []
+        while chunk := os.read(evidence_descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        evidence_after = os.fstat(evidence_descriptor)
+    finally:
+        os.close(evidence_descriptor)
+    evidence_bytes = b"".join(chunks)
+    evidence_identity = lambda value: (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_nlink,
+        value.st_uid,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+    evidence_visible = evidence_path.lstat()
+    if (
+        evidence_identity(evidence_before) != evidence_identity(evidence_after)
+        or (evidence_visible.st_dev, evidence_visible.st_ino)
+        != (evidence_after.st_dev, evidence_after.st_ino)
+        or len(evidence_bytes) != evidence_after.st_size
+    ):
+        raise SystemExit(f"slice {slice_id} evidence changed while it was read")
+    try:
+        evidence = json.loads(
+            evidence_bytes.decode("utf-8"), object_pairs_hook=no_duplicates
+        )
+    except (UnicodeError, ValueError, TypeError) as error:
+        raise SystemExit(f"slice {slice_id} evidence is malformed: {error}") from None
+    if set(evidence) != {"schema", "context", "slice", "library"}:
+        raise SystemExit(f"slice {slice_id} evidence has a non-canonical schema")
+    if evidence["schema"] != "iroha.norito-bridge.apple-slice-evidence.v1":
+        raise SystemExit(f"slice {slice_id} evidence schema is unsupported")
+    if evidence["context"] != expected_context:
+        raise SystemExit(f"slice {slice_id} evidence does not match this assembly context")
+    expected_slice = {
+        "id": slice_id,
+        "target_triple": expected["target_triple"],
+        "profile": expected["profile"],
+        "sdk_name": expected["sdk_name"],
+        "sdk_version": expected_context["apple"]["sdk_versions"][expected["sdk_name"]],
+        "deployment_target": expected_context["apple"]["deployment_targets"][expected["sdk_name"]],
+    }
+    if evidence["slice"] != expected_slice:
+        raise SystemExit(f"slice {slice_id} evidence has the wrong target identity")
+    library_evidence = evidence["library"]
+    if set(library_evidence) != {
+        "native_bridge_abi_version",
+        "file_name",
+        "sha256",
+        "size",
+        "architectures",
+        "global_defined_symbols_sha256",
+        "global_defined_symbol_count",
+        "required_symbol_inventory_sha256",
+        "forbidden_symbol_inventory_sha256",
+    } or (
+        library_evidence["native_bridge_abi_version"] != 22
+        or library_evidence["file_name"] != source.name
+        or library_evidence["required_symbol_inventory_sha256"]
+        != hashlib.sha256(required_bytes).hexdigest()
+        or library_evidence["forbidden_symbol_inventory_sha256"]
+        != hashlib.sha256(forbidden_bytes).hexdigest()
+    ):
+        raise SystemExit(f"slice {slice_id} library evidence is non-canonical")
+
+    destination_dir = staged_root / expected["target_triple"]
+    destination_dir.mkdir(mode=0o700)
+    destination = destination_dir / "libconnect_norito_bridge.a"
+    source_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    source_descriptor = os.open(source, source_flags)
+    destination_descriptor = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+    )
+    try:
+        before = os.fstat(source_descriptor)
+        digest = hashlib.sha256()
+        observed = 0
+        with os.fdopen(os.dup(source_descriptor), "rb", closefd=True) as reader:
+            with os.fdopen(os.dup(destination_descriptor), "wb", closefd=True) as writer:
+                while chunk := reader.read(1024 * 1024):
+                    digest.update(chunk)
+                    observed += len(chunk)
+                    writer.write(chunk)
+                writer.flush()
+                os.fsync(writer.fileno())
+        after = os.fstat(source_descriptor)
+    finally:
+        os.close(destination_descriptor)
+        os.close(source_descriptor)
+    identity = lambda value: (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+    visible = source.lstat()
+    if (
+        identity(before) != identity(after)
+        or (visible.st_dev, visible.st_ino) != (after.st_dev, after.st_ino)
+        or observed != after.st_size
+        or library_evidence["sha256"] != digest.hexdigest()
+        or library_evidence["size"] != observed
+    ):
+        raise SystemExit(f"slice {slice_id} library bytes do not match closed evidence")
+    architectures = subprocess.run(
+        [lipo, "-archs", str(destination)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=tool_environment,
+    ).stdout.split()
+    if architectures != [expected["architecture"]] or library_evidence["architectures"] != architectures:
+        raise SystemExit(f"slice {slice_id} has the wrong architecture")
+    symbols_output = subprocess.run(
+        [nm, "-gUj", str(destination)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=tool_environment,
+    ).stdout.decode("utf-8", "strict")
+    symbols = sorted(
+        {
+            line.strip().removeprefix("_")
+            for line in symbols_output.splitlines()
+            if line.strip()
+        }
+    )
+    symbol_bytes = (("\n".join(symbols) + "\n") if symbols else "").encode("utf-8")
+    missing = sorted(required_symbols - set(symbols))
+    forbidden = sorted(forbidden_symbols & set(symbols))
+    actual_kagemusha = {
+        symbol for symbol in symbols
+        if symbol.startswith("connect_norito_kagemusha_")
+    }
+    if missing:
+        raise SystemExit(
+            f"slice {slice_id} is missing ABI22 required exports: "
+            + ", ".join(missing)
+        )
+    if forbidden:
+        raise SystemExit(
+            f"slice {slice_id} contains forbidden exports: "
+            + ", ".join(forbidden)
+        )
+    if actual_kagemusha != expected_kagemusha:
+        raise SystemExit(f"slice {slice_id} Kagemusha export inventory is not exact")
+    if (
+        library_evidence["global_defined_symbols_sha256"]
+        != hashlib.sha256(symbol_bytes).hexdigest()
+        or library_evidence["global_defined_symbol_count"] != len(symbols)
+    ):
+        raise SystemExit(f"slice {slice_id} symbols do not match closed evidence")
+PY_ASSEMBLE_SLICES
+}
+
+if [[ "$MATRIX_MODE" != ordinary ]]; then
+  write_matrix_context
+fi
+
+if [[ "$MATRIX_MODE" == produce ]]; then
+  slice_configuration "$PRODUCE_SLICE_ID" || exit 1
+  build_one_apple_slice "$PRODUCE_SLICE_ID"
+  PRODUCED_LIBRARY="$(stage_cargo_library \
+    "$SLICE_TARGET_TRIPLE" "$SLICE_LABEL" \
+    "$CARGO_TARGET_DIR/$SLICE_TARGET_TRIPLE")"
+  assert_bridge_source_seal "Apple slice evidence production"
+  write_slice_bundle "$PRODUCED_LIBRARY"
+  assert_bridge_source_seal "the completed $PRODUCE_SLICE_ID evidence bundle"
+  rm -rf "$STAGE_DIR"
+  echo "[+] Produced authenticated Apple slice bundle: $SLICE_OUTPUT_ROOT/$PRODUCE_SLICE_ID" >&2
+  exit 0
+fi
+
+if [[ "$MATRIX_MODE" == assemble ]]; then
+  assert_bridge_source_seal "Apple slice assembly preflight"
+  assemble_slice_bundles
+  assert_bridge_source_seal "Apple slice evidence revalidation"
+else
+  echo "[+] Building five Rust static libraries sequentially in fixed Cargo targets" >&2
+  echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_ARM_TRIPLE, $MACOS_X64_TRIPLE" >&2
+  build_one_apple_slice ios-arm64
+  build_one_apple_slice ios-sim-arm64
+  build_one_apple_slice ios-sim-x64
+  build_one_apple_slice macos-arm64
+  build_one_apple_slice macos-x64
+fi
+
+if [[ "$MATRIX_MODE" == assemble ]]; then
+  LIB_DEV="$STAGE_DIR/cargo-libraries/$DEVICE_TRIPLE/lib${LIB_CRATE_NAME}.a"
+  LIB_SIM_ARM="$STAGE_DIR/cargo-libraries/$SIM_ARM_TRIPLE/lib${LIB_CRATE_NAME}.a"
+  LIB_SIM_X64="$STAGE_DIR/cargo-libraries/$SIM_X64_TRIPLE/lib${LIB_CRATE_NAME}.a"
+  LIB_MAC_ARM="$STAGE_DIR/cargo-libraries/$MACOS_ARM_TRIPLE/lib${LIB_CRATE_NAME}.a"
+  LIB_MAC_X64="$STAGE_DIR/cargo-libraries/$MACOS_X64_TRIPLE/lib${LIB_CRATE_NAME}.a"
+else
+  LIB_DEV=$(stage_cargo_library "$DEVICE_TRIPLE" "iOS device" "$CARGO_TARGET_DIR")
+  LIB_SIM_ARM=$(stage_cargo_library "$SIM_ARM_TRIPLE" "arm64 simulator" "$CARGO_TARGET_DIR")
+  LIB_SIM_X64=$(stage_cargo_library "$SIM_X64_TRIPLE" "x86_64 simulator" "$CARGO_TARGET_DIR")
+  LIB_MAC_ARM=$(stage_cargo_library "$MACOS_ARM_TRIPLE" "arm64 macOS" "$CARGO_TARGET_DIR")
+  LIB_MAC_X64=$(stage_cargo_library "$MACOS_X64_TRIPLE" "x86_64 macOS" "$CARGO_TARGET_DIR")
+fi
 
 assert_bridge_source_seal "Apple slice staging"
 
 if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" \
     || ! -f "$LIB_MAC_ARM" || ! -f "$LIB_MAC_X64" ]]; then
-  echo "[-] Missing built libraries. Did the cargo builds succeed?" >&2
+  echo "[-] Missing authenticated Apple slice libraries" >&2
   exit 1
 fi
 
-if [[ -z "${BRIDGE_VERSION}" ]]; then
-  VERSION_SOURCE="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
-  if command -v rg >/dev/null 2>&1; then
-    BRIDGE_VERSION=$(rg -n "expectedVersion" "$VERSION_SOURCE" | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
-  else
-    BRIDGE_VERSION=$(grep -m1 "expectedVersion" "$VERSION_SOURCE" | sed -E 's/.*"([^"]+)".*/\1/')
-  fi
-fi
-if [[ -z "${BRIDGE_VERSION}" ]]; then
-  echo "[-] Unable to determine NoritoBridge version for artifact manifest" >&2
-  exit 1
-fi
-BRIDGE_BUNDLE_VERSION="${BRIDGE_VERSION%%-*}"
-if [[ -z "$BRIDGE_BUNDLE_VERSION" ]]; then
-  BRIDGE_BUNDLE_VERSION="1"
-fi
+PUBLISH_ROOT="$(mktemp -d "$OUT_DIR/.NoritoBridge.publish.XXXXXX")"
+PUBLISH_XCFRAMEWORK="$PUBLISH_ROOT/${FRAMEWORK_NAME}.xcframework"
+PUBLISH_MANIFEST="$PUBLISH_XCFRAMEWORK/${FRAMEWORK_NAME}.artifacts.json"
+PUBLISH_MANIFEST_LINK="$PUBLISH_ROOT/${FRAMEWORK_NAME}.artifacts.json"
+FINAL_XCFRAMEWORK="$OUT_DIR/${FRAMEWORK_NAME}.xcframework"
+FINAL_MANIFEST="$OUT_DIR/${FRAMEWORK_NAME}.artifacts.json"
+CANONICAL_MANIFEST_RELATIVE_TARGET="${FRAMEWORK_NAME}.xcframework/${FRAMEWORK_NAME}.artifacts.json"
 
 SIM_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-sim-universal.a"
 MAC_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-macos-universal.a"

@@ -163,10 +163,10 @@ grep -Fq 'RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"' "$JVM_NATIVE_GATE" \
   || fail "JVM native gate does not preserve rustup dispatcher semantics"
 grep -Fq 'RUSTUP_CANONICAL_BINARY=' "$JVM_NATIVE_GATE" \
   || fail "JVM native gate does not authenticate the rustup dispatcher target"
-[[ "$(grep -Fc 'python-version: "3.12"' "$MOBILE_WORKFLOW")" -eq 3 ]] \
-  || fail "mobile workflow must pin Python 3.12 in exactly three jobs"
-[[ "$(grep -Fc 'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python"' "$MOBILE_WORKFLOW")" -eq 3 ]] \
-  || fail "mobile workflow must bind the canonical Python in exactly three jobs"
+[[ "$(grep -Fc 'python-version: "3.12"' "$MOBILE_WORKFLOW")" -eq 4 ]] \
+  || fail "mobile workflow must pin Python 3.12 in exactly four jobs"
+[[ "$(grep -Fc 'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python"' "$MOBILE_WORKFLOW")" -eq 4 ]] \
+  || fail "mobile workflow must bind the canonical Python in exactly four jobs"
 grep -Fq 'bash scripts/tests/mobile_sdk_python312_contract.sh' "$MOBILE_WORKFLOW" \
   || fail "mobile workflow does not run the Python 3.12 contract"
 grep -Fq '"scripts/tests/mobile_sdk_python312_contract.sh"' "$MOBILE_WORKFLOW" \
@@ -248,6 +248,59 @@ expect_failure_containing \
   env \
     MOBILE_SDK_PYTHON_BINARY=/bin/bash \
     /bin/bash "$JVM_NATIVE_GATE" --resolve-python312-for-test
+
+JVM_EXTERNAL_CARGO_TARGET="$TEST_ROOT/jvm-external-cargo-target"
+mkdir -m 0700 -- "$JVM_EXTERNAL_CARGO_TARGET"
+jvm_external_target="$(
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR="$JVM_EXTERNAL_CARGO_TARGET" \
+    /bin/bash "$JVM_NATIVE_GATE" --resolve-external-cargo-target-for-test
+)" || fail "JVM native gate rejected its canonical private external Cargo target"
+[[ "$jvm_external_target" == "$JVM_EXTERNAL_CARGO_TARGET" ]] \
+  || fail "JVM native gate substituted its external Cargo target"
+
+expect_failure_containing \
+  "missing JVM native external Cargo target" \
+  "is required for external target reuse" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    /bin/bash "$JVM_NATIVE_GATE" --resolve-external-cargo-target-for-test
+
+expect_failure_containing \
+  "relative JVM native external Cargo target" \
+  "must be an absolute canonical directory" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR=relative-target \
+    /bin/bash "$JVM_NATIVE_GATE" --resolve-external-cargo-target-for-test
+
+ln -s "$JVM_EXTERNAL_CARGO_TARGET" "$TEST_ROOT/jvm-external-cargo-target-link"
+expect_failure_containing \
+  "symlinked JVM native external Cargo target" \
+  "must be one owner-private" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR="$TEST_ROOT/jvm-external-cargo-target-link" \
+    /bin/bash "$JVM_NATIVE_GATE" --resolve-external-cargo-target-for-test
+
+chmod 0755 "$JVM_EXTERNAL_CARGO_TARGET"
+expect_failure_containing \
+  "non-private JVM native external Cargo target" \
+  "must be one owner-private" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR="$JVM_EXTERNAL_CARGO_TARGET" \
+    /bin/bash "$JVM_NATIVE_GATE" --resolve-external-cargo-target-for-test
+chmod 0700 "$JVM_EXTERNAL_CARGO_TARGET"
+
+expect_failure_containing \
+  "source-overlapping JVM native external Cargo target" \
+  "disjoint from the Iroha source tree" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR="$ROOT_DIR" \
+    /bin/bash "$JVM_NATIVE_GATE" --resolve-external-cargo-target-for-test
 
 APPLE_CARGO_TARGET="$TEST_ROOT/apple-cargo-target"
 APPLE_BUILD_DIR="$TEST_ROOT/apple-build"

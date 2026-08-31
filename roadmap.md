@@ -1,12 +1,16 @@
 # Roadmap
 
-Last updated: 2026-08-27
+Last updated: 2026-08-31
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
 ## Offline Cash V1 mobile rollout
 
+- Run the five-lane Apple thin-slice workflow and Android hosted build from one
+  signed immutable commit, require the compile-free Apple assembler and final
+  mobile artifact checker to pass, and archive the exact ABI-22 provenance
+  bundles before any application repin or store upload.
 - Keep the Kotlin/JVM and Java Android Torii facade source-complete but
   non-authoritative until the same immutable candidate passes the remaining
   release evidence gates below. The local facade validates public

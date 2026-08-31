@@ -20,11 +20,21 @@ fail() {
 }
 
 PYTHON_RESOLUTION_ONLY=0
+EXTERNAL_CARGO_TARGET_RESOLUTION_ONLY=0
 if (( $# > 1 )); then
   fail "unexpected arguments"
 elif (( $# == 1 )); then
-  [[ "$1" == "--resolve-python312-for-test" ]] || fail "unknown argument: $1"
-  PYTHON_RESOLUTION_ONLY=1
+  case "$1" in
+    --resolve-python312-for-test)
+      PYTHON_RESOLUTION_ONLY=1
+      ;;
+    --resolve-external-cargo-target-for-test)
+      EXTERNAL_CARGO_TARGET_RESOLUTION_ONLY=1
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
 fi
 
 for required_file in \
@@ -115,10 +125,106 @@ print(resolved)
   return 1
 }
 
+resolve_external_cargo_target() {
+  local configured="${KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR:-}"
+  local expected_host_triple="${1:-}"
+  [[ -n "$configured" ]] \
+    || fail "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR is required for external target reuse"
+  "$PYTHON_BINARY" -I -S - \
+    "$configured" "$ROOT_DIR" "$expected_host_triple" <<'PY'
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+candidate = Path(sys.argv[1])
+source_root = Path(sys.argv[2]).resolve(strict=True)
+expected_host_triple = sys.argv[3]
+if not candidate.is_absolute() or candidate != Path(os.path.abspath(candidate)):
+    raise SystemExit(
+        "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR must be an absolute canonical directory"
+    )
+try:
+    metadata = candidate.lstat()
+    resolved = candidate.resolve(strict=True)
+except OSError:
+    raise SystemExit(
+        "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR must already exist"
+    ) from None
+if (
+    resolved != candidate
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or stat.S_IMODE(metadata.st_mode) & 0o077
+    or not os.access(candidate, os.R_OK | os.W_OK | os.X_OK)
+    or candidate == source_root
+    or source_root in candidate.parents
+    or candidate in source_root.parents
+):
+    raise SystemExit(
+        "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR must be one owner-private, "
+        "writable, non-symbolic canonical directory disjoint from the Iroha source tree"
+    )
+
+try:
+    immediate_entries = list(os.scandir(candidate))
+except OSError as error:
+    raise SystemExit(
+        f"KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR could not be inspected: {error}"
+    ) from error
+if any(entry.is_symlink() for entry in immediate_entries):
+    raise SystemExit(
+        "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR must not contain immediate symbolic entries"
+    )
+
+if expected_host_triple:
+    if re.fullmatch(r"[A-Za-z0-9_.-]+", expected_host_triple) is None:
+        raise SystemExit("expected Cargo host triple is not canonical")
+    host_target = candidate / expected_host_triple
+    try:
+        host_metadata = host_target.lstat()
+    except FileNotFoundError:
+        host_metadata = None
+    except OSError as error:
+        raise SystemExit(
+            f"restored Cargo host target could not be inspected: {error}"
+        ) from error
+    if host_metadata is not None:
+        try:
+            resolved_host_target = host_target.resolve(strict=True)
+        except OSError as error:
+            raise SystemExit(
+                f"restored Cargo host target could not be resolved: {error}"
+            ) from error
+        if (
+            resolved_host_target != host_target
+            or resolved_host_target.parent != candidate
+            or candidate not in resolved_host_target.parents
+            or stat.S_ISLNK(host_metadata.st_mode)
+            or not stat.S_ISDIR(host_metadata.st_mode)
+            or host_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(host_metadata.st_mode) & 0o077
+            or not os.access(host_target, os.R_OK | os.W_OK | os.X_OK)
+        ):
+            raise SystemExit(
+                "restored Cargo host target must be one owned private non-symbolic "
+                "canonical directory within the external target"
+            )
+print(candidate)
+PY
+}
+
 PYTHON_BINARY="$(resolve_trusted_python312)" || exit 1
 if [[ "$PYTHON_RESOLUTION_ONLY" == "1" ]]; then
   printf '%s\n' "$PYTHON_BINARY"
   exit 0
+fi
+if [[ "$EXTERNAL_CARGO_TARGET_RESOLUTION_ONLY" == "1" ]]; then
+  resolve_external_cargo_target \
+    "${KAGEMUSHA_JVM_NATIVE_HOST_TRIPLE_FOR_TEST:-}"
+  exit $?
 fi
 USER_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
 USER_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$USER_HOME_DIR")"
@@ -266,10 +372,16 @@ if [[ "${KAGEMUSHA_JVM_NATIVE_TOOL_RESOLUTION_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+HOST_TRIPLE="$("$RUSTC_BINARY" --version --verbose | sed -n 's/^host: //p')"
+[[ "$HOST_TRIPLE" =~ ^[A-Za-z0-9_.-]+$ ]] \
+  || fail "rustc returned a non-canonical host triple"
+CARGO_PATH="${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:/usr/bin:/bin"
 BUILD_SESSION="$(/usr/bin/mktemp -d "${MOBILE_TMPDIR%/}/kagemusha-jvm-native.XXXXXX")"
 LOCALNET_DIR="$BUILD_SESSION/zk-asset-shield-localnet"
 LOCALNET_STOPPED=0
 EVIDENCE_DIR="${KAGEMUSHA_JVM_NATIVE_EVIDENCE_DIR:-}"
+RETAINED_NATIVE_DIR=""
+RETAINED_NATIVE_DIR_CREATED=0
 
 stop_localnet() {
   local pidfiles=()
@@ -317,6 +429,9 @@ cleanup() {
   if [[ "$preserve" == "0" ]]; then
     rm -rf -- "$BUILD_SESSION"
   fi
+  if [[ "$status" != "0" && "$RETAINED_NATIVE_DIR_CREATED" == "1" ]]; then
+    rm -rf -- "$RETAINED_NATIVE_DIR"
+  fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -342,8 +457,124 @@ if [[ -n "$EVIDENCE_DIR" ]]; then
   esac
 fi
 EMPTY_NATIVE_DIR="$BUILD_SESSION/no-native"
-CARGO_TARGET_DIR="$BUILD_SESSION/cargo-target"
-mkdir -p "$EMPTY_NATIVE_DIR" "$CARGO_TARGET_DIR"
+
+cargo_target_identity() {
+  "$PYTHON_BINARY" -I -S - "$1" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+candidate = Path(sys.argv[1])
+try:
+    metadata = candidate.lstat()
+    resolved = candidate.resolve(strict=True)
+except OSError:
+    raise SystemExit("JNI Cargo target is unavailable") from None
+if (
+    resolved != candidate
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or stat.S_IMODE(metadata.st_mode) & 0o077
+    or not os.access(candidate, os.R_OK | os.W_OK | os.X_OK)
+):
+    raise SystemExit(
+        "JNI Cargo target must remain one owner-private writable canonical directory"
+    )
+print(f"{metadata.st_dev}:{metadata.st_ino}:{metadata.st_mode}:{metadata.st_uid}")
+PY
+}
+
+verify_cargo_target_identity() {
+  [[ "$(cargo_target_identity "$CARGO_TARGET_DIR")" == "$CARGO_TARGET_IDENTITY" ]] \
+    || fail "JNI Cargo target identity changed during the release gate"
+}
+
+prepare_retained_native_directory() {
+  local configured="${KAGEMUSHA_JVM_NATIVE_RETAIN_DIR:-}"
+  "$PYTHON_BINARY" -I -S - \
+    "$configured" "$ROOT_DIR" "$BUILD_SESSION" "$CARGO_TARGET_DIR" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+candidate = Path(sys.argv[1])
+source_root = Path(sys.argv[2]).resolve(strict=True)
+build_session = Path(sys.argv[3]).resolve(strict=True)
+cargo_target = Path(sys.argv[4]).resolve(strict=True)
+if (
+    not candidate.is_absolute()
+    or candidate != Path(os.path.abspath(candidate))
+    or len(os.fsencode(candidate)) > 4096
+    or len(candidate.parts) > 64
+):
+    raise SystemExit(
+        "KAGEMUSHA_JVM_NATIVE_RETAIN_DIR must be one bounded absolute canonical leaf path"
+    )
+if candidate.exists() or candidate.is_symlink():
+    raise SystemExit("KAGEMUSHA_JVM_NATIVE_RETAIN_DIR must be fresh")
+parent = candidate.parent
+try:
+    parent_metadata = parent.lstat()
+    resolved_parent = parent.resolve(strict=True)
+except OSError:
+    raise SystemExit(
+        "KAGEMUSHA_JVM_NATIVE_RETAIN_DIR parent is unavailable"
+    ) from None
+if (
+    resolved_parent != parent
+    or stat.S_ISLNK(parent_metadata.st_mode)
+    or not stat.S_ISDIR(parent_metadata.st_mode)
+    or parent_metadata.st_uid != os.geteuid()
+    or not os.access(parent, os.R_OK | os.W_OK | os.X_OK)
+):
+    raise SystemExit(
+        "KAGEMUSHA_JVM_NATIVE_RETAIN_DIR parent must be one owned writable canonical directory"
+    )
+
+def overlaps(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
+
+if any(
+    overlaps(candidate, forbidden)
+    for forbidden in (source_root, build_session, cargo_target)
+):
+    raise SystemExit(
+        "KAGEMUSHA_JVM_NATIVE_RETAIN_DIR must be disjoint from source, session, and Cargo target"
+    )
+try:
+    os.mkdir(candidate, 0o700)
+    metadata = candidate.lstat()
+except OSError as error:
+    raise SystemExit(
+        f"KAGEMUSHA_JVM_NATIVE_RETAIN_DIR could not be created: {error}"
+    ) from error
+if (
+    candidate.resolve(strict=True) != candidate
+    or not stat.S_ISDIR(metadata.st_mode)
+    or stat.S_ISLNK(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or stat.S_IMODE(metadata.st_mode) != 0o700
+):
+    raise SystemExit(
+        "KAGEMUSHA_JVM_NATIVE_RETAIN_DIR was not created as one private canonical directory"
+    )
+print(candidate)
+PY
+}
+
+EXTERNAL_CARGO_TARGET=0
+if [[ -n "${KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR:-}" ]]; then
+  CARGO_TARGET_DIR="$(resolve_external_cargo_target "$HOST_TRIPLE")" || exit 1
+  EXTERNAL_CARGO_TARGET=1
+else
+  CARGO_TARGET_DIR="$BUILD_SESSION/cargo-target"
+  mkdir -m 0700 -- "$CARGO_TARGET_DIR"
+fi
+mkdir -m 0700 -- "$EMPTY_NATIVE_DIR"
+CARGO_TARGET_IDENTITY="$(cargo_target_identity "$CARGO_TARGET_DIR")" || exit 1
 
 run_adversarial_environment_self_test() {
   local fake_bin="$BUILD_SESSION/hostile-bin"
@@ -522,6 +753,35 @@ source_seal() {
     "$PYTHON_BINARY" -I -S "$SOURCE_SEAL" "$@"
 }
 
+scrub_external_workspace_outputs() {
+  printf '[kagemusha-jvm-native] scrubbing cached workspace outputs for %s; dependency artifacts remain reusable\n' \
+    "$HOST_TRIPLE" >&2
+  "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
+    --profile host-cargo \
+    --set "CARGO=$CARGO_BINARY" \
+    --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
+    --set "CARGO_INCREMENTAL=0" \
+    --set "CARGO_NET_OFFLINE=true" \
+    --set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+    --set "HOME=$USER_HOME_DIR" \
+    --set "LANG=C.UTF-8" \
+    --set "LC_ALL=C.UTF-8" \
+    --set "NORITO_SKIP_BINDINGS_SYNC=1" \
+    --set "PATH=$CARGO_PATH" \
+    --set "RUSTC=$RUSTC_BINARY" \
+    --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME" \
+    --set "TMPDIR=$MOBILE_TMPDIR" \
+    -- "$CARGO_BINARY" clean --locked --offline --workspace \
+      --target "$HOST_TRIPLE" \
+      --target-dir "$CARGO_TARGET_DIR" \
+      --manifest-path "$ROOT_DIR/Cargo.toml"
+  verify_cargo_target_identity
+}
+
+if [[ "$EXTERNAL_CARGO_TARGET" == "1" ]]; then
+  scrub_external_workspace_outputs
+fi
+
 SOURCE_SNAPSHOT="$BUILD_SESSION/source-seal-v1.json"
 source_seal snapshot --root "$ROOT_DIR" --platform android >"$SOURCE_SNAPSHOT"
 
@@ -612,9 +872,6 @@ run_expected_missing_native_failure \
     --tests org.hyperledger.iroha.android.offline.IrohaPeerKagemushaAdapterV1Tests \
     --console=plain
 
-HOST_TRIPLE="$("$RUSTC_BINARY" --version --verbose | sed -n 's/^host: //p')"
-[[ "$HOST_TRIPLE" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "rustc returned a non-canonical host triple"
-CARGO_PATH="${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:/usr/bin:/bin"
 printf '[kagemusha-jvm-native] building fresh host ABI-22 bridge for %s\n' "$HOST_TRIPLE" >&2
 "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
   --profile host-cargo \
@@ -633,6 +890,7 @@ printf '[kagemusha-jvm-native] building fresh host ABI-22 bridge for %s\n' "$HOS
   --set "TMPDIR=$MOBILE_TMPDIR" \
   -- "$CARGO_BINARY" build --locked --offline --target "$HOST_TRIPLE" \
     -p connect_norito_bridge --lib
+verify_cargo_target_identity
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
 
 case "$HOST_TRIPLE" in
@@ -642,13 +900,19 @@ case "$HOST_TRIPLE" in
 esac
 [[ -f "$NATIVE_BUILD_OUTPUT" && ! -L "$NATIVE_BUILD_OUTPUT" ]] \
   || fail "fresh host bridge library is missing: $NATIVE_BUILD_OUTPUT"
-STAGED_NATIVE_DIR="$BUILD_SESSION/staged-native"
-mkdir -m 0700 -- "$STAGED_NATIVE_DIR"
-STAGED_NATIVE_DIR="$(
-  "$PYTHON_BINARY" -I -S -c \
-    'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
-    "$STAGED_NATIVE_DIR"
-)"
+if [[ -n "${KAGEMUSHA_JVM_NATIVE_RETAIN_DIR:-}" ]]; then
+  RETAINED_NATIVE_DIR="$(prepare_retained_native_directory)" || exit 1
+  RETAINED_NATIVE_DIR_CREATED=1
+  STAGED_NATIVE_DIR="$RETAINED_NATIVE_DIR"
+else
+  STAGED_NATIVE_DIR="$BUILD_SESSION/staged-native"
+  mkdir -m 0700 -- "$STAGED_NATIVE_DIR"
+  STAGED_NATIVE_DIR="$(
+    "$PYTHON_BINARY" -I -S -c \
+      'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+      "$STAGED_NATIVE_DIR"
+  )"
+fi
 NATIVE_LIBRARY_NAME="${NATIVE_BUILD_OUTPUT##*/}"
 NATIVE_LIBRARY="$(
   "$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" stage \
@@ -658,7 +922,7 @@ NATIVE_LIBRARY="$(
 [[ "$NATIVE_LIBRARY" == "$STAGED_NATIVE_DIR/$NATIVE_LIBRARY_NAME" ]] \
   || fail "native artifact staging returned an unexpected path: $NATIVE_LIBRARY"
 NATIVE_LIBRARY_DIR="${NATIVE_LIBRARY%/*}"
-NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi22.json"
+NATIVE_EVIDENCE="$STAGED_NATIVE_DIR/c-jni-native-abi22.json"
 "$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" record \
   --artifact "$NATIVE_LIBRARY" \
   --manifest "$NATIVE_EVIDENCE" \
@@ -753,6 +1017,7 @@ printf '[kagemusha-jvm-native] building fresh four-peer localnet tools for %s\n'
   -- "$CARGO_BINARY" build --locked --offline --target "$HOST_TRIPLE" \
     -p iroha_kagami -p irohad -p iroha_cli \
     --bin kagami --bin iroha3d --bin iroha
+verify_cargo_target_identity
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
 
 LOCALNET_BIN_DIR="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug"
@@ -1022,6 +1287,11 @@ PY
 run_full_suite java "$ROOT_DIR/java/iroha_android" \
   "$ROOT_DIR/java/iroha_android/gradlew" --no-daemon --rerun-tasks test --console=plain
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
+"$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" verify \
+  --artifact "$NATIVE_LIBRARY" \
+  --manifest "$NATIVE_EVIDENCE" \
+  --source-root "$ROOT_DIR"
+verify_cargo_target_identity
 for tool_and_hash in \
   "$PYTHON_BINARY:$PYTHON_SHA256_START" \
   "$GIT_BINARY:$GIT_SHA256_START" \

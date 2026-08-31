@@ -456,7 +456,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                 're.fullmatch(rb"(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.'
                 '(0|[1-9][0-9]*)\\n", raw)'
             ),
-            4,
+            5,
         )
         self.assertLess(
             apple_job.index("name: Package Apple mobile SDK artifact"),
