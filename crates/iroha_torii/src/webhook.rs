@@ -10,6 +10,9 @@
 //!   admission, spool records, decoded bodies, and each scan batch have hard
 //!   bounds so a large or adversarial queue cannot grow worker memory without
 //!   limit.
+//! - Durable webhook storage is supported on Apple and Linux hosts, where Torii
+//!   can pin directories and enforce owner-private files. Enabling webhooks on
+//!   other hosts fails startup instead of falling back to pathname-only storage.
 //! - HTTPS delivery is supported when the `app_api_https` feature is enabled,
 //!   using `reqwest` + `rustls` with native roots. WebSocket delivery requires
 //!   `app_api_wss`; plain `http://` delivery is always available.
@@ -31,19 +34,22 @@ use iroha_data_model::{events::data::prelude as df, prelude::DataEvent};
 use iroha_futures::supervisor::ShutdownSignal;
 use sha2::{Digest, Sha256};
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
-use std::ffi::OsString;
-#[cfg(test)]
+use std::ffi::{OsStr, OsString};
+#[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::{
     collections::HashMap,
-    ffi::OsStr,
-    fs,
-    io::{self, Read as _, Write as _},
+    io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
+};
+#[cfg(any(test, target_vendor = "apple", target_os = "linux"))]
+use std::{
+    fs,
+    io::{Read as _, Write as _},
 };
 use url::{Host, Url};
 const WEBHOOK_REGISTRY_MAX_ENTRIES: usize = 1_024;
@@ -60,7 +66,9 @@ const WEBHOOK_DELIVERY_MAX_BASE64_BYTES: usize = WEBHOOK_DELIVERY_MAX_BYTES.div_
 // A 1 MiB body expands to about 1.34 MiB in base64; leave bounded room for the
 // delivery metadata while rejecting unexpectedly large on-disk records.
 const WEBHOOK_QUEUE_FILE_MAX_BYTES: usize = 2 * 1024 * 1024;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 const WEBHOOK_QUEUE_SCAN_BATCH_SIZE: usize = 128;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 const WEBHOOK_QUEUE_SCAN_WORK_ITEMS: usize = 1024;
 const WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS: usize = WEBHOOK_QUEUE_HARD_CAPACITY * 2;
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
@@ -116,7 +124,7 @@ fn lock_registry() -> std::sync::MutexGuard<'static, RegistryInner> {
 fn data_dir() -> PathBuf {
     crate::data_dir::base_dir()
 }
-#[cfg(test)]
+#[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
 fn registry_path() -> PathBuf {
     data_dir().join("webhooks.json")
 }
@@ -130,17 +138,16 @@ struct WebhookDirectory {
     file: fs::File,
 }
 
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WebhookFileIdentity {
-    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     device: u64,
-    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     inode: u64,
-    #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
-    length: u64,
-    #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
-    modified: Option<SystemTime>,
 }
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WebhookFileIdentity;
 
 struct BoundedWebhookFile {
     bytes: Vec<u8>,
@@ -322,6 +329,14 @@ fn invalid_webhook_storage(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn unsupported_webhook_persistence() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "durable webhook persistence is unavailable on this platform because Torii cannot enforce descriptor-bound owner-private storage",
+    )
+}
+
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 fn open_webhook_directory_chain(
     path: &Path,
@@ -494,31 +509,11 @@ fn open_webhook_directory_chain(
 
 #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 fn open_webhook_directory_chain(
-    path: &Path,
-    create: bool,
-    private_final: bool,
+    _path: &Path,
+    _create: bool,
+    _private_final: bool,
 ) -> io::Result<Option<WebhookDirectory>> {
-    if create {
-        fs::create_dir_all(path)?;
-    }
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(invalid_webhook_storage(
-            "webhook storage path must be a direct directory",
-        ));
-    }
-    #[cfg(unix)]
-    if private_final {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(Some(WebhookDirectory {
-        path: path.to_path_buf(),
-    }))
+    Err(unsupported_webhook_persistence())
 }
 
 fn open_webhook_data_directory(create: bool) -> io::Result<Option<WebhookDirectory>> {
@@ -529,6 +524,7 @@ fn open_webhook_queue_directory(create: bool) -> io::Result<Option<WebhookDirect
     open_webhook_directory_chain(&queue_dir(), create, true)
 }
 
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 fn filename_in_webhook_directory<'a>(
     directory: &WebhookDirectory,
     path: &'a Path,
@@ -619,36 +615,6 @@ fn inspect_private_webhook_file(
     Ok(Some((stat, identity)))
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
-fn inspect_private_webhook_file(
-    directory: &WebhookDirectory,
-    name: &OsStr,
-    maximum_bytes: Option<usize>,
-) -> io::Result<Option<(fs::Metadata, WebhookFileIdentity)>> {
-    let path = directory.path.join(name);
-    let metadata = match fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || maximum_bytes.is_some_and(|maximum| {
-            usize::try_from(metadata.len()).map_or(true, |size| size > maximum)
-        })
-    {
-        return Err(invalid_webhook_storage(format!(
-            "webhook persistence entry must be a bounded direct regular file: {}",
-            path.display()
-        )));
-    }
-    let identity = WebhookFileIdentity {
-        length: metadata.len(),
-        modified: metadata.modified().ok(),
-    };
-    Ok(Some((metadata, identity)))
-}
-
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 fn read_private_webhook_file_bounded(
     directory: &WebhookDirectory,
@@ -736,50 +702,11 @@ fn read_private_webhook_file_bounded(
 
 #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 fn read_private_webhook_file_bounded(
-    directory: &WebhookDirectory,
-    path: &Path,
-    maximum_bytes: usize,
+    _directory: &WebhookDirectory,
+    _path: &Path,
+    _maximum_bytes: usize,
 ) -> io::Result<Option<BoundedWebhookFile>> {
-    let name = filename_in_webhook_directory(directory, path)?;
-    let Some((before, identity)) =
-        inspect_private_webhook_file(directory, name, Some(maximum_bytes))?
-    else {
-        return Ok(None);
-    };
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        options.custom_flags(0x0020_0000);
-    }
-    let mut file = options.open(path)?;
-    let mut bytes = Vec::new();
-    (&mut file)
-        .take(
-            u64::try_from(maximum_bytes)
-                .unwrap_or(u64::MAX)
-                .saturating_add(1),
-        )
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > maximum_bytes {
-        return Err(invalid_webhook_storage(
-            "webhook persistence entry is oversized",
-        ));
-    }
-    let after = fs::symlink_metadata(path)?;
-    if after.file_type().is_symlink()
-        || after.len() != before.len()
-        || (WebhookFileIdentity {
-            length: after.len(),
-            modified: after.modified().ok(),
-        }) != identity
-    {
-        return Err(invalid_webhook_storage(
-            "webhook persistence entry changed while reading",
-        ));
-    }
-    Ok(Some(BoundedWebhookFile { bytes, identity }))
+    Err(unsupported_webhook_persistence())
 }
 
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
@@ -824,6 +751,7 @@ fn create_private_webhook_temp_file(
     ))
 }
 
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 fn publication_matches(
     publication: WebhookPublication,
     actual: Option<WebhookFileIdentity>,
@@ -935,47 +863,13 @@ fn write_private_webhook_file_atomic(
 
 #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 fn write_private_webhook_file_atomic(
-    directory: &WebhookDirectory,
-    path: &Path,
-    bytes: &[u8],
-    maximum_bytes: usize,
-    publication: WebhookPublication,
+    _directory: &WebhookDirectory,
+    _path: &Path,
+    _bytes: &[u8],
+    _maximum_bytes: usize,
+    _publication: WebhookPublication,
 ) -> io::Result<()> {
-    if bytes.len() > maximum_bytes {
-        return Err(invalid_webhook_storage(
-            "webhook persistence payload exceeds its byte bound",
-        ));
-    }
-    let name = filename_in_webhook_directory(directory, path)?;
-    let initial =
-        inspect_private_webhook_file(directory, name, None)?.map(|(_, identity)| identity);
-    if !publication_matches(publication, initial) {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "webhook persistence destination changed before publication",
-        ));
-    }
-    let mut temporary = tempfile::NamedTempFile::new_in(&directory.path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        temporary
-            .as_file()
-            .set_permissions(fs::Permissions::from_mode(0o600))?;
-    }
-    temporary.write_all(bytes)?;
-    temporary.as_file().sync_all()?;
-    match publication {
-        WebhookPublication::CreateNew => {
-            temporary
-                .persist_noclobber(path)
-                .map_err(|error| error.error)?;
-        }
-        WebhookPublication::Replace | WebhookPublication::ReplaceIdentity(_) => {
-            temporary.persist(path).map_err(|error| error.error)?;
-        }
-    }
-    Ok(())
+    Err(unsupported_webhook_persistence())
 }
 
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
@@ -1006,25 +900,15 @@ fn unlink_private_webhook_entry(
 
 #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 fn unlink_private_webhook_entry(
-    directory: &WebhookDirectory,
-    path: &Path,
-    expected: Option<WebhookFileIdentity>,
+    _directory: &WebhookDirectory,
+    _path: &Path,
+    _expected: Option<WebhookFileIdentity>,
     _sync: bool,
 ) -> io::Result<()> {
-    let name = filename_in_webhook_directory(directory, path)?;
-    if let Some(expected) = expected {
-        let Some((_, current)) = inspect_private_webhook_file(directory, name, None)? else {
-            return Ok(());
-        };
-        if current != expected {
-            return Err(invalid_webhook_storage(
-                "refusing to remove a replaced webhook persistence entry",
-            ));
-        }
-    }
-    fs::remove_file(path)
+    Err(unsupported_webhook_persistence())
 }
 
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 fn is_webhook_temporary_name(name: &OsStr) -> bool {
     let Some(name) = name.to_str() else {
         return false;
@@ -1083,29 +967,10 @@ fn cleanup_webhook_temporary_files(
 
 #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 fn cleanup_webhook_temporary_files(
-    directory: &WebhookDirectory,
-    work_limit: usize,
+    _directory: &WebhookDirectory,
+    _work_limit: usize,
 ) -> io::Result<usize> {
-    let mut removed = 0_usize;
-    for (index, entry) in fs::read_dir(&directory.path)?.enumerate() {
-        if index >= work_limit {
-            return Err(io::Error::other(
-                "webhook temporary-file recovery work limit reached",
-            ));
-        }
-        let entry = entry?;
-        if !is_webhook_temporary_name(&entry.file_name()) {
-            continue;
-        }
-        let Some((_, identity)) =
-            inspect_private_webhook_file(directory, &entry.file_name(), None)?
-        else {
-            continue;
-        };
-        unlink_private_webhook_entry(directory, &entry.path(), Some(identity), false)?;
-        removed = removed.saturating_add(1);
-    }
-    Ok(removed)
+    Err(unsupported_webhook_persistence())
 }
 
 fn recover_webhook_temporary_files() -> io::Result<()> {
@@ -1174,13 +1039,13 @@ fn queue_depth_bounded_in(
 }
 #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 fn queue_depth_bounded_in(
-    directory: &WebhookDirectory,
-    maximum: usize,
-    work_limit: usize,
+    _directory: &WebhookDirectory,
+    _maximum: usize,
+    _work_limit: usize,
 ) -> io::Result<usize> {
-    queue_depth_bounded_at(&directory.path, maximum, work_limit)
+    Err(unsupported_webhook_persistence())
 }
-#[cfg(any(test, not(any(target_vendor = "apple", target_os = "linux"))))]
+#[cfg(test)]
 fn queue_depth_bounded_at(
     root: &Path,
     maximum: usize,
@@ -1204,7 +1069,7 @@ fn queue_depth_bounded_at(
     }
     Ok(count)
 }
-#[cfg(test)]
+#[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
 fn queue_depth() -> usize {
     match queue_depth_bounded(usize::MAX) {
         Ok(depth) => depth,
@@ -3597,14 +3462,14 @@ pub(crate) fn start_delivery_worker(
         }
     })
 }
-#[cfg(any(test, not(any(target_vendor = "apple", target_os = "linux"))))]
+#[cfg(test)]
 struct QueueScanState {
     root: PathBuf,
     capacity: usize,
     entries: fs::ReadDir,
     retained: usize,
 }
-#[cfg(any(test, not(any(target_vendor = "apple", target_os = "linux"))))]
+#[cfg(test)]
 #[derive(Default)]
 struct QueueScanCursor {
     state: Option<QueueScanState>,
@@ -3615,12 +3480,7 @@ struct QueueScanBatch {
     overflow_paths: Vec<PathBuf>,
     sweep_complete: bool,
 }
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
-fn queue_scan_cursor() -> &'static Mutex<QueueScanCursor> {
-    static CURSOR: OnceLock<Mutex<QueueScanCursor>> = OnceLock::new();
-    CURSOR.get_or_init(|| Mutex::new(QueueScanCursor::default()))
-}
-#[cfg(any(test, not(any(target_vendor = "apple", target_os = "linux"))))]
+#[cfg(test)]
 fn discover_queue_batch_at(
     cursor: &mut QueueScanCursor,
     root: &Path,
@@ -3797,17 +3657,10 @@ fn discover_queue_batch(policy: WebhookPolicy) -> std::io::Result<QueueScanBatch
     })
 }
 #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
-fn discover_queue_batch(policy: WebhookPolicy) -> std::io::Result<QueueScanBatch> {
-    let mut cursor = lock_unpoisoned(queue_scan_cursor());
-    discover_queue_batch_at(
-        &mut cursor,
-        &queue_dir(),
-        effective_queue_capacity(policy),
-        WEBHOOK_QUEUE_SCAN_BATCH_SIZE,
-        WEBHOOK_QUEUE_SCAN_WORK_ITEMS,
-    )
+fn discover_queue_batch(_policy: WebhookPolicy) -> std::io::Result<QueueScanBatch> {
+    Err(unsupported_webhook_persistence())
 }
-#[cfg(test)]
+#[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
 fn prune_verified_queue_overflow(
     paths: Vec<PathBuf>,
     policy: WebhookPolicy,
@@ -4125,16 +3978,19 @@ mod tests {
         EventBox,
         pipeline::{TransactionEvent, TransactionStatus},
     };
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    use std::sync::{Barrier, MutexGuard};
     use std::{
         collections::HashSet,
         convert::TryFrom,
         fs,
-        sync::{Arc, Barrier, Mutex, MutexGuard},
+        sync::{Arc, Mutex},
     };
     use tokio::{
         runtime::Runtime,
         time::{Duration, sleep},
     };
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     fn write_private_test_file(path: &Path, bytes: &[u8]) {
         let mut options = fs::OpenOptions::new();
         options.write(true).create(true).truncate(true);
@@ -4178,6 +4034,16 @@ mod tests {
             })),
         ))
     }
+    #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+    #[test]
+    fn webhook_persistence_fails_closed_without_private_storage_support() {
+        let _env = TestDataDirGuard::new();
+        let error = init_persistence()
+            .expect_err("webhook persistence must not fall back to pathname-only storage");
+
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("owner-private"));
+    }
     #[test]
     fn webhook_registry_rejects_entry_and_count_overflow() {
         let mut registry = RegistryInner::default();
@@ -4191,6 +4057,7 @@ mod tests {
         }
         assert!(!registry_can_retain(&registry, &compact));
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn persisted_webhook_with_malformed_filter_is_skipped_instead_of_widened() {
         let _env = TestDataDirGuard::new();
@@ -4249,6 +4116,7 @@ mod tests {
         registry.next_id = 0;
         registry.items.clear();
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn persisted_boolean_filter_round_trips_without_semantic_widening() {
         use crate::filter::{FieldPath, FilterExpr};
@@ -4541,6 +4409,7 @@ mod tests {
         );
         assert!(second.sweep_complete);
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn queue_overflow_pruning_rechecks_current_capacity() {
         let _env = TestDataDirGuard::new();
@@ -4571,6 +4440,7 @@ mod tests {
         assert!(!overflow.exists(), "verified overflow must be removed");
         assert_eq!(queue_depth_bounded_at(&root, 3, 3).unwrap(), 2);
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn delivery_worker_removes_oversized_spool_file_before_decode() {
         let _env = TestDataDirGuard::new();
@@ -4594,6 +4464,7 @@ mod tests {
             .block_on(process_queue_once());
         assert!(!oversized.exists(), "oversized spool file must be removed");
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn delivery_worker_stops_cleanly_and_can_restart() {
         let _env = TestDataDirGuard::new();
@@ -4755,7 +4626,9 @@ mod tests {
         );
         assert_eq!(fs::read(&path).expect("read replacement record"), b"new");
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     struct TimeoutOverride(super::HttpTimeoutConfig);
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     impl TimeoutOverride {
         fn new(config: super::HttpTimeoutConfig) -> Self {
             let previous = super::http_timeout_config();
@@ -4763,15 +4636,18 @@ mod tests {
             Self(previous)
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     impl Drop for TimeoutOverride {
         fn drop(&mut self) {
             super::set_http_timeout_config(self.0);
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     struct WebhookPolicyGuard {
         previous: super::WebhookPolicy,
         _writer_guard: MutexGuard<'static, ()>,
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     impl WebhookPolicyGuard {
         fn new(policy: super::WebhookPolicy) -> Self {
             let writer_guard = super::webhook_policy_writer_lock()
@@ -4785,11 +4661,13 @@ mod tests {
             }
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     impl Drop for WebhookPolicyGuard {
         fn drop(&mut self) {
             super::apply_webhook_policy(self.previous);
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     fn expect_json_object(value: norito::json::Value, context: &str) -> norito::json::Map {
         match value {
             norito::json::Value::Object(map) => map,
@@ -4844,6 +4722,7 @@ mod tests {
         let array_value = norito::json::Value::Object(map_array);
         assert_eq!(super::proof_id_from_json(&array_value), Some(proof));
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn delivery_worker_processes_queue() {
         let _env = TestDataDirGuard::new();
@@ -4926,6 +4805,7 @@ mod tests {
             g.items.clear();
         });
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn queue_capacity_check_and_persistence_are_atomic() {
         const WRITERS: usize = 8;
@@ -4974,6 +4854,7 @@ mod tests {
             "concurrent writers must not overshoot queue capacity"
         );
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn payload_dropped_after_max_attempts() {
         let _env = TestDataDirGuard::new();
@@ -5035,6 +4916,7 @@ mod tests {
         });
         assert_eq!(super::queue_depth(), 0);
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn overflowing_persisted_attempts_are_removed_without_delivery() {
         let _env = TestDataDirGuard::new();
@@ -5087,6 +4969,7 @@ mod tests {
             "overflow must not reset the retry budget and trigger delivery"
         );
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn delivery_worker_times_out_and_continues() {
         let _env = TestDataDirGuard::new();
@@ -5243,12 +5126,14 @@ mod tests {
             g.items.clear();
         });
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     fn expect_json_array(value: norito::json::Value, context: &str) -> Vec<norito::json::Value> {
         match value {
             norito::json::Value::Array(arr) => arr,
             _ => panic!("expected array for {context}", context = context),
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn create_list_delete_roundtrip() {
         let _env = TestDataDirGuard::new();
@@ -5327,6 +5212,7 @@ mod tests {
             g.items.clear();
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn responses_report_secret_presence_without_exposing_value() {
         let _env = TestDataDirGuard::new();
@@ -5439,6 +5325,7 @@ mod tests {
             "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
         );
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn queued_delivery_keeps_its_signature_after_registration_deletion() {
         let _env = TestDataDirGuard::new();
@@ -5499,6 +5386,7 @@ mod tests {
             "delivered spool record must be removed"
         );
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn enqueue_respects_filter() {
         let _env = TestDataDirGuard::new();
@@ -5563,6 +5451,7 @@ mod tests {
             .count();
         assert_eq!(count, 1);
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn enqueue_respects_proof_envelope_hash_filter() {
         use crate::filter::{FieldPath, FilterExpr};

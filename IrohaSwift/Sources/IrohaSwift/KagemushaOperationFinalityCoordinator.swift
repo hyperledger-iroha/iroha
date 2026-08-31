@@ -507,7 +507,8 @@ public struct KagemushaOperationFinalityConfiguration: Equatable, Sendable {
 /// Explicit durable acceptance continuity supplied on every resolution.
 /// `.unaccepted` permits the exact authoritative-404 submission gate;
 /// `.accepted` disables the not-found gate. A canonical Rejected attempt may
-/// still authorize one deterministic same-request retry.
+/// still authorize one deterministic same-request retry. Pending carrier
+/// hashes may change, but `submittedAtMs` remains immutable for the operation.
 public enum KagemushaOperationContinuity: Equatable, Sendable {
     case unaccepted
     case accepted(KagemushaOperationReference)
@@ -532,15 +533,24 @@ public enum KagemushaOperationSubmission: Equatable, Sendable {
         case .redeem: .redeem
         }
     }
+
+    /// Immutable creation time authenticated by the request authorization.
+    public var issuedAtMs: UInt64 {
+        switch self {
+        case let .topUp(request): request.issuedAtMs
+        case let .redeem(request): request.issuedAtMs
+        }
+    }
 }
 
 /// Typed transport seam for the sole Kagemusha Torii lifecycle. The
 /// submission receives the exact request that supplied the coordinator's
-/// operation ID and kind.
+/// operation ID, kind, and signed timestamp. Status lookup receives that same
+/// request plus the accepted reference as soon as Torii has returned one.
 public protocol KagemushaOperationFinalityTransport: Sendable {
     func getKagemushaOperationStatus(
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
+        operation: KagemushaOperationSubmission,
+        acceptedReference: KagemushaOperationReference?,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus
 
@@ -655,6 +665,7 @@ public enum KagemushaOperationFinalityCoordinator {
             let resolution = try await resolveForTesting(
                 operationId: operation.operationId,
                 expectedKind: operation.kind,
+                expectedSubmittedAtMs: operation.issuedAtMs,
                 initialState: initialState,
                 continuity: continuity,
                 configuration: configuration,
@@ -666,10 +677,10 @@ public enum KagemushaOperationFinalityCoordinator {
                 },
                 existingDefinitiveSubmissionFailure:
                     existingDefinitiveSubmissionFailure,
-                fetchStatus: { operationId in
+                fetchStatus: { acceptedReference in
                     try await transport.getKagemushaOperationStatus(
-                        operationId: operationId,
-                        expectedKind: operation.kind,
+                        operation: operation,
+                        acceptedReference: acceptedReference,
                         chainDiscriminant: chainDiscriminant
                     )
                 },
@@ -701,6 +712,7 @@ public enum KagemushaOperationFinalityCoordinator {
     static func resolveForTesting<State>(
         operationId: String,
         expectedKind: KagemushaOperationKind,
+        expectedSubmittedAtMs: UInt64,
         initialState: State,
         continuity: KagemushaOperationContinuity,
         configuration: KagemushaOperationFinalityConfiguration = .production,
@@ -712,7 +724,7 @@ public enum KagemushaOperationFinalityCoordinator {
         },
         existingDefinitiveSubmissionFailure: (State) throws
             -> KagemushaDefinitiveSubmissionFailure?,
-        fetchStatus: @escaping (_ operationId: String) async throws
+        fetchStatus: @escaping (_ acceptedReference: KagemushaOperationReference?) async throws
             -> KagemushaOperationStatus,
         revalidateBeforeSubmission: @escaping (State) async throws -> Void,
         markSubmissionAttempt: (State) throws -> State,
@@ -735,6 +747,11 @@ public enum KagemushaOperationFinalityCoordinator {
     ) async throws -> KagemushaOperationFinalityResolution<State> {
         // Validate the operation identifier before any caller-owned side effect.
         _ = try KagemushaToriiAPI.operationPath(operationId)
+        guard expectedSubmittedAtMs > 0 else {
+            throw KagemushaOperationFinalityError.continuityViolation(
+                "signed request timestamp"
+            )
+        }
         let startedAt = monotonicNow()
         let (overallDeadline, deadlineOverflow) = startedAt
             .addingReportingOverflow(configuration.overallTimeoutNanoseconds)
@@ -744,11 +761,19 @@ public enum KagemushaOperationFinalityCoordinator {
 
         var state = initialState
         var boundTransactionHash: String?
-        var boundSubmittedAtMs: UInt64?
+        var boundSubmittedAtMs: UInt64? = expectedSubmittedAtMs
+        var acceptedReference: KagemushaOperationReference?
+        switch continuity {
+        case .unaccepted:
+            acceptedReference = nil
+        case let .accepted(reference):
+            acceptedReference = reference
+        }
         try initializeContinuitySeed(
             continuity: continuity,
             operationId: operationId,
             expectedKind: expectedKind,
+            expectedSubmittedAtMs: expectedSubmittedAtMs,
             boundTransactionHash: &boundTransactionHash,
             boundSubmittedAtMs: &boundSubmittedAtMs
         )
@@ -774,7 +799,7 @@ public enum KagemushaOperationFinalityCoordinator {
                 overallDeadline,
                 monotonicNow: monotonicNow
             ) {
-                try await fetchStatus(operationId)
+                try await fetchStatus(acceptedReference)
             }
         } catch {
             if statusResourceIsMissing(after: error) {
@@ -869,7 +894,8 @@ public enum KagemushaOperationFinalityCoordinator {
                 try validate(
                     reference,
                     operationId: operationId,
-                    expectedKind: expectedKind
+                    expectedKind: expectedKind,
+                    expectedSubmittedAtMs: expectedSubmittedAtMs
                 )
                 try bind(
                     reference.transactionHash,
@@ -878,6 +904,7 @@ public enum KagemushaOperationFinalityCoordinator {
                     and: &boundSubmittedAtMs
                 )
                 state = try recordAcceptance(reference, state)
+                acceptedReference = reference
                 shouldDelayBeforePolling = true
             }
         }
@@ -900,7 +927,7 @@ public enum KagemushaOperationFinalityCoordinator {
                     overallDeadline,
                     monotonicNow: monotonicNow
                 ) {
-                    try await fetchStatus(operationId)
+                    try await fetchStatus(acceptedReference)
                 }
             } catch {
                 guard statusFailureIsRetryable(error) else { throw error }
@@ -1180,14 +1207,15 @@ public enum KagemushaOperationFinalityCoordinator {
     private static func validate(
         _ reference: KagemushaOperationReference,
         operationId: String,
-        expectedKind: KagemushaOperationKind
+        expectedKind: KagemushaOperationKind,
+        expectedSubmittedAtMs: UInt64
     ) throws {
         let expectedStatusURI = try KagemushaToriiAPI.operationPath(operationId)
         guard reference.operationId == operationId,
               reference.kind == expectedKind,
               reference.state == .pending,
               reference.statusUri == expectedStatusURI,
-              reference.submittedAtMs > 0 else {
+              reference.submittedAtMs == expectedSubmittedAtMs else {
             throw KagemushaOperationFinalityError.continuityViolation(
                 "accepted operation reference"
             )
@@ -1205,12 +1233,6 @@ public enum KagemushaOperationFinalityCoordinator {
                 "transaction hash"
             )
         }
-        let hashChanged = boundTransactionHash.map { $0 != transactionHash }
-            ?? false
-        if hashChanged {
-            boundSubmittedAtMs = nil
-        }
-        boundTransactionHash = transactionHash
         if let submittedAtMs {
             guard submittedAtMs > 0 else {
                 throw KagemushaOperationFinalityError.continuityViolation(
@@ -1223,6 +1245,9 @@ public enum KagemushaOperationFinalityCoordinator {
                     "submitted timestamp"
                 )
             }
+        }
+        boundTransactionHash = transactionHash
+        if let submittedAtMs {
             boundSubmittedAtMs = submittedAtMs
         }
     }
@@ -1231,6 +1256,7 @@ public enum KagemushaOperationFinalityCoordinator {
         continuity: KagemushaOperationContinuity,
         operationId: String,
         expectedKind: KagemushaOperationKind,
+        expectedSubmittedAtMs: UInt64,
         boundTransactionHash: inout String?,
         boundSubmittedAtMs: inout UInt64?
     ) throws {
@@ -1240,7 +1266,8 @@ public enum KagemushaOperationFinalityCoordinator {
         try validate(
             reference,
             operationId: operationId,
-            expectedKind: expectedKind
+            expectedKind: expectedKind,
+            expectedSubmittedAtMs: expectedSubmittedAtMs
         )
         try bind(
             reference.transactionHash,

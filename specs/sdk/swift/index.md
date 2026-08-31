@@ -250,22 +250,26 @@ plus `POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
 `GET /v1/offline/operations/{operation_id}` for separate online consensus
 lifecycles. Use `getOfflineCapability()`, `submitKagemushaTopUp(_:)`,
 `submitKagemushaRedeem(_:)`, and
-`getKagemushaOperationStatus(operationId:chainDiscriminant:)`.
+`getKagemushaOperationStatus(_:chainDiscriminant:)` with the accepted
+`KagemushaOperationReference`.
 Capability discovery takes no selector.
 
 Capability discovery is not per-asset or per-dataspace backend readiness. The
-SDK accepts only the exact four-field ABI-21 `cash_handoff_v1` contract with
-maximum hop count 8 and `ready: true`.
+SDK accepts only the exact four-field ABI-21/V4 `cash_handoff_v1` contract with
+native bridge ABI 23, maximum hop count 8, and `ready: true`.
 No asset metadata, escrow catalog, dataspace enrollment, or backend enable flag
 is required for an app to expose offline user interfaces. Apps must not gate
 offline UI on this network discovery call; Torii reachability is not an
 offline-capability prerequisite.
 
-Top-up and redemption send canonical Norito archives and return a
+Top-up and redemption derive the operation id and immutable request timestamp
+from the signed authorization inside each canonical Norito archive and require
+the initial acknowledgement to match both. They return a
 `KagemushaOperationReference`; follow its status URI until the tagged
 `KagemushaOperationStatus` is applied or rejected. Command-specific proof and
 verifier material is validated when the corresponding operation consumes it
 and never changes universal offline capability.
+
 ## SoraFS orchestrator client
 
 `SorafsOrchestratorClient` wraps the same native Norito bridge used by the CLI parity harness, making

@@ -8,6 +8,7 @@
 //! hostname/SPKI policy digest before checkpoint state is opened and again before and after every
 //! feed operation.
 use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
+use crate::secure_file_metadata::{self, SecureMetadata};
 use blake3::Hasher;
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use flate2::read::GzDecoder;
@@ -1473,10 +1474,11 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
         })?;
         validate_checkpoint_parent(parent)?;
         let lock_path = checkpoint_lock_path(&self.path)?;
-        validate_output_file(&lock_path)?;
+        let before_open = validate_output_file(&lock_path)?;
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         set_no_follow(&mut options);
+        set_lock_share_mode(&mut options);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
@@ -1485,11 +1487,19 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
         let lock_file = options
             .open(&lock_path)
             .map_err(|error| persistence_io("open checkpoint lease file", error))?;
-        validate_opened_file(
+        let (opened_before_lock, named_before_lock) = validate_opened_file(
             &lock_path,
             &lock_file,
             "checkpoint lease file changed while opening",
         )?;
+        if before_open
+            .as_ref()
+            .is_some_and(|metadata| !secure_file_metadata::same_file(metadata, &opened_before_lock))
+        {
+            return Err(GatewayComplianceError::Persistence(
+                "checkpoint lease file changed between inspection and open".into(),
+            ));
+        }
         match lock_file.try_lock() {
             Ok(()) => {}
             Err(std::fs::TryLockError::WouldBlock) => {
@@ -1499,11 +1509,19 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
                 return Err(persistence_io("lock checkpoint lease file", error));
             }
         }
-        validate_opened_file(
+        let (opened_after_lock, named_after_lock) = validate_opened_file(
             &lock_path,
             &lock_file,
             "checkpoint lease file changed after locking",
         )?;
+        if !secure_file_metadata::same_file(&opened_before_lock, &opened_after_lock)
+            || !secure_file_metadata::same_file(&named_before_lock, &named_after_lock)
+            || !secure_file_metadata::same_file(&opened_after_lock, &named_after_lock)
+        {
+            return Err(GatewayComplianceError::Persistence(
+                "checkpoint lease ownership changed while locking".into(),
+            ));
+        }
         Ok(Box::new(FileGatewayComplianceStoreLease {
             path: self.path.clone(),
             max_bytes: self.max_bytes,
@@ -1537,32 +1555,38 @@ impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
             return Err(GatewayComplianceError::CheckpointConflict);
         }
         validate_checkpoint_parent(parent)?;
-        validate_output_file(&self.path)?;
+        let _output_before_prepare = validate_output_file(&self.path)?;
         let filename = self.path.file_name().ok_or_else(|| {
             GatewayComplianceError::Persistence("compliance checkpoint path has no filename".into())
         })?;
         let mut prefix = std::ffi::OsString::from(".");
         prefix.push(filename);
         prefix.push(".tmp-");
-        let mut temporary = tempfile::Builder::new()
-            .prefix(&prefix)
-            .tempfile_in(parent)
-            .map_err(|error| persistence_io("create checkpoint temp file", error))?;
-        #[cfg(unix)]
-        temporary
-            .as_file()
-            .set_permissions({
-                use std::os::unix::fs::PermissionsExt as _;
-                fs::Permissions::from_mode(0o640)
+        let mut temporary_builder = tempfile::Builder::new();
+        temporary_builder.prefix(&prefix);
+        let mut temporary = temporary_builder
+            .make_in(parent, |temporary_path| {
+                let mut options = OpenOptions::new();
+                options.write(true).create_new(true);
+                set_no_follow(&mut options);
+                set_checkpoint_temp_share_mode(&mut options);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt as _;
+                    options.mode(0o640);
+                }
+                options.open(temporary_path)
             })
-            .map_err(|error| persistence_io("set checkpoint temp permissions", error))?;
-        let temporary_metadata = temporary
-            .as_file()
-            .metadata()
+            .map_err(|error| persistence_io("create checkpoint temp file", error))?;
+        let temporary_metadata = secure_file_metadata::from_file(temporary.as_file())
             .map_err(|error| persistence_io("inspect checkpoint temp file", error))?;
-        if !temporary_metadata.is_file() || hard_link_count(&temporary_metadata) != 1 {
+        let named_temporary_metadata = secure_file_metadata::from_path(temporary.path())
+            .map_err(|error| persistence_io("inspect checkpoint temp path", error))?;
+        validate_checkpoint_file_metadata(&temporary_metadata)?;
+        validate_checkpoint_file_metadata(&named_temporary_metadata)?;
+        if !secure_file_metadata::same_file(&temporary_metadata, &named_temporary_metadata) {
             return Err(GatewayComplianceError::Persistence(
-                "compliance checkpoint temp must be an unlinked regular file".into(),
+                "compliance checkpoint temp changed identity while opening".into(),
             ));
         }
         temporary
@@ -1572,8 +1596,27 @@ impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
             .as_file()
             .sync_all()
             .map_err(|error| persistence_io("fsync checkpoint temp file", error))?;
+        let written_temporary_metadata = secure_file_metadata::from_file(temporary.as_file())
+            .map_err(|error| persistence_io("re-inspect checkpoint temp file", error))?;
+        let named_written_temporary_metadata = secure_file_metadata::from_path(temporary.path())
+            .map_err(|error| persistence_io("re-inspect checkpoint temp path", error))?;
+        validate_checkpoint_file_metadata(&written_temporary_metadata)?;
+        validate_checkpoint_file_metadata(&named_written_temporary_metadata)?;
+        let expected_length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if !secure_file_metadata::same_file(&temporary_metadata, &written_temporary_metadata)
+            || !secure_file_metadata::same_file(
+                &written_temporary_metadata,
+                &named_written_temporary_metadata,
+            )
+            || written_temporary_metadata.len() != expected_length
+            || named_written_temporary_metadata.len() != expected_length
+        {
+            return Err(GatewayComplianceError::Persistence(
+                "compliance checkpoint temp changed while writing".into(),
+            ));
+        }
         validate_checkpoint_parent(parent)?;
-        validate_output_file(&self.path)?;
+        let _output_before_compare = validate_output_file(&self.path)?;
         #[cfg(test)]
         if let Some(replacement) = self
             .test_hook
@@ -1598,24 +1641,34 @@ impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
         let persisted = temporary
             .persist(&self.path)
             .map_err(|error| persistence_io("replace checkpoint", error.error))?;
-        let persisted_metadata = persisted
-            .metadata()
+        let persisted_metadata = secure_file_metadata::from_file(&persisted)
             .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
-        let path_metadata = fs::symlink_metadata(&self.path)
+        let path_metadata = secure_file_metadata::from_path(&self.path)
             .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
-        if !persisted_metadata.is_file()
-            || path_metadata.file_type().is_symlink()
-            || !path_metadata.is_file()
-            || hard_link_count(&persisted_metadata) != 1
-            || hard_link_count(&path_metadata) != 1
-            || !same_file_identity(&persisted_metadata, &path_metadata)
+        if validate_checkpoint_file_metadata(&persisted_metadata).is_err()
+            || validate_checkpoint_file_metadata(&path_metadata).is_err()
+            || !secure_file_metadata::same_file(&persisted_metadata, &path_metadata)
+            || persisted_metadata.len() != expected_length
+            || path_metadata.len() != expected_length
         {
             return Err(GatewayComplianceError::CheckpointConflict);
         }
-        #[cfg(unix)]
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
+        crate::durable_fs::sync_direct_directory(parent)
             .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
+        let durable_path_metadata = secure_file_metadata::from_path(&self.path)
+            .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
+        if validate_checkpoint_file_metadata(&durable_path_metadata).is_err()
+            || !secure_file_metadata::unchanged(&path_metadata, &durable_path_metadata)
+            || durable_path_metadata.len() != expected_length
+        {
+            return Err(GatewayComplianceError::CheckpointConflict);
+        }
+        // Release every write-capable clone before reopening the durable file. On Windows the
+        // stable reader deliberately denies write sharing, so it must not overlap this writer.
+        drop(persisted_metadata);
+        drop(persisted);
+        drop(written_temporary_metadata);
+        drop(temporary_metadata);
         let generation = checkpoint_store_generation(Some(bytes));
         let durable = read_checkpoint_snapshot(&self.path, self.max_bytes)
             .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
@@ -3785,15 +3838,15 @@ fn read_checkpoint_snapshot(
         GatewayComplianceError::Persistence("compliance checkpoint path has no parent".into())
     })?;
     validate_checkpoint_parent(parent)?;
-    let metadata = match fs::symlink_metadata(path) {
+    let named_before = match secure_file_metadata::from_path(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Ok(checkpoint_store_snapshot(None));
         }
         Err(error) => return Err(persistence_io("inspect checkpoint", error)),
     };
-    validate_checkpoint_file_metadata(&metadata)?;
-    let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+    validate_checkpoint_file_metadata(&named_before)?;
+    let length = usize::try_from(named_before.len()).unwrap_or(usize::MAX);
     if length > max_bytes {
         return Err(GatewayComplianceError::ResourceLimit {
             resource: "compliance checkpoint bytes",
@@ -3804,24 +3857,44 @@ fn read_checkpoint_snapshot(
     let mut options = OpenOptions::new();
     options.read(true);
     set_no_follow(&mut options);
-    let file = options
+    set_stable_read_share_mode(&mut options);
+    let mut file = options
         .open(path)
         .map_err(|error| persistence_io("open checkpoint", error))?;
-    validate_opened_file(path, &file, "compliance checkpoint changed while opening")?;
+    let (opened_before, named_after_open) =
+        validate_opened_file(path, &file, "compliance checkpoint changed while opening")?;
+    if !secure_file_metadata::unchanged(&named_before, &opened_before)
+        || !secure_file_metadata::unchanged(&opened_before, &named_after_open)
+    {
+        return Err(GatewayComplianceError::Persistence(
+            "compliance checkpoint changed between inspection and open".into(),
+        ));
+    }
     let mut bytes = Vec::with_capacity(length);
-    file.take(
-        u64::try_from(max_bytes)
-            .unwrap_or(u64::MAX)
-            .saturating_add(1),
-    )
-    .read_to_end(&mut bytes)
-    .map_err(|error| persistence_io("read checkpoint", error))?;
+    Read::by_ref(&mut file)
+        .take(
+            u64::try_from(max_bytes)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        )
+        .read_to_end(&mut bytes)
+        .map_err(|error| persistence_io("read checkpoint", error))?;
     if bytes.len() > max_bytes {
         return Err(GatewayComplianceError::ResourceLimit {
             resource: "compliance checkpoint bytes",
             found: bytes.len(),
             maximum: max_bytes,
         });
+    }
+    let (opened_after, named_after) =
+        validate_opened_file(path, &file, "compliance checkpoint changed while reading")?;
+    if !secure_file_metadata::unchanged(&opened_before, &opened_after)
+        || !secure_file_metadata::unchanged(&opened_after, &named_after)
+        || opened_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    {
+        return Err(GatewayComplianceError::Persistence(
+            "compliance checkpoint changed while reading".into(),
+        ));
     }
     Ok(checkpoint_store_snapshot(Some(bytes)))
 }
@@ -3830,7 +3903,7 @@ fn validate_checkpoint_parent(path: &Path) -> Result<(), GatewayComplianceError>
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        let metadata = fs::symlink_metadata(path)
+        let metadata = secure_file_metadata::from_path(path)
             .map_err(|error| persistence_io("inspect checkpoint parent", error))?;
         if metadata.permissions().mode() & 0o022 != 0 {
             return Err(GatewayComplianceError::Persistence(
@@ -3841,21 +3914,25 @@ fn validate_checkpoint_parent(path: &Path) -> Result<(), GatewayComplianceError>
     Ok(())
 }
 fn validate_existing_directory_chain(path: &Path) -> Result<(), GatewayComplianceError> {
-    let mut current = PathBuf::new();
     for component in path.components() {
         match component {
-            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
-                current.push(component.as_os_str());
-            }
+            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {}
             Component::CurDir | Component::ParentDir => {
                 return Err(GatewayComplianceError::Persistence(
                     "checkpoint path contains traversal".into(),
                 ));
             }
         }
-        let metadata = fs::symlink_metadata(&current)
+    }
+    let mut ancestors = path
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        .collect::<Vec<_>>();
+    ancestors.reverse();
+    for current in ancestors {
+        let metadata = secure_file_metadata::from_path(current)
             .map_err(|error| persistence_io("inspect checkpoint directory", error))?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        if !secure_file_metadata::is_direct_directory(&metadata) {
             return Err(GatewayComplianceError::Persistence(format!(
                 "checkpoint directory `{}` is not a regular directory",
                 current.display()
@@ -3865,28 +3942,31 @@ fn validate_existing_directory_chain(path: &Path) -> Result<(), GatewayComplianc
     Ok(())
 }
 fn validate_checkpoint_file_metadata(
-    metadata: &fs::Metadata,
+    metadata: &SecureMetadata,
 ) -> Result<(), GatewayComplianceError> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() || hard_link_count(metadata) != 1 {
+    if !secure_file_metadata::is_direct_file(metadata)
+        || secure_file_metadata::number_of_links(metadata) != Some(1)
+    {
         return Err(GatewayComplianceError::Persistence(
-            "compliance checkpoint must be a single-link regular non-symlink file".into(),
+            "compliance checkpoint must be a single-link direct regular file".into(),
         ));
     }
     validate_file_permissions(metadata, "compliance checkpoint")
 }
-fn validate_output_file(path: &Path) -> Result<(), GatewayComplianceError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata)
-            if metadata.file_type().is_symlink()
-                || !metadata.is_file()
-                || hard_link_count(&metadata) != 1 =>
-        {
-            Err(GatewayComplianceError::Persistence(
-                "checkpoint output must be absent or a single-link regular non-symlink file".into(),
-            ))
+fn validate_output_file(path: &Path) -> Result<Option<SecureMetadata>, GatewayComplianceError> {
+    match secure_file_metadata::from_path(path) {
+        Ok(metadata) => {
+            if !secure_file_metadata::is_direct_file(&metadata)
+                || secure_file_metadata::number_of_links(&metadata) != Some(1)
+            {
+                return Err(GatewayComplianceError::Persistence(
+                    "checkpoint output must be absent or a single-link direct regular file".into(),
+                ));
+            }
+            validate_file_permissions(&metadata, "checkpoint output")?;
+            Ok(Some(metadata))
         }
-        Ok(metadata) => validate_file_permissions(&metadata, "checkpoint output"),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(persistence_io("inspect checkpoint output", error)),
     }
 }
@@ -3894,23 +3974,22 @@ fn validate_opened_file(
     path: &Path,
     file: &File,
     changed_message: &'static str,
-) -> Result<(), GatewayComplianceError> {
-    let path_metadata = fs::symlink_metadata(path)
-        .map_err(|error| persistence_io("inspect opened file path", error))?;
-    let opened_metadata = file
-        .metadata()
+) -> Result<(SecureMetadata, SecureMetadata), GatewayComplianceError> {
+    let opened_metadata = secure_file_metadata::from_file(file)
         .map_err(|error| persistence_io("inspect opened file", error))?;
-    if path_metadata.file_type().is_symlink()
-        || !path_metadata.is_file()
-        || !opened_metadata.is_file()
-        || hard_link_count(&path_metadata) != 1
-        || hard_link_count(&opened_metadata) != 1
-        || !same_file_identity(&path_metadata, &opened_metadata)
+    let path_metadata = secure_file_metadata::from_path(path)
+        .map_err(|error| persistence_io("inspect opened file path", error))?;
+    if !secure_file_metadata::is_direct_file(&path_metadata)
+        || !secure_file_metadata::is_direct_file(&opened_metadata)
+        || secure_file_metadata::number_of_links(&path_metadata) != Some(1)
+        || secure_file_metadata::number_of_links(&opened_metadata) != Some(1)
+        || !secure_file_metadata::same_file(&path_metadata, &opened_metadata)
     {
         return Err(GatewayComplianceError::Persistence(changed_message.into()));
     }
     validate_file_permissions(&path_metadata, "opened checkpoint file")?;
-    validate_file_permissions(&opened_metadata, "opened checkpoint file")
+    validate_file_permissions(&opened_metadata, "opened checkpoint file")?;
+    Ok((opened_metadata, path_metadata))
 }
 #[cfg(unix)]
 fn validate_file_permissions(
@@ -3937,28 +4016,45 @@ fn set_no_follow(options: &mut OpenOptions) {
     use std::os::unix::fs::OpenOptionsExt as _;
     options.custom_flags(libc::O_NOFOLLOW);
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_no_follow(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+#[cfg(not(any(unix, windows)))]
 fn set_no_follow(_options: &mut OpenOptions) {}
-#[cfg(unix)]
-fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev() && left.ino() == right.ino()
+#[cfg(windows)]
+fn set_lock_share_mode(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
 }
-#[cfg(not(unix))]
-fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len()
-        && left.modified().ok() == right.modified().ok()
-        && left.is_file() == right.is_file()
+#[cfg(not(windows))]
+fn set_lock_share_mode(_options: &mut OpenOptions) {}
+#[cfg(windows)]
+fn set_stable_read_share_mode(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+    options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE);
 }
-#[cfg(unix)]
-fn hard_link_count(metadata: &fs::Metadata) -> u64 {
-    use std::os::unix::fs::MetadataExt as _;
-    metadata.nlink()
+#[cfg(not(windows))]
+fn set_stable_read_share_mode(_options: &mut OpenOptions) {}
+#[cfg(windows)]
+fn set_checkpoint_temp_share_mode(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+    options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE);
 }
-#[cfg(not(unix))]
-fn hard_link_count(_metadata: &fs::Metadata) -> u64 {
-    1
-}
+#[cfg(not(windows))]
+fn set_checkpoint_temp_share_mode(_options: &mut OpenOptions) {}
 fn persistence_io(action: &'static str, error: io::Error) -> GatewayComplianceError {
     GatewayComplianceError::Persistence(format!("{action}: {error}"))
 }
@@ -6104,9 +6200,12 @@ mod tests {
             .stage_catalog(catalog.clone(), NOW + 5, binding)
             .expect("stage");
         assert_eq!(controller.checkpoint().expect("checkpoint").revision, 1);
-        let target_metadata = fs::symlink_metadata(&path).expect("checkpoint metadata");
-        assert!(target_metadata.is_file());
-        assert_eq!(hard_link_count(&target_metadata), 1);
+        let target_metadata = secure_file_metadata::from_path(&path).expect("checkpoint metadata");
+        assert!(secure_file_metadata::is_direct_file(&target_metadata));
+        assert_eq!(
+            secure_file_metadata::number_of_links(&target_metadata),
+            Some(1)
+        );
         assert!(
             fs::read_dir(&root)
                 .expect("checkpoint directory")
@@ -6190,7 +6289,7 @@ mod tests {
             "prepared temporary file must be removed after a generation conflict"
         );
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn file_store_rejects_hardlinked_checkpoint() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -6207,6 +6306,23 @@ mod tests {
         ));
         assert_eq!(fs::read(path).expect("checkpoint"), b"seed");
         assert_eq!(fs::read(alias).expect("checkpoint alias"), b"seed");
+    }
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn file_store_rejects_hardlinked_lease_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
+        let path = root.join("checkpoint.to");
+        let lock_path = checkpoint_lock_path(&path).expect("checkpoint lock path");
+        let alias = root.join("checkpoint.lock.alias");
+        fs::write(&lock_path, b"").expect("seed checkpoint lock");
+        fs::hard_link(&lock_path, &alias).expect("hardlink checkpoint lock");
+        let store = FileGatewayComplianceStore::new(path).expect("file checkpoint store config");
+
+        assert!(matches!(
+            store.try_acquire(),
+            Err(GatewayComplianceError::Persistence(_))
+        ));
     }
     #[cfg(unix)]
     #[test]

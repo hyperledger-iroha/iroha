@@ -2162,6 +2162,7 @@ export class ToriiBrowserClient {
     }).then((payload) => normalizeKagemushaOperationReference(payload, {
       expectedOperationId: normalized.operationId,
       expectedKind: kind,
+      expectedSubmittedAtMs: normalized.issuedAtMs,
       location,
       retryAfter,
     }));

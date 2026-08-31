@@ -1,6 +1,7 @@
 //! Persistence helpers for DA replay cursors, receipts, and spool artifacts.
 
 #![allow(clippy::redundant_pub_crate)]
+use crate::secure_file_metadata;
 use eyre::{WrapErr, eyre};
 use iroha_core::da::{LaneEpoch, ReplayFingerprint};
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
@@ -627,11 +628,33 @@ fn encode_cursor_journal_frame(record: &CursorJournalRecord) -> eyre::Result<Vec
 fn replay_cursor_journal_path(dir: &Path) -> PathBuf {
     dir.join(CURSOR_JOURNAL_FILE_NAME)
 }
+fn cursor_journal_open_options(create_new: bool) -> fs::OpenOptions {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).append(true).create_new(create_new);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        options
+            // The store owns the only writer and keeps this handle for its complete lifetime.
+            // Readers may inspect the journal, but replacement and competing mutation are denied.
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options
+}
 fn create_cursor_journal(path: &Path) -> eyre::Result<File> {
-    let file = fs::OpenOptions::new()
-        .create_new(true)
-        .read(true)
-        .append(true)
+    let file = cursor_journal_open_options(true)
         .open(path)
         .wrap_err_with(|| {
             format!(
@@ -639,12 +662,14 @@ fn create_cursor_journal(path: &Path) -> eyre::Result<File> {
                 path.display()
             )
         })?;
+    validate_open_cursor_journal(path, &file)?;
     file.sync_all().wrap_err_with(|| {
         format!(
             "failed to sync new DA replay cursor journal at {}",
             path.display()
         )
     })?;
+    validate_open_cursor_journal(path, &file)?;
     if let Some(parent) = path.parent() {
         sync_dir(parent).wrap_err_with(|| {
             format!(
@@ -653,10 +678,11 @@ fn create_cursor_journal(path: &Path) -> eyre::Result<File> {
             )
         })?;
     }
+    validate_open_cursor_journal(path, &file)?;
     Ok(file)
 }
 fn open_cursor_journal(path: &Path, valid_bytes: u64, had_torn_tail: bool) -> eyre::Result<File> {
-    let mut file = match fs::OpenOptions::new().read(true).append(true).open(path) {
+    let mut file = match cursor_journal_open_options(false).open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == ErrorKind::NotFound => return create_cursor_journal(path),
         Err(err) => {
@@ -696,44 +722,41 @@ fn open_cursor_journal(path: &Path, valid_bytes: u64, had_torn_tail: bool) -> ey
                 )
             })?;
         }
+        validate_open_cursor_journal(path, &file)?;
     }
     Ok(file)
 }
 fn validate_open_cursor_journal(path: &Path, file: &File) -> eyre::Result<()> {
-    let path_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+    let path_metadata = secure_file_metadata::from_path(path).wrap_err_with(|| {
         format!(
             "failed to inspect DA replay cursor journal at {}",
             path.display()
         )
     })?;
-    if !path_metadata.file_type().is_file() {
+    if !secure_file_metadata::is_direct_file(&path_metadata)
+        || secure_file_metadata::number_of_links(&path_metadata) != Some(1)
+    {
         return Err(eyre!(
-            "DA replay cursor journal {} is not a regular file",
+            "DA replay cursor journal {} is not a direct single-link regular file",
             path.display()
         ));
     }
-    let file_metadata = file.metadata().wrap_err_with(|| {
+    let file_metadata = secure_file_metadata::from_file(file).wrap_err_with(|| {
         format!(
             "failed to inspect open DA replay cursor journal at {}",
             path.display()
         )
     })?;
-    if !file_metadata.file_type().is_file() || file_metadata.len() != path_metadata.len() {
+    if !secure_file_metadata::is_direct_file(&file_metadata)
+        || secure_file_metadata::number_of_links(&file_metadata) != Some(1)
+        || file_metadata.len() != path_metadata.len()
+        || !secure_file_metadata::same_file(&path_metadata, &file_metadata)
+        || !secure_file_metadata::unchanged(&path_metadata, &file_metadata)
+    {
         return Err(eyre!(
             "DA replay cursor journal {} changed while open",
             path.display()
         ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if file_metadata.dev() != path_metadata.dev() || file_metadata.ino() != path_metadata.ino()
-        {
-            return Err(eyre!(
-                "DA replay cursor journal {} was replaced while open",
-                path.display()
-            ));
-        }
     }
     Ok(())
 }
@@ -778,6 +801,7 @@ fn append_cursor_journal_record(
     journal
         .sync_all()
         .wrap_err("failed to sync DA replay cursor journal entry")?;
+    validate_open_cursor_journal(&journal_path, journal)?;
     Ok(())
 }
 fn create_replay_cursor_dir_no_follow(path: &Path) -> eyre::Result<()> {
@@ -785,13 +809,16 @@ fn create_replay_cursor_dir_no_follow(path: &Path) -> eyre::Result<()> {
     validate_replay_cursor_dir_no_follow(path)
 }
 fn validate_replay_cursor_dir_no_follow(path: &Path) -> eyre::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
+    let metadata = secure_file_metadata::from_path(path)?;
     validate_replay_cursor_dir_metadata(path, &metadata)
 }
-fn validate_replay_cursor_dir_metadata(path: &Path, metadata: &fs::Metadata) -> eyre::Result<()> {
-    if !metadata.file_type().is_dir() {
+fn validate_replay_cursor_dir_metadata(
+    path: &Path,
+    metadata: &secure_file_metadata::SecureMetadata,
+) -> eyre::Result<()> {
+    if !secure_file_metadata::is_direct_directory(metadata) {
         return Err(eyre!(
-            "DA replay directory at {} is not a directory",
+            "DA replay directory at {} is not a direct directory",
             path.display()
         ));
     }
@@ -801,8 +828,7 @@ pub(super) fn replay_cursor_temp_path(path: &Path) -> PathBuf {
     path.with_added_extension("tmp")
 }
 fn sync_dir(path: &Path) -> std::io::Result<()> {
-    let file = fs::File::open(path)?;
-    file.sync_all()
+    crate::durable_fs::sync_direct_directory(path)
 }
 fn read_cursor_snapshot(
     path: &Path,
@@ -1040,12 +1066,12 @@ fn archive_receipts_outside_allow_set(
         match fs::hard_link(&source, &destination) {
             Ok(()) => {}
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                let source_bytes = read_regular_spool_artifact(
+                let source_bytes = read_linked_retirement_artifact(
                     &source,
                     "retired DA receipt source",
                     DA_RECEIPT_ARTIFACT_MAX_BYTES_V1,
                 )?;
-                let archived_bytes = read_regular_spool_artifact(
+                let archived_bytes = read_linked_retirement_artifact(
                     &destination,
                     "retired DA receipt archive",
                     DA_RECEIPT_ARTIFACT_MAX_BYTES_V1,
@@ -1890,11 +1916,29 @@ fn read_regular_spool_artifact(
     artifact: &str,
     max_bytes: usize,
 ) -> std::io::Result<Vec<u8>> {
-    let path_metadata = fs::symlink_metadata(path)?;
-    if !path_metadata.file_type().is_file() {
+    read_regular_spool_artifact_with_link_policy(path, artifact, max_bytes, false)
+}
+fn read_linked_retirement_artifact(
+    path: &Path,
+    artifact: &str,
+    max_bytes: usize,
+) -> std::io::Result<Vec<u8>> {
+    read_regular_spool_artifact_with_link_policy(path, artifact, max_bytes, true)
+}
+fn read_regular_spool_artifact_with_link_policy(
+    path: &Path,
+    artifact: &str,
+    max_bytes: usize,
+    allow_multiple_links: bool,
+) -> std::io::Result<Vec<u8>> {
+    let path_metadata = secure_file_metadata::from_path(path)?;
+    if !secure_file_metadata::is_direct_file(&path_metadata)
+        || (!allow_multiple_links
+            && secure_file_metadata::number_of_links(&path_metadata) != Some(1))
+    {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
-            format!("{artifact} {} is not a regular file", path.display()),
+            format!("{artifact} {} is not a direct regular file", path.display()),
         ));
     }
     let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
@@ -1908,35 +1952,28 @@ fn read_regular_spool_artifact(
             ),
         ));
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
+    #[cfg(windows)]
+    let mut file = secure_file_metadata::open_direct_file(path)?;
+    #[cfg(not(windows))]
+    let mut file = {
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        }
+        options.open(path)?
+    };
+    let opened_metadata = secure_file_metadata::from_file(&file)?;
+    if !secure_file_metadata::is_direct_file(&opened_metadata)
+        || opened_metadata.len() != path_metadata.len()
+        || !secure_file_metadata::same_file(&path_metadata, &opened_metadata)
     {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    }
-    let mut file = options.open(path)?;
-    let opened_metadata = file.metadata()?;
-    if !opened_metadata.is_file() || opened_metadata.len() != path_metadata.len() {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
             format!("{artifact} {} changed while it was opened", path.display()),
         ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        if opened_metadata.dev() != path_metadata.dev()
-            || opened_metadata.ino() != path_metadata.ino()
-        {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "{artifact} {} changed identity while opening",
-                    path.display()
-                ),
-            ));
-        }
     }
     let expected_len = usize::try_from(opened_metadata.len()).map_err(|_| {
         std::io::Error::new(
@@ -1966,9 +2003,12 @@ fn read_regular_spool_artifact(
             ),
         ));
     }
-    let final_metadata = file.metadata()?;
-    if !final_metadata.is_file()
-        || final_metadata.len() != opened_metadata.len()
+    let final_metadata = secure_file_metadata::from_file(&file)?;
+    let named_after = secure_file_metadata::from_path(path)?;
+    if !secure_file_metadata::is_direct_file(&final_metadata)
+        || !secure_file_metadata::is_direct_file(&named_after)
+        || !secure_file_metadata::unchanged(&opened_metadata, &final_metadata)
+        || !secure_file_metadata::unchanged(&final_metadata, &named_after)
         || u64::try_from(bytes.len()).ok() != Some(opened_metadata.len())
     {
         return Err(std::io::Error::new(
@@ -2756,7 +2796,7 @@ fn persist_encoded_da_receipt(
     Ok(Some(target_path))
 }
 fn open_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<Option<fs::ReadDir>> {
-    let metadata = match fs::symlink_metadata(spool_dir) {
+    let metadata = match secure_file_metadata::from_path(spool_dir) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err),
@@ -2773,14 +2813,20 @@ fn create_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<()> {
         builder.mode(0o700);
     }
     builder.create(spool_dir)?;
-    let metadata = fs::symlink_metadata(spool_dir)?;
+    let metadata = secure_file_metadata::from_path(spool_dir)?;
     validate_spool_dir_metadata(spool_dir, &metadata)
 }
-fn validate_spool_dir_metadata(spool_dir: &Path, metadata: &fs::Metadata) -> std::io::Result<()> {
-    if !metadata.file_type().is_dir() {
+fn validate_spool_dir_metadata(
+    spool_dir: &Path,
+    metadata: &secure_file_metadata::SecureMetadata,
+) -> std::io::Result<()> {
+    if !secure_file_metadata::is_direct_directory(metadata) {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
-            format!("DA spool path `{}` is not a directory", spool_dir.display()),
+            format!(
+                "DA spool path `{}` is not a direct directory",
+                spool_dir.display()
+            ),
         ));
     }
     Ok(())
@@ -2819,7 +2865,7 @@ fn existing_ticket_artifact_dir(
         shard_dir.as_path(),
         ticket_dir.as_path(),
     ] {
-        let metadata = match fs::symlink_metadata(path) {
+        let metadata = match secure_file_metadata::from_path(path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err),

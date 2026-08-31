@@ -2,14 +2,21 @@
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
-    smartcontracts::isi::staking::{apply_slash_to_validator, max_slash_amount},
-    state::{State, StateTransaction, WorldReadOnly, public_lane_validator_record_matches_key},
+    smartcontracts::isi::staking::{
+        apply_consensus_slash_to_validator, apply_slash_to_validator_without_observability,
+        max_slash_amount,
+    },
+    state::{
+        State, StateBlock, StateTransaction, StateView, WorldReadOnly,
+        public_lane_validator_record_matches_key,
+    },
 };
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     block::{
-        consensus::{Evidence, EvidenceRecord, ValidatorIndex},
+        BlockHeader,
+        consensus::{Evidence, EvidencePenaltyStatus, EvidenceRecord, ValidatorIndex},
         consensus_v2::HeightContext,
     },
     consensus::{
@@ -27,10 +34,22 @@ pub struct PenaltyOutcome {
     pub applied: u64,
     pub slashed: u64,
 }
+#[derive(Clone, Copy)]
+enum EffectsApplicationMode {
+    Commit,
+    ValidateOnly,
+}
 #[derive(Clone)]
 struct ValidatorLocator {
     lane_id: LaneId,
     validator: AccountId,
+    total_stake: Quantity,
+}
+struct ParentPenaltySnapshot {
+    evidence: super::evidence::V2CommittedEvidenceSnapshot,
+    slashing_delay: u64,
+    max_slash_bps: u16,
+    validator_map: BTreeMap<PublicKey, Vec<ValidatorLocator>>,
 }
 fn consensus_penalty_is_due(
     recorded_at_height: u64,
@@ -52,16 +71,21 @@ impl<'a> PenaltyApplier<'a> {
     ) -> Self {
         Self { state }
     }
-    fn build_validator_locator_map(&self) -> BTreeMap<PublicKey, ValidatorLocator> {
-        let world = self.state.world_view();
+    fn parent_snapshot(
+        view: &StateView<'_>,
+        evidence: super::evidence::V2CommittedEvidenceSnapshot,
+    ) -> Result<ParentPenaltySnapshot> {
+        let world = view.world();
+        let slashing_delay = crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(world)
+            .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?;
         let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
         for (key, record) in world.public_lane_validators().iter() {
             if !public_lane_validator_record_matches_key(key, record) {
                 continue;
             }
             let (lane_id, validator_id) = key;
-            if !self.state.is_lane_active_for_authority(*lane_id)
-                || self.state.staking_authority_lane(*lane_id) != Some(*lane_id)
+            if !view.is_lane_active_for_authority(*lane_id)
+                || view.staking_authority_lane(*lane_id) != Some(*lane_id)
             {
                 continue;
             }
@@ -71,58 +95,88 @@ impl<'a> PenaltyApplier<'a> {
                 .push(ValidatorLocator {
                     lane_id: *lane_id,
                     validator: validator_id.clone(),
+                    total_stake: record.total_stake.clone(),
                 });
         }
-        let mut result = BTreeMap::new();
-        for (pk, mut locators) in candidates_map {
+        for locators in candidates_map.values_mut() {
             locators.sort_by(|lhs, rhs| {
                 lhs.lane_id
                     .cmp(&rhs.lane_id)
                     .then_with(|| lhs.validator.cmp(&rhs.validator))
             });
-            if let Some(best) = locators.into_iter().next() {
-                result.insert(pk, best);
-            }
         }
-        result
+        Ok(ParentPenaltySnapshot {
+            evidence,
+            slashing_delay,
+            max_slash_bps: view.nexus.staking.max_slash_bps,
+            validator_map: candidates_map,
+        })
     }
     pub(crate) fn derive_npos_consensus_effects(
         &self,
-        current_height: u64,
+        block_header: &BlockHeader,
     ) -> Result<NposConsensusEffects> {
+        let (v2_evidence_admissions, penalty_actions) =
+            self.derive_from_stable_parent(block_header, true)?;
         Ok(NposConsensusEffects {
             finalized_global_beacon_pulse: None,
-            v2_evidence_admissions: super::evidence::pending_v2_evidence_admissions(
-                self.state,
-                current_height,
-            ),
-            penalty_actions: self.derive_npos_penalty_actions(current_height)?,
+            v2_evidence_admissions,
+            penalty_actions,
         })
     }
     /// Derive only deterministic penalty actions from pre-block state.
     pub(crate) fn derive_npos_penalty_actions(
         &self,
-        current_height: u64,
+        block_header: &BlockHeader,
     ) -> Result<Vec<NposPenaltyAction>> {
-        let mut actions = self.derive_consensus_penalty_actions(current_height)?;
-        actions.sort();
-        actions.dedup();
-        Ok(actions)
+        self.derive_from_stable_parent(block_header, false)
+            .map(|(_, actions)| actions)
+    }
+    fn derive_from_stable_parent(
+        &self,
+        block_header: &BlockHeader,
+        include_admissions: bool,
+    ) -> Result<(Vec<iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence>, Vec<NposPenaltyAction>)>
+    {
+        loop {
+            let generation_before = self.state.state_view_generation();
+            if generation_before % 2 != 0 {
+                std::thread::yield_now();
+                continue;
+            }
+            let view = self.state.view();
+            let evidence = super::evidence::v2_committed_evidence_snapshot(view.world());
+            let result = Self::parent_snapshot(&view, evidence.clone()).and_then(|snapshot| {
+                let admissions = if include_admissions {
+                    super::evidence::pending_v2_evidence_admissions_from_snapshot(
+                        self.state,
+                        block_header.height().get(),
+                        &evidence,
+                    )
+                } else {
+                    Vec::new()
+                };
+                drop(view);
+                self.derive_consensus_penalty_actions(block_header, snapshot)
+                    .map(|actions| (admissions, actions))
+            });
+            let generation_after = self.state.state_view_generation();
+            if generation_before == generation_after && generation_after % 2 == 0 {
+                return result;
+            }
+            std::thread::yield_now();
+        }
     }
     #[allow(clippy::too_many_lines)]
     fn derive_consensus_penalty_actions(
         &self,
-        current_height: u64,
+        block_header: &BlockHeader,
+        snapshot: ParentPenaltySnapshot,
     ) -> Result<Vec<NposPenaltyAction>> {
-        let slashing_delay = {
-            let world = self.state.world_view();
-            crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(&world)
-                .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?
-        };
-        let evidence_view = self.state.world.consensus_evidence.view();
+        let current_height = block_header.height().get();
         let mut pending: Vec<(Vec<u8>, EvidenceRecord)> = Vec::new();
-        for (key, record) in evidence_view.iter() {
-            if record.penalty_applied || record.penalty_cancelled {
+        for (key, record) in snapshot.evidence.records {
+            if record.penalty_status.is_terminal() {
                 continue;
             }
             if record.recorded_at_height >= current_height {
@@ -130,17 +184,24 @@ impl<'a> PenaltyApplier<'a> {
                 // can never drive its own deterministic penalty attachment.
                 continue;
             }
-            if !consensus_penalty_is_due(record.recorded_at_height, slashing_delay, current_height)
-            {
+            if !consensus_penalty_is_due(
+                record.recorded_at_height,
+                snapshot.slashing_delay,
+                current_height,
+            ) {
                 continue;
             }
-            pending.push((key.clone(), record.clone()));
+            pending.push((key, record));
         }
-        drop(evidence_view);
         if pending.is_empty() {
             return Ok(Vec::new());
         }
-        let validator_map = self.build_validator_locator_map();
+        pending.sort_by(|left, right| left.0.cmp(&right.0));
+        let _witness_suppression =
+            crate::sumeragi::witness::suppress_recording_for_current_thread();
+        let mut scratch = self
+            .state
+            .consensus_effects_probe_block(block_header.clone());
         let mut actions = Vec::new();
         for (key, record) in pending {
             // Admission already validated and anchored this immutable context.
@@ -155,30 +216,44 @@ impl<'a> PenaltyApplier<'a> {
             let offenders = offender_indices(&record.evidence, record.recorded_at_height, context);
             let slash_id = Hash::new(key.clone());
             for signer in offenders {
-                let Some((peer_id, locator)) =
-                    self.locate_validator_in_roster_cached(signer, &roster, &validator_map)
+                let Some((peer_id, locators)) =
+                    self.locate_validator_in_roster_cached(
+                        signer,
+                        &roster,
+                        &snapshot.validator_map,
+                    )
                 else {
                     continue;
                 };
-                let Some(amount) = max_slash_amount_for_validator_from_state(
-                    self.state,
-                    &locator,
-                    self.state.nexus_snapshot().staking.max_slash_bps,
-                )?
-                else {
-                    continue;
-                };
-                actions.push(NposPenaltyAction::ConsensusSlash(
-                    NposConsensusSlashAction {
+                for locator in locators {
+                    let amount = max_slash_amount(&locator.total_stake, snapshot.max_slash_bps)?;
+                    if amount.is_zero() {
+                        continue;
+                    }
+                    let slash = NposConsensusSlashAction {
                         evidence_key: key.clone(),
                         signer,
-                        peer_id,
+                        peer_id: peer_id.clone(),
                         lane_id: locator.lane_id,
                         validator: locator.validator,
                         slash_id,
                         amount,
-                    },
-                ));
+                    };
+                    let mut transaction = scratch.consensus_effects_transaction();
+                    if apply_slash_to_validator_without_observability(
+                        &mut transaction,
+                        slash.lane_id,
+                        &slash.validator,
+                        slash.slash_id,
+                        &slash.amount,
+                        block_header.creation_time_ms,
+                    )
+                    .is_ok()
+                    {
+                        transaction.apply_consensus_effects();
+                        actions.push(NposPenaltyAction::ConsensusSlash(slash));
+                    }
+                }
             }
             // A removed, inactive, or zero-stake offender is still terminal:
             // retaining an unslashable record forever would exhaust the
@@ -190,6 +265,8 @@ impl<'a> PenaltyApplier<'a> {
                 },
             ));
         }
+        actions.sort();
+        actions.dedup();
         Ok(actions)
     }
     #[allow(clippy::unused_self)]
@@ -197,8 +274,8 @@ impl<'a> PenaltyApplier<'a> {
         &self,
         signer: ValidatorIndex,
         roster: &[PeerId],
-        map: &BTreeMap<PublicKey, ValidatorLocator>,
-    ) -> Option<(PeerId, ValidatorLocator)> {
+        map: &BTreeMap<PublicKey, Vec<ValidatorLocator>>,
+    ) -> Option<(PeerId, Vec<ValidatorLocator>)> {
         let signer_idx = usize::try_from(signer).ok()?;
         let peer = roster.get(signer_idx)?;
         map.get(peer.public_key())
@@ -210,13 +287,72 @@ impl<'a> PenaltyApplier<'a> {
 pub(crate) fn apply_npos_consensus_effects_to_transaction(
     tx: &mut StateTransaction<'_, '_>,
     effects: &NposConsensusEffects,
+    evidence_prune_keys: &[Vec<u8>],
     expected_beacon_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
     authenticated_roster: &[PeerId],
     current_height: u64,
     current_view: u64,
     now_ms: u64,
-    #[cfg(feature = "telemetry")] _telemetry: Option<&StateTelemetry>,
 ) -> Result<PenaltyOutcome> {
+    apply_npos_consensus_effects_to_transaction_inner(
+        tx,
+        effects,
+        evidence_prune_keys,
+        expected_beacon_anchor,
+        authenticated_roster,
+        current_height,
+        current_view,
+        now_ms,
+        EffectsApplicationMode::Commit,
+    )
+}
+/// Validate post-execution consensus effects in a rollback-only transaction.
+///
+/// The caller must pass the exact prune plan derived from immutable parent
+/// state. Operational slash counters and telemetry are suppressed because the
+/// transaction is deliberately discarded. Consensus effects never contribute
+/// to the transaction execution witness in either application mode.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_npos_consensus_effects_after_execution(
+    state_block: &mut StateBlock<'_>,
+    effects: &NposConsensusEffects,
+    evidence_prune_keys: &[Vec<u8>],
+    expected_beacon_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
+    authenticated_roster: &[PeerId],
+    current_height: u64,
+    current_view: u64,
+    now_ms: u64,
+) -> Result<()> {
+    let mut tx = state_block.transaction();
+    apply_npos_consensus_effects_to_transaction_inner(
+        &mut tx,
+        effects,
+        evidence_prune_keys,
+        expected_beacon_anchor,
+        authenticated_roster,
+        current_height,
+        current_view,
+        now_ms,
+        EffectsApplicationMode::ValidateOnly,
+    )?;
+    Ok(())
+}
+#[allow(clippy::too_many_arguments)]
+fn apply_npos_consensus_effects_to_transaction_inner(
+    tx: &mut StateTransaction<'_, '_>,
+    effects: &NposConsensusEffects,
+    evidence_prune_keys: &[Vec<u8>],
+    expected_beacon_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
+    authenticated_roster: &[PeerId],
+    current_height: u64,
+    current_view: u64,
+    now_ms: u64,
+    mode: EffectsApplicationMode,
+) -> Result<PenaltyOutcome> {
+    // These are finality effects, not transaction execution. Suppress the
+    // process-global recorder in both commit and rollback-only validation so
+    // concurrent in-process State instances cannot contaminate one another.
+    let _witness_suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
     let mut outcome = PenaltyOutcome::default();
     if let Some(pulse) = effects.finalized_global_beacon_pulse {
         if pulse.network_id != tx.network_id
@@ -268,23 +404,25 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
             .verify_and_advance_global_beacon_pulse(&session, pulse, expected_anchor)
             .wrap_err("failed to persist finalized global beacon pulse")?;
     }
-    let evidence_horizon = tx
-        .world
-        .sumeragi_npos_parameters()
-        .map(|params| params.evidence_horizon_blocks());
-    let committed_evidence = tx
-        .world
-        .consensus_evidence
-        .iter()
-        .map(|(key, record)| (key.clone(), record.clone()))
-        .collect::<Vec<_>>();
-    for key in super::evidence::v2_committed_evidence_prune_keys(
-        &committed_evidence,
-        current_height,
-        evidence_horizon,
-        effects.v2_evidence_admissions.len(),
-    ) {
-        tx.world.consensus_evidence.remove(key);
+    if !evidence_prune_keys.windows(2).all(|pair| pair[0] < pair[1]) {
+        return Err(eyre!(
+            "Sumeragi v2 parent evidence prune plan is not canonical"
+        ));
+    }
+    for key in evidence_prune_keys {
+        let record = tx
+            .world
+            .consensus_evidence
+            .get(key)
+            .ok_or_else(|| eyre!("Sumeragi v2 parent evidence prune target is absent"))?;
+        if !record.penalty_status.is_terminal() {
+            return Err(eyre!(
+                "Sumeragi v2 parent evidence prune target is not terminal"
+            ));
+        }
+    }
+    for key in evidence_prune_keys {
+        tx.world.consensus_evidence.remove(key.clone());
     }
     if tx
         .world
@@ -313,47 +451,89 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
                 recorded_at_height: current_height,
                 recorded_at_view: current_view,
                 recorded_at_ms: now_ms,
-                penalty_applied: false,
-                penalty_cancelled: false,
-                penalty_cancelled_at_height: None,
-                penalty_applied_at_height: None,
+                penalty_status: EvidencePenaltyStatus::Pending,
             },
         );
     }
     for action in &effects.penalty_actions {
         match action {
             NposPenaltyAction::ConsensusSlash(action) => {
+                ensure_evidence_penalty_is_unresolved(tx, &action.evidence_key)?;
                 if !tx.is_lane_active_for_authority(action.lane_id) {
-                    continue;
+                    return Err(eyre!(
+                        "consensus slash targets a lane made inactive by block execution"
+                    ));
                 }
-                apply_slash_to_validator(
-                    tx,
-                    action.lane_id,
-                    &action.validator,
-                    action.slash_id,
-                    &action.amount,
-                    now_ms,
-                )?;
+                match mode {
+                    EffectsApplicationMode::Commit => apply_consensus_slash_to_validator(
+                        tx,
+                        action.lane_id,
+                        &action.validator,
+                        action.slash_id,
+                        &action.amount,
+                        now_ms,
+                    )?,
+                    EffectsApplicationMode::ValidateOnly => {
+                        apply_slash_to_validator_without_observability(
+                            tx,
+                            action.lane_id,
+                            &action.validator,
+                            action.slash_id,
+                            &action.amount,
+                            now_ms,
+                        )?;
+                    }
+                }
                 outcome.applied = outcome.applied.saturating_add(1);
                 outcome.slashed = outcome.slashed.saturating_add(1);
             }
             NposPenaltyAction::MarkConsensusEvidenceApplied(action) => {
+                if action.height != current_height {
+                    return Err(eyre!(
+                        "consensus evidence-applied marker has the wrong block height"
+                    ));
+                }
+                ensure_evidence_penalty_is_unresolved(tx, &action.evidence_key)?;
                 let mut record = tx
                     .world
                     .consensus_evidence
                     .get(&action.evidence_key)
-                    .cloned();
-                if let Some(record) = record.as_mut() {
-                    record.penalty_applied = true;
-                    record.penalty_applied_at_height = Some(action.height);
-                    tx.world
-                        .consensus_evidence
-                        .insert(action.evidence_key.clone(), record.clone());
-                }
+                    .cloned()
+                    .expect("validated unresolved evidence exists");
+                record.penalty_status = EvidencePenaltyStatus::Applied {
+                    height: action.height,
+                };
+                tx.world
+                    .consensus_evidence
+                    .insert(action.evidence_key.clone(), record);
             }
         }
     }
     Ok(outcome)
+}
+fn ensure_evidence_penalty_is_unresolved(
+    tx: &StateTransaction<'_, '_>,
+    evidence_key: &[u8],
+) -> Result<()> {
+    let record = tx
+        .world
+        .consensus_evidence
+        .get(evidence_key)
+        .ok_or_else(|| eyre!("consensus penalty action references missing evidence"))?;
+    match record.penalty_status {
+        EvidencePenaltyStatus::Pending => {}
+        EvidencePenaltyStatus::Applied { .. } => {
+            return Err(eyre!(
+                "consensus penalty action references already applied evidence"
+            ));
+        }
+        EvidencePenaltyStatus::Cancelled { .. } => {
+            return Err(eyre!(
+                "consensus penalty action references cancelled evidence"
+            ));
+        }
+    }
+    Ok(())
 }
 fn canonical_indices(
     indices: impl IntoIterator<Item = ValidatorIndex>,
@@ -391,28 +571,6 @@ fn offender_indices(
     };
     canonical_indices([signer], context.roster.len())
 }
-fn max_slash_amount_for_validator_from_state(
-    state: &State,
-    locator: &ValidatorLocator,
-    max_bps: u16,
-) -> Result<Option<Quantity>> {
-    if !state.is_lane_active_for_authority(locator.lane_id) {
-        return Ok(None);
-    }
-    let world = state.world_view();
-    let Some(record) = world
-        .public_lane_validators()
-        .get(&(locator.lane_id, locator.validator.clone()))
-        .cloned()
-    else {
-        return Ok(None);
-    };
-    let amount = max_slash_amount(&record.total_stake, max_bps)?;
-    if amount.is_zero() {
-        return Ok(None);
-    }
-    Ok(Some(amount))
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,7 +578,7 @@ mod tests {
         block::ValidBlock,
         kura::Kura,
         query::store::LiveQueryStore,
-        state::{State, World},
+        state::{State, StateBlock, World},
         sumeragi::evidence::evidence_key,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
@@ -702,10 +860,7 @@ mod tests {
             recorded_at_height,
             recorded_at_view: 0,
             recorded_at_ms: recorded_at_height.saturating_mul(1_000),
-            penalty_applied: false,
-            penalty_cancelled: false,
-            penalty_cancelled_at_height: None,
-            penalty_applied_at_height: None,
+            penalty_status: EvidencePenaltyStatus::Pending,
         };
         let mut block = state.world.consensus_evidence.block();
         block.insert(key.clone(), record);
@@ -746,6 +901,30 @@ mod tests {
         };
         parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
         parameters.commit();
+    }
+    fn height_two_state_block(state: &State) -> StateBlock<'_> {
+        state.block(BlockHeader::new(
+            NonZeroU64::new(2).expect("non-zero penalty test height"),
+            None,
+            None,
+            None,
+            2_000,
+            0,
+        ))
+    }
+    fn retire_primary_lane_in_candidate(state_block: &mut StateBlock<'_>) {
+        let catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("non-zero lane count"),
+            vec![LaneConfig {
+                id: LaneId::new(1),
+                alias: "post-execution-lane".to_owned(),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("sparse post-execution lane catalog");
+        state_block.nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
+        state_block.nexus.lane_catalog = catalog;
     }
     #[test]
     fn consensus_penalty_delay_does_not_saturate_into_early_eligibility() {
@@ -891,5 +1070,246 @@ mod tests {
             )),
             "an unslashable offence must still reach a terminal state"
         );
+    }
+    #[test]
+    fn post_execution_lane_retirement_rejects_the_entire_consensus_penalty_bundle() {
+        let state = fresh_state();
+        install_one_block_delay_npos(&state);
+        let frozen_roster = roster();
+        let context = height_one_context(
+            state.network_id_ref().clone(),
+            &frozen_roster,
+            test_block_hash(0xA1),
+        );
+        let offender = frozen_roster[1].clone();
+        let validator = add_validator_record(&state, &offender);
+        let evidence_key = insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let effects = PenaltyApplier::new(
+            &state,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        )
+        .derive_npos_consensus_effects(2)
+        .expect("due evidence derives a complete penalty bundle");
+        assert!(effects.penalty_actions.iter().any(|action| matches!(
+            action,
+            NposPenaltyAction::ConsensusSlash(slash)
+                if slash.evidence_key == evidence_key && slash.validator == validator
+        )));
+
+        let evidence_prune_keys =
+            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+                &state,
+                2,
+                effects.v2_evidence_admissions.len(),
+            );
+        let mut state_block = height_two_state_block(&state);
+        retire_primary_lane_in_candidate(&mut state_block);
+        let error = validate_npos_consensus_effects_after_execution(
+            &mut state_block,
+            &effects,
+            &evidence_prune_keys,
+            None,
+            &frozen_roster,
+            2,
+            0,
+            2_000,
+        )
+        .expect_err("retiring a slash target must reject the candidate block");
+        assert!(
+            error
+                .to_string()
+                .contains("lane made inactive by block execution"),
+            "unexpected rejection: {error}"
+        );
+        let record = state_block
+            .world
+            .consensus_evidence
+            .get(&evidence_key)
+            .expect("rollback preserves the unresolved evidence");
+        assert_eq!(record.penalty_status, EvidencePenaltyStatus::Pending);
+    }
+    #[test]
+    fn post_execution_evidence_cancellation_rejects_slash_and_mark_atomically() {
+        let state = fresh_state();
+        install_one_block_delay_npos(&state);
+        let frozen_roster = roster();
+        let context = height_one_context(
+            state.network_id_ref().clone(),
+            &frozen_roster,
+            test_block_hash(0xA2),
+        );
+        let offender = frozen_roster[1].clone();
+        let validator = add_validator_record(&state, &offender);
+        let evidence_key = insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let effects = PenaltyApplier::new(
+            &state,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        )
+        .derive_npos_consensus_effects(2)
+        .expect("due evidence derives a complete penalty bundle");
+        let evidence_prune_keys =
+            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+                &state,
+                2,
+                effects.v2_evidence_admissions.len(),
+            );
+        let mut state_block = height_two_state_block(&state);
+        {
+            let mut transaction = state_block.transaction();
+            let mut record = transaction
+                .world
+                .consensus_evidence
+                .get(&evidence_key)
+                .cloned()
+                .expect("candidate cancellation target exists");
+            record.penalty_status = EvidencePenaltyStatus::Cancelled { height: 2 };
+            transaction
+                .world
+                .consensus_evidence
+                .insert(evidence_key.clone(), record);
+            transaction.apply();
+        }
+
+        let error = validate_npos_consensus_effects_after_execution(
+            &mut state_block,
+            &effects,
+            &evidence_prune_keys,
+            None,
+            &frozen_roster,
+            2,
+            0,
+            2_000,
+        )
+        .expect_err("same-block cancellation must reject the candidate penalty bundle");
+        assert!(
+            error.to_string().contains("cancelled evidence"),
+            "unexpected rejection: {error}"
+        );
+        let evidence = state_block
+            .world
+            .consensus_evidence
+            .get(&evidence_key)
+            .expect("candidate cancellation remains staged");
+        assert_eq!(
+            evidence.penalty_status,
+            EvidencePenaltyStatus::Cancelled { height: 2 }
+        );
+        let validator_record = state_block
+            .world
+            .public_lane_validators
+            .get(&(LaneId::SINGLE, validator))
+            .expect("validator record remains staged");
+        assert_eq!(validator_record.total_stake, Quantity::from(10_000_u64));
+    }
+    #[test]
+    fn post_execution_penalty_validation_cannot_write_an_active_global_witness() {
+        let state = fresh_state();
+        install_one_block_delay_npos(&state);
+        let frozen_roster = roster();
+        let context = height_one_context(
+            state.network_id_ref().clone(),
+            &frozen_roster,
+            test_block_hash(0xA3),
+        );
+        let offender = frozen_roster[1].clone();
+        add_validator_record(&state, &offender);
+        insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let effects = PenaltyApplier::new(
+            &state,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        )
+        .derive_npos_consensus_effects(2)
+        .expect("due evidence derives a complete penalty bundle");
+        let evidence_prune_keys =
+            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+                &state,
+                2,
+                effects.v2_evidence_admissions.len(),
+            );
+        let mut state_block = height_two_state_block(&state);
+
+        let witness_guard = crate::sumeragi::witness::exec_witness_guard();
+        crate::sumeragi::witness::start_block();
+        validate_npos_consensus_effects_after_execution(
+            &mut state_block,
+            &effects,
+            &evidence_prune_keys,
+            None,
+            &frozen_roster,
+            2,
+            0,
+            2_000,
+        )
+        .expect("valid penalty effects remain applicable in the rollback-only overlay");
+        let witness = crate::sumeragi::witness::drain_exec_witness();
+        drop(witness_guard);
+
+        assert!(witness.reads.is_empty());
+        assert!(witness.writes.is_empty());
+        assert!(witness.fastpq_transcripts.is_empty());
+        assert!(witness.fastpq_batches.is_empty());
+    }
+    #[test]
+    fn committed_consensus_penalty_cannot_publish_transaction_execution_evidence() {
+        let state = fresh_state();
+        install_one_block_delay_npos(&state);
+        let frozen_roster = roster();
+        let context = height_one_context(
+            state.network_id_ref().clone(),
+            &frozen_roster,
+            test_block_hash(0xA4),
+        );
+        let offender = frozen_roster[1].clone();
+        add_validator_record(&state, &offender);
+        insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let effects = PenaltyApplier::new(
+            &state,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        )
+        .derive_npos_consensus_effects(2)
+        .expect("due evidence derives a complete penalty bundle");
+        let evidence_prune_keys =
+            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+                &state,
+                2,
+                effects.v2_evidence_admissions.len(),
+            );
+        let mut state_block = height_two_state_block(&state);
+
+        let witness_guard = crate::sumeragi::witness::exec_witness_guard();
+        crate::sumeragi::witness::start_block();
+        let mut transaction = state_block.transaction();
+        apply_npos_consensus_effects_to_transaction(
+            &mut transaction,
+            &effects,
+            &evidence_prune_keys,
+            None,
+            &frozen_roster,
+            2,
+            0,
+            2_000,
+        )
+        .expect("valid committed penalty effects apply");
+        transaction.apply();
+        let witness = crate::sumeragi::witness::drain_exec_witness();
+        drop(witness_guard);
+
+        assert!(witness.reads.is_empty());
+        assert!(witness.writes.is_empty());
+        assert!(witness.fastpq_transcripts.is_empty());
+        assert!(witness.fastpq_batches.is_empty());
+        assert!(state_block.drain_transfer_transcripts().is_empty());
     }
 }

@@ -22411,15 +22411,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @discardableResult
     public func getKagemushaOperationStatus(
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
+        _ reference: KagemushaOperationReference,
         chainDiscriminant: UInt16,
         completion: @escaping (Result<KagemushaOperationStatus, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getKagemushaOperationStatus(
-                operationId: operationId,
-                expectedKind: expectedKind,
+                reference,
                 chainDiscriminant: chainDiscriminant
             )
         }
@@ -26663,6 +26661,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             path: KagemushaToriiAPI.Endpoint.topUp.path,
             operationId: requestBody.operationId,
             expectedKind: .topUp,
+            expectedSubmittedAtMs: requestBody.issuedAtMs,
             archive: requestBody.noritoArchive()
         )
     }
@@ -26674,16 +26673,72 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             path: KagemushaToriiAPI.Endpoint.redeem.path,
             operationId: requestBody.operationId,
             expectedKind: .redeem,
+            expectedSubmittedAtMs: requestBody.issuedAtMs,
             archive: requestBody.noritoArchive()
         )
     }
 
+    /// Poll an accepted Kagemusha operation while preserving its immutable
+    /// operation identity, kind, status URI, and signed request timestamp.
+    /// A Pending retry or terminal global winner may carry another transaction hash.
     public func getKagemushaOperationStatus(
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
+        _ reference: KagemushaOperationReference,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
-        let path = try KagemushaToriiAPI.operationPath(operationId)
+        let path = try KagemushaToriiAPI.operationPath(reference.operationId)
+        guard reference.state == .pending,
+              reference.statusUri == path else {
+            throw ToriiClientError.invalidPayload(
+                "Kagemusha operation reference does not identify its canonical status resource"
+            )
+        }
+        return try await getKagemushaOperationStatus(
+            path: path,
+            expectedOperationId: reference.operationId,
+            expectedKind: reference.kind,
+            expectedSubmittedAtMs: reference.submittedAtMs,
+            chainDiscriminant: chainDiscriminant
+        )
+    }
+
+    /// Coordinator transport entry point. Before Torii acknowledges the POST,
+    /// status lookup is bound to the signed request itself; afterwards it is
+    /// additionally bound to the exact accepted reference.
+    public func getKagemushaOperationStatus(
+        operation: KagemushaOperationSubmission,
+        acceptedReference: KagemushaOperationReference?,
+        chainDiscriminant: UInt16
+    ) async throws -> KagemushaOperationStatus {
+        if let acceptedReference {
+            guard acceptedReference.operationId == operation.operationId,
+                  acceptedReference.kind == operation.kind,
+                  acceptedReference.submittedAtMs == operation.issuedAtMs else {
+                throw ToriiClientError.invalidPayload(
+                    "Kagemusha operation reference does not match the signed request"
+                )
+            }
+            return try await getKagemushaOperationStatus(
+                acceptedReference,
+                chainDiscriminant: chainDiscriminant
+            )
+        }
+        let path = try KagemushaToriiAPI.operationPath(operation.operationId)
+        return try await getKagemushaOperationStatus(
+            path: path,
+            expectedOperationId: operation.operationId,
+            expectedKind: operation.kind,
+            expectedSubmittedAtMs: operation.issuedAtMs,
+            chainDiscriminant: chainDiscriminant
+        )
+    }
+
+    private func getKagemushaOperationStatus(
+        path: String,
+        expectedOperationId: String,
+        expectedKind: KagemushaOperationKind,
+        expectedSubmittedAtMs: UInt64,
+        chainDiscriminant: UInt16
+    ) async throws -> KagemushaOperationStatus {
         let request = try makeRequest(
             path: path,
             headers: ["Accept": "application/x-norito"]
@@ -26702,10 +26757,16 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             responseData,
             chainDiscriminant: chainDiscriminant
         )
-        guard status.operationId == operationId,
+        guard status.operationId == expectedOperationId,
               status.kind == expectedKind else {
             throw ToriiClientError.invalidPayload(
                 "Kagemusha operation status identity or kind does not match the requested resource"
+            )
+        }
+        if case let .pending(pending) = status,
+           pending.submittedAtMs != expectedSubmittedAtMs {
+            throw ToriiClientError.invalidPayload(
+                "Kagemusha Pending status changed the signed request timestamp"
             )
         }
         return status
@@ -26715,6 +26776,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         path: String,
         operationId: String,
         expectedKind: KagemushaOperationKind,
+        expectedSubmittedAtMs: UInt64,
         archive: Data
     ) async throws -> KagemushaOperationReference {
         let request = try makeRequest(
@@ -26742,9 +26804,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard reference.operationId == operationId,
               reference.kind == expectedKind,
               reference.state == .pending,
-              reference.statusUri == expectedStatusUri else {
+              reference.statusUri == expectedStatusUri,
+              reference.submittedAtMs == expectedSubmittedAtMs else {
             throw ToriiClientError.invalidPayload(
-                "Kagemusha operation reference does not match the submitted command"
+                "Kagemusha operation reference does not match the signed request"
             )
         }
         guard response.value(forHTTPHeaderField: "Location") == expectedStatusUri else {

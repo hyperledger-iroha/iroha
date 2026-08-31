@@ -112,7 +112,16 @@ class KagemushaRecursiveSpendProver private constructor() {
             IOS_APP_ATTEST_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES + 1
         private const val IOS_APP_ATTEST_AUTHENTICATOR_DATA_MAX_BYTES: Int = 4 * 1024
         private const val IOS_APP_ATTEST_EXTENSION_DATA_FLAG: Int = 0x80
-        const val MAX_TORII_RESPONSE_BYTES: Int = 4 * 1024 * 1024
+        /** Exact JSON response ceiling for the offline-readiness route. */
+        const val MAX_TORII_READINESS_RESPONSE_BYTES: Int = 4 * 1024
+        /** Exact Norito response ceiling for accepted operation references. */
+        const val MAX_TORII_OPERATION_REFERENCE_BYTES: Int = 4 * 1024
+        /** Exact Norito response ceiling for operation-status resources. */
+        const val MAX_TORII_OPERATION_STATUS_BYTES: Int = 4 * 1024 * 1024
+        /** Exact Norito response ceiling for recipient-lineage proofs. */
+        const val MAX_TORII_RECIPIENT_LINEAGE_RESPONSE_BYTES: Int = 4 * 1024 * 1024
+        /** Exact archive ceiling for standalone Torii-sourced proof material. */
+        const val MAX_TORII_PROOF_ARCHIVE_BYTES: Int = 4 * 1024 * 1024
         const val MAXIMUM_INPUTS_PER_TRANSITION: Int = 2
         const val MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS: Int = MAXIMUM_INPUTS_PER_TRANSITION
         const val MAXIMUM_BRANCH_CLAIMS: Int = 2
@@ -2605,7 +2614,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         archive,
         "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage",
         "recipientRegistrationLineage",
-        MAX_TORII_RESPONSE_BYTES,
+        MAX_TORII_RECIPIENT_LINEAGE_RESPONSE_BYTES,
     )
 
     class RecipientReceiveOfferV2 internal constructor(archive: ByteArray) : CanonicalArchive(
@@ -2919,21 +2928,21 @@ class KagemushaRecursiveSpendProver private constructor() {
         archive,
         "KagemushaRecursiveSpendTopUpAnchorV4",
         "topUpAnchorV4",
-        MAX_TORII_RESPONSE_BYTES,
+        MAX_TORII_PROOF_ARCHIVE_BYTES,
     )
 
     class TopUpFinalityProof internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
         "KagemushaTopUpFinalityProofV2",
         "topUpFinalityProof",
-        MAX_TORII_RESPONSE_BYTES,
+        MAX_TORII_PROOF_ARCHIVE_BYTES,
     )
 
     class TopUpFinalityRosterArtifact internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
         "KagemushaTopUpFinalityRosterArtifactV2",
         "topUpFinalityRosterArtifact",
-        MAX_TORII_RESPONSE_BYTES,
+        MAX_TORII_PROOF_ARCHIVE_BYTES,
     )
 
     /** Complete V4 origin plus its stable compact-finality proof. */
@@ -2941,7 +2950,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         archive,
         "KagemushaRecursiveSpendTopUpFinalityEvidenceV4",
         "topUpFinalityEvidenceV4",
-        MAX_TORII_RESPONSE_BYTES,
+        MAX_TORII_PROOF_ARCHIVE_BYTES,
     )
 
     /** Complete bounded origin-finality inventory required to spend or verify one V4 bundle. */
@@ -3905,14 +3914,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         archive,
         "OfflineOperationReference",
         "operationReference",
-        MAX_TORII_RESPONSE_BYTES,
+        MAX_TORII_OPERATION_REFERENCE_BYTES,
     )
 
     class OperationStatus internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
         "OfflineOperationStatus",
         "operationStatus",
-        MAX_TORII_RESPONSE_BYTES,
+        MAX_TORII_OPERATION_STATUS_BYTES,
     )
 
     enum class OperationState { PENDING, APPLIED, REJECTED }
@@ -3938,7 +3947,12 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun operationIdHex(): String = hex(operationIdValue)
     }
 
-    /** Durable continuity key retained from command acceptance through terminal polling. */
+    /**
+     * Durable status-polling reference bound to the signed command.
+     *
+     * The operation ID, kind, and submitted-at value (the signed authorization issuance time)
+     * remain fixed. An exact retry or global Applied winner may carry another transaction hash.
+     */
     class OperationHandle(
         operationId: ByteArray,
         val kind: OperationKind,
@@ -4129,7 +4143,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     reference.submittedAtMilliseconds ==
                         identity.authorizationIssuedAtMilliseconds,
                 ) {
-                    "Kagemusha Torii response submission time must match signed authorization issuance"
+                    "Kagemusha Torii response submitted_at must match signed authorization issued_at"
                 }
                 return OperationHandle(
                     reference.operationId(),
@@ -4147,14 +4161,11 @@ class KagemushaRecursiveSpendProver private constructor() {
                     "Kagemusha Torii status operation ID must match the requested operation"
                 }
                 check(status.kind == handle.kind) {
-                    "Kagemusha Torii status kind must match the accepted operation"
-                }
-                check(status.transactionHash().contentEquals(handle.transactionHash())) {
-                    "Kagemusha Torii status transaction hash must match the accepted operation"
+                    "Kagemusha Torii status kind must match the signed operation"
                 }
                 status.submittedAtMilliseconds?.let {
                     check(it == handle.submittedAtMilliseconds) {
-                        "Kagemusha Torii pending status submission time must match command acceptance"
+                        "Kagemusha Torii pending status submitted_at must match signed authorization issued_at"
                     }
                 }
             }
@@ -4189,7 +4200,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     .setUri(URI.create("$baseUri$CAPABILITY_PATH"))
                     .addHeader("Accept", JSON_MEDIA_TYPE)
                     .setTimeout(requestTimeout)
-                    .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
+                    .setMaximumResponseBytes(MAX_TORII_READINESS_RESPONSE_BYTES.toLong())
                     .build(),
                 200,
                 JSON_MEDIA_TYPE,
@@ -4235,7 +4246,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 .addHeader("Content-Type", NORITO_MEDIA_TYPE)
                 .setBody(body)
                 .setTimeout(requestTimeout)
-                .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
+                .setMaximumResponseBytes(MAX_TORII_RECIPIENT_LINEAGE_RESPONSE_BYTES.toLong())
             authHeaders.forEach { (name, value) -> builder.addHeader(name, value) }
             return execute(
                 builder.build(),
@@ -4275,7 +4286,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     .setUri(URI.create("$baseUri$OPERATIONS_PATH/$id"))
                     .addHeader("Accept", NORITO_MEDIA_TYPE)
                     .setTimeout(requestTimeout)
-                    .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
+                    .setMaximumResponseBytes(MAX_TORII_OPERATION_STATUS_BYTES.toLong())
                     .build(),
                 200,
             ).thenApply {
@@ -4300,7 +4311,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     .addHeader("Idempotency-Key", id)
                     .setBody(request)
                     .setTimeout(requestTimeout)
-                    .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
+                    .setMaximumResponseBytes(MAX_TORII_OPERATION_REFERENCE_BYTES.toLong())
                     .build(),
                 202,
             ).thenApply {

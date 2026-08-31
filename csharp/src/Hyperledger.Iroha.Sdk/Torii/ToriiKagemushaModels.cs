@@ -32,18 +32,21 @@ public sealed class ToriiKagemushaTopUpRequestV4
 
     public ToriiKagemushaTopUpRequestV4(ReadOnlySpan<byte> norito)
     {
-        (this.norito, OperationId) = ToriiKagemushaTransport.RequireNoritoRequestArchive(
-            norito,
-            ToriiKagemushaTransport.MaxTopUpNoritoRequestBytes,
-            ToriiKagemushaTransport.TopUpRequestSchemaName,
-            fieldCount: 8,
-            operationIdFieldIndex: 6,
-            nameof(norito));
+        (this.norito, OperationId, IssuedAtMilliseconds) =
+            ToriiKagemushaTransport.RequireNoritoRequestArchive(
+                norito,
+                ToriiKagemushaTransport.MaxTopUpNoritoRequestBytes,
+                ToriiKagemushaTransport.TopUpRequestSchemaName,
+                fieldCount: 8,
+                operationIdFieldIndex: 6,
+                nameof(norito));
     }
 
     public int Version => ToriiKagemushaTransport.ManifestVersion;
 
     public string OperationId { get; }
+
+    public ulong IssuedAtMilliseconds { get; }
 
     public byte[] Norito => norito.ToArray();
 }
@@ -57,18 +60,21 @@ public sealed class ToriiKagemushaRedeemRequestV4
 
     public ToriiKagemushaRedeemRequestV4(ReadOnlySpan<byte> norito)
     {
-        (this.norito, OperationId) = ToriiKagemushaTransport.RequireNoritoRequestArchive(
-            norito,
-            ToriiKagemushaTransport.MaxRedeemNoritoRequestBytes,
-            ToriiKagemushaTransport.RedeemRequestSchemaName,
-            fieldCount: 10,
-            operationIdFieldIndex: 8,
-            nameof(norito));
+        (this.norito, OperationId, IssuedAtMilliseconds) =
+            ToriiKagemushaTransport.RequireNoritoRequestArchive(
+                norito,
+                ToriiKagemushaTransport.MaxRedeemNoritoRequestBytes,
+                ToriiKagemushaTransport.RedeemRequestSchemaName,
+                fieldCount: 10,
+                operationIdFieldIndex: 8,
+                nameof(norito));
     }
 
     public int Version => ToriiKagemushaTransport.ManifestVersion;
 
     public string OperationId { get; }
+
+    public ulong IssuedAtMilliseconds { get; }
 
     public byte[] Norito => norito.ToArray();
 }
@@ -162,9 +168,9 @@ public sealed record class ToriiKagemushaOperationStatus
     public required string TransactionHash { get; init; }
 
     /// <summary>
-    /// The active submission time carried only by Pending responses. It repeats while their
-    /// transaction hash is unchanged and may replace both values for a newer exact retry
-    /// attempt. Applied and Rejected responses omit this field.
+    /// The signed request creation time carried only by Pending responses. It remains immutable
+    /// across exact retries even when a newer carrier transaction replaces the transaction hash.
+    /// Applied and Rejected responses omit this field.
     /// </summary>
     public ulong? SubmittedAtMilliseconds { get; init; }
 
@@ -190,6 +196,9 @@ internal static class ToriiKagemushaTransport
 
     private const int RequiredHeaderPaddingBytes = 8;
     private const ushort RequestWireVersion = 4;
+    private const int RequestAuthorizationFieldCount = 10;
+    private const int RequestAuthorizationOperationIdFieldIndex = 3;
+    private const int RequestAuthorizationIssuedAtFieldIndex = 4;
 
     internal static string RequireOperationId(string? value, string parameterName)
     {
@@ -206,7 +215,8 @@ internal static class ToriiKagemushaTransport
         return value;
     }
 
-    internal static (byte[] Archive, string OperationId) RequireNoritoRequestArchive(
+    internal static (byte[] Archive, string OperationId, ulong IssuedAtMilliseconds)
+        RequireNoritoRequestArchive(
         ReadOnlySpan<byte> value,
         int maximumBytes,
         string expectedSchemaName,
@@ -243,13 +253,16 @@ internal static class ToriiKagemushaTransport
                 parameterName);
         }
 
-        if (fieldCount <= 0 || operationIdFieldIndex < 0 || operationIdFieldIndex >= fieldCount)
+        if (fieldCount <= 1
+            || operationIdFieldIndex < 0
+            || operationIdFieldIndex >= fieldCount - 1)
         {
             throw new InvalidOperationException("Kagemusha request field layout is invalid.");
         }
 
         var reader = new CanonicalNoritoReader(payload, "Kagemusha V4 request", parameterName);
         ReadOnlySpan<byte> operationId = default;
+        ReadOnlySpan<byte> authorization = default;
         for (var index = 0; index < fieldCount; index++)
         {
             var field = reader.ReadField($"field[{index}]");
@@ -267,6 +280,10 @@ internal static class ToriiKagemushaTransport
             {
                 operationId = field;
             }
+            if (index == fieldCount - 1)
+            {
+                authorization = field;
+            }
         }
         reader.RequireEnd();
         if (operationId.Length != 32 || operationId.IndexOfAnyExcept((byte)0) < 0)
@@ -276,6 +293,48 @@ internal static class ToriiKagemushaTransport
                 parameterName);
         }
 
-        return (value.ToArray(), Convert.ToHexString(operationId).ToLowerInvariant());
+        var authorizationReader = new CanonicalNoritoReader(
+            authorization,
+            "Kagemusha V4 request authorization",
+            parameterName);
+        ReadOnlySpan<byte> authorizationOperationId = default;
+        ReadOnlySpan<byte> issuedAtField = default;
+        for (var index = 0; index < RequestAuthorizationFieldCount; index++)
+        {
+            var field = authorizationReader.ReadField($"field[{index}]");
+            if (index == RequestAuthorizationOperationIdFieldIndex)
+            {
+                authorizationOperationId = field;
+            }
+            if (index == RequestAuthorizationIssuedAtFieldIndex)
+            {
+                issuedAtField = field;
+            }
+        }
+        authorizationReader.RequireEnd();
+        if (!authorizationOperationId.SequenceEqual(operationId))
+        {
+            throw new ArgumentException(
+                "Kagemusha request authorization operation id must match the outer operation id.",
+                parameterName);
+        }
+        if (issuedAtField.Length != sizeof(ulong))
+        {
+            throw new ArgumentException(
+                "Kagemusha request authorization issued_at_ms must be exactly eight little-endian bytes.",
+                parameterName);
+        }
+        var issuedAtMilliseconds = BinaryPrimitives.ReadUInt64LittleEndian(issuedAtField);
+        if (issuedAtMilliseconds == 0)
+        {
+            throw new ArgumentException(
+                "Kagemusha request authorization issued_at_ms must be positive.",
+                parameterName);
+        }
+
+        return (
+            value.ToArray(),
+            Convert.ToHexString(operationId).ToLowerInvariant(),
+            issuedAtMilliseconds);
     }
 }

@@ -705,9 +705,52 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let redeem = try KagemushaRedeemRequest(noritoArchive: redeemArchive)
 
         XCTAssertEqual(topUp.operationId, expectedOperationId)
+        XCTAssertEqual(topUp.issuedAtMs, 1)
         XCTAssertEqual(topUp.noritoArchive(), topUpArchive)
         XCTAssertEqual(redeem.operationId, expectedOperationId)
+        XCTAssertEqual(redeem.issuedAtMs, 1)
         XCTAssertEqual(redeem.noritoArchive(), redeemArchive)
+    }
+
+    func testRequestsRequireAuthorizationIdentityAndPositiveIssuedAt() throws {
+        let operationId = Data(repeating: 0x31, count: 32)
+        let otherOperationId = Data(repeating: 0x32, count: 32)
+        for (schema, fieldCount, operationIdFieldIndex) in [
+            (KagemushaRecursiveSpend.topUpRequestWireName, 8, 6),
+            (KagemushaRecursiveSpend.redeemRequestWireName, 10, 8),
+        ] {
+            let mismatched = requestArchive(
+                schema: schema,
+                fieldCount: fieldCount,
+                operationIdFieldIndex: operationIdFieldIndex,
+                operationId: operationId,
+                authorizationOperationId: otherOperationId
+            )
+            let zeroIssuedAt = requestArchive(
+                schema: schema,
+                fieldCount: fieldCount,
+                operationIdFieldIndex: operationIdFieldIndex,
+                operationId: operationId,
+                issuedAtMs: 0
+            )
+            let construct: (Data) throws -> Void = schema
+                == KagemushaRecursiveSpend.topUpRequestWireName
+                ? { _ = try KagemushaTopUpRequest(noritoArchive: $0) }
+                : { _ = try KagemushaRedeemRequest(noritoArchive: $0) }
+
+            XCTAssertThrowsError(try construct(mismatched)) { error in
+                XCTAssertEqual(
+                    error as? KagemushaOperationError,
+                    .invalidField("authorization.operation_id")
+                )
+            }
+            XCTAssertThrowsError(try construct(zeroIssuedAt)) { error in
+                XCTAssertEqual(
+                    error as? KagemushaOperationError,
+                    .invalidField("authorization.issued_at_ms")
+                )
+            }
+        }
     }
 
     func testRequestsEnforceExactToriiRequestBodyCeiling() throws {
@@ -850,14 +893,18 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         schema: String,
         fieldCount: Int,
         operationIdFieldIndex: Int,
-        operationId: Data
+        operationId: Data,
+        authorizationOperationId: Data? = nil,
+        issuedAtMs: UInt64 = 1
     ) -> Data {
         KagemushaRecursiveSpend.frameArchive(
             schema: schema,
             payload: requestPayload(
                 fieldCount: fieldCount,
                 operationIdFieldIndex: operationIdFieldIndex,
-                operationId: operationId
+                operationId: operationId,
+                authorizationOperationId: authorizationOperationId,
+                issuedAtMs: issuedAtMs
             )
         )
     }
@@ -926,6 +973,11 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                     field = CompactNorito.encodeUInt16(KagemushaRecursiveSpend.wireVersionV4)
                 } else if index == operationIdFieldIndex {
                     field = operationId
+                } else if index == fieldCount - 1 {
+                    field = requestAuthorization(
+                        operationId: operationId,
+                        issuedAtMs: 1
+                    )
                 } else if index == 1 {
                     field = Data(repeating: 0x5a, count: fillerBytes)
                 } else {
@@ -965,7 +1017,9 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     private func requestPayload(
         fieldCount: Int,
         operationIdFieldIndex: Int,
-        operationId: Data
+        operationId: Data,
+        authorizationOperationId: Data? = nil,
+        issuedAtMs: UInt64 = 1
     ) -> Data {
         var payload = CompactNoritoWriter()
         for index in 0..<fieldCount {
@@ -974,12 +1028,37 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 field = CompactNorito.encodeUInt16(KagemushaRecursiveSpend.wireVersionV4)
             } else if index == operationIdFieldIndex {
                 field = operationId
+            } else if index == fieldCount - 1 {
+                field = requestAuthorization(
+                    operationId: authorizationOperationId ?? operationId,
+                    issuedAtMs: issuedAtMs
+                )
             } else {
                 field = Data([UInt8(index + 1)])
             }
             payload.writeField(field)
         }
         return payload.data
+    }
+
+    private func requestAuthorization(
+        operationId: Data,
+        issuedAtMs: UInt64
+    ) -> Data {
+        var authorization = CompactNoritoWriter()
+        for index in 0..<10 {
+            let field: Data
+            switch index {
+            case 3:
+                field = operationId
+            case 4:
+                field = CompactNorito.encodeUInt64(issuedAtMs)
+            default:
+                field = Data([UInt8(index + 1)])
+            }
+            authorization.writeField(field)
+        }
+        return authorization.data
     }
 
     private func canonicalTopUpAnchorArchive(shieldLeafIndex: UInt32 = 7) throws -> Data {

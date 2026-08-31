@@ -188,8 +188,10 @@ only the exact four-field `cash_handoff_v1`, bridge ABI 23, eight-hop
 `OfflineStatus` with `ready: true`.
 
 This is deliberately a transport-only boundary. Command helpers require an
-externally produced `{ version: 4, operationId, norito }` archive and never
-derive witnesses, install recursive artifacts, or claim a native prover. Use a
+externally produced `{ version: 4, norito }` archive; they derive the operation
+id and signed request time from its exact compact V4 fields and reject a 202
+response that changes either value. They never derive witnesses, install
+recursive artifacts, or claim a native prover. Use a
 supported Swift or JVM wallet implementation to create the archive, then pass a
 detached copy to JavaScript only when a web or Node service owns Torii
 submission and operation polling. Top-up archives are limited to 512 KiB and

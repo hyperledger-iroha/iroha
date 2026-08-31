@@ -9350,6 +9350,7 @@ impl Client {
         response: &Response<Vec<u8>>,
         expected_status: StatusCode,
         context: &'static str,
+        preference: WireFormatPreference,
     ) -> Result<T>
     where
         T: norito::json::JsonDeserializeOwned + norito::NoritoSerialize,
@@ -9366,17 +9367,51 @@ impl Client {
             .next()
             .map(str::trim)
             .unwrap_or_default();
-        if Self::is_json_content_type(content_type) {
+        let is_json = Self::is_json_content_type(content_type);
+        let is_norito = media_type.eq_ignore_ascii_case(APPLICATION_NORITO);
+        match preference {
+            WireFormatPreference::NoritoOnly if !is_norito => {
+                return Err(eyre!(
+                    "{context}: response violates NoritoOnly: expected content-type `{APPLICATION_NORITO}`"
+                ));
+            }
+            WireFormatPreference::JsonOnly if !is_json => {
+                return Err(eyre!(
+                    "{context}: response violates JsonOnly: expected content-type `{APPLICATION_JSON}`"
+                ));
+            }
+            WireFormatPreference::NoritoPreferred
+            | WireFormatPreference::JsonPreferred
+            | WireFormatPreference::NoritoOnly
+            | WireFormatPreference::JsonOnly => {}
+        }
+        if is_json {
             return norito::json::from_slice(response.body())
                 .map_err(|error| eyre!("{context}: failed to decode JSON payload: {error}"));
         }
-        if media_type.eq_ignore_ascii_case(APPLICATION_NORITO) {
+        if is_norito {
             return decode_from_bytes(response.body())
                 .map_err(|error| eyre!("{context}: failed to decode Norito payload: {error}"));
         }
         Err(eyre!(
             "{context}: invalid content-type `{content_type}` (expected application/json or application/x-norito)"
         ))
+    }
+    fn ensure_offline_operation_status_response_size(response: &Response<Vec<u8>>) -> Result<()> {
+        let content_type = Self::response_content_type(response);
+        let (representation, maximum_bytes) = if Self::is_json_content_type(content_type) {
+            ("JSON", OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES)
+        } else if Self::is_norito_content_type(content_type) {
+            ("Norito", OFFLINE_OPERATION_STATUS_MAX_BYTES)
+        } else {
+            return Ok(());
+        };
+        if response.body().len() > maximum_bytes {
+            return Err(eyre!(
+                "Failed to fetch offline operation: {representation} response exceeds the {maximum_bytes}-byte limit"
+            ));
+        }
+        Ok(())
     }
     fn require_lower_hex_32(value: &str, field: &str) -> Result<()> {
         if value.len() == Hash::LENGTH * 2
@@ -9543,6 +9578,7 @@ impl Client {
             &response,
             StatusCode::OK,
             "Failed to discover offline capability",
+            self.wire_format_preference,
         )?;
         Self::validate_offline_capability(&status)?;
         Ok(status)
@@ -9625,6 +9661,7 @@ impl Client {
             &response,
             StatusCode::ACCEPTED,
             "Failed to submit offline operation",
+            self.wire_format_preference,
         )?;
         Self::validate_offline_operation_reference(
             &response,
@@ -9637,16 +9674,16 @@ impl Client {
     }
     /// Poll the current state and advance the active Pending-attempt cursor.
     ///
-    /// A validated newer Pending transaction replaces the reference's
-    /// transaction hash and submission time atomically. Terminal observations
-    /// may identify a different retry or globally winning transaction but do
-    /// not rewrite the pending cursor.
+    /// A validated different Pending transaction replaces the reference's
+    /// transaction hash while retaining the signed request's immutable
+    /// submission time. Terminal observations may identify a different retry
+    /// or globally winning transaction but do not rewrite the pending cursor.
     ///
     /// # Errors
     /// Returns an error for a malformed accepted-operation reference, transport
     /// failure, non-success response, malformed negotiated representation, or
-    /// a response whose operation or kind differs, or an active Pending hash
-    /// whose submission time changes.
+    /// a response whose operation or kind differs, or a Pending response whose
+    /// request-bound submission time changes.
     pub fn poll_offline_operation_status(
         &self,
         reference: &mut OfflineOperationReference,
@@ -9668,10 +9705,12 @@ impl Client {
                 .header("Accept", self.wire_format_preference.accept_header())
                 .max_response_bytes(max_response_bytes),
         )?;
+        Self::ensure_offline_operation_status_response_size(&response)?;
         let status: OfflineOperationStatus = Self::parse_negotiated_typed_response(
             &response,
             StatusCode::OK,
             "Failed to fetch offline operation",
+            self.wire_format_preference,
         )?;
         Self::observe_offline_operation_status(&status, reference)?;
         Ok(status)
@@ -10384,9 +10423,8 @@ mod offline_client_tests {
             .expect_err("zero submission time must fail before transport");
         assert!(zero_time_error.to_string().contains("submitted_at_ms"));
         let operation_id = bytes_to_hex(&operation_bytes);
-        let mut forged = operation_reference(&operation_id, OfflineOperationKind::Redeem);
-        forged.submitted_at_ms = 43;
-        let response = accepted_response(&forged);
+        let wrong_kind = operation_reference(&operation_id, OfflineOperationKind::Redeem);
+        let response = accepted_response(&wrong_kind);
         let error = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || {
@@ -10401,6 +10439,24 @@ mod offline_client_tests {
         )
         .expect_err("cross-kind forged response must fail closed");
         assert!(error.to_string().contains("kind or initial state"));
+
+        let mut wrong_time = operation_reference(&operation_id, OfflineOperationKind::TopUp);
+        wrong_time.submitted_at_ms = 43;
+        let response = accepted_response(&wrong_time);
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || {
+                client_with_base_url(base_url()).submit_offline_operation(
+                    torii_uri::OFFLINE_TOP_UP,
+                    &fixture,
+                    operation_bytes,
+                    42,
+                    OfflineOperationKind::TopUp,
+                )
+            },
+        )
+        .expect_err("forged signed-request time must fail closed");
+        assert!(error.to_string().contains("submission time"));
     }
     #[test]
     fn operation_status_request_validates_path_id_and_payload_binding() {
@@ -10411,7 +10467,7 @@ mod offline_client_tests {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
             transaction_hash: newer_transaction_hash.clone(),
-            submitted_at_ms: 43,
+            submitted_at_ms: 42,
         };
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
@@ -10424,7 +10480,7 @@ mod offline_client_tests {
         })
         .expect("operation status");
         assert_eq!(reference.transaction_hash, newer_transaction_hash);
-        assert_eq!(reference.submitted_at_ms, 43);
+        assert_eq!(reference.submitted_at_ms, 42);
         let snapshots = snapshots.lock().expect("snapshots");
         assert_eq!(
             snapshots[0].url.path(),
@@ -10451,8 +10507,8 @@ mod offline_client_tests {
         let changed_time = OfflineOperationStatus::Pending {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
-            transaction_hash: reference.transaction_hash.clone(),
-            submitted_at_ms: 44,
+            transaction_hash: format!("{}27", "22".repeat(31)),
+            submitted_at_ms: 43,
         };
         let changed_time_response = HttpResponse::builder()
             .status(StatusCode::OK)
@@ -10464,7 +10520,7 @@ mod offline_client_tests {
             respond_with(&Arc::new(Mutex::new(Vec::new())), changed_time_response),
             || client_with_base_url(base_url()).poll_offline_operation_status(&mut reference),
         )
-        .expect_err("the active pending hash cannot change its timestamp");
+        .expect_err("a retry hash cannot change the request-bound timestamp");
         assert!(error.to_string().contains("submission time"));
         assert_eq!(reference, unchanged_reference);
 
@@ -10488,6 +10544,111 @@ mod offline_client_tests {
         .expect_err("zero operation id must fail before transport");
         assert!(zero_error.to_string().contains("must not be zero"));
         assert!(zero_snapshots.lock().expect("snapshots").is_empty());
+    }
+    #[test]
+    fn operation_status_response_enforces_representation_size_before_decode() {
+        let operation_id = "11".repeat(32);
+        let original_reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
+        for (content_type, maximum_bytes, decode_error) in [
+            (
+                APPLICATION_NORITO,
+                OFFLINE_OPERATION_STATUS_MAX_BYTES,
+                "failed to decode Norito payload",
+            ),
+            (
+                APPLICATION_JSON,
+                OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
+                "failed to decode JSON payload",
+            ),
+        ] {
+            let exact_limit_response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", content_type)
+                .body(vec![0; maximum_bytes])
+                .expect("exact-limit response");
+            let mut exact_limit_reference = original_reference.clone();
+            let exact_limit_error = with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), exact_limit_response),
+                || {
+                    client_with_base_url(base_url())
+                        .poll_offline_operation_status(&mut exact_limit_reference)
+                },
+            )
+            .expect_err("an invalid exact-limit body must reach the representation decoder");
+            assert!(exact_limit_error.to_string().contains(decode_error));
+            assert_eq!(exact_limit_reference, original_reference);
+
+            let oversized_response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", content_type)
+                .body(vec![0; maximum_bytes + 1])
+                .expect("oversized response");
+            let mut oversized_reference = original_reference.clone();
+            let oversized_error = with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), oversized_response),
+                || {
+                    client_with_base_url(base_url())
+                        .poll_offline_operation_status(&mut oversized_reference)
+                },
+            )
+            .expect_err("an oversized body must fail before representation decoding");
+            let oversized_message = oversized_error.to_string();
+            assert!(
+                oversized_message
+                    .contains(&format!("response exceeds the {maximum_bytes}-byte limit"))
+            );
+            assert!(!oversized_message.contains("failed to decode"));
+            assert_eq!(oversized_reference, original_reference);
+        }
+    }
+    #[test]
+    fn operation_status_error_response_is_bounded_without_mutating_reference() {
+        let operation_id = "11".repeat(32);
+        let original_reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
+        let envelope = ErrorEnvelope::new(
+            "offline_service_unavailable",
+            "offline operation lookup is temporarily unavailable",
+        );
+        let response = HttpResponse::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&envelope).expect("encode error envelope"))
+            .expect("bounded error response");
+        let mut bounded_reference = original_reference.clone();
+        let bounded_error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || {
+                client_with_base_url(base_url())
+                    .poll_offline_operation_status(&mut bounded_reference)
+            },
+        )
+        .expect_err("a non-success response must remain an error");
+        assert!(
+            bounded_error
+                .to_string()
+                .contains("offline_service_unavailable")
+        );
+        assert_eq!(bounded_reference, original_reference);
+
+        let oversized_response = HttpResponse::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("content-type", APPLICATION_NORITO)
+            .body(vec![0; OFFLINE_OPERATION_STATUS_MAX_BYTES + 1])
+            .expect("oversized error response");
+        let mut oversized_reference = original_reference.clone();
+        let oversized_error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), oversized_response),
+            || {
+                client_with_base_url(base_url())
+                    .poll_offline_operation_status(&mut oversized_reference)
+            },
+        )
+        .expect_err("an oversized Norito error must fail before typed decoding");
+        assert!(oversized_error.to_string().contains(&format!(
+            "response exceeds the {}-byte limit",
+            OFFLINE_OPERATION_STATUS_MAX_BYTES
+        )));
+        assert_eq!(oversized_reference, original_reference);
     }
     #[test]
     fn pending_operation_status_rejects_zero_submission_time() {
@@ -10612,6 +10773,74 @@ mod offline_client_tests {
         assert_eq!(reference, original_reference);
     }
     #[test]
+    fn negotiated_only_preferences_reject_opposite_kagemusha_representations() {
+        let capability = universal_offline_capability();
+        let json_capability_response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&capability).expect("encode JSON capability"))
+            .expect("JSON capability response");
+        let capability_error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), json_capability_response),
+            || {
+                client_with_base_url(base_url())
+                    .with_wire_format_preference(WireFormatPreference::NoritoOnly)
+                    .get_offline_capability()
+            },
+        )
+        .expect_err("NoritoOnly must reject a JSON capability response");
+        assert!(capability_error.to_string().contains("violates NoritoOnly"));
+
+        let fixture = CommandFixture { nonce: 7 };
+        let operation_bytes = [0x11; 32];
+        let operation_id = bytes_to_hex(&operation_bytes);
+        let accepted = operation_reference(&operation_id, OfflineOperationKind::TopUp);
+        let submission_error = with_mock_http(
+            respond_with(
+                &Arc::new(Mutex::new(Vec::new())),
+                accepted_response(&accepted),
+            ),
+            || {
+                client_with_base_url(base_url())
+                    .with_wire_format_preference(WireFormatPreference::JsonOnly)
+                    .submit_offline_operation(
+                        torii_uri::OFFLINE_TOP_UP,
+                        &fixture,
+                        operation_bytes,
+                        42,
+                        OfflineOperationKind::TopUp,
+                    )
+            },
+        )
+        .expect_err("JsonOnly must reject a Norito accepted reference");
+        assert!(submission_error.to_string().contains("violates JsonOnly"));
+
+        let status = OfflineOperationStatus::Pending {
+            operation_id,
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: format!("{}25", "22".repeat(31)),
+            submitted_at_ms: 42,
+        };
+        let json_status_response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&status).expect("encode JSON status"))
+            .expect("JSON operation status response");
+        let original_reference = accepted.clone();
+        let mut status_reference = accepted;
+        let status_error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), json_status_response),
+            || {
+                client_with_base_url(base_url())
+                    .with_wire_format_preference(WireFormatPreference::NoritoOnly)
+                    .poll_offline_operation_status(&mut status_reference)
+            },
+        )
+        .expect_err("NoritoOnly must reject a JSON operation status");
+        assert!(status_error.to_string().contains("violates NoritoOnly"));
+        assert_eq!(status_reference, original_reference);
+    }
+    #[test]
     fn negotiated_decoder_rejects_retired_and_missing_media_types() {
         let capability = universal_offline_capability();
         let body = norito::json::to_vec(&capability).expect("encode capability");
@@ -10621,6 +10850,7 @@ mod offline_client_tests {
                 &response,
                 StatusCode::OK,
                 "offline response",
+                WireFormatPreference::NoritoPreferred,
             )
             .expect_err("unadvertised representation must fail closed");
             assert!(error.to_string().contains("invalid content-type"));

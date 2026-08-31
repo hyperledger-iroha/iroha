@@ -2643,8 +2643,9 @@ pub(crate) mod tests {
         governance::types::{
             BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId,
             GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1,
-            GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, ProposalContentId,
-            RiskTierV1, SortitionRequestId, SortitionRequestV1, parliament_candidate_root_v1,
+            GovernanceExpectedHeadV1, GovernanceStageV1, MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+            ParliamentBody, ProposalContentId, RiskTierV1, SortitionRequestId, SortitionRequestV1,
+            parliament_candidate_root_v1,
         },
         musubi::MusubiRegistrySnapshotV1,
         peer::PeerId,
@@ -3258,7 +3259,11 @@ pub(crate) mod tests {
                 body,
                 candidate_root,
                 u32::try_from(candidates.len()).expect("four candidates"),
-                2,
+                if body == ParliamentBody::PolicyJury {
+                    MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+                } else {
+                    2
+                },
                 pulse_height - 10,
                 pulse_height,
                 BeaconSessionId::for_network_v1(network_id),
@@ -3644,7 +3649,8 @@ pub(crate) mod tests {
             .expect("pending Parliament attempt");
         let governance = Governance {
             rules_committee_size: 2,
-            policy_jury_size: 2,
+            policy_jury_size: usize::try_from(MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
+                .expect("the V1 anonymity floor fits usize"),
             parliament_alternate_size: 2,
             ..Governance::default()
         };
@@ -3785,6 +3791,12 @@ pub(crate) mod tests {
             0,
         );
         let committed_hash = header.hash();
+        let evidence_prune_keys =
+            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+                &state,
+                context.height,
+                effects.v2_evidence_admissions.len(),
+            );
         let mut state_block = state.block(header);
         let mut transaction = state_block.transaction();
         transaction
@@ -3809,13 +3821,12 @@ pub(crate) mod tests {
             crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
                 &mut transaction,
                 &effects,
+                &evidence_prune_keys,
                 Some(expected_anchor),
                 &stale_roster,
                 context.height,
                 0,
                 0,
-                #[cfg(feature = "telemetry")]
-                None,
             )
             .err()
             .expect("a stale height roster must reject the otherwise valid pulse");
@@ -3828,13 +3839,12 @@ pub(crate) mod tests {
         crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
+            &evidence_prune_keys,
             Some(expected_anchor),
             &roster,
             context.height,
             0,
             0,
-            #[cfg(feature = "telemetry")]
-            None,
         )
         .expect("post-transaction rotation must preserve the parent-authorized pulse");
         if let Some(governance_attempt_id) = transient_governance_attempt_id {

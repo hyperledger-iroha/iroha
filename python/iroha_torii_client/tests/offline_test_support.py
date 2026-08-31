@@ -65,6 +65,7 @@ OFFLINE_NETWORK_ID = _canonical_hash(0x91)
 OFFLINE_OTHER_NETWORK_ID = _canonical_hash(0x93)
 OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request"
 OFFLINE_REDEEM_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request"
+OFFLINE_ISSUED_AT_MS = 1_725_000_000_123
 
 
 def offline_norito_frame(type_name: str, payload: bytes = b"\x01") -> bytes:
@@ -99,6 +100,7 @@ def offline_kagemusha_request_frame(
     field_count: int,
     operation_id_field_index: int,
     operation_id: bytes = bytes(OFFLINE_OPERATION_BYTES),
+    authorization: Optional[bytes] = None,
     version: int = 4,
     trailing_payload: bytes = b"",
 ) -> bytes:
@@ -107,8 +109,38 @@ def offline_kagemusha_request_frame(
     fields = [b"\x01" for _ in range(field_count)]
     fields[0] = version.to_bytes(2, "little")
     fields[operation_id_field_index] = operation_id
+    fields[-1] = (
+        offline_kagemusha_authorization_archive(operation_id=operation_id)
+        if authorization is None
+        else authorization
+    )
     payload = b"".join(_compact_length(len(field)) + field for field in fields)
     return offline_norito_frame(type_name, payload + trailing_payload)
+
+
+def offline_kagemusha_authorization_archive(
+    *,
+    operation_id: bytes = bytes(OFFLINE_OPERATION_BYTES),
+    issued_at_ms: int = OFFLINE_ISSUED_AT_MS,
+    issued_at_ms_bytes: Optional[bytes] = None,
+    field_count: int = 10,
+    trailing_payload: bytes = b"",
+) -> bytes:
+    """Build the exact compact Kagemusha request-authorization archive."""
+
+    fields = [b"\x01" for _ in range(field_count)]
+    if field_count > 3:
+        fields[3] = operation_id
+    if field_count > 4:
+        fields[4] = (
+            issued_at_ms.to_bytes(8, "little")
+            if issued_at_ms_bytes is None
+            else issued_at_ms_bytes
+        )
+    return (
+        b"".join(_compact_length(len(field)) + field for field in fields)
+        + trailing_payload
+    )
 
 
 def offline_top_up_request(
@@ -156,7 +188,7 @@ def offline_operation_reference(**overrides: Any) -> Dict[str, Any]:
         "state": {"state": "pending", "value": None},
         "transaction_hash": OFFLINE_TRANSACTION_HASH,
         "status_uri": OFFLINE_STATUS_URI,
-        "submitted_at_ms": 1_725_000_000_123,
+        "submitted_at_ms": OFFLINE_ISSUED_AT_MS,
     }
     reference.update(overrides)
     return reference

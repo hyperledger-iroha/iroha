@@ -121,7 +121,16 @@ public final class KagemushaRecursiveSpendProver {
       IOS_APP_ATTEST_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES + 1;
   private static final int IOS_APP_ATTEST_AUTHENTICATOR_DATA_MAX_BYTES = 4 * 1024;
   private static final int IOS_APP_ATTEST_EXTENSION_DATA_FLAG = 0x80;
-  public static final int MAX_TORII_RESPONSE_BYTES = 4 * 1024 * 1024;
+  /** Exact JSON response ceiling for the offline-readiness route. */
+  public static final int MAX_TORII_READINESS_RESPONSE_BYTES = 4 * 1024;
+  /** Exact Norito response ceiling for accepted operation references. */
+  public static final int MAX_TORII_OPERATION_REFERENCE_BYTES = 4 * 1024;
+  /** Exact Norito response ceiling for operation-status resources. */
+  public static final int MAX_TORII_OPERATION_STATUS_BYTES = 4 * 1024 * 1024;
+  /** Exact Norito response ceiling for recipient-lineage proofs. */
+  public static final int MAX_TORII_RECIPIENT_LINEAGE_RESPONSE_BYTES = 4 * 1024 * 1024;
+  /** Exact archive ceiling for standalone Torii-sourced proof material. */
+  public static final int MAX_TORII_PROOF_ARCHIVE_BYTES = 4 * 1024 * 1024;
   public static final int MAXIMUM_INPUTS_PER_TRANSITION = 2;
   public static final int MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS = MAXIMUM_INPUTS_PER_TRANSITION;
   public static final int MAXIMUM_BRANCH_CLAIMS = 2;
@@ -2438,7 +2447,7 @@ public final class KagemushaRecursiveSpendProver {
           archive,
           "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage",
           "recipientRegistrationLineage",
-          MAX_TORII_RESPONSE_BYTES);
+          MAX_TORII_RECIPIENT_LINEAGE_RESPONSE_BYTES);
     }
   }
 
@@ -2759,13 +2768,17 @@ public final class KagemushaRecursiveSpendProver {
           archive,
           "KagemushaRecursiveSpendTopUpAnchorV4",
           "topUpAnchorV4",
-          MAX_TORII_RESPONSE_BYTES);
+          MAX_TORII_PROOF_ARCHIVE_BYTES);
     }
   }
 
   public static final class TopUpFinalityProof extends CanonicalArchive {
     private TopUpFinalityProof(final byte[] archive) {
-      super(archive, "KagemushaTopUpFinalityProofV2", "topUpFinalityProof", MAX_TORII_RESPONSE_BYTES);
+      super(
+          archive,
+          "KagemushaTopUpFinalityProofV2",
+          "topUpFinalityProof",
+          MAX_TORII_PROOF_ARCHIVE_BYTES);
     }
   }
 
@@ -2775,7 +2788,7 @@ public final class KagemushaRecursiveSpendProver {
           archive,
           "KagemushaTopUpFinalityRosterArtifactV2",
           "topUpFinalityRosterArtifact",
-          MAX_TORII_RESPONSE_BYTES);
+          MAX_TORII_PROOF_ARCHIVE_BYTES);
     }
   }
 
@@ -2786,7 +2799,7 @@ public final class KagemushaRecursiveSpendProver {
           archive,
           "KagemushaRecursiveSpendTopUpFinalityEvidenceV4",
           "topUpFinalityEvidenceV4",
-          MAX_TORII_RESPONSE_BYTES);
+          MAX_TORII_PROOF_ARCHIVE_BYTES);
     }
   }
 
@@ -4106,13 +4119,13 @@ public final class KagemushaRecursiveSpendProver {
           archive,
           "OfflineOperationReference",
           "operationReference",
-          MAX_TORII_RESPONSE_BYTES);
+          MAX_TORII_OPERATION_REFERENCE_BYTES);
     }
   }
 
   public static final class OperationStatus extends CanonicalArchive {
     private OperationStatus(final byte[] archive) {
-      super(archive, "OfflineOperationStatus", "operationStatus", MAX_TORII_RESPONSE_BYTES);
+      super(archive, "OfflineOperationStatus", "operationStatus", MAX_TORII_OPERATION_STATUS_BYTES);
     }
   }
 
@@ -4147,7 +4160,12 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  /** Durable continuity key retained from command acceptance through terminal polling. */
+  /**
+   * Durable status-polling reference bound to the signed command.
+   *
+   * <p>The operation ID, kind, and submitted-at value (the signed authorization issuance time)
+   * remain fixed. An exact retry or global Applied winner may carry another transaction hash.
+   */
   public static final class OperationHandle {
     private final byte[] operationId;
     private final OperationKind kind;
@@ -4397,7 +4415,7 @@ public final class KagemushaRecursiveSpendProver {
                   .setUri(URI.create(baseUri + CAPABILITY_PATH))
                   .addHeader("Accept", JSON_MEDIA_TYPE)
                   .setTimeout(requestTimeout)
-                  .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
+                  .setMaximumResponseBytes((long) MAX_TORII_READINESS_RESPONSE_BYTES)
                   .build(),
               200,
               JSON_MEDIA_TYPE)
@@ -4446,7 +4464,7 @@ public final class KagemushaRecursiveSpendProver {
                   .setUri(URI.create(baseUri + OPERATIONS_PATH + "/" + id))
                   .addHeader("Accept", NORITO_MEDIA_TYPE)
                   .setTimeout(requestTimeout)
-                  .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
+                  .setMaximumResponseBytes((long) MAX_TORII_OPERATION_STATUS_BYTES)
                   .build(),
               200)
           .thenApply(response -> {
@@ -4470,7 +4488,7 @@ public final class KagemushaRecursiveSpendProver {
                   .addHeader("Idempotency-Key", id)
                   .setBody(request)
                   .setTimeout(requestTimeout)
-                  .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
+                  .setMaximumResponseBytes((long) MAX_TORII_OPERATION_REFERENCE_BYTES)
                   .build(),
               202)
           .thenApply(
@@ -4500,7 +4518,7 @@ public final class KagemushaRecursiveSpendProver {
       if (reference.submittedAtMilliseconds()
           != identity.authorizationIssuedAtMilliseconds()) {
         throw new IllegalStateException(
-            "Kagemusha Torii response submission time must match signed authorization issuance");
+            "Kagemusha Torii response submitted_at must match signed authorization issued_at");
       }
       return new OperationHandle(
           reference.operationId(),
@@ -4517,16 +4535,12 @@ public final class KagemushaRecursiveSpendProver {
       }
       if (status.kind() != handle.kind()) {
         throw new IllegalStateException(
-            "Kagemusha Torii status kind must match the accepted operation");
-      }
-      if (!Arrays.equals(status.transactionHash(), handle.transactionHash())) {
-        throw new IllegalStateException(
-            "Kagemusha Torii status transaction hash must match the accepted operation");
+            "Kagemusha Torii status kind must match the signed operation");
       }
       if (status.submittedAtMilliseconds() != null
           && !status.submittedAtMilliseconds().equals(handle.submittedAtMilliseconds())) {
         throw new IllegalStateException(
-            "Kagemusha Torii pending status submission time must match command acceptance");
+            "Kagemusha Torii pending status submitted_at must match signed authorization issued_at");
       }
     }
 

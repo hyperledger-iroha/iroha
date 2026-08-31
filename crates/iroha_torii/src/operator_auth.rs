@@ -2711,7 +2711,10 @@ fn acquire_credential_store_lock(path: &Path) -> Result<Option<fs::File>, String
 }
 #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 fn acquire_credential_store_lock(_path: &Path) -> Result<Option<fs::File>, String> {
-    Ok(None)
+    Err(
+        "persistent operator authentication is unsupported on this platform because Torii cannot enforce a descriptor-bound private credential store and exclusive owner lock"
+            .to_owned(),
+    )
 }
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 fn read_credentials_file(path: &Path, maximum_bytes: u64) -> Result<Option<Vec<u8>>, String> {
@@ -2840,41 +2843,11 @@ fn read_credentials_file(path: &Path, maximum_bytes: u64) -> Result<Option<Vec<u
     Ok(Some(bytes))
 }
 #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
-fn read_credentials_file(path: &Path, maximum_bytes: u64) -> Result<Option<Vec<u8>>, String> {
-    let read_limit = maximum_bytes
-        .checked_add(1)
-        .ok_or_else(|| "credentials payload read bound overflow".to_owned())?;
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum_bytes {
-        return Err(format!(
-            "credential file must be a bounded regular non-symlink file: {}",
-            path.display()
-        ));
-    }
-    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
-    let mut bytes = Vec::new();
-    let capacity = usize::try_from(metadata.len())
-        .map_err(|_| "credentials payload length does not fit this platform".to_owned())?;
-    bytes
-        .try_reserve_exact(capacity)
-        .map_err(|error| format!("failed to reserve bounded credential read: {error}"))?;
-    (&mut file)
-        .take(read_limit)
-        .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
-    if u64::try_from(bytes.len())
-        .ok()
-        .is_none_or(|length| length > maximum_bytes)
-    {
-        return Err(format!(
-            "credentials payload exceeds the configured {maximum_bytes}-byte bound"
-        ));
-    }
-    Ok(Some(bytes))
+fn read_credentials_file(_path: &Path, _maximum_bytes: u64) -> Result<Option<Vec<u8>>, String> {
+    Err(
+        "persistent operator authentication is unsupported on this platform because Torii cannot enforce a descriptor-bound private credential store"
+            .to_owned(),
+    )
 }
 fn max_credentials_file_bytes(capacity: NonZeroUsize) -> Result<u64, String> {
     let bytes = capacity
@@ -3227,69 +3200,12 @@ fn persist_credentials_file(
 }
 #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 fn persist_credentials_file(
-    path: &Path,
-    body: &[u8],
+    _path: &Path,
+    _body: &[u8],
 ) -> Result<CredentialPersistence, OperatorAuthError> {
-    let parent = path.parent().ok_or_else(|| {
-        OperatorAuthError::persistence_failure("credentials path has no parent directory")
-    })?;
-    match fs::symlink_metadata(parent) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            return Err(OperatorAuthError::persistence_failure(
-                "credential parent must be a non-symlink directory",
-            ));
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(parent).map_err(|error| {
-                OperatorAuthError::persistence_failure(format!(
-                    "failed to create operator auth directory: {error}"
-                ))
-            })?;
-        }
-        Err(error) => {
-            return Err(OperatorAuthError::persistence_failure(format!(
-                "failed to inspect operator auth directory: {error}"
-            )));
-        }
-    }
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            return Err(OperatorAuthError::persistence_failure(
-                "credential destination must be a regular non-symlink file",
-            ));
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(OperatorAuthError::persistence_failure(format!(
-                "failed to inspect credential destination: {error}"
-            )));
-        }
-    }
-    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
-        OperatorAuthError::persistence_failure(format!(
-            "failed to create credential temporary file: {error}"
-        ))
-    })?;
-    temporary.write_all(body).map_err(|error| {
-        OperatorAuthError::persistence_failure(format!("failed to write credentials: {error}"))
-    })?;
-    temporary.as_file().sync_all().map_err(|error| {
-        OperatorAuthError::persistence_failure(format!("failed to sync credentials: {error}"))
-    })?;
-    let _persisted = temporary.persist(path).map_err(|error| {
-        OperatorAuthError::persistence_failure(format!("failed to persist credentials: {error}"))
-    })?;
-    #[cfg(unix)]
-    if let Err(error) = fs::File::open(parent).and_then(|directory| directory.sync_all()) {
-        return Ok(CredentialPersistence::StateUncertain(
-            OperatorAuthError::persistence_failure(format!(
-                "credential publication committed without descriptor-relative confirmation and its durable commit is uncertain: {error}"
-            )),
-        ));
-    }
-    Ok(CredentialPersistence::Durable)
+    Err(OperatorAuthError::persistence_failure(
+        "persistent operator authentication is unsupported on this platform because Torii cannot enforce a descriptor-bound private credential store",
+    ))
 }
 fn parse_registration_payload(
     payload: &norito::json::Value,

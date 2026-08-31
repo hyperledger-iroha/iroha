@@ -1339,7 +1339,8 @@ the application owns reconciliation and any later explicit submission.
 `POST /v1/offline/receiver-lineage`.
 Use `getOfflineCapability()`, `submitKagemushaTopUp`,
 `submitKagemushaRedeem`,
-`getKagemushaOperationStatus(operationId:expectedKind:chainDiscriminant:)`, and
+`getKagemushaOperationStatus(_:chainDiscriminant:)` with the accepted operation
+reference, and
 `getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`.
 `getOfflineCapability()` takes no selector.
 
@@ -1356,12 +1357,15 @@ dataspaces require no offline enrollment or backend enablement.
 
 `KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding
 typed Kagemusha Norito archive. They derive the lowercase idempotency key from
-the embedded nonzero operation ID; callers cannot override it. Top-up archives
+the embedded nonzero operation ID, require the nested authorization to repeat
+that ID, and retain its positive signed `issued_at_ms`; callers cannot override
+either value. Top-up archives
 are limited to 512 KiB and redeem archives to 48 MiB, exactly matching Torii.
 Keep a submitted
 operation and its input note until the operation status reaches final chain
 state. A transport timeout or unknown state is not permission to create a new
-operation ID.
+operation ID. Across Pending observations, `submitted_at_ms` remains immutable
+for that operation even if an exact retry advances the active transaction hash.
 
 Local artifact validation requires exact bridge ABI 23 and manifest
 schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`. The V4

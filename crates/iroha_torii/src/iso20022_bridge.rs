@@ -1,4 +1,7 @@
-use crate::routing::{self, MaybeTelemetry};
+use crate::{
+    routing::{self, MaybeTelemetry},
+    secure_file_metadata::{self, SecureMetadata},
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::DashMap;
 use eyre::WrapErr as _;
@@ -1866,6 +1869,15 @@ impl Iso20022BridgeRuntime {
         let profiles = load_profile_catalog(config)?;
         let (participants_by_key, participants_by_financial_id, audit_admin_keys) =
             load_participant_catalog(config, &profiles)?;
+        let (store_dir, audit_export_dir) = prepare_iso_persistence_layout(
+            config.store_dir.as_deref(),
+            config.audit_export_dir.as_deref(),
+        )
+        .map_err(|error| {
+            eyre::eyre!(
+                "failed to initialize the configured ISO bridge audit persistence targets: {error}"
+            )
+        })?;
         let runtime = Iso20022BridgeRuntime {
             signer_account,
             signer_private_key,
@@ -1880,10 +1892,10 @@ impl Iso20022BridgeRuntime {
             reference_data,
             default_profile_id: config.default_profile.trim().to_owned(),
             profiles: Arc::new(profiles),
-            store_dir: config.store_dir.clone(),
+            store_dir,
             store_retention: Duration::from_secs(config.store_retention_secs),
             store_max_records,
-            audit_export_dir: config.audit_export_dir.clone(),
+            audit_export_dir,
             dedupe_ttl: Duration::from_secs(config.dedupe_ttl_secs),
             state_lock: Arc::new(ReentrantMutex::new(())),
             records: DashMap::new(),
@@ -4512,7 +4524,7 @@ impl Iso20022BridgeRuntime {
             return true;
         };
         let messages_dir = store_dir.join("messages");
-        if !ensure_real_directory(&messages_dir) {
+        if !is_real_directory(&messages_dir) {
             return false;
         }
         let Some(json) = persisted_record_json(message_id, &record) else {
@@ -4562,7 +4574,7 @@ impl Iso20022BridgeRuntime {
             return false;
         };
         let tombstones_dir = store_dir.join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR);
-        if !ensure_real_directory(&tombstones_dir) {
+        if !is_real_directory(&tombstones_dir) {
             return false;
         }
         let Ok(json) =
@@ -4619,7 +4631,7 @@ impl Iso20022BridgeRuntime {
         }
         if let Some(store_dir) = self.store_dir.as_deref() {
             let audit_dir = store_dir.join(ISO_PERSISTED_AUDIT_DIR);
-            if !ensure_real_directory(&audit_dir) {
+            if !is_real_directory(&audit_dir) {
                 return Err(format!(
                     "ISO bridge audit directory is unavailable or unsafe: {}",
                     audit_dir.display()
@@ -4639,7 +4651,7 @@ impl Iso20022BridgeRuntime {
         let Some(export_dir) = self.audit_export_dir.as_deref() else {
             return Ok(());
         };
-        if !ensure_real_directory(export_dir) {
+        if !is_real_directory(export_dir) {
             return Err(format!(
                 "ISO audit export directory is unavailable or unsafe: {}",
                 export_dir.display()
@@ -4651,7 +4663,7 @@ impl Iso20022BridgeRuntime {
         let anchor_json = norito::json::to_string_pretty(&anchor)
             .map_err(|error| format!("failed to encode the ISO audit anchor: {error}"))?;
         let anchor_dir = export_dir.join(ISO_AUDIT_EXPORT_ANCHOR_DIR);
-        if !ensure_real_directory(&anchor_dir) {
+        if !is_real_directory(&anchor_dir) {
             return Err(format!(
                 "ISO audit anchor directory is unavailable or unsafe: {}",
                 anchor_dir.display()
@@ -5753,7 +5765,7 @@ fn read_startup_record_entry(
                 path.display()
             );
         }
-        let metadata = fs::symlink_metadata(&path).wrap_err_with(|| {
+        let metadata = secure_file_metadata::from_path(&path).wrap_err_with(|| {
             format!(
                 "failed to inspect ISO bridge {record_kind} writer temp `{}`",
                 path.display()
@@ -5789,7 +5801,7 @@ fn read_startup_record_entry(
             path.display()
         );
     }
-    let metadata = fs::symlink_metadata(&path).wrap_err_with(|| {
+    let metadata = secure_file_metadata::from_path(&path).wrap_err_with(|| {
         format!(
             "failed to inspect ISO bridge {record_kind} record `{}`",
             path.display()
@@ -5834,7 +5846,7 @@ fn iso_record_temp_target_filename(file_name: &str) -> Option<&str> {
 }
 fn remove_stable_startup_writer_temp(
     path: &Path,
-    expected_metadata: &fs::Metadata,
+    expected_metadata: &SecureMetadata,
     record_kind: &str,
 ) -> eyre::Result<()> {
     let file = open_persisted_file_no_follow(path).wrap_err_with(|| {
@@ -5843,13 +5855,13 @@ fn remove_stable_startup_writer_temp(
             path.display()
         )
     })?;
-    let opened_metadata = file.metadata().wrap_err_with(|| {
+    let opened_metadata = secure_file_metadata::from_file(&file).wrap_err_with(|| {
         format!(
             "failed to inspect opened ISO bridge {record_kind} writer temp `{}`",
             path.display()
         )
     })?;
-    let named_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+    let named_metadata = secure_file_metadata::from_path(path).wrap_err_with(|| {
         format!(
             "failed to re-inspect ISO bridge {record_kind} writer temp `{}`",
             path.display()
@@ -5885,12 +5897,12 @@ fn remove_stable_startup_writer_temp(
     })
 }
 fn read_persisted_json_bounded(path: &Path, max_bytes: u64) -> Option<String> {
-    let metadata = fs::symlink_metadata(path).ok()?;
+    let metadata = secure_file_metadata::from_path(path).ok()?;
     read_persisted_json_bounded_with_metadata(path, &metadata, max_bytes).map(|(text, _)| text)
 }
 fn read_persisted_json_bounded_with_metadata(
     path: &Path,
-    expected_metadata: &fs::Metadata,
+    expected_metadata: &SecureMetadata,
     max_bytes: u64,
 ) -> Option<(String, u64)> {
     if !persisted_metadata_is_direct_regular(expected_metadata)
@@ -5899,7 +5911,7 @@ fn read_persisted_json_bounded_with_metadata(
         return None;
     }
     let mut file = open_persisted_file_no_follow(path).ok()?;
-    let opened_metadata = file.metadata().ok()?;
+    let opened_metadata = secure_file_metadata::from_file(&file).ok()?;
     if !persisted_metadata_is_direct_regular(&opened_metadata)
         || !persisted_metadata_unchanged(expected_metadata, &opened_metadata)
     {
@@ -5927,8 +5939,8 @@ fn read_persisted_json_bounded_with_metadata(
     if actual_bytes != opened_metadata.len() {
         return None;
     }
-    let after_metadata = file.metadata().ok()?;
-    let named_after_metadata = fs::symlink_metadata(path).ok()?;
+    let after_metadata = secure_file_metadata::from_file(&file).ok()?;
+    let named_after_metadata = secure_file_metadata::from_path(path).ok()?;
     if !persisted_metadata_unchanged(&opened_metadata, &after_metadata)
         || !persisted_metadata_unchanged(&after_metadata, &named_after_metadata)
     {
@@ -5949,13 +5961,7 @@ fn open_persisted_file_no_follow(path: &Path) -> std::io::Result<fs::File> {
 }
 #[cfg(windows)]
 fn open_persisted_file_no_follow(path: &Path) -> std::io::Result<fs::File> {
-    use std::os::windows::fs::OpenOptionsExt as _;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    options.open(path)
+    secure_file_metadata::open_direct_file(path)
 }
 #[cfg(not(any(unix, windows)))]
 fn open_persisted_file_no_follow(_path: &Path) -> std::io::Result<fs::File> {
@@ -5964,46 +5970,12 @@ fn open_persisted_file_no_follow(_path: &Path) -> std::io::Result<fs::File> {
         "stable direct-file opens are unavailable on this platform",
     ))
 }
-fn persisted_metadata_is_direct_regular(metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return false;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0;
-    }
-    #[cfg(not(windows))]
-    true
+fn persisted_metadata_is_direct_regular(metadata: &SecureMetadata) -> bool {
+    secure_file_metadata::is_direct_file(metadata)
+        && secure_file_metadata::number_of_links(metadata) == Some(1)
 }
-#[cfg(unix)]
-fn persisted_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-        && left.mode() == right.mode()
-}
-#[cfg(windows)]
-fn persisted_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-        && left.file_size() == right.file_size()
-        && left.last_write_time() == right.last_write_time()
-        && left.creation_time() == right.creation_time()
-        && left.file_attributes() == right.file_attributes()
-}
-#[cfg(not(any(unix, windows)))]
-fn persisted_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    false
+fn persisted_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
+    secure_file_metadata::unchanged(left, right)
 }
 fn sync_iso_directory(path: &Path) -> std::io::Result<()> {
     crate::durable_fs::sync_direct_directory(path)
@@ -6038,12 +6010,57 @@ fn write_iso_record_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()>
             use std::os::unix::fs::OpenOptionsExt as _;
             options.mode(0o600);
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+            const FILE_SHARE_READ_DELETE: u32 = 0x0000_0001 | 0x0000_0004;
+            options.share_mode(FILE_SHARE_READ_DELETE);
+        }
         let mut file = options.open(&temp_path)?;
+        let created = secure_file_metadata::from_file(&file)?;
+        let named_created = secure_file_metadata::from_path(&temp_path)?;
+        if !persisted_metadata_is_direct_regular(&created)
+            || !persisted_metadata_unchanged(&created, &named_created)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ISO writer temp is not the newly-created private filesystem object",
+            ));
+        }
         file.write_all(bytes)?;
         file.sync_all()?;
+        let written = secure_file_metadata::from_file(&file)?;
+        let named_written = secure_file_metadata::from_path(&temp_path)?;
+        if !persisted_metadata_is_direct_regular(&written)
+            || !secure_file_metadata::same_file(&created, &written)
+            || !persisted_metadata_unchanged(&written, &named_written)
+            || written.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ISO writer temp changed while it was being prepared",
+            ));
+        }
         drop(file);
         fs::rename(&temp_path, path)?;
+        let published = secure_file_metadata::from_path(path)?;
+        if !persisted_metadata_is_direct_regular(&published)
+            || !secure_file_metadata::same_file(&written, &published)
+            || published.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ISO publication changed identity before durability was established",
+            ));
+        }
         sync_iso_directory(parent)?;
+        let durable = secure_file_metadata::from_path(path)?;
+        if !persisted_metadata_unchanged(&published, &durable) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ISO publication changed while its directory was being synchronized",
+            ));
+        }
         Ok(())
     })();
     if result.is_err() {
@@ -6052,10 +6069,134 @@ fn write_iso_record_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()>
     result
 }
 fn is_real_directory(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
+    secure_file_metadata::from_path(path)
+        .is_ok_and(|metadata| secure_file_metadata::is_direct_directory(&metadata))
 }
-fn ensure_real_directory(path: &Path) -> bool {
-    fs::create_dir_all(path).is_ok() && is_real_directory(path)
+fn prepare_iso_persistence_layout(
+    store_dir: Option<&Path>,
+    audit_export_dir: Option<&Path>,
+) -> std::io::Result<(Option<PathBuf>, Option<PathBuf>)> {
+    let store_dir = if let Some(store_dir) = store_dir {
+        prepare_real_directory(store_dir)?;
+        let store_dir = fs::canonicalize(store_dir)?;
+        prepare_real_directory(&store_dir.join("messages"))?;
+        prepare_real_directory(&store_dir.join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR))?;
+        prepare_real_directory(&store_dir.join(ISO_PERSISTED_AUDIT_DIR))?;
+        Some(store_dir)
+    } else {
+        None
+    };
+    let audit_export_dir = if let Some(audit_export_dir) = audit_export_dir {
+        prepare_real_directory(audit_export_dir)?;
+        let audit_export_dir = fs::canonicalize(audit_export_dir)?;
+        prepare_real_directory(&audit_export_dir.join(ISO_AUDIT_EXPORT_ANCHOR_DIR))?;
+        Some(audit_export_dir)
+    } else {
+        None
+    };
+    Ok((store_dir, audit_export_dir))
+}
+fn prepare_real_directory(path: &Path) -> std::io::Result<()> {
+    prepare_real_directory_with_sync(path, sync_iso_directory)
+}
+fn prepare_real_directory_with_sync(
+    path: &Path,
+    mut sync_directory: impl FnMut(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "ISO persistence directory must have a containing directory",
+        )
+    })?;
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    let requested_parent = secure_file_metadata::from_path(parent)?;
+    if !secure_file_metadata::is_direct_directory(&requested_parent) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ISO persistence parent is not a direct directory",
+        ));
+    }
+    let durable_parent = fs::canonicalize(parent)?;
+    let durable_parent_before = secure_file_metadata::from_path(&durable_parent)?;
+    if !secure_file_metadata::is_direct_directory(&durable_parent_before)
+        || !secure_file_metadata::same_file(&requested_parent, &durable_parent_before)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ISO persistence parent is not a real directory",
+        ));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "ISO persistence directory has no final path component",
+        )
+    })?;
+    let durable_path = durable_parent.join(file_name);
+    match secure_file_metadata::from_path(&durable_path) {
+        Ok(metadata) if secure_file_metadata::is_direct_directory(&metadata) => {}
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ISO persistence path is not a real directory",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(&durable_path)?
+        }
+        Err(error) => return Err(error),
+    }
+    let prepared = secure_file_metadata::from_path(&durable_path)?;
+    let requested = secure_file_metadata::from_path(path)?;
+    let requested_parent_after_create = secure_file_metadata::from_path(parent)?;
+    let durable_parent_after_create = secure_file_metadata::from_path(&durable_parent)?;
+    if !secure_file_metadata::is_direct_directory(&prepared)
+        || !secure_file_metadata::is_direct_directory(&requested)
+        || !secure_file_metadata::same_file(&prepared, &requested)
+        || !secure_file_metadata::same_file(&requested_parent, &requested_parent_after_create)
+        || !secure_file_metadata::same_file(&durable_parent_before, &durable_parent_after_create)
+        || !secure_file_metadata::same_file(
+            &requested_parent_after_create,
+            &durable_parent_after_create,
+        )
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ISO persistence path or parent changed while it was being prepared",
+        ));
+    }
+    // Sync the directory itself first, then the directory containing its name. Repeating both
+    // operations when the directory already exists repairs an interrupted first-use attempt.
+    sync_directory(&durable_path)?;
+    sync_directory(&durable_parent)?;
+    let durable_prepared = secure_file_metadata::from_path(&durable_path)?;
+    let durable_parent_after_sync = secure_file_metadata::from_path(&durable_parent)?;
+    let requested_parent_after_sync = secure_file_metadata::from_path(parent)?;
+    if !secure_file_metadata::unchanged(&prepared, &durable_prepared)
+        || !secure_file_metadata::unchanged(
+            &durable_parent_after_create,
+            &durable_parent_after_sync,
+        )
+        || !secure_file_metadata::unchanged(
+            &requested_parent_after_create,
+            &requested_parent_after_sync,
+        )
+        || !secure_file_metadata::same_file(
+            &requested_parent_after_sync,
+            &durable_parent_after_sync,
+        )
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ISO persistence path changed while its namespace was being synchronized",
+        ));
+    }
+    Ok(())
 }
 fn context_value(context: &IsoMessageContext) -> JsonValue {
     let mut map = norito::json::Map::new();

@@ -5,9 +5,9 @@ use iroha_data_model::{
     block::{
         Header as BlockHeader,
         consensus::{
-            ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence, EvidenceRecord, ExecKv,
-            ExecWitness, ExecWitnessMsg, LaneBlockCommitment, LaneSettlementReceipt,
-            NposGenesisParams, SumeragiV2EquivocationEvidence,
+            ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence, EvidencePenaltyStatus,
+            EvidenceRecord, ExecKv, ExecWitness, ExecWitnessMsg, LaneBlockCommitment,
+            LaneSettlementReceipt, NposGenesisParams, SumeragiV2EquivocationEvidence,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
@@ -286,10 +286,7 @@ fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> Eviden
         recorded_at_height: rng.next_u64(),
         recorded_at_view: rng.next_u64(),
         recorded_at_ms: rng.next_u64(),
-        penalty_applied: false,
-        penalty_cancelled: false,
-        penalty_cancelled_at_height: None,
-        penalty_applied_at_height: None,
+        penalty_status: EvidencePenaltyStatus::Pending,
     }
 }
 fn rng_sumeragi_v2_status(rng: &mut DeterministicRng) -> SumeragiV2Status {
@@ -398,10 +395,7 @@ fn consensus_persistence_norito_roundtrip() {
         recorded_at_height: 44,
         recorded_at_view: 8,
         recorded_at_ms: 1_702_000_123,
-        penalty_applied: false,
-        penalty_cancelled: true,
-        penalty_cancelled_at_height: Some(45),
-        penalty_applied_at_height: None,
+        penalty_status: EvidencePenaltyStatus::Cancelled { height: 45 },
     };
     let exec_witness = ExecWitness {
         reads: vec![ExecKv {
@@ -452,10 +446,7 @@ fn evidence_record_rejects_shortened_pre_release_binary_layouts() {
         recorded_at_height: 84,
         recorded_at_view: 9,
         recorded_at_ms: 1_702_000_456,
-        penalty_applied: true,
-        penalty_cancelled: false,
-        penalty_cancelled_at_height: None,
-        penalty_applied_at_height: Some(85),
+        penalty_status: EvidencePenaltyStatus::Applied { height: 85 },
     };
     assert_roundtrip(&record);
     let shortened_record = PreReleaseEvidenceRecord {
@@ -475,10 +466,7 @@ fn evidence_record_rejects_shortened_pre_release_binary_layouts() {
         recorded_at_height: 86,
         recorded_at_view: 10,
         recorded_at_ms: 1_702_000_789,
-        penalty_applied: false,
-        penalty_cancelled: false,
-        penalty_cancelled_at_height: None,
-        penalty_applied_at_height: None,
+        penalty_status: EvidencePenaltyStatus::Pending,
     };
     assert_roundtrip(&pending_record);
     let omitted_nullable_slots = PreReleaseEvidenceRecordWithoutNullableSlots {
@@ -486,13 +474,13 @@ fn evidence_record_rejects_shortened_pre_release_binary_layouts() {
         recorded_at_height: pending_record.recorded_at_height,
         recorded_at_view: pending_record.recorded_at_view,
         recorded_at_ms: pending_record.recorded_at_ms,
-        penalty_applied: pending_record.penalty_applied,
-        penalty_cancelled: pending_record.penalty_cancelled,
+        penalty_applied: false,
+        penalty_cancelled: false,
     }
     .encode();
     assert!(
         EvidenceRecord::decode_all(&mut omitted_nullable_slots.as_slice()).is_err(),
-        "EvidenceRecord must encode explicit None tags for every nullable storage slot"
+        "EvidenceRecord must reject the retired independent-boolean penalty layout"
     );
 }
 #[test]

@@ -73,16 +73,20 @@ The lifecycle operator and payment submission surfaces use these five Torii rout
 Top-up and redemption accept only the canonical typed value with
 `Content-Type: application/x-norito`. They do not accept JSON request bodies or
 an encoded-byte wrapper. The lowercase 64-hex `Idempotency-Key` is the signed
-operation id. An identical retry returns the same operation; reuse with any
+operation id. An exact retry returns the same logical operation; reuse with any
 different request conflicts. A client retains its local operation until Torii
 reports globally final Applied state. Maintained clients keep the operation id,
-kind, and canonical status URI immutable. The active marker-preserving
+kind, canonical status URI, and signed request time immutable. The initial 202
+must repeat `authorization.issued_at_ms` as `submitted_at_ms`; maintained SDKs
+derive that value from the exact compact request archive rather than trusting a
+caller or response. The active marker-preserving
 transaction hash may advance when the configured authority retries an exact
 Rejected attempt or when another authorized authority wins global Applied
-finality. A Pending response must repeat `submitted_at_ms` while its transaction
-hash is unchanged; when the hash advances, clients accept and retain the new
-positive timestamp with it and use that pair as the reference for the next
-poll. Maintained SDKs issue each command POST as exactly one transport dispatch,
+finality. Every Pending response must repeat the request-bound
+`submitted_at_ms`, including when an exact retry advances the active transaction
+hash. Clients retain that immutable timestamp and promote only the replacement
+hash into the reference used for the next poll. Maintained SDKs issue each
+command POST as exactly one transport dispatch,
 regardless of any ambient POST-retry policy. An ambiguous response is reconciled
 through the canonical status resource; a further POST is authorized only after
 an exact Rejected attempt is observed and the same request is deliberately
@@ -837,8 +841,9 @@ ignored and every verifier/policy setting is overridden. The index must equal
 through descriptor-rooted, no-symlink traversal; there must be zero untracked
 or ignored files; and the root `Cargo.lock` must be exactly one tracked
 mode-`100644` index entry whose bytes also match the separate V1 lock digest.
-The legacy `ignored_cargo_lock_*` descriptor field names retain their V1 wire
-spelling but bind this tracked file. The complete clean closure is hash-bound
+The descriptor binds that tracked file through the exact
+`tracked_cargo_lock_size_bytes` and `tracked_cargo_lock_sha256` fields; retired
+`ignored_cargo_lock_*` names are rejected. The complete clean closure is hash-bound
 throughout the candidate, native build, device transcript, and signed evidence.
 Dirty closures have no compatibility admission path.
 

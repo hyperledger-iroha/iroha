@@ -1,8 +1,12 @@
 //! Static-site binding helpers backed by SoraFS storage.
+use crate::secure_file_metadata::{
+    SecureMetadata, from_file, from_path, is_direct_directory, is_direct_file, number_of_links,
+    same_file, unchanged,
+};
 use http::uri::Authority;
 use std::{
     collections::BTreeSet,
-    fs::{self, File, OpenOptions},
+    fs::File,
     io::Read,
     net::IpAddr,
     path::{Component, Path, PathBuf},
@@ -133,34 +137,34 @@ fn absolute_secure_path(path: &Path) -> Result<PathBuf, String> {
             .map_err(|err| format!("failed to resolve SoraFS site binding path: {err}"))
     }
 }
-fn reject_symlink_components(path: &Path) -> Result<(), String> {
+type PinnedBindingAncestor = (PathBuf, SecureMetadata);
+
+fn pin_binding_ancestors(path: &Path) -> Result<Vec<PinnedBindingAncestor>, String> {
     let mut current = PathBuf::new();
     let component_count = path.components().count();
+    let mut ancestors = Vec::new();
     for (index, component) in path.components().enumerate() {
         current.push(component.as_os_str());
         if matches!(component, Component::Prefix(_) | Component::RootDir) {
             continue;
         }
-        let metadata = fs::symlink_metadata(&current).map_err(|err| {
+        if index + 1 == component_count {
+            break;
+        }
+        let metadata = from_path(&current).map_err(|err| {
             format!(
                 "failed to inspect SoraFS site binding path component `{}`: {err}",
                 current.display()
             )
         })?;
-        if metadata.file_type().is_symlink() {
+        if !is_direct_directory(&metadata) {
             return Err(format!(
-                "SoraFS site binding path component `{}` must not be a symbolic link",
-                current.display()
-            ));
-        }
-        if index + 1 < component_count && !metadata.is_dir() {
-            return Err(format!(
-                "SoraFS site binding ancestor `{}` is not a directory",
+                "SoraFS site binding ancestor `{}` must be a direct directory",
                 current.display()
             ));
         }
         #[cfg(unix)]
-        if index + 1 < component_count {
+        {
             use std::os::unix::fs::MetadataExt as _;
             if metadata.mode() & 0o022 != 0 {
                 return Err(format!(
@@ -169,18 +173,57 @@ fn reject_symlink_components(path: &Path) -> Result<(), String> {
                 ));
             }
         }
+        ancestors.push((current.clone(), metadata));
+    }
+    Ok(ancestors)
+}
+
+fn revalidate_binding_ancestors(ancestors: &[PinnedBindingAncestor]) -> Result<(), String> {
+    for (path, before) in ancestors {
+        let after = from_path(path).map_err(|err| {
+            format!(
+                "failed to re-inspect SoraFS site binding ancestor `{}`: {err}",
+                path.display()
+            )
+        })?;
+        if !is_direct_directory(&after) || !same_file(before, &after) {
+            return Err(format!(
+                "SoraFS site binding ancestor `{}` changed while the file was being read",
+                path.display()
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            if after.mode() & 0o022 != 0 {
+                return Err(format!(
+                    "SoraFS site binding ancestor `{}` must not be group- or world-writable",
+                    path.display()
+                ));
+            }
+        }
     }
     Ok(())
 }
+
 fn open_read_only_no_follow(path: &Path) -> Result<File, String> {
-    let mut options = OpenOptions::new();
-    options.read(true);
+    #[cfg(windows)]
+    let opened = crate::secure_file_metadata::open_direct_file(path);
     #[cfg(unix)]
-    {
+    let opened = {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    }
-    options.open(path).map_err(|err| {
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK | libc::O_NOCTTY);
+        options.open(path)
+    };
+    #[cfg(not(any(unix, windows)))]
+    let opened = Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure direct-file opening is unsupported on this platform",
+    ));
+    opened.map_err(|err| {
         format!(
             "failed to open SoraFS site bindings `{}`: {err}",
             path.display()
@@ -188,22 +231,22 @@ fn open_read_only_no_follow(path: &Path) -> Result<File, String> {
     })
 }
 #[allow(unsafe_code)]
-fn validate_binding_file_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
-    if !metadata.is_file() {
+fn validate_binding_file_metadata(path: &Path, metadata: &SecureMetadata) -> Result<(), String> {
+    if !is_direct_file(metadata) {
         return Err(format!(
-            "SoraFS site binding path `{}` is not a regular file",
+            "SoraFS site binding path `{}` is not a direct regular file",
+            path.display()
+        ));
+    }
+    if number_of_links(metadata) != Some(1) {
+        return Err(format!(
+            "SoraFS site binding file `{}` must have exactly one hard link",
             path.display()
         ));
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-        if metadata.nlink() != 1 {
-            return Err(format!(
-                "SoraFS site binding file `{}` must have exactly one hard link",
-                path.display()
-            ));
-        }
         let effective_uid = rustix::process::geteuid().as_raw();
         if metadata.uid() != effective_uid && metadata.uid() != 0 {
             return Err(format!(
@@ -221,14 +264,15 @@ fn validate_binding_file_metadata(path: &Path, metadata: &fs::Metadata) -> Resul
     Ok(())
 }
 fn read_secure_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String> {
-    reject_symlink_components(path)?;
-    let before = fs::symlink_metadata(path).map_err(|err| {
+    let ancestors = pin_binding_ancestors(path)?;
+    let before = from_path(path).map_err(|err| {
         format!(
             "failed to inspect SoraFS site bindings `{}`: {err}",
             path.display()
         )
     })?;
     validate_binding_file_metadata(path, &before)?;
+    revalidate_binding_ancestors(&ancestors)?;
     let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
     if before.len() > max_bytes_u64 {
         return Err(format!(
@@ -238,33 +282,42 @@ fn read_secure_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String>
             max_bytes
         ));
     }
-    let file = open_read_only_no_follow(path)?;
-    let opened = file.metadata().map_err(|err| {
+    let mut file = open_read_only_no_follow(path)?;
+    let opened_before = from_file(&file).map_err(|err| {
         format!(
             "failed to inspect opened SoraFS site bindings `{}`: {err}",
             path.display()
         )
     })?;
-    validate_binding_file_metadata(path, &opened)?;
-    #[cfg(unix)]
+    let named_after_open = from_path(path).map_err(|err| {
+        format!(
+            "failed to re-inspect opened SoraFS site bindings `{}`: {err}",
+            path.display()
+        )
+    })?;
+    validate_binding_file_metadata(path, &opened_before)?;
+    validate_binding_file_metadata(path, &named_after_open)?;
+    if !same_file(&before, &opened_before)
+        || !unchanged(&before, &opened_before)
+        || !same_file(&opened_before, &named_after_open)
+        || !unchanged(&opened_before, &named_after_open)
     {
-        use std::os::unix::fs::MetadataExt as _;
-        if before.dev() != opened.dev() || before.ino() != opened.ino() {
-            return Err(format!(
-                "SoraFS site binding file `{}` changed while it was opened",
-                path.display()
-            ));
-        }
+        return Err(format!(
+            "SoraFS site binding file `{}` changed while it was opened",
+            path.display()
+        ));
     }
+    revalidate_binding_ancestors(&ancestors)?;
     let read_limit = u64::try_from(max_bytes)
         .unwrap_or(u64::MAX)
         .saturating_add(1);
     let mut bytes = Vec::with_capacity(
-        usize::try_from(before.len())
+        usize::try_from(opened_before.len())
             .unwrap_or(max_bytes)
             .min(max_bytes),
     );
-    file.take(read_limit)
+    (&mut file)
+        .take(read_limit)
         .read_to_end(&mut bytes)
         .map_err(|err| {
             format!(
@@ -279,7 +332,34 @@ fn read_secure_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String>
             max_bytes
         ));
     }
-    if bytes.len() as u64 != before.len() {
+    let opened_after = from_file(&file).map_err(|err| {
+        format!(
+            "failed to re-inspect opened SoraFS site bindings `{}`: {err}",
+            path.display()
+        )
+    })?;
+    let named_after_read = from_path(path).map_err(|err| {
+        format!(
+            "failed to re-inspect SoraFS site bindings `{}` after reading: {err}",
+            path.display()
+        )
+    })?;
+    validate_binding_file_metadata(path, &opened_after)?;
+    validate_binding_file_metadata(path, &named_after_read)?;
+    if !same_file(&opened_before, &opened_after)
+        || !unchanged(&opened_before, &opened_after)
+        || !same_file(&opened_after, &named_after_read)
+        || !unchanged(&opened_after, &named_after_read)
+        || !same_file(&before, &named_after_read)
+        || !unchanged(&before, &named_after_read)
+    {
+        return Err(format!(
+            "SoraFS site binding file `{}` changed while it was being read",
+            path.display()
+        ));
+    }
+    revalidate_binding_ancestors(&ancestors)?;
+    if u64::try_from(bytes.len()).ok() != Some(opened_before.len()) {
         return Err(format!(
             "SoraFS site binding file `{}` changed size while being read",
             path.display()
@@ -624,6 +704,8 @@ pub fn content_type_for_path(path: &[String]) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
     fn sample_document() -> SiteBindingsDocument {
         SiteBindingsDocument {
             version: SITE_BINDINGS_SCHEMA_VERSION_V1,
@@ -820,7 +902,7 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn secure_loader_rejects_symlinks_hardlinks_and_unsafe_permissions() {
+    fn secure_loader_rejects_symlinks_and_unsafe_permissions() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
         let bytes = encoded_sample_document();
         let (dir, path) = write_secure_fixture(&bytes);
@@ -837,10 +919,6 @@ mod tests {
         assert!(
             load_site_bindings_file(&parent_link.join("bindings.json"), bytes.len(), 1).is_err()
         );
-        let hard_link = canonical_dir.join("bindings-hardlink.json");
-        fs::hard_link(&path, &hard_link).expect("create hard link");
-        assert!(load_site_bindings_file(&path, bytes.len(), 1).is_err());
-        fs::remove_file(&hard_link).expect("remove hard link");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o622))
             .expect("make fixture group writable");
         assert!(load_site_bindings_file(&path, bytes.len(), 1).is_err());
@@ -851,6 +929,16 @@ mod tests {
         )
         .expect("make parent world writable");
         assert!(load_site_bindings_file(&unsafe_path, bytes.len(), 1).is_err());
+    }
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn secure_loader_rejects_multiply_linked_files() {
+        let bytes = encoded_sample_document();
+        let (directory, path) = write_secure_fixture(&bytes);
+        let hard_link = directory.path().join("bindings-hardlink.json");
+        fs::hard_link(&path, &hard_link).expect("create hard link");
+
+        assert!(load_site_bindings_file(&path, bytes.len(), 1).is_err());
     }
     #[test]
     fn secure_loader_rejects_traversal_and_non_files() {

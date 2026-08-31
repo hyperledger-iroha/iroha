@@ -118,6 +118,34 @@ pub mod isi {
             destination_id: &AssetId,
             amount: &Quantity,
         ) -> Result<TransferDeltaTranscript, Error> {
+            self.precheck_numeric_asset_transfer_delta_exact_inner(
+                source_id,
+                destination_id,
+                amount,
+                true,
+            )
+        }
+        /// Precheck a verified protocol-custody movement without user account controls.
+        fn precheck_protocol_custody_transfer_delta_exact(
+            &self,
+            source_id: &AssetId,
+            destination_id: &AssetId,
+            amount: &Quantity,
+        ) -> Result<TransferDeltaTranscript, Error> {
+            self.precheck_numeric_asset_transfer_delta_exact_inner(
+                source_id,
+                destination_id,
+                amount,
+                false,
+            )
+        }
+        fn precheck_numeric_asset_transfer_delta_exact_inner(
+            &self,
+            source_id: &AssetId,
+            destination_id: &AssetId,
+            amount: &Quantity,
+            enforce_account_controls: bool,
+        ) -> Result<TransferDeltaTranscript, Error> {
             if source_id.definition() != destination_id.definition() {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -128,7 +156,7 @@ pub mod isi {
                     .into(),
                 ));
             }
-            if !amount.is_zero() {
+            if enforce_account_controls && !amount.is_zero() {
                 self.ensure_numeric_asset_transfer_availability(
                     source_id,
                     amount.clone(),
@@ -166,7 +194,9 @@ pub mod isi {
                 .checked_add(amount)
                 .map_err(|_| MathError::Overflow)?;
             assert_numeric_spec_with(to_balance_after.as_numeric(), source_spec)?;
-            self.ensure_numeric_asset_holding_limit(destination_id, &to_balance_after)?;
+            if enforce_account_controls {
+                self.ensure_numeric_asset_holding_limit(destination_id, &to_balance_after)?;
+            }
             Ok(TransferDeltaTranscript {
                 from_account: source_id.account().clone(),
                 to_account: destination_id.account().clone(),
@@ -2127,6 +2157,20 @@ pub mod isi {
         }
         /// Apply the prepared movement, transcript and canonical events as one consumed action.
         fn apply(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
+            self.apply_with_observability(state_transaction, true)
+        }
+        /// Apply into a disposable transaction without publishing operational telemetry.
+        fn apply_without_observability(
+            self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            self.apply_with_observability(state_transaction, false)
+        }
+        fn apply_with_observability(
+            self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            record_observability: bool,
+        ) -> Result<(), Error> {
             let bindings = vec![(
                 self.plan.source_id.clone(),
                 self.plan.destination_id.clone(),
@@ -2136,16 +2180,22 @@ pub mod isi {
                 .authorization
                 .resolve_transcript_identity(state_transaction, &bindings)?;
             let applied = self.plan.apply(state_transaction)?;
-            state_transaction.record_transfer_transcripts_with_batch_hash(
-                &self.authorization.transcript_authority,
-                transcript_identity,
-                vec![applied.delta],
-            );
+            if record_observability {
+                state_transaction.record_transfer_transcripts_with_batch_hash(
+                    &self.authorization.transcript_authority,
+                    transcript_identity,
+                    vec![applied.delta],
+                );
+            }
             #[allow(clippy::float_arithmetic)]
             #[cfg(feature = "telemetry")]
-            state_transaction
-                .telemetry
-                .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
+            if record_observability {
+                state_transaction
+                    .telemetry
+                    .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
+            }
+            #[cfg(not(feature = "telemetry"))]
+            let _ = record_observability;
             emit_numeric_asset_transfer_events(
                 state_transaction,
                 applied.source_id,
@@ -3139,10 +3189,24 @@ pub mod isi {
             ),
         )
     }
-    /// Consume an exact retained public-lane slash capability.
+    /// Consume an exact retained public-lane slash capability from a transaction entrypoint.
     pub(in crate::smartcontracts::isi) fn execute_verified_staking_slash_transfer(
         state_transaction: &mut StateTransaction<'_, '_>,
         authorization: crate::smartcontracts::isi::staking::VerifiedStakingSlashDebit,
+    ) -> Result<(), Error> {
+        execute_verified_staking_slash_transfer_inner(state_transaction, authorization, true)
+    }
+    /// Apply a consensus slash without transaction-execution evidence.
+    pub(in crate::smartcontracts::isi) fn execute_verified_consensus_staking_slash_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::staking::VerifiedStakingSlashDebit,
+    ) -> Result<(), Error> {
+        execute_verified_staking_slash_transfer_inner(state_transaction, authorization, false)
+    }
+    fn execute_verified_staking_slash_transfer_inner(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::staking::VerifiedStakingSlashDebit,
+        record_observability: bool,
     ) -> Result<(), Error> {
         let (lane_id, validator, slash_id, source_id, destination_id, amount) =
             authorization.into_parts();
@@ -3178,7 +3242,7 @@ pub mod isi {
             amount.clone(),
             record.total_stake.clone(),
         ))?;
-        execute_numeric_asset_movement(
+        let movement = PreparedNumericAssetMovement::prepare(
             state_transaction,
             source_id,
             destination_id,
@@ -3187,7 +3251,12 @@ pub mod isi {
                 &validator,
                 RetainedNumericAssetMovementPurpose::StakingSlash(binding),
             ),
-        )
+        )?;
+        if record_observability {
+            movement.apply(state_transaction)
+        } else {
+            movement.apply_without_observability(state_transaction)
+        }
     }
     fn prepare_verified_governance_numeric_movement(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -4103,13 +4172,24 @@ pub mod isi {
                 .unwrap_or_else(|| amount.as_numeric().scale());
             let normalized_amount =
                 normalized_numeric_to_u64(amount.as_numeric(), normalized_scale);
-            let prechecked_delta = state_transaction
-                .world
-                .precheck_numeric_asset_transfer_delta_exact(
-                    &source_id,
-                    &destination_id,
-                    &amount,
-                )?;
+            let prechecked_delta = if source_policy == NumericAssetTransferSourcePolicy::StakingSlash
+            {
+                state_transaction
+                    .world
+                    .precheck_protocol_custody_transfer_delta_exact(
+                        &source_id,
+                        &destination_id,
+                        &amount,
+                    )?
+            } else {
+                state_transaction
+                    .world
+                    .precheck_numeric_asset_transfer_delta_exact(
+                        &source_id,
+                        &destination_id,
+                        &amount,
+                    )?
+            };
             Ok(Self {
                 source_id,
                 destination_id,
@@ -4947,6 +5027,13 @@ pub mod isi {
             .numeric_spec_for(source_id.definition())
             .map_err(Error::from)?;
         assert_numeric_spec_with(amount.as_numeric(), spec)?;
+        // An exact retained staking-slash capability is finality-owned protocol
+        // custody. User transfer availability, holding, issuer-usage, and
+        // unrelated custody controls cannot veto a consensus sanction after
+        // its source and sink have been bound to the staking configuration.
+        if source_policy == NumericAssetTransferSourcePolicy::StakingSlash {
+            return Ok((source_id, destination_id));
+        }
         ensure_transparent_allowed(
             state_transaction,
             source_id.definition(),

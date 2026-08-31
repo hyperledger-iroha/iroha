@@ -93,6 +93,7 @@ export interface KagemushaNoritoRequestV4 {
 
 export interface NormalizedKagemushaNoritoRequestV4 extends KagemushaNoritoRequestV4 {
   readonly operationId: string;
+  readonly issuedAtMs: number | bigint;
 }
 
 export interface OfflineStatus {
@@ -243,6 +244,7 @@ export function normalizeKagemushaOperationReference(
   expected?: {
     expectedOperationId: string;
     expectedKind: "top_up" | "redeem";
+    expectedSubmittedAtMs: number | bigint;
     location: string | null;
     retryAfter: string | null;
   },

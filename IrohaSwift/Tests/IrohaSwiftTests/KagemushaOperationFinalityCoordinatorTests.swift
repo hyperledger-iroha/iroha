@@ -845,7 +845,8 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
                     transactionHash,
                     submittedAtMs: 8
                 )),
-            ]
+            ],
+            expectedSubmittedAtMs: 7
         )
 
         do {
@@ -862,7 +863,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         )
     }
 
-    func testRestartContinuitySeedAllowsNewPendingAttempt() async throws {
+    func testRestartContinuitySeedAllowsNewPendingCarrierHash() async throws {
         let operationId = id(0x86)
         let previousHash = id(0x87)
         let newerHash = id(0x88)
@@ -874,10 +875,11 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
                     operationId,
                     .redeem,
                     newerHash,
-                    submittedAtMs: 10
+                    submittedAtMs: 9
                 )),
                 .status(try appliedRedeem(operationId, newerHash)),
-            ]
+            ],
+            expectedSubmittedAtMs: 9
         )
         harness.continuity = .accepted(try reference(
             operationId,
@@ -889,10 +891,43 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         let resolution = try await harness.run()
 
         guard case .applied = resolution.outcome else {
-            return XCTFail("newer pending attempt must replace the continuity seed")
+            return XCTFail("new pending carrier hash must remain authoritative")
         }
         XCTAssertEqual(harness.journal.transactionHash, newerHash)
-        XCTAssertEqual(harness.journal.submittedAtMs, 10)
+        XCTAssertEqual(harness.journal.submittedAtMs, 9)
+    }
+
+    func testRestartContinuitySeedRejectsNewHashTimestampSubstitution() async throws {
+        let operationId = id(0x86)
+        let previousHash = id(0x87)
+        let newerHash = id(0x88)
+        let harness = Harness(
+            operationId: operationId,
+            kind: .redeem,
+            steps: [.status(try pending(
+                operationId,
+                .redeem,
+                newerHash,
+                submittedAtMs: 10
+            ))],
+            expectedSubmittedAtMs: 9
+        )
+        harness.continuity = .accepted(try reference(
+            operationId,
+            .redeem,
+            previousHash,
+            submittedAtMs: 9
+        ))
+
+        do {
+            _ = try await harness.run()
+            XCTFail("new carrier hash must not replace the submitted timestamp")
+        } catch KagemushaOperationFinalityError.continuityViolation(let field) {
+            XCTAssertEqual(field, "submitted timestamp")
+        }
+        XCTAssertEqual(harness.trace, ["status"])
+        XCTAssertNil(harness.journal.transactionHash)
+        XCTAssertNil(harness.journal.submittedAtMs)
     }
 
     func testRestartContinuitySeedRejectsSameHashTimestampSubstitution() async throws {
@@ -906,7 +941,8 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
                 .redeem,
                 transactionHash,
                 submittedAtMs: 10
-            ))]
+            ))],
+            expectedSubmittedAtMs: 9
         )
         harness.continuity = .accepted(try reference(
             operationId,
@@ -1084,7 +1120,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
                 operationId,
                 .redeem,
                 retryHash,
-                submittedAtMs: 2
+                submittedAtMs: 1
             )
         }
 
@@ -1096,7 +1132,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         XCTAssertEqual(harness.submissionCount, 1)
         XCTAssertEqual(harness.journal.attemptCount, 1)
         XCTAssertEqual(harness.journal.transactionHash, retryHash)
-        XCTAssertEqual(harness.journal.submittedAtMs, 2)
+        XCTAssertEqual(harness.journal.submittedAtMs, 1)
         XCTAssertTrue(harness.journal.rejected)
         XCTAssertEqual(
             harness.trace,
@@ -1735,8 +1771,22 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         schema: String,
         fieldCount: Int,
         operationIdFieldIndex: Int,
-        operationId: Data
+        operationId: Data,
+        issuedAtMs: UInt64 = 1
     ) -> Data {
+        var authorization = CompactNoritoWriter()
+        for index in 0..<10 {
+            let field: Data
+            switch index {
+            case 3:
+                field = operationId
+            case 4:
+                field = CompactNorito.encodeUInt64(issuedAtMs)
+            default:
+                field = Data([UInt8(index + 1)])
+            }
+            authorization.writeField(field)
+        }
         var payload = CompactNoritoWriter()
         for index in 0..<fieldCount {
             payload.writeField(
@@ -1744,6 +1794,8 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
                     ? CompactNorito.encodeUInt16(KagemushaRecursiveSpend.wireVersionV4)
                     : index == operationIdFieldIndex
                     ? operationId
+                    : index == fieldCount - 1
+                    ? authorization.data
                     : Data([UInt8(index + 1)])
             )
         }
@@ -1847,15 +1899,16 @@ private actor TypedFinalityTransport: KagemushaOperationFinalityTransport {
     }
 
     func getKagemushaOperationStatus(
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
+        operation: KagemushaOperationSubmission,
+        acceptedReference: KagemushaOperationReference?,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
-              expectedKind == expectedOperation.kind else {
+              operation == expectedOperation,
+              acceptedReference == nil || acceptedReference == reference else {
             throw FinalityHarnessError.unexpectedSubmission
         }
-        requestedOperationIds.append(operationId)
+        requestedOperationIds.append(operation.operationId)
         if requestedOperationIds.count == 1 {
             throw ToriiClientError.httpStatus(
                 code: 404,
@@ -1891,13 +1944,14 @@ private struct AppliedOnlyFinalityTransport:
     let status: KagemushaOperationStatus
 
     func getKagemushaOperationStatus(
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
+        operation: KagemushaOperationSubmission,
+        acceptedReference: KagemushaOperationReference?,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
-              status.operationId == operationId,
-              status.kind == expectedKind else {
+              status.operationId == operation.operationId,
+              status.kind == operation.kind,
+              acceptedReference == nil else {
             throw FinalityHarnessError.unexpectedSubmission
         }
         return status
@@ -1915,12 +1969,13 @@ private struct DeadlineIgnoringFinalityTransport:
     Sendable
 {
     func getKagemushaOperationStatus(
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
+        operation: KagemushaOperationSubmission,
+        acceptedReference: KagemushaOperationReference?,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
-              expectedKind == .topUp else {
+              acceptedReference == nil,
+              operation.kind == .redeem else {
             throw FinalityHarnessError.unexpectedSubmission
         }
         return try await withCheckedThrowingContinuation {
@@ -1963,13 +2018,13 @@ private actor LeaseFinalityTransport: KagemushaOperationFinalityTransport {
     }
 
     func getKagemushaOperationStatus(
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
+        operation: KagemushaOperationSubmission,
+        acceptedReference: KagemushaOperationReference?,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
-              operationId == expectedOperation.operationId,
-              expectedKind == expectedOperation.kind else {
+              operation == expectedOperation,
+              acceptedReference == nil || acceptedReference == reference else {
             throw FinalityHarnessError.unexpectedSubmission
         }
         statusCount += 1
@@ -2026,6 +2081,7 @@ private struct FinalityJournal: Equatable {
 private final class Harness {
     let operationId: String
     let kind: KagemushaOperationKind
+    var expectedSubmittedAtMs: UInt64
     var steps: [FinalityStatusStep]
     var journal = FinalityJournal()
     var trace: [String] = []
@@ -2049,10 +2105,12 @@ private final class Harness {
         operationId: String,
         kind: KagemushaOperationKind,
         steps: [FinalityStatusStep],
-        initialJournal: FinalityJournal = FinalityJournal()
+        initialJournal: FinalityJournal = FinalityJournal(),
+        expectedSubmittedAtMs: UInt64 = 1
     ) {
         self.operationId = operationId
         self.kind = kind
+        self.expectedSubmittedAtMs = expectedSubmittedAtMs
         self.steps = steps
         self.journal = initialJournal
     }
@@ -2061,6 +2119,7 @@ private final class Harness {
         try await KagemushaOperationFinalityCoordinator.resolveForTesting(
             operationId: operationId,
             expectedKind: kind,
+            expectedSubmittedAtMs: expectedSubmittedAtMs,
             initialState: journal,
             continuity: continuity,
             configuration: configuration,

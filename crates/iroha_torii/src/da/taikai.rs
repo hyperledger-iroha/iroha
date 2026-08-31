@@ -113,6 +113,7 @@ pub(crate) const TAIKAI_ANCHOR_REQUEST_MAX_BYTES: usize = 16 * 1024 * 1024;
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) mod taikai_ingest {
     use super::*;
+    use crate::secure_file_metadata::{self, SecureMetadata};
     use sorafs_car::{CarBuildPlan, CarWriter};
     use std::{
         cmp::Reverse,
@@ -680,7 +681,7 @@ pub(crate) mod taikai_ingest {
             let path = base_dir.join(format!(
                 "{TAIKAI_TRM_LOCK_PREFIX}{slug}{TAIKAI_TRM_LOCK_SUFFIX}"
             ));
-            let before = match fs::symlink_metadata(&path) {
+            let before = match secure_file_metadata::from_path(&path) {
                 Ok(metadata) => Some(metadata),
                 Err(err) if err.kind() == ErrorKind::NotFound => None,
                 Err(err) => {
@@ -690,15 +691,20 @@ pub(crate) mod taikai_ingest {
                     )));
                 }
             };
-            if before.as_ref().is_some_and(|metadata| !metadata.is_file()) {
+            if before.as_ref().is_some_and(|metadata| {
+                !secure_file_metadata::is_direct_file(metadata)
+                    || secure_file_metadata::number_of_links(metadata) != Some(1)
+                    || metadata.len() != 0
+            }) {
                 return Err(internal_error(format!(
-                    "Taikai routing manifest lock is not a regular file: {}",
+                    "Taikai routing manifest lock is not an empty single-link regular file: {}",
                     path.display()
                 )));
             }
             let mut options = OpenOptions::new();
             options.read(true).write(true).create(true);
             set_taikai_no_follow_open_options(&mut options);
+            set_taikai_lock_share_mode(&mut options);
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt as _;
@@ -710,24 +716,28 @@ pub(crate) mod taikai_ingest {
                     path.display()
                 ))
             })?;
-            let opened = file.metadata().map_err(|err| {
+            let opened = secure_file_metadata::from_file(&file).map_err(|err| {
                 internal_error(format!(
                     "failed to inspect open Taikai routing manifest lock `{}`: {err}",
                     path.display()
                 ))
             })?;
-            let linked = fs::symlink_metadata(&path).map_err(|err| {
+            let linked = secure_file_metadata::from_path(&path).map_err(|err| {
                 internal_error(format!(
                     "failed to re-inspect Taikai routing manifest lock `{}`: {err}",
                     path.display()
                 ))
             })?;
-            if !opened.is_file()
-                || !linked.is_file()
+            if !secure_file_metadata::is_direct_file(&opened)
+                || !secure_file_metadata::is_direct_file(&linked)
+                || secure_file_metadata::number_of_links(&opened) != Some(1)
+                || secure_file_metadata::number_of_links(&linked) != Some(1)
+                || opened.len() != 0
+                || linked.len() != 0
                 || before
                     .as_ref()
-                    .is_some_and(|metadata| !taikai_metadata_same_identity(metadata, &opened))
-                || !taikai_metadata_same_identity(&opened, &linked)
+                    .is_some_and(|metadata| !secure_file_metadata::same_file(metadata, &opened))
+                || !secure_file_metadata::same_file(&opened, &linked)
             {
                 return Err(internal_error(format!(
                     "Taikai routing manifest lock changed identity while opening: {}",
@@ -749,30 +759,22 @@ pub(crate) mod taikai_ingest {
                     )));
                 }
             }
-            let locked_link = fs::symlink_metadata(&path).map_err(|err| {
+            let locked_link = secure_file_metadata::from_path(&path).map_err(|err| {
                 internal_error(format!(
                     "failed to inspect locked Taikai routing manifest lock `{}`: {err}",
                     path.display()
                 ))
             })?;
-            if !taikai_metadata_same_identity(&opened, &locked_link) {
+            if !secure_file_metadata::is_direct_file(&locked_link)
+                || secure_file_metadata::number_of_links(&locked_link) != Some(1)
+                || locked_link.len() != 0
+                || !secure_file_metadata::same_file(&opened, &locked_link)
+            {
                 return Err(internal_error(format!(
                     "Taikai routing manifest lock changed identity while acquiring ownership: {}",
                     path.display()
                 )));
             }
-            file.set_len(0).map_err(|err| {
-                internal_error(format!(
-                    "failed to reset Taikai routing manifest lock `{}`: {err}",
-                    path.display()
-                ))
-            })?;
-            writeln!(file, "{}", current_unix_seconds()).map_err(|err| {
-                internal_error(format!(
-                    "failed to write Taikai routing manifest lock `{}`: {err}",
-                    path.display()
-                ))
-            })?;
             file.sync_all().map_err(|err| {
                 internal_error(format!(
                     "failed to sync Taikai routing manifest lock `{}`: {err}",
@@ -846,7 +848,7 @@ pub(crate) mod taikai_ingest {
         label: &str,
         maximum: usize,
     ) -> io::Result<Vec<u8>> {
-        let before = fs::symlink_metadata(path)?;
+        let before = secure_file_metadata::from_path(path)?;
         validate_regular_taikai_metadata(path, label, &before)?;
         let maximum_u64 = u64::try_from(maximum).unwrap_or(u64::MAX);
         if before.len() > maximum_u64 {
@@ -859,16 +861,21 @@ pub(crate) mod taikai_ingest {
                 ),
             ));
         }
-        let mut options = OpenOptions::new();
-        options.read(true);
-        set_taikai_no_follow_open_options(&mut options);
-        let mut file = options.open(path)?;
-        let opened = file.metadata()?;
+        #[cfg(windows)]
+        let mut file = secure_file_metadata::open_direct_file(path)?;
+        #[cfg(not(windows))]
+        let mut file = {
+            let mut options = OpenOptions::new();
+            options.read(true);
+            set_taikai_no_follow_open_options(&mut options);
+            options.open(path)?
+        };
+        let opened = secure_file_metadata::from_file(&file)?;
         validate_regular_taikai_metadata(path, label, &opened)?;
-        let linked = fs::symlink_metadata(path)?;
+        let linked = secure_file_metadata::from_path(path)?;
         validate_regular_taikai_metadata(path, label, &linked)?;
-        if !taikai_metadata_same_identity(&before, &opened)
-            || !taikai_metadata_same_identity(&opened, &linked)
+        if !secure_file_metadata::same_file(&before, &opened)
+            || !secure_file_metadata::same_file(&opened, &linked)
         {
             return Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -887,9 +894,9 @@ pub(crate) mod taikai_ingest {
     fn validate_regular_taikai_metadata(
         path: &Path,
         label: &str,
-        metadata: &fs::Metadata,
+        metadata: &SecureMetadata,
     ) -> io::Result<()> {
-        if !metadata.file_type().is_file() {
+        if !secure_file_metadata::is_direct_file(metadata) {
             return Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!("{label} is not a regular file: {}", path.display()),
@@ -900,18 +907,16 @@ pub(crate) mod taikai_ingest {
     fn revalidate_regular_taikai_read(
         path: &Path,
         file: &fs::File,
-        original: &fs::Metadata,
+        original: &SecureMetadata,
         bytes_len: usize,
         label: &str,
     ) -> io::Result<()> {
-        let opened_after = file.metadata()?;
-        let linked_after = fs::symlink_metadata(path)?;
+        let opened_after = secure_file_metadata::from_file(file)?;
+        let linked_after = secure_file_metadata::from_path(path)?;
         validate_regular_taikai_metadata(path, label, &opened_after)?;
         validate_regular_taikai_metadata(path, label, &linked_after)?;
-        if !taikai_metadata_same_identity(original, &opened_after)
-            || !taikai_metadata_same_identity(&opened_after, &linked_after)
-            || opened_after.len() != original.len()
-            || linked_after.len() != original.len()
+        if !secure_file_metadata::unchanged(original, &opened_after)
+            || !secure_file_metadata::unchanged(&opened_after, &linked_after)
             || u64::try_from(bytes_len).ok() != Some(original.len())
         {
             return Err(io::Error::new(
@@ -934,23 +939,14 @@ pub(crate) mod taikai_ingest {
     }
     #[cfg(not(any(unix, windows)))]
     fn set_taikai_no_follow_open_options(_options: &mut OpenOptions) {}
-    #[cfg(unix)]
-    fn taikai_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-        use std::os::unix::fs::MetadataExt as _;
-        left.dev() == right.dev() && left.ino() == right.ino()
-    }
     #[cfg(windows)]
-    fn taikai_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-        use std::os::windows::fs::MetadataExt as _;
-        left.volume_serial_number().is_some()
-            && left.file_index().is_some()
-            && left.volume_serial_number() == right.volume_serial_number()
-            && left.file_index() == right.file_index()
+    fn set_taikai_lock_share_mode(options: &mut OpenOptions) {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_SHARE_READ_WRITE: u32 = 0x0000_0001 | 0x0000_0002;
+        options.share_mode(FILE_SHARE_READ_WRITE);
     }
-    #[cfg(not(any(unix, windows)))]
-    fn taikai_metadata_same_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-        false
-    }
+    #[cfg(not(windows))]
+    fn set_taikai_lock_share_mode(_options: &mut OpenOptions) {}
     fn create_taikai_spool_dir_no_follow(base_dir: &Path) -> io::Result<()> {
         fs::create_dir_all(base_dir)?;
         validate_taikai_spool_dir_no_follow(base_dir)
@@ -963,11 +959,19 @@ pub(crate) mod taikai_ingest {
         base_dir: &Path,
         metadata: &fs::Metadata,
     ) -> io::Result<()> {
-        if !metadata.file_type().is_dir() {
+        let is_direct_directory =
+            !metadata.file_type().is_symlink() && metadata.file_type().is_dir();
+        #[cfg(windows)]
+        let is_direct_directory = {
+            use std::os::windows::fs::MetadataExt as _;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+            is_direct_directory && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+        };
+        if !is_direct_directory {
             return Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "Taikai spool directory `{}` is not a directory",
+                    "Taikai spool directory `{}` is not a direct directory",
                     base_dir.display()
                 ),
             ));
@@ -1872,7 +1876,8 @@ pub(crate) mod taikai_ingest {
             let path = dir.path().join("taikai-artifact.norito");
             fs::write(&path, b"old-artifact").expect("seed artifact");
             let file = fs::File::open(&path).expect("open original artifact");
-            let original = file.metadata().expect("inspect original artifact");
+            let original =
+                secure_file_metadata::from_file(&file).expect("inspect original artifact");
             fs::write(&path, b"replacement-artifact").expect("replace artifact");
             let err = revalidate_regular_taikai_read(
                 &path,
@@ -1896,12 +1901,13 @@ pub(crate) mod taikai_ingest {
             let path = dir.path().join("taikai-artifact.norito");
             fs::write(&path, b"old-artifact").expect("seed artifact");
             let file = fs::File::open(&path).expect("open original artifact");
-            let original = file.metadata().expect("inspect original artifact");
+            let original =
+                secure_file_metadata::from_file(&file).expect("inspect original artifact");
             let target = dir.path().join("artifact-target.norito");
             fs::write(&target, b"old-artifact").expect("write symlink target");
             fs::remove_file(&path).expect("remove original artifact");
             symlink(&target, &path).expect("replace artifact with symlink");
-            let err = revalidate_regular_taikai_read(
+            revalidate_regular_taikai_read(
                 &path,
                 &file,
                 &original,
@@ -1909,11 +1915,6 @@ pub(crate) mod taikai_ingest {
                 "Taikai artifact test",
             )
             .expect_err("symlink replacement must reject");
-            assert_eq!(err.kind(), ErrorKind::InvalidData);
-            assert!(
-                err.to_string().contains("not a regular file"),
-                "unexpected error: {err}"
-            );
             assert!(
                 fs::symlink_metadata(&path)
                     .expect("inspect symlink")

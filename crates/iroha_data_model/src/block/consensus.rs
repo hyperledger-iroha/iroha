@@ -218,11 +218,36 @@ impl PartialOrd for Evidence {
         Some(self.cmp(other))
     }
 }
+/// Closed penalty lifecycle for one committed evidence record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub enum EvidencePenaltyStatus {
+    /// The deterministic penalty delay has not elapsed or no action has run yet.
+    Pending,
+    /// Consensus applied the penalty at the stated canonical block height.
+    Applied {
+        /// Canonical height that applied the penalty.
+        height: Height,
+    },
+    /// Governance cancelled the penalty at the stated canonical block height.
+    Cancelled {
+        /// Canonical height that cancelled the penalty.
+        height: Height,
+    },
+}
+impl EvidencePenaltyStatus {
+    /// Return whether this status can no longer produce a penalty action.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        !matches!(self, Self::Pending)
+    }
+}
 /// Persisted evidence entry annotated with commit metadata.
 ///
 /// Every record has already been admitted by a committed block. Node-local
 /// pending observations use no data-model representation and never enter WSV.
 /// Shortened records are rejected instead of receiving implicit penalty state.
+/// Penalty state is a closed sum type so impossible combinations such as an
+/// applied-and-cancelled record cannot enter WSV or its binary representation.
 /// The type is binary-only; endpoint JSON uses a purpose-built audit projection.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct EvidenceRecord {
@@ -234,14 +259,8 @@ pub struct EvidenceRecord {
     pub recorded_at_view: View,
     /// Block creation timestamp in milliseconds since UNIX epoch.
     pub recorded_at_ms: u64,
-    /// Whether a penalty was already applied for this evidence record.
-    pub penalty_applied: bool,
-    /// Whether governance cancelled penalty application for this evidence record.
-    pub penalty_cancelled: bool,
-    /// Block height at which the penalty was cancelled, if any.
-    pub penalty_cancelled_at_height: Option<Height>,
-    /// Block height at which the penalty was applied, if any.
-    pub penalty_applied_at_height: Option<Height>,
+    /// Exact pending, applied, or cancelled penalty state.
+    pub penalty_status: EvidencePenaltyStatus,
 }
 /// Membership snapshot exported through `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]

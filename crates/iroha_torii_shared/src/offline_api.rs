@@ -603,7 +603,7 @@ pub struct OfflineOperationReference {
     pub transaction_hash: String,
     /// Relative URI of the operation status resource.
     pub status_uri: String,
-    /// Submission time of the active pending attempt in Unix milliseconds.
+    /// Immutable signed-request creation time in Unix milliseconds.
     pub submitted_at_ms: u64,
 }
 impl OfflineOperationReference {
@@ -660,17 +660,17 @@ impl OfflineOperationReference {
 
     /// Validate and atomically observe one status response.
     ///
-    /// Operation id, command kind, and status URI remain immutable. A Pending
-    /// response with the current transaction hash must retain its submission
-    /// time. A newer Pending hash advances the hash and timestamp together;
-    /// terminal responses may name a different retry or globally winning
+    /// Operation id, command kind, and status URI remain immutable. A different
+    /// Pending hash advances only the active transaction; every Pending
+    /// response retains the submission time bound to the immutable signed
+    /// request. Terminal responses may name a different retry or globally winning
     /// transaction without changing this pending-attempt cursor.
     ///
     /// # Errors
     ///
     /// Returns an error without modifying this reference when either value is
-    /// malformed, immutable identity differs, or a current Pending hash changes
-    /// its submission time.
+    /// malformed, immutable identity differs, or any Pending response changes
+    /// the request-bound submission time.
     pub fn observe_status(&mut self, status: &OfflineOperationStatus) -> Result<(), String> {
         self.validate_structure()?;
         status.validate_structure()?;
@@ -689,15 +689,11 @@ impl OfflineOperationReference {
                         "operation status kind does not match the accepted operation".into(),
                     );
                 }
-                if transaction_hash == &self.transaction_hash {
-                    if *submitted_at_ms != self.submitted_at_ms {
-                        return Err(
-                            "current pending transaction changed its submission time".into()
-                        );
-                    }
-                } else {
+                if *submitted_at_ms != self.submitted_at_ms {
+                    return Err("pending operation changed its submission time".into());
+                }
+                if transaction_hash != &self.transaction_hash {
                     self.transaction_hash.clone_from(transaction_hash);
-                    self.submitted_at_ms = *submitted_at_ms;
                 }
             }
             OfflineOperationStatus::Applied {
@@ -1292,13 +1288,23 @@ mod tests {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
             transaction_hash: newer_transaction_hash.clone(),
-            submitted_at_ms: 43,
+            submitted_at_ms: 42,
         };
         reference
             .observe_status(&newer_pending)
             .expect("newer pending attempt");
         assert_eq!(reference.transaction_hash, newer_transaction_hash);
-        assert_eq!(reference.submitted_at_ms, 43);
+        assert_eq!(reference.submitted_at_ms, 42);
+
+        let changed_retry_time = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: format!("{}27", "22".repeat(31)),
+            submitted_at_ms: 43,
+        };
+        let before_changed_retry_time = reference.clone();
+        assert!(reference.observe_status(&changed_retry_time).is_err());
+        assert_eq!(reference, before_changed_retry_time);
 
         let before_invalid = reference.clone();
         let mut zero_time = newer_pending.clone();

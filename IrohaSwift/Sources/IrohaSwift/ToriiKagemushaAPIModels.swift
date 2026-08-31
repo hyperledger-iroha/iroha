@@ -355,6 +355,8 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
     public static let maximumArchiveBytes = 512 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
+    /// Immutable request creation time from the signed authorization.
+    public let issuedAtMs: UInt64
     private let archive: Data
 
     /// Validates and retains a canonical first-release Kagemusha top-up request archive.
@@ -368,6 +370,7 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
             maximumArchiveBytes: Self.maximumArchiveBytes
         )
         self.operationId = validated.operationId
+        self.issuedAtMs = validated.issuedAtMs
         self.archive = validated.archive
     }
 
@@ -380,6 +383,8 @@ public struct KagemushaRedeemRequest: Equatable, Sendable {
     public static let maximumArchiveBytes = 48 * 1_024 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
+    /// Immutable request creation time from the signed authorization.
+    public let issuedAtMs: UInt64
     private let archive: Data
 
     /// Validates and retains a canonical first-release Kagemusha redemption request archive.
@@ -393,6 +398,7 @@ public struct KagemushaRedeemRequest: Equatable, Sendable {
             maximumArchiveBytes: Self.maximumArchiveBytes
         )
         self.operationId = validated.operationId
+        self.issuedAtMs = validated.issuedAtMs
         self.archive = validated.archive
     }
 
@@ -1376,7 +1382,7 @@ private enum KagemushaOperationValidation {
         fieldCount: Int,
         expectedWireVersion: UInt16,
         maximumArchiveBytes: Int
-    ) throws -> (archive: Data, operationId: String) {
+    ) throws -> (archive: Data, operationId: String, issuedAtMs: UInt64) {
         guard let requiredPaddingLength = KagemushaRecursiveSpend
             .requiredHeaderPaddingLength(forWireName: schema),
               !value.isEmpty,
@@ -1436,6 +1442,58 @@ private enum KagemushaOperationValidation {
               operationId.contains(where: { $0 != 0 }) else {
             throw KagemushaOperationError.invalidField("operation_id")
         }
-        return (Data(value), operationId.hexEncodedString())
+        let issuedAtMs = try requestAuthorizationIssuedAtMs(
+            fields[fieldCount - 1],
+            outerOperationId: operationId
+        )
+        return (Data(value), operationId.hexEncodedString(), issuedAtMs)
+    }
+
+    private static func requestAuthorizationIssuedAtMs(
+        _ authorization: Data,
+        outerOperationId: Data
+    ) throws -> UInt64 {
+        let fieldCount = 10
+        let operationIdFieldIndex = 3
+        let issuedAtMsFieldIndex = 4
+        var reader = CanonicalNoritoReader(data: authorization)
+        var fields = [Data]()
+        fields.reserveCapacity(fieldCount)
+        do {
+            for _ in 0..<fieldCount {
+                fields.append(try reader.readCompactField())
+            }
+        } catch {
+            throw KagemushaOperationError.invalidNoritoArchive
+        }
+        guard reader.remaining() == 0 else {
+            throw KagemushaOperationError.invalidNoritoArchive
+        }
+
+        var canonicalAuthorization = CompactNoritoWriter()
+        for field in fields {
+            canonicalAuthorization.writeField(field)
+        }
+        guard canonicalAuthorization.data == authorization else {
+            throw KagemushaOperationError.invalidNoritoArchive
+        }
+        guard fields[operationIdFieldIndex] == outerOperationId else {
+            throw KagemushaOperationError.invalidField("authorization.operation_id")
+        }
+
+        let issuedAtField = fields[issuedAtMsFieldIndex]
+        guard issuedAtField.count == MemoryLayout<UInt64>.size else {
+            throw KagemushaOperationError.invalidField("authorization.issued_at_ms")
+        }
+        var decodedIssuedAtMs: UInt64 = 0
+        issuedAtField.withUnsafeBytes { buffer in
+            if let baseAddress = buffer.baseAddress {
+                memcpy(&decodedIssuedAtMs, baseAddress, MemoryLayout<UInt64>.size)
+            }
+        }
+        return try positive(
+            UInt64(littleEndian: decodedIssuedAtMs),
+            field: "authorization.issued_at_ms"
+        )
     }
 }

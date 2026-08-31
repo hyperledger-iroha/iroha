@@ -9,10 +9,8 @@ use iroha_data_model::{
     isi::{InstructionBox, RegisterBox},
     offline::{
         KagemushaOperationCarrierErrorV4, KagemushaOperationCarrierV4, KagemushaOperationKindV4,
-        KagemushaOperationRequestV4,
-        classify_kagemusha_operation_entrypoint_v4 as classify_direct_kagemusha_operation_entrypoint_v4,
-        classify_kagemusha_operation_transaction_v4 as classify_direct_kagemusha_operation_transaction_v4,
-        is_kagemusha_operation_instruction_v4,
+        KagemushaOperationRequestV4, classify_direct_kagemusha_operation_entrypoint_v4,
+        classify_direct_kagemusha_operation_transaction_v4, is_kagemusha_operation_instruction_v4,
     },
     state_path::StatePath,
     transaction::{
@@ -1372,7 +1370,8 @@ mod tests {
         trigger_name: &str,
         instructions: Vec<InstructionBox>,
     ) -> InstructionBox {
-        let trigger_id = trigger_name.parse().expect("valid fixture trigger id");
+        let trigger_id: iroha_data_model::trigger::TriggerId =
+            trigger_name.parse().expect("valid fixture trigger id");
         let action = Action::new(
             instructions,
             Repeats::Indefinitely,

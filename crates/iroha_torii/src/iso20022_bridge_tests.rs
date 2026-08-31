@@ -8977,23 +8977,20 @@ fn durable_store_reloads_message_status() {
     assert!(!reloaded.check_and_record_inbound("persisted-replay", replay));
 }
 #[test]
-fn transaction_hash_binding_fails_closed_when_durable_store_is_unwritable() {
+fn configured_durable_store_must_be_available_at_startup() {
     let store = TempDir::new().expect("tempdir");
     let blocked_store = store.path().join("not-a-directory");
     fs::write(&blocked_store, b"file blocks durable store creation").expect("write blocker");
     let mut config = sample_config();
     config.store_dir = Some(blocked_store);
-    let runtime = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(runtime.check_and_record_message("durability-blocked"));
-    assert!(!runtime.bind_transaction_hash("durability-blocked", "tx-must-not-dispatch"));
-    let status = runtime
-        .message_status("durability-blocked")
-        .expect("pending status retained");
-    assert_eq!(status.status_label(), "Pending");
-    assert_eq!(status.transaction_hash(), None);
-    assert!(!runtime.tx_hash_index.contains_key("tx-must-not-dispatch"));
+    let error = runtime_config_error(
+        &config,
+        "an unavailable configured durable store must stop startup",
+    );
+    assert!(
+        error.to_string().contains("is not a real directory"),
+        "unexpected hard-cut error: {error:?}"
+    );
 }
 #[test]
 fn status_transition_is_not_published_when_candidate_persistence_fails() {
@@ -9181,7 +9178,7 @@ fn persisted_record_reader_rejects_a_replaced_path_identity() {
     let path = directory.path().join("record.json");
     let displaced = directory.path().join("record.displaced.json");
     fs::write(&path, b"same-length").expect("write original record");
-    let expected = fs::symlink_metadata(&path).expect("inspect original record");
+    let expected = secure_file_metadata::from_path(&path).expect("inspect original record");
     fs::rename(&path, &displaced).expect("displace original record");
     fs::write(&path, b"same-length").expect("write replacement record");
 
@@ -9193,6 +9190,19 @@ fn persisted_record_reader_rejects_a_replaced_path_identity() {
         )
         .is_none(),
         "a same-sized replacement must not satisfy the enumerated identity"
+    );
+}
+#[test]
+fn persisted_record_reader_rejects_hard_linked_input() {
+    let directory = TempDir::new().expect("tempdir");
+    let path = directory.path().join("record.json");
+    let alias = directory.path().join("record-alias.json");
+    fs::write(&path, b"{}").expect("write original record");
+    fs::hard_link(&path, alias).expect("create hard link");
+
+    assert!(
+        read_persisted_record_bounded(&path).is_none(),
+        "a multiply-linked persistence object must fail closed"
     );
 }
 #[test]
@@ -9455,6 +9465,82 @@ fn durable_unlink_keeps_accounting_when_directory_sync_fails() {
     let usage = runtime.durable_store_usage.lock();
     assert!(!usage.message_bytes.contains_key(message_id));
     assert!(usage.bytes < before_bytes);
+}
+#[test]
+fn durable_directory_initialization_resyncs_an_existing_name_after_failure() {
+    let parent = TempDir::new().expect("tempdir");
+    let directory = parent.path().join("iso-store");
+    let durable_parent = fs::canonicalize(parent.path()).expect("canonical parent");
+    let durable_directory = durable_parent.join("iso-store");
+    let first_syncs = std::cell::RefCell::new(Vec::new());
+
+    let error = prepare_real_directory_with_sync(&directory, |path| {
+        first_syncs.borrow_mut().push(path.to_path_buf());
+        if path == durable_parent.as_path() {
+            return Err(std::io::Error::other(
+                "injected parent-directory sync failure",
+            ));
+        }
+        Ok(())
+    })
+    .expect_err("the first parent sync must fail");
+
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::Other,
+        "unexpected initialization failure: {error}"
+    );
+    assert!(is_real_directory(&directory));
+    assert_eq!(
+        first_syncs.into_inner(),
+        vec![durable_directory.clone(), durable_parent.clone()]
+    );
+
+    let retry_syncs = std::cell::RefCell::new(Vec::new());
+    prepare_real_directory_with_sync(&directory, |path| {
+        retry_syncs.borrow_mut().push(path.to_path_buf());
+        Ok(())
+    })
+    .expect("an existing directory must repeat both durability syncs");
+    assert_eq!(
+        retry_syncs.into_inner(),
+        vec![durable_directory, durable_parent]
+    );
+}
+#[test]
+fn durable_directory_initialization_does_not_create_unowned_parent_trees() {
+    let holder = TempDir::new().expect("tempdir");
+    let missing_parent = holder.path().join("operator-owned-parent");
+    let directory = missing_parent.join("iso-store");
+
+    let error = prepare_real_directory_with_sync(&directory, |_| Ok(()))
+        .expect_err("a missing operator-owned parent must fail closed");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(!missing_parent.exists());
+}
+#[test]
+fn runtime_prepares_identity_directories_once_and_does_not_recreate_them() {
+    let holder = TempDir::new().expect("tempdir");
+    let store = holder.path().join("iso-store");
+    let mut config = sample_config();
+    config.store_dir = Some(store.clone());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let messages = store.join("messages");
+    let tombstones = store.join(ISO_PERSISTED_REPLAY_TOMBSTONE_DIR);
+    let audit = store.join(ISO_PERSISTED_AUDIT_DIR);
+    assert!(is_real_directory(&messages));
+    assert!(is_real_directory(&tombstones));
+    assert!(is_real_directory(&audit));
+
+    fs::remove_dir(&tombstones).expect("remove empty tombstone directory");
+    assert!(!runtime.check_and_record_message("missing-tombstone-directory"));
+    assert!(
+        !tombstones.exists(),
+        "runtime persistence must fail closed instead of rebuilding directory topology"
+    );
 }
 #[test]
 fn runtime_rejects_unbounded_or_excessive_store_counts() {
@@ -12190,16 +12276,15 @@ fn protected_replay_capacity_fails_closed_without_mutation() {
 #[test]
 fn detail_persistence_failure_keeps_the_precommitted_replay_tombstone() {
     let store = TempDir::new().expect("tempdir");
-    fs::write(
-        store.path().join("messages"),
-        b"block rich-record directory creation",
-    )
-    .expect("write rich-record blocker");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .expect("runtime")
         .expect("enabled");
+    let messages = store.path().join("messages");
+    let messages_backup = store.path().join("messages-backup");
+    fs::rename(&messages, &messages_backup).expect("move initialized message directory");
+    fs::write(&messages, b"block rich-record persistence").expect("write rich-record blocker");
     let metadata = inbound_metadata("precommitted-replay", "pacs.008");
     let parties = runtime.compatibility_test_parties(&metadata);
     assert_eq!(
@@ -12213,6 +12298,8 @@ fn detail_persistence_failure_keeps_the_precommitted_replay_tombstone() {
             .contains_key("precommitted-replay")
     );
     drop(runtime);
+    fs::remove_file(&messages).expect("remove rich-record blocker");
+    fs::rename(messages_backup, messages).expect("restore initialized message directory");
 
     let reloaded = Iso20022BridgeRuntime::from_config(&config)
         .expect("restart loads precommitted tombstone")

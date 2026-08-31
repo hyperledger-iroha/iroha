@@ -42,6 +42,7 @@ public sealed partial class ToriiClient
             "/v1/offline/top-up",
             request.Norito,
             request.OperationId,
+            request.IssuedAtMilliseconds,
             ToriiKagemushaOperationKind.TopUp,
             cancellationToken);
     }
@@ -55,6 +56,7 @@ public sealed partial class ToriiClient
             "/v1/offline/redeem",
             request.Norito,
             request.OperationId,
+            request.IssuedAtMilliseconds,
             ToriiKagemushaOperationKind.Redeem,
             cancellationToken);
     }
@@ -62,9 +64,9 @@ public sealed partial class ToriiClient
     /// <summary>
     /// Polls one accepted operation identity and validates the returned
     /// result's continuity. Exact retries and a foreign-authority global Applied
-    /// winner may advance the transaction hash. After Pending advances its hash
-    /// and timestamp, callers must use that returned pair in the reference for
-    /// the next poll. Applied top-ups additionally authenticate their balanced-
+    /// winner may advance the transaction hash. Pending must preserve the
+    /// signed request's authorization issuance timestamp even when a retry
+    /// replaces its transaction hash. Applied top-ups additionally authenticate their balanced-
     /// Merkle path and combined post-state root against the embedded
     /// execution commitment. The embedded Commit-QC signature still requires
     /// verification against a separately trusted validator roster before the
@@ -105,6 +107,7 @@ public sealed partial class ToriiClient
         string path,
         byte[] norito,
         string operationId,
+        ulong issuedAtMilliseconds,
         ToriiKagemushaOperationKind expectedKind,
         CancellationToken cancellationToken)
     {
@@ -137,6 +140,7 @@ public sealed partial class ToriiClient
         return ParseKagemushaOperationReference(
             document.RootElement,
             operationId,
+            issuedAtMilliseconds,
             expectedKind,
             location);
     }
@@ -254,6 +258,7 @@ public sealed partial class ToriiClient
     private static ToriiKagemushaOperationReference ParseKagemushaOperationReference(
         JsonElement root,
         string expectedOperationId,
+        ulong expectedSubmittedAtMilliseconds,
         ToriiKagemushaOperationKind expectedKind,
         string? location)
     {
@@ -271,12 +276,16 @@ public sealed partial class ToriiClient
         var state = ParseTaggedPendingState(root.GetProperty("state"));
         var transactionHash = RequireJsonHash(root.GetProperty("transaction_hash"), "transaction_hash");
         var statusUri = RequireJsonString(root.GetProperty("status_uri"), "status_uri");
+        var submittedAtMilliseconds = RequireJsonPositiveUInt64(
+            root.GetProperty("submitted_at_ms"),
+            "submitted_at_ms");
         var expectedUri = $"/v1/offline/operations/{expectedOperationId}";
         if (!string.Equals(operationId, expectedOperationId, StringComparison.Ordinal)
             || kind != expectedKind
             || state != ToriiKagemushaOperationState.Pending
             || !string.Equals(statusUri, expectedUri, StringComparison.Ordinal)
-            || !string.Equals(location, expectedUri, StringComparison.Ordinal))
+            || !string.Equals(location, expectedUri, StringComparison.Ordinal)
+            || submittedAtMilliseconds != expectedSubmittedAtMilliseconds)
         {
             throw new JsonException("Kagemusha operation reference does not match the submitted V4 command.");
         }
@@ -288,7 +297,7 @@ public sealed partial class ToriiClient
             State = state,
             TransactionHash = transactionHash,
             StatusUri = statusUri,
-            SubmittedAtMilliseconds = RequireJsonPositiveUInt64(root.GetProperty("submitted_at_ms"), "submitted_at_ms"),
+            SubmittedAtMilliseconds = submittedAtMilliseconds,
         };
     }
 
@@ -319,10 +328,6 @@ public sealed partial class ToriiClient
 
         if (status.Kind != expectedReference.Kind
             || status.State == ToriiKagemushaOperationState.Pending
-                && string.Equals(
-                    status.TransactionHash,
-                    expectedReference.TransactionHash,
-                    StringComparison.Ordinal)
                 && status.SubmittedAtMilliseconds != expectedReference.SubmittedAtMilliseconds)
         {
             throw new JsonException(

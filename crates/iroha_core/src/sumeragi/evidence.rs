@@ -12,7 +12,10 @@ use iroha_crypto::{Hash, Signature};
 use iroha_data_model::{
     NetworkId,
     block::{
-        consensus::{Evidence, EvidenceRecord, Height, SumeragiV2EquivocationEvidence, View},
+        consensus::{
+            Evidence, EvidencePenaltyStatus, EvidenceRecord, Height,
+            SumeragiV2EquivocationEvidence, View,
+        },
         consensus_v2 as wire_v2,
     },
     consensus::NposPenaltyAction,
@@ -165,7 +168,7 @@ fn v2_evidence_offender(evidence: &SumeragiV2EquivocationEvidence) -> Option<Pee
         .map(|validator| validator.validator.clone())
 }
 fn evidence_record_is_terminal(record: &EvidenceRecord) -> bool {
-    record.penalty_applied || record.penalty_cancelled
+    record.penalty_status.is_terminal()
 }
 fn evidence_record_is_stale(
     record: &EvidenceRecord,
@@ -174,6 +177,30 @@ fn evidence_record_is_stale(
 ) -> bool {
     let subject_height = v2_conflict_round(&record.evidence.equivocation.conflict).height;
     !evidence_within_configured_horizon(current_height, horizon, Some(subject_height))
+}
+fn configured_v2_evidence_horizon(world: &(impl WorldReadOnly + ?Sized)) -> Option<u64> {
+    world
+        .sumeragi_npos_parameters()
+        .map(|params| params.evidence_horizon_blocks())
+}
+/// Generation-coherent committed evidence inputs used by proposal and validation.
+#[derive(Clone)]
+pub(crate) struct V2CommittedEvidenceSnapshot {
+    pub(crate) horizon: Option<u64>,
+    pub(crate) records: Vec<(Vec<u8>, EvidenceRecord)>,
+}
+/// Copy the complete bounded evidence table and its governing horizon from one world view.
+pub(crate) fn v2_committed_evidence_snapshot(
+    world: &(impl WorldReadOnly + ?Sized),
+) -> V2CommittedEvidenceSnapshot {
+    V2CommittedEvidenceSnapshot {
+        horizon: configured_v2_evidence_horizon(world),
+        records: world
+            .consensus_evidence()
+            .iter()
+            .map(|(key, record)| (key.clone(), record.clone()))
+            .collect(),
+    }
 }
 /// Select deterministic committed evidence records to prune before admission.
 ///
@@ -211,6 +238,25 @@ pub(crate) fn v2_committed_evidence_prune_keys(
     }
     pruned.into_iter().collect()
 }
+/// Derive the exact canonical evidence-prune plan from immutable parent state.
+///
+/// Candidate validation and post-finality application both call this helper
+/// before opening their block transaction. A parameter update in the candidate
+/// therefore cannot change which parent records are reclaimed after validation.
+pub(crate) fn v2_committed_evidence_prune_keys_from_state(
+    state: &State,
+    current_height: u64,
+    incoming_records: usize,
+) -> Vec<Vec<u8>> {
+    let view = state.view();
+    let snapshot = v2_committed_evidence_snapshot(view.world());
+    v2_committed_evidence_prune_keys(
+        &snapshot.records,
+        current_height,
+        snapshot.horizon,
+        incoming_records,
+    )
+}
 /// Validate the exact v2 evidence admitted by a candidate block.
 ///
 /// Validation is self-contained: a follower does not need to have observed or
@@ -237,17 +283,10 @@ pub(crate) fn validate_v2_evidence_admissions(
     if total_bytes.is_none_or(|size| size > MAX_V2_EVIDENCE_ADMISSION_BYTES) {
         return Err(EvidenceValidationError::V2AdmissionTooLarge);
     }
-    let horizon = {
-        let world = state.world_view();
-        world
-            .sumeragi_npos_parameters()
-            .map(|params| params.evidence_horizon_blocks())
-    };
-    let records = state.world.consensus_evidence.view();
-    let records = records
-        .iter()
-        .map(|(key, record)| (key.clone(), record.clone()))
-        .collect::<Vec<_>>();
+    let view = state.view();
+    let snapshot = v2_committed_evidence_snapshot(view.world());
+    let horizon = snapshot.horizon;
+    let records = snapshot.records;
     let pruned =
         v2_committed_evidence_prune_keys(&records, block_height, horizon, admissions.len())
             .into_iter()
@@ -339,17 +378,18 @@ pub(crate) fn pending_v2_evidence_admissions(
     state: &State,
     proposal_height: u64,
 ) -> Vec<SumeragiV2EquivocationEvidence> {
-    let horizon = {
-        let world = state.world_view();
-        world
-            .sumeragi_npos_parameters()
-            .map(|params| params.evidence_horizon_blocks())
-    };
-    let records = state.world.consensus_evidence.view();
-    let records = records
-        .iter()
-        .map(|(key, record)| (key.clone(), record.clone()))
-        .collect::<Vec<_>>();
+    let view = state.view();
+    let snapshot = v2_committed_evidence_snapshot(view.world());
+    pending_v2_evidence_admissions_from_snapshot(state, proposal_height, &snapshot)
+}
+/// Select local admissions against the same parent snapshot used for penalties.
+pub(crate) fn pending_v2_evidence_admissions_from_snapshot(
+    state: &State,
+    proposal_height: u64,
+    snapshot: &V2CommittedEvidenceSnapshot,
+) -> Vec<SumeragiV2EquivocationEvidence> {
+    let horizon = snapshot.horizon;
+    let records = &snapshot.records;
     let committed_keys = records
         .iter()
         .map(|(key, _)| key.clone())
@@ -444,13 +484,10 @@ fn retain_validated_local_evidence(
 ) -> bool {
     use norito::codec::Encode as _;
 
-    let current_height = u64::try_from(state.committed_height()).unwrap_or(0);
-    let horizon = {
-        let world = state.world_view();
-        world
-            .sumeragi_npos_parameters()
-            .map(|params| params.evidence_horizon_blocks())
-    };
+    let view = state.view();
+    let current_height = u64::try_from(view.height()).unwrap_or(0);
+    let snapshot = v2_committed_evidence_snapshot(view.world());
+    let horizon = snapshot.horizon;
     let encoded_len = canonical.encode().len();
     if encoded_len > MAX_V2_EVIDENCE_ADMISSION_BYTES {
         return false;
@@ -462,16 +499,14 @@ fn retain_validated_local_evidence(
     let key = v2_evidence_admission_key(&canonical);
     let offender = v2_evidence_offender(&canonical)
         .expect("validated Sumeragi v2 evidence signer belongs to its frozen roster");
-    let committed = state.world.consensus_evidence.view();
-    if committed.get(&key).is_some()
-        || committed.iter().any(|(_, record)| {
-            !evidence_record_is_terminal(record)
-                && v2_evidence_offender(&record.evidence.equivocation).as_ref() == Some(&offender)
-        })
-    {
+    if snapshot.records.iter().any(|(committed_key, record)| {
+        committed_key == &key
+            || (!evidence_record_is_terminal(record)
+                && v2_evidence_offender(&record.evidence.equivocation).as_ref()
+                    == Some(&offender))
+    }) {
         return false;
     }
-    drop(committed);
 
     let mut pending = state.sumeragi_v2_pending_evidence.lock();
     pending.retain(|_, record| {
@@ -1358,23 +1393,46 @@ mod tests {
             v2_evidence_admissions: admissions,
             penalty_actions: Vec::new(),
         };
+        let evidence_prune_keys = v2_committed_evidence_prune_keys_from_state(
+            state,
+            height,
+            effects.v2_evidence_admissions.len(),
+        );
         let mut transaction = state_block.transaction();
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
+            &evidence_prune_keys,
             None,
             &[],
             height,
             view,
             now_ms,
-            #[cfg(feature = "telemetry")]
-            None,
         )
         .expect("valid exact v2 admission applies");
         transaction.apply();
         state_block
             .commit_world_overlay_for_testing()
             .expect("test admission block commits");
+    }
+    fn insert_terminal_v2_evidence_for_test(
+        state: &State,
+        evidence: SumeragiV2EquivocationEvidence,
+    ) -> Vec<u8> {
+        let key = v2_evidence_admission_key(&evidence);
+        let mut records = state.world.consensus_evidence.block();
+        records.insert(
+            key.clone(),
+            EvidenceRecord {
+                evidence: canonical_v2_evidence(&evidence),
+                recorded_at_height: 2,
+                recorded_at_view: 0,
+                recorded_at_ms: 20,
+                penalty_status: EvidencePenaltyStatus::Applied { height: 2 },
+            },
+        );
+        records.commit();
+        key
     }
     fn add_v2_penalty_validator(state: &State, peer: &PeerId) {
         let validator = iroha_data_model::account::AccountId::new(peer.public_key().clone());
@@ -1644,16 +1702,171 @@ mod tests {
                     recorded_at_height: u64::try_from(index).expect("small fixture height") + 1,
                     recorded_at_view: 0,
                     recorded_at_ms: 0,
-                    penalty_applied: terminal,
-                    penalty_cancelled: false,
-                    penalty_cancelled_at_height: None,
-                    penalty_applied_at_height: terminal.then_some(2),
+                    penalty_status: if terminal {
+                        EvidencePenaltyStatus::Applied { height: 2 }
+                    } else {
+                        EvidencePenaltyStatus::Pending
+                    },
                 },
             ));
         }
         let pruned = v2_committed_evidence_prune_keys(&records, 3, None, 2);
         assert_eq!(pruned.len(), 2);
         assert!(terminal_keys.iter().all(|key| pruned.contains(key)));
+    }
+    #[test]
+    fn immutable_parent_horizon_prunes_terminal_evidence_after_candidate_expands_horizon() {
+        const BLOCK_HEIGHT: u64 = 3;
+        const CANDIDATE_HORIZON: u64 = 100;
+
+        let fixture = V2EvidenceFixture::new();
+        let state = test_state_for_v2_fixture_with_horizon(&fixture, 1);
+        let evidence = canonical_v2_phase_vote_evidence(&fixture, 0x7D, 0x7E);
+        let key = insert_terminal_v2_evidence_for_test(&state, evidence);
+        let evidence_prune_keys =
+            v2_committed_evidence_prune_keys_from_state(&state, BLOCK_HEIGHT, 0);
+        assert_eq!(evidence_prune_keys, vec![key.clone()]);
+
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(BLOCK_HEIGHT).expect("non-zero test height"),
+            None,
+            None,
+            None,
+            30,
+            0,
+        );
+        let mut state_block = state.block(header);
+        let mut candidate_transaction = state_block.transaction();
+        candidate_transaction
+            .world
+            .parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(
+                SumeragiNposParameters {
+                    evidence_horizon_blocks: CANDIDATE_HORIZON,
+                    ..SumeragiNposParameters::default()
+                }
+                .into_custom_parameter(),
+            ));
+        candidate_transaction.apply();
+        assert_eq!(
+            state_block
+                .world
+                .sumeragi_npos_parameters()
+                .map(|params| params.evidence_horizon_blocks()),
+            Some(CANDIDATE_HORIZON)
+        );
+
+        let effects = iroha_data_model::consensus::NposConsensusEffects::default();
+        super::super::penalties::validate_npos_consensus_effects_after_execution(
+            &mut state_block,
+            &effects,
+            &evidence_prune_keys,
+            None,
+            &[],
+            BLOCK_HEIGHT,
+            0,
+            30,
+        )
+        .expect("post-execution validation uses the immutable parent prune plan");
+        assert!(
+            state_block.world.consensus_evidence.get(&key).is_some(),
+            "post-execution validation must roll its prune simulation back"
+        );
+        let mut effects_transaction = state_block.transaction();
+        super::super::penalties::apply_npos_consensus_effects_to_transaction(
+            &mut effects_transaction,
+            &effects,
+            &evidence_prune_keys,
+            None,
+            &[],
+            BLOCK_HEIGHT,
+            0,
+            30,
+        )
+        .expect("the immutable parent prune plan remains applicable");
+        effects_transaction.apply();
+        state_block
+            .commit_world_overlay_for_testing()
+            .expect("candidate horizon expansion and parent prune commit");
+        assert!(state.world.consensus_evidence.view().get(&key).is_none());
+    }
+    #[test]
+    fn immutable_parent_horizon_keeps_terminal_evidence_after_candidate_shrinks_horizon() {
+        const BLOCK_HEIGHT: u64 = 3;
+        const CANDIDATE_HORIZON: u64 = 1;
+
+        let fixture = V2EvidenceFixture::new();
+        let state = test_state_for_v2_fixture_with_horizon(&fixture, 100);
+        let evidence = canonical_v2_phase_vote_evidence(&fixture, 0x7F, 0x80);
+        let key = insert_terminal_v2_evidence_for_test(&state, evidence);
+        let evidence_prune_keys =
+            v2_committed_evidence_prune_keys_from_state(&state, BLOCK_HEIGHT, 0);
+        assert!(evidence_prune_keys.is_empty());
+
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(BLOCK_HEIGHT).expect("non-zero test height"),
+            None,
+            None,
+            None,
+            30,
+            0,
+        );
+        let mut state_block = state.block(header);
+        let mut candidate_transaction = state_block.transaction();
+        candidate_transaction
+            .world
+            .parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(
+                SumeragiNposParameters {
+                    evidence_horizon_blocks: CANDIDATE_HORIZON,
+                    ..SumeragiNposParameters::default()
+                }
+                .into_custom_parameter(),
+            ));
+        candidate_transaction.apply();
+        assert_eq!(
+            state_block
+                .world
+                .sumeragi_npos_parameters()
+                .map(|params| params.evidence_horizon_blocks()),
+            Some(CANDIDATE_HORIZON)
+        );
+
+        let effects = iroha_data_model::consensus::NposConsensusEffects::default();
+        super::super::penalties::validate_npos_consensus_effects_after_execution(
+            &mut state_block,
+            &effects,
+            &evidence_prune_keys,
+            None,
+            &[],
+            BLOCK_HEIGHT,
+            0,
+            30,
+        )
+        .expect("post-execution validation uses the immutable parent keep plan");
+        assert!(
+            state_block.world.consensus_evidence.get(&key).is_some(),
+            "post-execution validation must leave the retained evidence intact"
+        );
+        let mut effects_transaction = state_block.transaction();
+        super::super::penalties::apply_npos_consensus_effects_to_transaction(
+            &mut effects_transaction,
+            &effects,
+            &evidence_prune_keys,
+            None,
+            &[],
+            BLOCK_HEIGHT,
+            0,
+            30,
+        )
+        .expect("the immutable parent keep plan remains applicable");
+        effects_transaction.apply();
+        state_block
+            .commit_world_overlay_for_testing()
+            .expect("candidate horizon shrink and parent keep commit");
+        assert!(state.world.consensus_evidence.view().get(&key).is_some());
     }
     #[test]
     fn sumeragi_v2_equivocation_local_retention_deduplicates_swaps() {
@@ -1848,10 +2061,7 @@ mod tests {
                 recorded_at_height: 2,
                 recorded_at_view: 0,
                 recorded_at_ms: 20,
-                penalty_applied: false,
-                penalty_cancelled: false,
-                penalty_cancelled_at_height: None,
-                penalty_applied_at_height: None,
+                penalty_status: EvidencePenaltyStatus::Pending,
             },
         );
         records.commit();

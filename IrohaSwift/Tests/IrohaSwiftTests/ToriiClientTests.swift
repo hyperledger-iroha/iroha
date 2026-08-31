@@ -27,15 +27,32 @@ private func encodeTestCanonicalOnboardingBody(
 private func kagemushaOperationRequestArchive(
     schema: String,
     fieldCount: Int,
-    operationIdFieldIndex: Int
+    operationIdFieldIndex: Int,
+    issuedAtMs: UInt64 = 1
 ) -> Data {
+    let operationId = Data(repeating: 0x11, count: 32)
+    var authorization = CompactNoritoWriter()
+    for index in 0..<10 {
+        let field: Data
+        switch index {
+        case 3:
+            field = operationId
+        case 4:
+            field = CompactNorito.encodeUInt64(issuedAtMs)
+        default:
+            field = Data([UInt8(index + 1)])
+        }
+        authorization.writeField(field)
+    }
     var payload = CompactNoritoWriter()
     for index in 0..<fieldCount {
         let field: Data
         if index == 0 {
             field = CompactNorito.encodeUInt16(KagemushaRecursiveSpend.wireVersionV4)
         } else if index == operationIdFieldIndex {
-            field = Data(repeating: 0x11, count: 32)
+            field = operationId
+        } else if index == fieldCount - 1 {
+            field = authorization.data
         } else {
             field = Data([UInt8(index + 1)])
         }
@@ -44,6 +61,22 @@ private func kagemushaOperationRequestArchive(
     return KagemushaRecursiveSpend.frameArchive(
         schema: schema,
         payload: payload.data
+    )
+}
+
+private func kagemushaOperationReference(
+    operationId: String,
+    kind: KagemushaOperationKind,
+    transactionHash: String = String(repeating: "22", count: 31) + "23",
+    submittedAtMs: UInt64 = 1
+) throws -> KagemushaOperationReference {
+    try KagemushaOperationReference(
+        operationId: operationId,
+        kind: kind,
+        state: .pending,
+        transactionHash: transactionHash,
+        statusUri: "/v1/offline/operations/\(operationId)",
+        submittedAtMs: submittedAtMs
     )
 }
 
@@ -13103,7 +13136,7 @@ final class ToriiClientTests: XCTestCase {
                 state: .pending,
                 transactionHash: transactionHash,
                 statusUri: "/v1/offline/operations/\(operationId)",
-                submittedAtMs: 1_700_000_000_000
+                submittedAtMs: UInt64.max
             )
         }
         let topUpResponseArchive = KagemushaOperationCodec.encodeReference(try reference(.topUp))
@@ -13111,12 +13144,14 @@ final class ToriiClientTests: XCTestCase {
         let topUpRequestArchive = kagemushaOperationRequestArchive(
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
             fieldCount: 8,
-            operationIdFieldIndex: 6
+            operationIdFieldIndex: 6,
+            issuedAtMs: UInt64.max
         )
         let redeemRequestArchive = kagemushaOperationRequestArchive(
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
             fieldCount: 10,
-            operationIdFieldIndex: 8
+            operationIdFieldIndex: 8,
+            issuedAtMs: UInt64.max
         )
         let pendingStatusArchive = try XCTUnwrap(Data(hexString:
             "4e5254300000fb04214104df1bdcd39249bddd4db23a0096000000000000008b9a6668d701e20402000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323308ffffffffffffffff"
@@ -13172,8 +13207,7 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(acceptedRedeem, try reference(.redeem))
         let operationStatus = try await client.getKagemushaOperationStatus(
-            operationId: operationId,
-            expectedKind: .topUp,
+            acceptedTopUp,
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         )
         XCTAssertEqual(
@@ -13209,8 +13243,10 @@ final class ToriiClientTests: XCTestCase {
 
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: operationId,
-                expectedKind: .topUp,
+                try kagemushaOperationReference(
+                    operationId: operationId,
+                    kind: .topUp
+                ),
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("missing operation status must return typed HTTP failure")
@@ -13416,6 +13452,10 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testOfflineOperationResponsesAreStreamingBoundedBeforeCodecParsing() async throws {
         let operationId = String(repeating: "11", count: 32)
+        let reference = try kagemushaOperationReference(
+            operationId: operationId,
+            kind: .topUp
+        )
 
         func install(
             status: Int,
@@ -13445,8 +13485,7 @@ final class ToriiClientTests: XCTestCase {
         )
         await assertToriiInvalidPayload(contains: "declares more than") {
             _ = try await self.makeClient().getKagemushaOperationStatus(
-                operationId: operationId,
-                expectedKind: .topUp,
+                reference,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
         }
@@ -13461,8 +13500,7 @@ final class ToriiClientTests: XCTestCase {
         )
         await assertToriiInvalidPayload(contains: "response exceeded") {
             _ = try await self.makeClient().getKagemushaOperationStatus(
-                operationId: operationId,
-                expectedKind: .topUp,
+                reference,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
         }
@@ -13477,8 +13515,7 @@ final class ToriiClientTests: XCTestCase {
         )
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: operationId,
-                expectedKind: .topUp,
+                reference,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("exact-limit non-Norito bytes must reach the codec")
@@ -13499,8 +13536,7 @@ final class ToriiClientTests: XCTestCase {
         )
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: operationId,
-                expectedKind: .topUp,
+                reference,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("oversized 404 must fail before absence classification")
@@ -13566,14 +13602,18 @@ final class ToriiClientTests: XCTestCase {
             )
         )
 
-        func reference(operationId: String, kind: KagemushaOperationKind) throws -> Data {
+        func reference(
+            operationId: String,
+            kind: KagemushaOperationKind,
+            submittedAtMs: UInt64 = 1
+        ) throws -> Data {
             KagemushaOperationCodec.encodeReference(try KagemushaOperationReference(
                 operationId: operationId,
                 kind: kind,
                 state: .pending,
                 transactionHash: transactionHash,
                 statusUri: "/v1/offline/operations/\(operationId)",
-                submittedAtMs: 1
+                submittedAtMs: submittedAtMs
             ))
         }
 
@@ -13583,20 +13623,38 @@ final class ToriiClientTests: XCTestCase {
                 [
                     "Content-Type": "application/x-norito",
                     "Location": "/v1/offline/operations/\(submittedOperationId)",
+                    "Retry-After": "1",
                 ],
-                "does not match the submitted command"
+                "does not match the signed request"
             ),
             (
                 try reference(operationId: submittedOperationId, kind: .redeem),
                 [
                     "Content-Type": "application/x-norito",
                     "Location": "/v1/offline/operations/\(submittedOperationId)",
+                    "Retry-After": "1",
                 ],
-                "does not match the submitted command"
+                "does not match the signed request"
+            ),
+            (
+                try reference(
+                    operationId: submittedOperationId,
+                    kind: .topUp,
+                    submittedAtMs: 2
+                ),
+                [
+                    "Content-Type": "application/x-norito",
+                    "Location": "/v1/offline/operations/\(submittedOperationId)",
+                    "Retry-After": "1",
+                ],
+                "does not match the signed request"
             ),
             (
                 try reference(operationId: submittedOperationId, kind: .topUp),
-                ["Content-Type": "application/x-norito"],
+                [
+                    "Content-Type": "application/x-norito",
+                    "Retry-After": "1",
+                ],
                 "Location must match"
             ),
             (
@@ -13604,6 +13662,7 @@ final class ToriiClientTests: XCTestCase {
                 [
                     "Content-Type": "application/x-norito",
                     "Location": "/v1/offline/operations/\(otherOperationId)",
+                    "Retry-After": "1",
                 ],
                 "Location must match"
             ),
@@ -13612,12 +13671,16 @@ final class ToriiClientTests: XCTestCase {
                 [
                     "Content-Type": "application/json",
                     "Location": "/v1/offline/operations/\(submittedOperationId)",
+                    "Retry-After": "1",
                 ],
                 "Content-Type must be application/x-norito"
             ),
             (
                 try reference(operationId: submittedOperationId, kind: .topUp),
-                ["Location": "/v1/offline/operations/\(submittedOperationId)"],
+                [
+                    "Location": "/v1/offline/operations/\(submittedOperationId)",
+                    "Retry-After": "1",
+                ],
                 "Content-Type must be application/x-norito"
             ),
             (
@@ -13674,6 +13737,27 @@ final class ToriiClientTests: XCTestCase {
     func testOfflineStatusRejectsWrongResourceIdentityKindAndMediaType() async throws {
         let operationId = String(repeating: "11", count: 32)
         let otherOperationId = String(repeating: "33", count: 32)
+        let wrongIdentityReference = try kagemushaOperationReference(
+            operationId: otherOperationId,
+            kind: .topUp,
+            submittedAtMs: UInt64.max
+        )
+        let wrongKindReference = try kagemushaOperationReference(
+            operationId: operationId,
+            kind: .redeem,
+            submittedAtMs: UInt64.max
+        )
+        let reference = try kagemushaOperationReference(
+            operationId: operationId,
+            kind: .topUp,
+            transactionHash: String(repeating: "44", count: 31) + "45",
+            submittedAtMs: UInt64.max
+        )
+        let wrongTimestampReference = try kagemushaOperationReference(
+            operationId: operationId,
+            kind: .topUp,
+            submittedAtMs: UInt64.max - 1
+        )
         let pendingStatus = try XCTUnwrap(Data(hexString:
             "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff"
         ))
@@ -13687,10 +13771,29 @@ final class ToriiClientTests: XCTestCase {
             )!
             return (response, pendingStatus)
         }
+
+        let replacement = try await makeClient().getKagemushaOperationStatus(
+            reference,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+        guard case let .pending(replacementPending) = replacement else {
+            return XCTFail("expected Pending replacement carrier")
+        }
+        XCTAssertNotEqual(replacementPending.transactionHash, reference.transactionHash)
+        XCTAssertEqual(replacementPending.submittedAtMs, reference.submittedAtMs)
+
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: otherOperationId,
-                expectedKind: .topUp,
+                wrongTimestampReference,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
+            XCTFail("Pending must retain the accepted signed request timestamp")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("signed request timestamp"))
+        }
+        do {
+            _ = try await makeClient().getKagemushaOperationStatus(
+                wrongIdentityReference,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("expected operation identity mismatch to fail")
@@ -13700,8 +13803,7 @@ final class ToriiClientTests: XCTestCase {
 
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: operationId,
-                expectedKind: .redeem,
+                wrongKindReference,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("expected operation kind mismatch to fail")
@@ -13724,8 +13826,7 @@ final class ToriiClientTests: XCTestCase {
             }
             do {
                 _ = try await makeClient().getKagemushaOperationStatus(
-                    operationId: operationId,
-                    expectedKind: .topUp,
+                    reference,
                     chainDiscriminant: SccpV1.tairaI105DiscriminantV1
                 )
                 XCTFail("expected invalid operation media type to fail")

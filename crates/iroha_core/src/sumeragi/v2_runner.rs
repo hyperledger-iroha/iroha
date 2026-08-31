@@ -2532,7 +2532,7 @@ fn candidate_attachments(
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(context.height)
+        .derive_npos_consensus_effects(round_header)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
     } else {
         Default::default()

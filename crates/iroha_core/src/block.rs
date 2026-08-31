@@ -7900,6 +7900,58 @@ pub(crate) mod valid {
             }
             state_block.capture_exec_witness();
             drop(exec_witness_guard);
+            let post_execution_npos_validation = (|| {
+                let Some(effects) = block.npos_consensus_effects() else {
+                    return Ok(());
+                };
+                let context = validation_profile
+                    .v2_context()
+                    .and_then(SumeragiV2ValidationContext::authenticated_height_context)
+                    .ok_or_else(|| {
+                        Self::npos_effects_error(
+                            "post-execution NPoS effect validation requires the authenticated height context",
+                        )
+                    })?;
+                let authenticated_roster = context
+                    .roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect::<Vec<_>>();
+                let height = block.header().height().get();
+                let evidence_prune_keys =
+                    crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+                        state,
+                        height,
+                        effects.v2_evidence_admissions.len(),
+                    );
+                let expected_beacon_anchor = block.header().prev_block_hash().map(|block_hash| {
+                    iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+                        height: height.saturating_sub(1),
+                        block_hash,
+                    }
+                });
+                crate::sumeragi::penalties::validate_npos_consensus_effects_after_execution(
+                    &mut state_block,
+                    effects,
+                    &evidence_prune_keys,
+                    expected_beacon_anchor,
+                    &authenticated_roster,
+                    height,
+                    block.header().view_change_index(),
+                    block.header().creation_time_ms,
+                )
+                .map_err(|error| {
+                    Self::npos_effects_error(format!(
+                        "NPoS consensus effects are not applicable after block execution: {error}"
+                    ))
+                })
+            })();
+            if let Err(error) = post_execution_npos_validation {
+                drop(state_block);
+                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
+                emit_rejection(&block, &error);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             if block.is_empty() && !allow_empty_block {
                 let error = BlockValidationError::EmptyBlock;
                 drop(state_block);
@@ -8494,7 +8546,7 @@ pub(crate) mod valid {
             );
             let expected_actions =
                 applier
-                    .derive_npos_penalty_actions(block_height)
+                    .derive_npos_penalty_actions(block.header())
                     .map_err(|err| {
                         Self::npos_effects_error(format!("failed to derive NPoS effects: {err}"))
                     })?;

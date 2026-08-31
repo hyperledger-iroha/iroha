@@ -1915,13 +1915,14 @@ class RuntimeUpgradeTxResponse:
 
 @dataclass(frozen=True)
 class KagemushaTopUpRequestV4:
-    """Canonical ABI-21/V4 Norito top-up request with its derived operation id."""
+    """Canonical ABI-21/V4 top-up with archive-derived operation id and issue time."""
 
     norito: bytes
     operation_id: str = dataclass_field(init=False)
+    issued_at_ms: int = dataclass_field(init=False)
 
     def __post_init__(self) -> None:
-        operation_id = _validate_kagemusha_norito_request(
+        operation_id, issued_at_ms = _validate_kagemusha_norito_request(
             self.norito,
             _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES,
             "KagemushaTopUpRequestV4.norito",
@@ -1931,17 +1932,19 @@ class KagemushaTopUpRequestV4:
         )
         object.__setattr__(self, "norito", bytes(self.norito))
         object.__setattr__(self, "operation_id", operation_id)
+        object.__setattr__(self, "issued_at_ms", issued_at_ms)
 
 
 @dataclass(frozen=True)
 class KagemushaRedeemRequestV4:
-    """Canonical ABI-21/V4 Norito redemption request with its derived operation id."""
+    """Canonical ABI-21/V4 redeem with archive-derived operation id and issue time."""
 
     norito: bytes
     operation_id: str = dataclass_field(init=False)
+    issued_at_ms: int = dataclass_field(init=False)
 
     def __post_init__(self) -> None:
-        operation_id = _validate_kagemusha_norito_request(
+        operation_id, issued_at_ms = _validate_kagemusha_norito_request(
             self.norito,
             _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES,
             "KagemushaRedeemRequestV4.norito",
@@ -1951,6 +1954,7 @@ class KagemushaRedeemRequestV4:
         )
         object.__setattr__(self, "norito", bytes(self.norito))
         object.__setattr__(self, "operation_id", operation_id)
+        object.__setattr__(self, "issued_at_ms", issued_at_ms)
 
 
 _OFFLINE_CAPABILITY_PATH = "/v1/offline/readiness"
@@ -2022,7 +2026,7 @@ def _validate_kagemusha_norito_request(
     *,
     field_count: int,
     operation_id_field_index: int,
-) -> str:
+) -> Tuple[str, int]:
     if type(value) is not bytes:
         raise TypeError(f"{context} must be immutable bytes")
     if not value:
@@ -2038,6 +2042,45 @@ def _validate_kagemusha_norito_request(
         expected_padding_length=8,
         expected_flags=0x02,
     )
+    fields = _decode_kagemusha_compact_fields(payload, field_count, context)
+    if (
+        len(fields[0]) != 2
+        or int.from_bytes(fields[0], "little") != _KAGEMUSHA_REQUEST_WIRE_VERSION
+    ):
+        raise ValueError(
+            f"{context} must carry wire version {_KAGEMUSHA_REQUEST_WIRE_VERSION}"
+        )
+    operation_id = fields[operation_id_field_index]
+    if len(operation_id) != 32 or not any(operation_id):
+        raise ValueError(
+            f"{context} operation_id field must be exactly 32 non-zero bytes"
+        )
+
+    authorization_context = f"{context} authorization"
+    authorization_fields = _decode_kagemusha_compact_fields(
+        fields[-1],
+        10,
+        authorization_context,
+    )
+    authorization_operation_id = authorization_fields[3]
+    if authorization_operation_id != operation_id:
+        raise ValueError(
+            f"{authorization_context} operation_id must equal the outer operation_id"
+        )
+    issued_at_ms_bytes = authorization_fields[4]
+    if len(issued_at_ms_bytes) != 8:
+        raise ValueError(f"{authorization_context} issued_at_ms must be exactly 8 bytes")
+    issued_at_ms = int.from_bytes(issued_at_ms_bytes, "little")
+    if issued_at_ms == 0:
+        raise ValueError(f"{authorization_context} issued_at_ms must be positive")
+    return operation_id.hex(), issued_at_ms
+
+
+def _decode_kagemusha_compact_fields(
+    payload: bytes,
+    field_count: int,
+    context: str,
+) -> List[bytes]:
     fields: List[bytes] = []
     cursor = 0
     for field_index in range(field_count):
@@ -2055,22 +2098,13 @@ def _validate_kagemusha_norito_request(
         raise ValueError(
             f"{context} must contain exactly {field_count} compact-length fields"
         )
-    if len(fields[0]) != 2 or int.from_bytes(fields[0], "little") != _KAGEMUSHA_REQUEST_WIRE_VERSION:
-        raise ValueError(
-            f"{context} must carry wire version {_KAGEMUSHA_REQUEST_WIRE_VERSION}"
-        )
     canonical_payload = b"".join(
         _encode_kagemusha_compact_length(len(field_value)) + field_value
         for field_value in fields
     )
     if canonical_payload != payload:
         raise ValueError(f"{context} must use canonical compact-length field framing")
-    operation_id = fields[operation_id_field_index]
-    if len(operation_id) != 32 or not any(operation_id):
-        raise ValueError(
-            f"{context} operation_id field must be exactly 32 non-zero bytes"
-        )
-    return operation_id.hex()
+    return fields
 
 
 def _decode_kagemusha_compact_length(
@@ -2946,6 +2980,7 @@ def _offline_operation_reference(
     *,
     expected_operation_id: str,
     expected_kind: Literal["top_up", "redeem"],
+    expected_submitted_at_ms: int,
     location: Optional[str],
     retry_after: Optional[str],
 ) -> OfflineOperationReference:
@@ -2986,6 +3021,16 @@ def _offline_operation_reference(
     if location != expected_uri:
         raise RuntimeError(f"Location header must equal {expected_uri}")
     _offline_retry_after(retry_after, "Retry-After header")
+    submitted_at_ms = _offline_unsigned(
+        _offline_required(record, "submitted_at_ms", context),
+        f"{context}.submitted_at_ms",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if submitted_at_ms != expected_submitted_at_ms:
+        raise RuntimeError(
+            f"{context}.submitted_at_ms does not match the signed request issued_at_ms"
+        )
     return OfflineOperationReference(
         operation_id=operation_id,
         kind=kind,
@@ -2995,12 +3040,7 @@ def _offline_operation_reference(
             f"{context}.transaction_hash",
         ),
         status_uri=status_uri,
-        submitted_at_ms=_offline_unsigned(
-            _offline_required(record, "submitted_at_ms", context),
-            f"{context}.submitted_at_ms",
-            _OFFLINE_MAX_U64,
-            positive=True,
-        ),
+        submitted_at_ms=submitted_at_ms,
     )
 
 
@@ -4499,12 +4539,13 @@ def _offline_operation_status(
                 positive=True,
             ),
         )
-        if status.kind != accepted.kind or (
-            status.transaction_hash == accepted.transaction_hash
-            and status.submitted_at_ms != accepted.submitted_at_ms
+        if (
+            status.kind != accepted.kind
+            or status.submitted_at_ms != accepted.submitted_at_ms
         ):
             raise RuntimeError(
-                f"{value_context} does not match the accepted kind or active submission identity"
+                f"{value_context} does not match the accepted kind or "
+                "immutable submission timestamp"
             )
         return status
     if state == "applied":
@@ -11632,6 +11673,7 @@ class ToriiClient(
             "top_up",
             request.norito,
             request.operation_id,
+            request.issued_at_ms,
             timeout=_kagemusha_request_timeout(timeout, "submit_kagemusha_top_up"),
         )
 
@@ -11650,6 +11692,7 @@ class ToriiClient(
             "redeem",
             request.norito,
             request.operation_id,
+            request.issued_at_ms,
             timeout=_kagemusha_request_timeout(timeout, "submit_kagemusha_redeem"),
         )
 
@@ -11661,10 +11704,10 @@ class ToriiClient(
     ) -> OfflineOperationStatus:
         """Fetch status bound to an accepted Kagemusha operation identity.
 
-        Exact retries and a foreign-authority global Applied winner may advance
-        the active transaction hash while the operation id and kind stay fixed.
-        After Pending advances its hash and timestamp, persist that returned
-        pair in the accepted reference used for the next poll.
+        Exact retries may advance the active transaction hash while the
+        operation id, kind, and submitted timestamp stay fixed. Persist the
+        returned Pending carrier hash without replacing the accepted
+        ``submitted_at_ms``.
         """
 
         accepted = _validated_offline_operation_reference(accepted_reference)
@@ -11704,6 +11747,7 @@ class ToriiClient(
         kind: Literal["top_up", "redeem"],
         body: bytes,
         operation_id: str,
+        issued_at_ms: int,
         *,
         timeout: Optional[float],
     ) -> OfflineOperationReference:
@@ -11736,6 +11780,7 @@ class ToriiClient(
             payload,
             expected_operation_id=operation_id,
             expected_kind=kind,
+            expected_submitted_at_ms=issued_at_ms,
             location=response.headers.get("Location"),
             retry_after=response.headers.get("Retry-After"),
         )

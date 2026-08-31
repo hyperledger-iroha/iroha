@@ -69,6 +69,7 @@ public final class KagemushaRecursiveSpendProverTest {
     toriiLifecycleRoutesAndHeadersAreExact();
     toriiCommandsRejectNoncanonicalRecoveryHeaders();
     toriiOperationIdentityBindingsRejectSubstitutionBeforeCompletion();
+    toriiOperationStatusAllowsCarrierReplacementWithImmutableSignedTime();
     operationStatusProjectionRejectsZeroHeightsAndUnstableCodes();
     offlineCapabilityRejectsRetiredReadinessClaims();
     publicSurfaceIsKagemushaOnly();
@@ -92,6 +93,11 @@ public final class KagemushaRecursiveSpendProverTest {
   @org.junit.Test
   public void toriiOperationIdentityBindingsRejectSubstitutionUnderJUnit() {
     toriiOperationIdentityBindingsRejectSubstitutionBeforeCompletion();
+  }
+
+  @org.junit.Test
+  public void toriiOperationStatusAllowsCarrierReplacementUnderJUnit() {
+    toriiOperationStatusAllowsCarrierReplacementWithImmutableSignedTime();
   }
 
   @org.junit.Test
@@ -1885,14 +1891,6 @@ public final class KagemushaRecursiveSpendProverTest {
             new KagemushaRecursiveSpendProver.OperationHandle(
                 operationId,
                 KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
-                otherOperationId,
-                7L)));
-    assertThrowsIllegalState(() ->
-        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
-            status,
-            new KagemushaRecursiveSpendProver.OperationHandle(
-                operationId,
-                KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
                 operationId,
                 8L)));
     final KagemushaRecursiveSpendProver.OperationStatusProjection appliedRedeem =
@@ -1934,6 +1932,73 @@ public final class KagemushaRecursiveSpendProverTest {
             archive("iroha.torii.v1.offline.top_up.request"));
     assertThrowsIllegalState(() -> client.submitTopUp(request));
     assert dispatched.get() == null;
+  }
+
+  private static void toriiOperationStatusAllowsCarrierReplacementWithImmutableSignedTime() {
+    final byte[] operationId = filled(0x11);
+    final byte[] replacementTransactionHash = filled(0x13);
+    final KagemushaRecursiveSpendProver.OperationHandle topUpHandle =
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
+            operationReferenceProjection(
+                KagemushaRecursiveSpendProver.OperationKind.TOP_UP, operationId, 7L),
+            operationRequestIdentity(
+                KagemushaRecursiveSpendProver.OperationKind.TOP_UP, operationId, 7L));
+    final KagemushaRecursiveSpendProver.OperationStatusProjection replacementPending =
+        operationProjectionWithTransactionHash(
+            KagemushaRecursiveSpendProver.OperationState.PENDING,
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            replacementTransactionHash,
+            7L,
+            null,
+            null);
+    KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+        replacementPending, topUpHandle);
+    assert Arrays.equals(topUpHandle.transactionHash(), operationId);
+    assert topUpHandle.submittedAtMilliseconds() == 7L;
+
+    final KagemushaRecursiveSpendProver.OperationStatusProjection changedTimestampPending =
+        operationProjectionWithTransactionHash(
+            KagemushaRecursiveSpendProver.OperationState.PENDING,
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            replacementTransactionHash,
+            8L,
+            null,
+            null);
+    assertThrowsIllegalState(() ->
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+            changedTimestampPending, topUpHandle));
+
+    final KagemushaRecursiveSpendProver.OperationHandle redeemHandle =
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
+            operationReferenceProjection(
+                KagemushaRecursiveSpendProver.OperationKind.REDEEM, operationId, 7L),
+            operationRequestIdentity(
+                KagemushaRecursiveSpendProver.OperationKind.REDEEM, operationId, 7L));
+    final KagemushaRecursiveSpendProver.OperationStatusProjection appliedWinner =
+        operationProjectionWithTransactionHash(
+            KagemushaRecursiveSpendProver.OperationState.APPLIED,
+            KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+            operationId,
+            replacementTransactionHash,
+            null,
+            1L,
+            null);
+    KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+        appliedWinner, redeemHandle);
+
+    final KagemushaRecursiveSpendProver.OperationStatusProjection rejectedRetry =
+        operationProjectionWithTransactionHash(
+            KagemushaRecursiveSpendProver.OperationState.REJECTED,
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            replacementTransactionHash,
+            null,
+            null,
+            operationRejection("offline_operation_rejected", "rejected"));
+    KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+        rejectedRetry, topUpHandle);
   }
 
   private static void operationStatusProjectionRejectsZeroHeightsAndUnstableCodes() {

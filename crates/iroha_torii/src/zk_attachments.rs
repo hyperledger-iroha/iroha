@@ -1384,44 +1384,32 @@ fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::Fi
 }
 #[cfg(windows)]
 fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::File, fs::Metadata)> {
-    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    let before = fs::symlink_metadata(path)?;
-    let before_identity = (before.volume_serial_number(), before.file_index());
-    if !before.is_file()
-        || before.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || before.number_of_links() != Some(1)
-        || before_identity.0.is_none()
-        || before_identity.1.is_none()
-    {
+    use crate::secure_file_metadata::{
+        from_file, from_path, is_direct_file, number_of_links, open_direct_file, same_file,
+    };
+
+    let before = from_path(path)?;
+    if !is_direct_file(&before) || number_of_links(&before) != Some(1) {
         return Err(invalid_attachment_file(
             "attachment entry is not a direct single-link regular file",
         ));
     }
-    let mut options = fs::OpenOptions::new();
-    let file = options
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)?;
-    let opened = file.metadata()?;
-    let after = fs::symlink_metadata(path)?;
-    let opened_identity = (opened.volume_serial_number(), opened.file_index());
-    let after_identity = (after.volume_serial_number(), after.file_index());
-    if !opened.is_file()
-        || !after.is_file()
-        || opened.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || after.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || opened.number_of_links() != Some(1)
-        || after.number_of_links() != Some(1)
-        || opened_identity != before_identity
-        || after_identity != before_identity
+    let file = open_direct_file(path)?;
+    let opened = from_file(&file)?;
+    let named = from_path(path)?;
+    if !is_direct_file(&opened)
+        || !is_direct_file(&named)
+        || number_of_links(&opened) != Some(1)
+        || number_of_links(&named) != Some(1)
+        || !same_file(&before, &opened)
+        || !same_file(&opened, &named)
     {
         return Err(invalid_attachment_file(
             "attachment entry changed identity while being opened",
         ));
     }
-    Ok((file, opened))
+    let metadata = file.metadata()?;
+    Ok((file, metadata))
 }
 #[cfg(not(any(unix, windows)))]
 fn open_attachment_regular_file_platform(

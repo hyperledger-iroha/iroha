@@ -71,16 +71,45 @@ function encodeCompactLength(value) {
   return Buffer.from(bytes);
 }
 
+function authorizationPayload({
+  operationId = OPERATION_ID,
+  issuedAtMs = 1234n,
+  fieldOverrides = {},
+} = {}) {
+  const issuedAt = Buffer.alloc(8);
+  issuedAt.writeBigUInt64LE(BigInt(issuedAtMs));
+  const fields = Array.from({ length: 10 }, (_, index) => {
+    if (Object.hasOwn(fieldOverrides, index)) return Buffer.from(fieldOverrides[index]);
+    if (index === 3) return Buffer.from(operationId, "hex");
+    if (index === 4) return issuedAt;
+    return Buffer.from([index + 1]);
+  });
+  return Buffer.concat(fields.map((field) => Buffer.concat([
+    encodeCompactLength(field.length),
+    field,
+  ])));
+}
+
 function requestPayload(
   schemaName,
-  { operationId = OPERATION_ID, fieldOverrides = {}, extraFields = [] } = {},
+  {
+    operationId = OPERATION_ID,
+    authorizationOperationId = operationId,
+    issuedAtMs = 1234n,
+    fieldOverrides = {},
+    extraFields = [],
+  } = {},
 ) {
   const fieldCount = schemaName === TOP_UP_SCHEMA_NAME ? 8 : 10;
   const operationIdFieldIndex = schemaName === TOP_UP_SCHEMA_NAME ? 6 : 8;
+  const authorizationFieldIndex = fieldCount - 1;
   const fields = Array.from({ length: fieldCount }, (_, index) => {
     if (Object.hasOwn(fieldOverrides, index)) return Buffer.from(fieldOverrides[index]);
     if (index === 0) return Buffer.from([4, 0]);
     if (index === operationIdFieldIndex) return Buffer.from(operationId, "hex");
+    if (index === authorizationFieldIndex) {
+      return authorizationPayload({ operationId: authorizationOperationId, issuedAtMs });
+    }
     return Buffer.from([index + 1]);
   });
   fields.push(...extraFields.map((field) => Buffer.from(field)));
@@ -109,8 +138,8 @@ function noritoArchive(
   return archive;
 }
 
-function requestV4(schemaName = TOP_UP_SCHEMA_NAME) {
-  return { version: 4, norito: noritoArchive(schemaName) };
+function requestV4(schemaName = TOP_UP_SCHEMA_NAME, options = {}) {
+  return { version: 4, norito: noritoArchive(schemaName, options) };
 }
 
 function operationReference(kind) {
@@ -205,6 +234,7 @@ function appliedTopUpStatus() {
 
 const TEST_NATIVE_STATUS_BYTES = Uint8Array.of(0x7b, 0x7d);
 const TEST_NATIVE_STATUS_VALIDATOR = Object.freeze({
+  connectNoritoBridgeAbiVersion() { return 23; },
   kagemushaOfflineOperationStatusJsonValidateV1() {},
 });
 
@@ -281,14 +311,19 @@ test("Kagemusha JavaScript surface is transport-only ABI-23/V4", () => {
 test("Kagemusha requests require an exact schema-bound Norito frame", () => {
   const normalizedTopUp = normalizeKagemushaTopUpRequestV4(requestV4());
   assert.equal(normalizedTopUp.operationId, OPERATION_ID);
-  assert.equal(normalizedTopUp.norito.length, 96);
+  assert.equal(normalizedTopUp.issuedAtMs, 1234);
+  assert.equal(normalizedTopUp.norito.length, 153);
   assert.equal(
     normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME)).norito.length,
-    100,
+    157,
   );
   assert.equal(
     normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME)).operationId,
     OPERATION_ID,
+  );
+  assert.equal(
+    normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME)).issuedAtMs,
+    1234,
   );
   assert.equal(
     normalizeKagemushaTopUpRequestV4({
@@ -367,6 +402,30 @@ test("Kagemusha requests require an exact schema-bound Norito frame", () => {
   assert.throws(
     () => normalizeKagemushaRedeemRequestV4(zeroOperationId),
     /must contain one non-zero 32-byte operation id/u,
+  );
+
+  assert.throws(
+    () => normalizeKagemushaTopUpRequestV4(requestV4(TOP_UP_SCHEMA_NAME, {
+      authorizationOperationId: "12".repeat(32),
+    })),
+    /authorization operation id must match/u,
+  );
+  assert.throws(
+    () => normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME, {
+      issuedAtMs: 0,
+    })),
+    /authorization issued_at_ms must be a positive lossless unsigned 64-bit integer/u,
+  );
+  assert.throws(
+    () => normalizeKagemushaTopUpRequestV4({
+      version: 4,
+      norito: noritoArchive(TOP_UP_SCHEMA_NAME, {
+        fieldOverrides: {
+          7: authorizationPayload({ fieldOverrides: { 4: new Uint8Array(7) } }),
+        },
+      }),
+    }),
+    /authorization issued_at_ms must be one canonical u64/u,
   );
 
   const trailingField = {
@@ -505,6 +564,38 @@ test("ToriiClient never redispatches an ambiguous Kagemusha POST", async () => {
   }
 });
 
+test("Kagemusha submission binds the accepted timestamp to the signed request", async () => {
+  for (const Client of [
+    sdk.ToriiClient,
+    distSdk.ToriiClient,
+    sdk.ToriiBrowserClient,
+    distSdk.ToriiBrowserClient,
+  ]) {
+    let dispatches = 0;
+    const client = new Client("https://torii.example", {
+      fetchImpl: async () => {
+        dispatches += 1;
+        return jsonResponse({
+          ...operationReference("top_up"),
+          submitted_at_ms: 1235,
+        }, {
+          status: 202,
+          headers: {
+            location: `/v1/offline/operations/${OPERATION_ID}`,
+            "retry-after": "1",
+          },
+        });
+      },
+    });
+
+    await assert.rejects(
+      () => client.submitKagemushaTopUpV4(requestV4()),
+      /submitted_at_ms/u,
+    );
+    assert.equal(dispatches, 1);
+  }
+});
+
 test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", async () => {
   const observed = [];
   const responses = [
@@ -624,6 +715,7 @@ test("raw Kagemusha JSON preserves lossless u64 fields", async () => {
     ];
     let validatedStatusBytes = null;
     const nativeBinding = {
+      connectNoritoBridgeAbiVersion() { return 23; },
       kagemushaOfflineOperationStatusJsonValidateV1(bytes) {
         validatedStatusBytes = Buffer.from(bytes);
       },
@@ -639,7 +731,9 @@ test("raw Kagemusha JSON preserves lossless u64 fields", async () => {
       ...options,
     });
 
-    const acceptedTopUp = await client.submitKagemushaTopUpV4(requestV4());
+    const acceptedTopUp = await client.submitKagemushaTopUpV4(
+      requestV4(TOP_UP_SCHEMA_NAME, { issuedAtMs: firstUnsafeU64 }),
+    );
     const appliedTopUpPromise = client.getKagemushaOperationStatus(acceptedTopUp);
     const appliedTopUp = nativeBindingSymbol === undefined
       ? await assert.rejects(
@@ -648,7 +742,7 @@ test("raw Kagemusha JSON preserves lossless u64 fields", async () => {
       )
       : await appliedTopUpPromise;
     const acceptedRedeem = await client.submitKagemushaRedeemV4(
-      requestV4(REDEEM_SCHEMA_NAME),
+      requestV4(REDEEM_SCHEMA_NAME, { issuedAtMs: maxU64 }),
     );
     const appliedRedeem = await client.getKagemushaOperationStatus(acceptedRedeem);
 
@@ -723,6 +817,7 @@ test("Applied top-up status fails closed without successful native validation", 
       fetchImpl: async () => rawJsonResponse(rawStatus),
       maxRetries: 0,
       [nativeBindingSymbol]: {
+        connectNoritoBridgeAbiVersion() { return 23; },
         kagemushaOfflineOperationStatusJsonValidateV1(bytes) {
           observedBytes = Buffer.from(bytes);
           throw nativeError;
@@ -734,6 +829,25 @@ test("Applied top-up status fails closed without successful native validation", 
       (error) => error === nativeError,
     );
     assert.deepEqual(observedBytes, Buffer.from(rawStatus));
+
+    for (const [label, binding] of [
+      ["missing", { kagemushaOfflineOperationStatusJsonValidateV1() {} }],
+      ["wrong", {
+        connectNoritoBridgeAbiVersion() { return 22; },
+        kagemushaOfflineOperationStatusJsonValidateV1() {},
+      }],
+    ]) {
+      const wrongAbi = new Client("https://torii.example", {
+        fetchImpl: async () => rawJsonResponse(rawStatus),
+        maxRetries: 0,
+        [nativeBindingSymbol]: binding,
+      });
+      await assert.rejects(
+        () => wrongAbi.getKagemushaOperationStatus(operationReference("top_up")),
+        /connectNoritoBridgeAbiVersion\(\) === 23/u,
+        `${label} ABI version must fail closed`,
+      );
+    }
   }
 });
 
@@ -883,6 +997,7 @@ test("operation references require Torii's positive Retry-After header", () => {
       () => normalizeKagemushaOperationReference(operationReference("top_up"), {
         expectedOperationId: OPERATION_ID,
         expectedKind: "top_up",
+        expectedSubmittedAtMs: 1234,
         location: `/v1/offline/operations/${OPERATION_ID}`,
         retryAfter,
       }),
@@ -920,6 +1035,7 @@ test("pending operation timestamps must be positive", () => {
     }, {
       expectedOperationId: OPERATION_ID,
       expectedKind: "top_up",
+      expectedSubmittedAtMs: 1234,
       location: `/v1/offline/operations/${OPERATION_ID}`,
       retryAfter: "1",
     }),
@@ -939,7 +1055,7 @@ test("pending operation timestamps must be positive", () => {
   );
 });
 
-test("pending operation status preserves identity while allowing an exact retry attempt", () => {
+test("pending operation status preserves request time across an exact retry attempt", () => {
   const pending = {
     state: "pending",
     value: {
@@ -966,17 +1082,22 @@ test("pending operation status preserves identity while allowing an exact retry 
         value: {
           ...pending.value,
           transaction_hash: "25".repeat(32),
-          submitted_at_ms: 1235,
+          submitted_at_ms: 1234,
         },
       },
       operationReference("top_up"),
     );
     assert.equal(advanced.value.transaction_hash, "25".repeat(32));
-    assert.equal(advanced.value.submitted_at_ms, 1235);
+    assert.equal(advanced.value.submitted_at_ms, 1234);
     for (const value of [
       { ...pending.value, operation_id: "21".repeat(32) },
       { ...pending.value, kind: { kind: "redeem", value: null } },
       { ...pending.value, submitted_at_ms: 1235 },
+      {
+        ...pending.value,
+        transaction_hash: "25".repeat(32),
+        submitted_at_ms: 1235,
+      },
     ]) {
       assert.throws(
         () => normalize(

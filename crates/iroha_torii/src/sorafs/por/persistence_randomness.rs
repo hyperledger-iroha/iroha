@@ -280,6 +280,35 @@ impl<'a> norito::core::DecodeFromSlice<'a> for PorCoordinatorSnapshot {
     }
 }
 const SECURE_TEMP_RETRIES: usize = 8;
+type RetainedSecureMetadata = crate::secure_file_metadata::SecureMetadata;
+
+#[derive(Debug)]
+struct SecureParent {
+    absolute: PathBuf,
+    path: PathBuf,
+    metadata: RetainedSecureMetadata,
+    #[cfg(windows)]
+    pinned_directories: Vec<(PathBuf, RetainedSecureMetadata)>,
+}
+
+impl SecureParent {
+    #[cfg(any(windows, feature = "app_api"))]
+    fn revalidate(&self) -> Result<(), SecureFileError> {
+        #[cfg(windows)]
+        revalidate_windows_secure_directories(&self.pinned_directories)?;
+
+        let current = crate::secure_file_metadata::from_path(&self.path)?;
+        validate_secure_parent_metadata(&self.path, &current)?;
+        if !crate::secure_file_metadata::same_file(&self.metadata, &current) {
+            return Err(SecureFileError::UnsafePath(format!(
+                "persistence parent {} changed identity while it was in use",
+                self.path.display()
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Error)]
 enum SecureFileError {
     #[error("io error: {0}")]
@@ -307,6 +336,28 @@ impl SecureAtomicWriteError {
             Self::BeforePublication(error) | Self::CommitUncertain(error) => error,
         }
     }
+}
+fn validate_secure_parent_metadata(
+    path: &Path,
+    metadata: &RetainedSecureMetadata,
+) -> Result<(), SecureFileError> {
+    if !crate::secure_file_metadata::is_direct_directory(metadata) {
+        return Err(SecureFileError::UnsafePath(format!(
+            "persistence directory {} is not a direct directory",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        let effective_uid = rustix::process::geteuid().as_raw();
+        if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 {
+            return Err(SecureFileError::UnsafePath(format!(
+                "persistence directory {} must be owned by this process user and private",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 fn absolute_secure_path(path: &Path) -> Result<PathBuf, SecureFileError> {
     if path
@@ -341,7 +392,8 @@ fn absolute_secure_path(path: &Path) -> Result<PathBuf, SecureFileError> {
     }
     Ok(absolute)
 }
-fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, PathBuf, fs::Metadata), SecureFileError> {
+#[cfg(unix)]
+fn ensure_secure_parent(path: &Path) -> Result<SecureParent, SecureFileError> {
     let absolute = absolute_secure_path(path)?;
     let parent = absolute
         .parent()
@@ -360,40 +412,118 @@ fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, PathBuf, fs::Metadata),
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let containing_directory = cursor.parent().map(Path::to_path_buf);
                 let mut builder = fs::DirBuilder::new();
                 #[cfg(unix)]
                 builder.mode(0o700);
                 builder.create(&cursor)?;
+                if let Some(containing_directory) = containing_directory
+                    && !containing_directory.as_os_str().is_empty()
+                {
+                    crate::durable_fs::sync_direct_directory(&containing_directory)?;
+                }
             }
             Err(error) => return Err(error.into()),
         }
     }
-    let metadata = fs::symlink_metadata(&parent)?;
-    #[cfg(unix)]
-    let effective_uid = rustix::process::geteuid().as_raw();
-    #[cfg(unix)]
-    if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 {
-        return Err(SecureFileError::UnsafePath(format!(
-            "persistence directory {} must be owned by this process user and mode 0700",
-            parent.display()
-        )));
+    let metadata = crate::secure_file_metadata::from_path(&parent)?;
+    validate_secure_parent_metadata(&parent, &metadata)?;
+    Ok(SecureParent {
+        absolute,
+        path: parent,
+        metadata,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn ensure_secure_parent(_path: &Path) -> Result<SecureParent, SecureFileError> {
+    Err(SecureFileError::Io(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure persistence directories are unsupported on this platform",
+    )))
+}
+
+#[cfg(windows)]
+fn ensure_secure_parent(path: &Path) -> Result<SecureParent, SecureFileError> {
+    let absolute = absolute_secure_path(path)?;
+    let parent = absolute
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| SecureFileError::UnsafePath("persistence path has no parent".to_owned()))?;
+    let mut cursor = PathBuf::new();
+    let mut pinned_directories = Vec::new();
+    for component in parent.components() {
+        cursor.push(component.as_os_str());
+        if matches!(component, Component::Prefix(_)) {
+            continue;
+        }
+        let containing_directory = cursor.parent().map(Path::to_path_buf);
+        let (metadata, created) = match crate::secure_file_metadata::from_path(&cursor) {
+            Ok(metadata) => (metadata, false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match fs::create_dir(&cursor) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error.into()),
+                }
+                (crate::secure_file_metadata::from_path(&cursor)?, true)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        validate_secure_parent_metadata(&cursor, &metadata)?;
+        revalidate_windows_secure_directories(&pinned_directories)?;
+        if created
+            && let Some(containing_directory) = containing_directory
+            && !containing_directory.as_os_str().is_empty()
+        {
+            crate::durable_fs::sync_direct_directory(&containing_directory)?;
+            revalidate_windows_secure_directories(&pinned_directories)?;
+        }
+        pinned_directories.push((cursor.clone(), metadata));
     }
-    Ok((absolute, parent, metadata))
+    let metadata = crate::secure_file_metadata::from_path(&parent)?;
+    validate_secure_parent_metadata(&parent, &metadata)?;
+    revalidate_windows_secure_directories(&pinned_directories)?;
+    Ok(SecureParent {
+        absolute,
+        path: parent,
+        metadata,
+        pinned_directories,
+    })
+}
+
+#[cfg(windows)]
+fn revalidate_windows_secure_directories(
+    directories: &[(PathBuf, RetainedSecureMetadata)],
+) -> Result<(), SecureFileError> {
+    for (path, before) in directories {
+        let after = crate::secure_file_metadata::from_path(path)?;
+        validate_secure_parent_metadata(path, &after)?;
+        if !crate::secure_file_metadata::same_file(before, &after) {
+            return Err(SecureFileError::UnsafePath(format!(
+                "persistence directory {} changed identity while it was in use",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 fn validate_secure_file_metadata(
     path: &Path,
-    metadata: &fs::Metadata,
+    metadata: &RetainedSecureMetadata,
 ) -> Result<(), SecureFileError> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if !crate::secure_file_metadata::is_direct_file(metadata)
+        || crate::secure_file_metadata::number_of_links(metadata) != Some(1)
+    {
         return Err(SecureFileError::UnsafePath(format!(
-            "{} is not a regular non-symlink file",
+            "{} is not a direct, single-link regular file",
             path.display()
         )));
     }
     #[cfg(unix)]
     let effective_uid = rustix::process::geteuid().as_raw();
     #[cfg(unix)]
-    if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 || metadata.nlink() != 1 {
+    if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 {
         return Err(SecureFileError::UnsafePath(format!(
             "{} must be owned by this process user, private, and singly linked",
             path.display()
@@ -402,43 +532,102 @@ fn validate_secure_file_metadata(
     Ok(())
 }
 fn secure_read_bytes(path: &Path, max_bytes: usize) -> Result<Option<Vec<u8>>, SecureFileError> {
-    let (absolute, parent, parent_metadata) = ensure_secure_parent(path)?;
-    let filename = absolute.file_name().ok_or_else(|| {
+    let parent = ensure_secure_parent(path)?;
+    let filename = parent.absolute.file_name().ok_or_else(|| {
         SecureFileError::UnsafePath("persistence path must name a file".to_owned())
     })?;
-    let parent_file = open_secure_parent_directory(&parent, &parent_metadata)?;
-    secure_read_bytes_in_parent(&parent_file, filename, &absolute, max_bytes)
+    let parent_file = open_secure_parent_directory(&parent)?;
+    revalidate_secure_parent_for_path_operations(&parent)?;
+    let bytes = secure_read_bytes_in_parent(&parent_file, filename, &parent.absolute, max_bytes)?;
+    revalidate_secure_parent_for_path_operations(&parent)?;
+    Ok(bytes)
 }
-fn open_secure_parent_directory(
-    parent: &Path,
-    expected: &fs::Metadata,
-) -> Result<File, SecureFileError> {
+fn open_secure_parent_directory(parent: &SecureParent) -> Result<File, SecureFileError> {
     let mut options = OpenOptions::new();
-    options.read(true);
     #[cfg(unix)]
-    options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
-    let directory = options.open(parent)?;
-    let opened = directory.metadata()?;
-    if !opened.is_dir() {
-        return Err(SecureFileError::UnsafePath(format!(
-            "persistence parent {} is not a directory",
-            parent.display()
-        )));
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+        options
+            .access_mode(0)
+            // Keep the parent usable by readers and writers, but deny rename/delete sharing
+            // while path-based Windows operations depend on this identity.
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    #[cfg(unix)]
-    if opened.dev() != expected.dev() || opened.ino() != expected.ino() {
+    #[cfg(not(any(unix, windows)))]
+    options.read(true);
+    let directory = options.open(&parent.path)?;
+    let opened = crate::secure_file_metadata::from_file(&directory)?;
+    validate_secure_parent_metadata(&parent.path, &opened)?;
+    if !crate::secure_file_metadata::same_file(&parent.metadata, &opened) {
         return Err(SecureFileError::UnsafePath(
             "persistence parent changed while pinning its directory handle".to_owned(),
         ));
     }
+    revalidate_secure_parent_for_path_operations(parent)?;
     Ok(directory)
+}
+
+fn revalidate_secure_parent_for_path_operations(
+    parent: &SecureParent,
+) -> Result<(), SecureFileError> {
+    #[cfg(windows)]
+    return parent.revalidate();
+    #[cfg(not(windows))]
+    {
+        let _ = parent;
+        Ok(())
+    }
+}
+
+fn sync_secure_parent_directory(
+    _parent: &SecureParent,
+    _directory: &File,
+) -> Result<(), SecureFileError> {
+    #[cfg(unix)]
+    {
+        _directory.sync_all()?;
+        let durable = crate::secure_file_metadata::from_file(_directory)?;
+        validate_secure_parent_metadata(&_parent.path, &durable)?;
+        if !crate::secure_file_metadata::same_file(&_parent.metadata, &durable) {
+            return Err(SecureFileError::UnsafePath(format!(
+                "persistence parent {} changed while its directory entry was synchronized",
+                _parent.path.display()
+            )));
+        }
+    }
+    #[cfg(windows)]
+    {
+        _parent.revalidate()?;
+        crate::durable_fs::sync_direct_directory(&_parent.path)?;
+        _parent.revalidate()?;
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = _parent;
+        return Err(SecureFileError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "durable directory synchronization is unsupported on this platform",
+        )));
+    }
+    #[cfg(any(unix, windows))]
+    Ok(())
 }
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn verify_secure_named_file(
     parent: &File,
     name: &std::ffi::OsStr,
     path: &Path,
-    metadata: &fs::Metadata,
+    metadata: &RetainedSecureMetadata,
 ) -> Result<rustix::fs::Stat, SecureFileError> {
     let named = rustix::fs::statat(parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
         .map_err(std::io::Error::from)?;
@@ -461,12 +650,14 @@ fn verify_secure_named_file(
     _parent: &File,
     _name: &std::ffi::OsStr,
     path: &Path,
-    metadata: &fs::Metadata,
+    metadata: &RetainedSecureMetadata,
 ) -> Result<(), SecureFileError> {
-    let named = fs::symlink_metadata(path)?;
+    let named = crate::secure_file_metadata::from_path(path)?;
     validate_secure_file_metadata(path, metadata)?;
     validate_secure_file_metadata(path, &named)?;
-    if named.len() != metadata.len() {
+    if !crate::secure_file_metadata::same_file(metadata, &named)
+        || !crate::secure_file_metadata::unchanged(metadata, &named)
+    {
         return Err(SecureFileError::UnsafePath(format!(
             "{} changed while being inspected",
             path.display()
@@ -506,7 +697,7 @@ fn secure_read_bytes_in_parent(
         )
         .map_err(std::io::Error::from)?,
     );
-    let opened = file.metadata()?;
+    let opened = crate::secure_file_metadata::from_file(&file)?;
     let opened_named = verify_secure_named_file(parent, name, path, &opened)?;
     if opened_named.st_dev != before.st_dev || opened_named.st_ino != before.st_ino {
         return Err(SecureFileError::UnsafePath(format!(
@@ -514,14 +705,24 @@ fn secure_read_bytes_in_parent(
             path.display()
         )));
     }
-    let mut bytes = Vec::with_capacity(opened.len() as usize);
+    let capacity = usize::try_from(opened.len())
+        .unwrap_or(max_bytes)
+        .min(max_bytes);
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(std::io::Error::other)?;
     std::io::Read::by_ref(&mut file)
-        .take(max_bytes as u64 + 1)
+        .take(
+            u64::try_from(max_bytes)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        )
         .read_to_end(&mut bytes)?;
     if bytes.len() > max_bytes {
         return Err(SecureFileError::Oversize { limit: max_bytes });
     }
-    let after_metadata = file.metadata()?;
+    let after_metadata = crate::secure_file_metadata::from_file(&file)?;
     let after = verify_secure_named_file(parent, name, path, &after_metadata)?;
     if after.st_dev != before.st_dev
         || after.st_ino != before.st_ino
@@ -546,26 +747,72 @@ fn secure_read_bytes_in_parent(
     path: &Path,
     max_bytes: usize,
 ) -> Result<Option<Vec<u8>>, SecureFileError> {
-    let metadata = match fs::symlink_metadata(path) {
+    let before = match crate::secure_file_metadata::from_path(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    validate_secure_file_metadata(path, &metadata)?;
-    if metadata.len() > max_bytes as u64 {
+    validate_secure_file_metadata(path, &before)?;
+    let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    if before.len() > max_bytes_u64 {
         return Err(SecureFileError::Oversize { limit: max_bytes });
     }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    let mut file = options.open(path)?;
-    let opened = file.metadata()?;
-    validate_secure_file_metadata(path, &opened)?;
-    let mut bytes = Vec::with_capacity(opened.len() as usize);
+
+    #[cfg(windows)]
+    let mut file = crate::secure_file_metadata::open_direct_file(path)?;
+    #[cfg(not(windows))]
+    let mut file = {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NOFOLLOW);
+        options.open(path)?
+    };
+    let opened_before = crate::secure_file_metadata::from_file(&file)?;
+    let named_after_open = crate::secure_file_metadata::from_path(path)?;
+    validate_secure_file_metadata(path, &opened_before)?;
+    validate_secure_file_metadata(path, &named_after_open)?;
+    if !crate::secure_file_metadata::same_file(&before, &opened_before)
+        || !crate::secure_file_metadata::unchanged(&before, &opened_before)
+        || !crate::secure_file_metadata::same_file(&opened_before, &named_after_open)
+        || !crate::secure_file_metadata::unchanged(&opened_before, &named_after_open)
+        || opened_before.len() > max_bytes_u64
+    {
+        return Err(SecureFileError::UnsafePath(format!(
+            "{} changed while being opened",
+            path.display()
+        )));
+    }
+
+    let capacity = usize::try_from(opened_before.len())
+        .unwrap_or(max_bytes)
+        .min(max_bytes);
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(std::io::Error::other)?;
     std::io::Read::by_ref(&mut file)
-        .take(max_bytes as u64 + 1)
+        .take(max_bytes_u64.saturating_add(1))
         .read_to_end(&mut bytes)?;
     if bytes.len() > max_bytes {
         return Err(SecureFileError::Oversize { limit: max_bytes });
+    }
+    let opened_after = crate::secure_file_metadata::from_file(&file)?;
+    let named_after_read = crate::secure_file_metadata::from_path(path)?;
+    validate_secure_file_metadata(path, &opened_after)?;
+    validate_secure_file_metadata(path, &named_after_read)?;
+    if !crate::secure_file_metadata::same_file(&opened_before, &opened_after)
+        || !crate::secure_file_metadata::unchanged(&opened_before, &opened_after)
+        || !crate::secure_file_metadata::same_file(&opened_after, &named_after_read)
+        || !crate::secure_file_metadata::unchanged(&opened_after, &named_after_read)
+        || !crate::secure_file_metadata::same_file(&before, &named_after_read)
+        || !crate::secure_file_metadata::unchanged(&before, &named_after_read)
+        || u64::try_from(bytes.len()).ok() != Some(opened_before.len())
+    {
+        return Err(SecureFileError::UnsafePath(format!(
+            "{} changed while being read",
+            path.display()
+        )));
     }
     Ok(Some(bytes))
 }
@@ -593,7 +840,7 @@ fn create_secure_temporary_file(
             Err(error) => return Err(std::io::Error::from(error).into()),
         };
         let path = parent_path.join(&name);
-        let metadata = file.metadata()?;
+        let metadata = crate::secure_file_metadata::from_file(&file)?;
         if let Err(error) = verify_secure_named_file(parent, &name, &path, &metadata) {
             let _ = rustix::fs::unlinkat(parent, &name, rustix::fs::AtFlags::empty());
             return Err(error);
@@ -616,8 +863,30 @@ fn create_secure_temporary_file(
         let path = parent_path.join(&name);
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            const FILE_SHARE_READ: u32 = 0x0000_0001;
+            const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+            options
+                // Deny competing writers for the complete staging lifetime. Delete sharing is
+                // required so the open temporary file can be atomically renamed into place.
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
         match options.open(&path) {
-            Ok(file) => return Ok((file, name, path)),
+            Ok(file) => {
+                let metadata = crate::secure_file_metadata::from_file(&file)?;
+                if let Err(error) = verify_secure_named_file(_parent, &name, &path, &metadata) {
+                    let _ = fs::remove_file(&path);
+                    return Err(error);
+                }
+                return Ok((file, name, path));
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.into()),
         }
@@ -792,22 +1061,23 @@ fn secure_atomic_write_with_outcome(
             SecureFileError::Oversize { limit: max_bytes },
         ));
     }
-    let (absolute, parent, parent_before) = ensure_secure_parent(path)?;
-    let filename = absolute
+    let parent = ensure_secure_parent(path)?;
+    let filename = parent
+        .absolute
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| {
             SecureFileError::UnsafePath("persistence filename is not UTF-8".to_owned())
         })?;
     let filename_os = std::ffi::OsStr::new(filename);
-    let parent_file = open_secure_parent_directory(&parent, &parent_before)?;
-    if let Some(existing) =
-        secure_read_bytes_in_parent(&parent_file, filename_os, &absolute, max_bytes)?
-    {
+    let parent_file = open_secure_parent_directory(&parent)?;
+    revalidate_secure_parent_for_path_operations(&parent)?;
+    let existing =
+        secure_read_bytes_in_parent(&parent_file, filename_os, &parent.absolute, max_bytes)?;
+    revalidate_secure_parent_for_path_operations(&parent)?;
+    if let Some(existing) = existing {
         if existing == bytes {
-            parent_file
-                .sync_all()
-                .map_err(SecureFileError::from)
+            sync_secure_parent_directory(&parent, &parent_file)
                 .map_err(SecureAtomicWriteError::CommitUncertain)?;
             return Ok(());
         }
@@ -825,21 +1095,40 @@ fn secure_atomic_write_with_outcome(
             )),
         ));
     }
+    revalidate_secure_parent_for_path_operations(&parent)?;
     let (mut file, temp_name, temp_path) =
-        create_secure_temporary_file(&parent_file, &parent, filename)?;
+        create_secure_temporary_file(&parent_file, &parent.path, filename)?;
     let mut publication_reached = false;
     let result: Result<(), SecureFileError> = (|| {
-        verify_secure_named_file(&parent_file, &temp_name, &temp_path, &file.metadata()?)?;
+        revalidate_secure_parent_for_path_operations(&parent)?;
+        let temporary_empty = crate::secure_file_metadata::from_file(&file)?;
+        verify_secure_named_file(&parent_file, &temp_name, &temp_path, &temporary_empty)?;
+        if temporary_empty.len() != 0 {
+            return Err(SecureFileError::UnsafePath(format!(
+                "{} was not empty when it was created",
+                temp_path.display()
+            )));
+        }
         file.write_all(bytes)?;
         file.sync_all()?;
-        verify_secure_named_file(&parent_file, &temp_name, &temp_path, &file.metadata()?)?;
+        let temporary_ready = crate::secure_file_metadata::from_file(&file)?;
+        verify_secure_named_file(&parent_file, &temp_name, &temp_path, &temporary_ready)?;
+        if !crate::secure_file_metadata::same_file(&temporary_empty, &temporary_ready)
+            || u64::try_from(bytes.len()).ok() != Some(temporary_ready.len())
+        {
+            return Err(SecureFileError::UnsafePath(format!(
+                "{} changed identity or length while it was written",
+                temp_path.display()
+            )));
+        }
+        revalidate_secure_parent_for_path_operations(&parent)?;
         if replace_existing {
             publish_secure_file_replace(
                 &parent_file,
                 &temp_name,
                 filename_os,
                 &temp_path,
-                &absolute,
+                &parent.absolute,
             )?;
             publication_reached = true;
         } else {
@@ -852,12 +1141,12 @@ fn secure_atomic_write_with_outcome(
                     return match secure_read_bytes_in_parent(
                         &parent_file,
                         filename_os,
-                        &absolute,
+                        &parent.absolute,
                         max_bytes,
                     )? {
                         Some(existing) if existing == bytes => {
                             publication_reached = true;
-                            parent_file.sync_all()?;
+                            sync_secure_parent_directory(&parent, &parent_file)?;
                             Ok(())
                         }
                         Some(_) => Err(SecureFileError::Conflict),
@@ -867,12 +1156,33 @@ fn secure_atomic_write_with_outcome(
                 Err(error) => return Err(error.into()),
             }
         }
-        parent_file.sync_all()?;
-        verify_secure_named_file(&parent_file, filename_os, &absolute, &file.metadata()?)?;
+        revalidate_secure_parent_for_path_operations(&parent)?;
+        let published = crate::secure_file_metadata::from_file(&file)?;
+        verify_secure_named_file(&parent_file, filename_os, &parent.absolute, &published)?;
+        if !crate::secure_file_metadata::same_file(&temporary_ready, &published)
+            || u64::try_from(bytes.len()).ok() != Some(published.len())
+        {
+            return Err(SecureFileError::UnsafePath(format!(
+                "{} changed identity or length during publication",
+                parent.absolute.display()
+            )));
+        }
+        sync_secure_parent_directory(&parent, &parent_file)?;
+        let durable = crate::secure_file_metadata::from_file(&file)?;
+        verify_secure_named_file(&parent_file, filename_os, &parent.absolute, &durable)?;
+        if !crate::secure_file_metadata::unchanged(&published, &durable) {
+            return Err(SecureFileError::UnsafePath(format!(
+                "{} changed while its directory entry was synchronized",
+                parent.absolute.display()
+            )));
+        }
+        revalidate_secure_parent_for_path_operations(&parent)?;
         Ok(())
     })();
     if result.is_err() && !publication_reached {
-        let _ = unlink_secure_temporary_file(&parent_file, &temp_name, &temp_path);
+        if revalidate_secure_parent_for_path_operations(&parent).is_ok() {
+            let _ = unlink_secure_temporary_file(&parent_file, &temp_name, &temp_path);
+        }
     }
     result.map_err(|error| {
         if publication_reached {
@@ -1226,13 +1536,17 @@ struct DrandEndpoint {
 struct SecureStateOwnerLock {
     path: PathBuf,
     file: File,
+    identity: RetainedSecureMetadata,
+    parent: SecureParent,
+    parent_directory: File,
 }
 #[cfg(feature = "app_api")]
 impl SecureStateOwnerLock {
     fn acquire(state_path: &Path, label: &str) -> Result<Self, RandomnessError> {
-        let (absolute, parent, _) = ensure_secure_parent(state_path)
+        let parent = ensure_secure_parent(state_path)
             .map_err(|error| RandomnessError::Persistence(format!("{label} state: {error}")))?;
-        let filename = absolute
+        let filename = parent
+            .absolute
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| {
@@ -1240,8 +1554,14 @@ impl SecureStateOwnerLock {
                     "{label} state ownership path is not canonical UTF-8"
                 ))
             })?;
-        let path = parent.join(format!(".{filename}.owner.lock"));
-        let before_open = match fs::symlink_metadata(&path) {
+        let path = parent.path.join(format!(".{filename}.owner.lock"));
+        let parent_directory = open_secure_parent_directory(&parent).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock parent: {error}"))
+        })?;
+        parent.revalidate().map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock parent: {error}"))
+        })?;
+        let before_open = match crate::secure_file_metadata::from_path(&path) {
             Ok(metadata) => {
                 validate_secure_file_metadata(&path, &metadata).map_err(|error| {
                     RandomnessError::Persistence(format!("{label} state lock: {error}"))
@@ -1264,10 +1584,23 @@ impl SecureStateOwnerLock {
         options.read(true).write(true).create(true);
         #[cfg(unix)]
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            const FILE_SHARE_READ: u32 = 0x0000_0001;
+            const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+            options
+                // Lock contenders need read/write sharing, but delete sharing would allow a
+                // second pathname to replace the file while this owner still holds its lock.
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
         let file = options.open(&path).map_err(|error| {
             RandomnessError::Persistence(format!("{label} state lock: {error}"))
         })?;
-        let opened = file.metadata().map_err(|error| {
+        let opened = crate::secure_file_metadata::from_file(&file).map_err(|error| {
             RandomnessError::Persistence(format!("{label} state lock: {error}"))
         })?;
         validate_secure_file_metadata(&path, &opened).map_err(|error| {
@@ -1278,26 +1611,30 @@ impl SecureStateOwnerLock {
                 "{label} state ownership lock is not empty"
             )));
         }
-        #[cfg(unix)]
-        if before_open
-            .as_ref()
-            .is_some_and(|before| before.dev() != opened.dev() || before.ino() != opened.ino())
-        {
+        if before_open.as_ref().is_some_and(|before| {
+            !crate::secure_file_metadata::same_file(before, &opened)
+                || !crate::secure_file_metadata::unchanged(before, &opened)
+        }) {
             return Err(RandomnessError::Persistence(format!(
                 "{label} state ownership lock changed while opening"
             )));
         }
-        #[cfg(not(unix))]
-        let _ = &before_open;
-        let linked = fs::symlink_metadata(&path).map_err(|error| {
+        let linked = crate::secure_file_metadata::from_path(&path).map_err(|error| {
             RandomnessError::Persistence(format!("{label} state lock: {error}"))
         })?;
-        #[cfg(unix)]
-        if linked.dev() != opened.dev() || linked.ino() != opened.ino() {
+        validate_secure_file_metadata(&path, &linked).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        if !crate::secure_file_metadata::same_file(&opened, &linked)
+            || !crate::secure_file_metadata::unchanged(&opened, &linked)
+        {
             return Err(RandomnessError::Persistence(format!(
                 "{label} state ownership lock path changed while opening"
             )));
         }
+        parent.revalidate().map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock parent: {error}"))
+        })?;
         match file.try_lock() {
             Ok(()) => {}
             Err(fs::TryLockError::WouldBlock) => {
@@ -1311,15 +1648,66 @@ impl SecureStateOwnerLock {
                 )));
             }
         }
-        let owner = Self { path, file };
+        file.sync_all().map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        sync_secure_parent_directory(&parent, &parent_directory).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock parent: {error}"))
+        })?;
+        let identity = crate::secure_file_metadata::from_file(&file).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        let locked_link = crate::secure_file_metadata::from_path(&path).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        validate_secure_file_metadata(&path, &identity).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        validate_secure_file_metadata(&path, &locked_link).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        if !crate::secure_file_metadata::same_file(&opened, &identity)
+            || !crate::secure_file_metadata::unchanged(&opened, &identity)
+            || !crate::secure_file_metadata::same_file(&identity, &locked_link)
+            || !crate::secure_file_metadata::unchanged(&identity, &locked_link)
+        {
+            return Err(RandomnessError::Persistence(format!(
+                "{label} state ownership lock changed while acquiring ownership"
+            )));
+        }
+        parent.revalidate().map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock parent: {error}"))
+        })?;
+        let owner = Self {
+            path,
+            file,
+            identity,
+            parent,
+            parent_directory,
+        };
         owner.verify(label)?;
         Ok(owner)
     }
     fn verify(&self, label: &str) -> Result<(), RandomnessError> {
-        let opened = self.file.metadata().map_err(|error| {
+        self.parent.revalidate().map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock parent: {error}"))
+        })?;
+        let opened_parent = crate::secure_file_metadata::from_file(&self.parent_directory)
+            .map_err(|error| {
+                RandomnessError::Persistence(format!("{label} state lock parent: {error}"))
+            })?;
+        validate_secure_parent_metadata(&self.parent.path, &opened_parent).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock parent: {error}"))
+        })?;
+        if !crate::secure_file_metadata::same_file(&self.parent.metadata, &opened_parent) {
+            return Err(RandomnessError::Persistence(format!(
+                "{label} state ownership lock parent changed identity"
+            )));
+        }
+        let opened = crate::secure_file_metadata::from_file(&self.file).map_err(|error| {
             RandomnessError::Persistence(format!("{label} state lock: {error}"))
         })?;
-        let linked = fs::symlink_metadata(&self.path).map_err(|error| {
+        let linked = crate::secure_file_metadata::from_path(&self.path).map_err(|error| {
             RandomnessError::Persistence(format!("{label} state lock: {error}"))
         })?;
         validate_secure_file_metadata(&self.path, &opened).map_err(|error| {
@@ -1333,12 +1721,18 @@ impl SecureStateOwnerLock {
                 "{label} state ownership lock is not empty"
             )));
         }
-        #[cfg(unix)]
-        if linked.dev() != opened.dev() || linked.ino() != opened.ino() {
+        if !crate::secure_file_metadata::same_file(&self.identity, &opened)
+            || !crate::secure_file_metadata::unchanged(&self.identity, &opened)
+            || !crate::secure_file_metadata::same_file(&opened, &linked)
+            || !crate::secure_file_metadata::unchanged(&opened, &linked)
+        {
             return Err(RandomnessError::Persistence(format!(
-                "{label} state ownership lock path was replaced"
+                "{label} state ownership lock identity, revision, or link count changed"
             )));
         }
+        self.parent.revalidate().map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock parent: {error}"))
+        })?;
         Ok(())
     }
 }
@@ -1462,6 +1856,7 @@ impl DrandHttpRandomnessProvider {
         }
         let state_owner_lock = SecureStateOwnerLock::acquire(&config.state_path, "drand")?;
         let loaded = load_drand_state(&config.state_path, &config.public_key)?;
+        state_owner_lock.verify("drand")?;
         Ok(Self {
             public_key: config.public_key,
             genesis_time: config.genesis_time,
@@ -1603,6 +1998,7 @@ impl DrandHttpRandomnessProvider {
         ))
         .await
         .map_err(|error| RandomnessError::Persistence(error.to_string()))??;
+        self.state_owner_lock.verify("drand")?;
         let mut state = self.state.lock();
         *state = Some(next);
         Ok(())

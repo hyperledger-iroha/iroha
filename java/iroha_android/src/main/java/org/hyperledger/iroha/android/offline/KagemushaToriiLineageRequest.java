@@ -61,7 +61,8 @@ final class KagemushaToriiLineageRequest {
             .setBody(body)
             .setTimeout(requestTimeout)
             .setMaximumResponseBytes(
-                (long) KagemushaRecursiveSpendProver.MAX_TORII_RESPONSE_BYTES);
+                (long)
+                    KagemushaRecursiveSpendProver.MAX_TORII_RECIPIENT_LINEAGE_RESPONSE_BYTES);
     authHeaders.forEach(builder::addHeader);
     return builder.build();
   }

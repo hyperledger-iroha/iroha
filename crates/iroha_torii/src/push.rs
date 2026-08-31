@@ -5,7 +5,7 @@
 //! single atomic replacement. Startup enumeration and dispatch are likewise count-bounded so
 //! corrupted local persistence cannot determine peak memory. Remote provider bodies are streamed
 //! under one source-coupled ceiling, and successful delivery responses are not buffered.
-use crate::account_activity::AccountActivityRole;
+use crate::{account_activity::AccountActivityRole, secure_file_metadata};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD};
 use dashmap::DashMap;
@@ -1866,9 +1866,13 @@ fn read_bounded_stable_file_with(
     maximum: usize,
     after_open: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<Vec<u8>> {
-    let named_before = fs::symlink_metadata(path)?;
-    if push_metadata_is_symlink_or_reparse(&named_before) || !named_before.is_file() {
-        return Err(invalid_data("push input must be a direct regular file"));
+    let named_before = secure_file_metadata::from_path(path)?;
+    if !secure_file_metadata::is_direct_file(&named_before)
+        || secure_file_metadata::number_of_links(&named_before) != Some(1)
+    {
+        return Err(invalid_data(
+            "push input must be a direct single-link regular file",
+        ));
     }
     let maximum_u64 = u64::try_from(maximum).unwrap_or(u64::MAX);
     if named_before.len() > maximum_u64 {
@@ -1877,14 +1881,21 @@ fn read_bounded_stable_file_with(
             named_before.len()
         )));
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    set_no_follow_open_options(&mut options);
-    let mut file = options.open(path)?;
-    let opened_before = file.metadata()?;
-    if push_metadata_is_symlink_or_reparse(&opened_before) || !opened_before.is_file() {
+    #[cfg(windows)]
+    let mut file = secure_file_metadata::open_direct_file(path)?;
+    #[cfg(not(windows))]
+    let mut file = {
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        set_no_follow_open_options(&mut options);
+        options.open(path)?
+    };
+    let opened_before = secure_file_metadata::from_file(&file)?;
+    if !secure_file_metadata::is_direct_file(&opened_before)
+        || secure_file_metadata::number_of_links(&opened_before) != Some(1)
+    {
         return Err(invalid_data(
-            "opened push input is not a direct regular file",
+            "opened push input is not a direct single-link regular file",
         ));
     }
     if opened_before.len() > maximum_u64 {
@@ -1893,7 +1904,7 @@ fn read_bounded_stable_file_with(
             opened_before.len()
         )));
     }
-    if !push_file_metadata_unchanged(&named_before, &opened_before) {
+    if !secure_file_metadata::unchanged(&named_before, &opened_before) {
         return Err(invalid_data("push input changed identity while opening"));
     }
     after_open()?;
@@ -1909,12 +1920,14 @@ fn read_bounded_stable_file_with(
             "push input exceeds the maximum {maximum} bytes"
         )));
     }
-    let opened_after = file.metadata()?;
-    let named_after = fs::symlink_metadata(path)?;
-    if push_metadata_is_symlink_or_reparse(&named_after)
-        || !named_after.is_file()
-        || !push_file_metadata_unchanged(&opened_before, &opened_after)
-        || !push_file_metadata_unchanged(&opened_after, &named_after)
+    let opened_after = secure_file_metadata::from_file(&file)?;
+    let named_after = secure_file_metadata::from_path(path)?;
+    if !secure_file_metadata::is_direct_file(&opened_after)
+        || !secure_file_metadata::is_direct_file(&named_after)
+        || secure_file_metadata::number_of_links(&opened_after) != Some(1)
+        || secure_file_metadata::number_of_links(&named_after) != Some(1)
+        || !secure_file_metadata::unchanged(&opened_before, &opened_after)
+        || !secure_file_metadata::unchanged(&opened_after, &named_after)
         || opened_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
     {
         return Err(invalid_data("push input changed while reading"));
@@ -1922,35 +1935,44 @@ fn read_bounded_stable_file_with(
     Ok(bytes)
 }
 fn write_direct_regular_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if push_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_file() => {
-            return Err(invalid_data(
-                "push temporary output path is not a direct regular file",
-            ));
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        // Keep the newly-created inode private until it has been fully written and closed.
+        options.share_mode(0);
+    }
     set_no_follow_open_options(&mut options);
     let mut file = options.open(path)?;
-    let opened_before = file.metadata()?;
-    if push_metadata_is_symlink_or_reparse(&opened_before) || !opened_before.is_file() {
+    let opened_before = secure_file_metadata::from_file(&file)?;
+    let named_before = secure_file_metadata::from_path(path)?;
+    if !secure_file_metadata::is_direct_file(&opened_before)
+        || !secure_file_metadata::is_direct_file(&named_before)
+        || secure_file_metadata::number_of_links(&opened_before) != Some(1)
+        || secure_file_metadata::number_of_links(&named_before) != Some(1)
+        || !secure_file_metadata::same_file(&opened_before, &named_before)
+    {
         return Err(invalid_data(
-            "push temporary output is not a direct regular file",
+            "push temporary output is not a newly-created single-link regular file",
         ));
     }
     file.write_all(bytes)?;
     file.sync_all()?;
-    let opened_after = file.metadata()?;
-    let named_after = fs::symlink_metadata(path)?;
+    let opened_after = secure_file_metadata::from_file(&file)?;
+    let named_after = secure_file_metadata::from_path(path)?;
     let expected = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-    if push_metadata_is_symlink_or_reparse(&named_after)
-        || !named_after.is_file()
-        || !push_file_metadata_same_identity(&opened_before, &opened_after)
-        || !push_file_metadata_same_identity(&opened_after, &named_after)
+    if !secure_file_metadata::is_direct_file(&opened_after)
+        || !secure_file_metadata::is_direct_file(&named_after)
+        || secure_file_metadata::number_of_links(&opened_after) != Some(1)
+        || secure_file_metadata::number_of_links(&named_after) != Some(1)
+        || !secure_file_metadata::same_file(&opened_before, &opened_after)
+        || !secure_file_metadata::same_file(&opened_after, &named_after)
         || opened_after.len() != expected
         || named_after.len() != expected
     {
@@ -1988,45 +2010,6 @@ fn push_metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
     }
     #[cfg(not(windows))]
     false
-}
-#[cfg(unix)]
-fn push_file_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(windows)]
-fn push_file_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-}
-#[cfg(not(any(unix, windows)))]
-fn push_file_metadata_same_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    false
-}
-#[cfg(unix)]
-fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    push_file_metadata_same_identity(left, right)
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-#[cfg(windows)]
-fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    push_file_metadata_same_identity(left, right)
-        && left.file_size() == right.file_size()
-        && left.last_write_time() == right.last_write_time()
-        && left.creation_time() == right.creation_time()
-}
-#[cfg(not(any(unix, windows)))]
-fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 fn remove_file_if_exists_with_state(path: &Path) -> Result<(), AtomicRemovalError> {
     match fs::remove_file(path) {
@@ -3265,6 +3248,16 @@ mod tests {
         fs::write(&target, b"{}").expect("write symlink target");
         symlink(&target, &link).expect("create push symlink");
         assert!(read_bounded_stable_file(&link, 32).is_err());
+    }
+    #[test]
+    fn bounded_push_file_read_rejects_hard_link() {
+        let directory = tempfile::tempdir().expect("push hard-link directory");
+        let path = directory.path().join("input.json");
+        let alias = directory.path().join("input-alias.json");
+        fs::write(&path, b"{}").expect("write push input");
+        fs::hard_link(&path, alias).expect("create push hard link");
+
+        assert!(read_bounded_stable_file(&path, 32).is_err());
     }
     #[test]
     fn write_side_device_capacity_is_hard() {

@@ -66,6 +66,14 @@ marker, not a normalization option. Contract `tx_hash_hex` receipt fields use
 the same exact spelling, as do contract entrypoint hashes, multisig transaction
 hashes, and offline-operation status transaction hashes.
 
+`KagemushaTopUpRequestV4` and `KagemushaRedeemRequestV4` decode the exact
+embedded authorization archive and expose its signed `issued_at_ms` alongside
+the derived operation id. Submission rejects a 202 reference unless its
+`submitted_at_ms` equals that signed request timestamp. Pending reconciliation
+then keeps the accepted timestamp immutable even when an exact retry advances
+the active transaction hash. Callers supply only the canonical Norito request
+archive; neither identity nor timestamp has a caller-provided override.
+
 ## Kagemusha native validation
 
 Applied Kagemusha top-up status validation requires the ABI-23

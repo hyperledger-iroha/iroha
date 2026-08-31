@@ -440,10 +440,14 @@ for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
 
 ## Kagemusha offline cash
 
-The first-release JavaScript package does not expose Kagemusha readiness,
-top-up, redemption, or operation polling. Those flows require canonical Norito
-archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead
-of hand-encoding requests in JavaScript.
+The JavaScript package exposes Kagemusha readiness, top-up, redemption, and
+operation polling through `getOfflineCapability`, `submitKagemushaTopUpV4`,
+`submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Supply an
+externally produced canonical V4 Norito archive: the SDK derives its operation
+ID and signed authorization issuance time and requires the initial 202
+reference to repeat both. JavaScript does not derive witnesses, hold
+device-bound custody, or provide a native prover, so use a supported Swift or
+JVM wallet to create the archive rather than hand-encoding it.
 
 ## Torii Queries & Streaming
 

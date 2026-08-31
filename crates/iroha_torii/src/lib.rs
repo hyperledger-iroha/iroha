@@ -176,6 +176,7 @@ mod content;
 mod durable_fs;
 mod proof_filters;
 pub mod sccp_replay;
+mod secure_file_metadata;
 pub mod sorafs;
 use axum::{
     Router,
@@ -19398,52 +19399,86 @@ fn zk_pk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyI
     keys_dir.join(format!("{backend}__{name}.pk"))
 }
 #[cfg(feature = "app_api")]
+fn open_zk_key_file_direct(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(windows)]
+    {
+        return crate::secure_file_metadata::open_direct_file(path);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        return std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(path);
+    }
+    #[cfg(not(any(unix, windows)))]
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure direct-file opening is unsupported on this platform",
+    ))
+}
+#[cfg(feature = "app_api")]
 fn read_zk_key_file_bounded(path: &Path, label: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
+    use crate::secure_file_metadata::{
+        from_file, from_path, is_direct_file, number_of_links, same_file, unchanged,
+    };
     use std::io::Read as _;
-    let path_metadata = std::fs::symlink_metadata(path).map_err(|err| {
+
+    let named_before = from_path(path).map_err(|err| {
         format!(
             "failed to inspect {label} bytes at {}: {err}",
             path.display()
         )
     })?;
-    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+    if !is_direct_file(&named_before) || number_of_links(&named_before) != Some(1) {
         return Err(format!(
-            "{label} path must be a regular non-symlink file: {}",
+            "{label} path must be a direct, single-link regular file: {}",
             path.display()
         ));
     }
-    let path_len = usize::try_from(path_metadata.len()).unwrap_or(usize::MAX);
+    let path_len = usize::try_from(named_before.len()).unwrap_or(usize::MAX);
     if path_len > max_bytes {
         return Err(format!(
             "{label} file exceeds the {max_bytes}-byte tooling limit before read"
         ));
     }
-    let file = std::fs::File::open(path)
+    let mut file = open_zk_key_file_direct(path)
         .map_err(|err| format!("failed to open {label} bytes at {}: {err}", path.display()))?;
-    let file_metadata = file.metadata().map_err(|err| {
+    let opened_before = from_file(&file).map_err(|err| {
         format!(
             "failed to inspect opened {label} at {}: {err}",
             path.display()
         )
     })?;
-    if !file_metadata.is_file() {
+    let named_after_open = from_path(path).map_err(|err| {
+        format!(
+            "failed to inspect {label} bytes at {} after opening: {err}",
+            path.display()
+        )
+    })?;
+    if !is_direct_file(&opened_before)
+        || !is_direct_file(&named_after_open)
+        || number_of_links(&opened_before) != Some(1)
+        || number_of_links(&named_after_open) != Some(1)
+    {
         return Err(format!(
-            "opened {label} path is not a regular file: {}",
+            "opened {label} path is not a direct, single-link regular file: {}",
             path.display()
         ));
     }
-    #[cfg(unix)]
+    if !same_file(&named_before, &opened_before)
+        || !unchanged(&named_before, &opened_before)
+        || !same_file(&opened_before, &named_after_open)
+        || !unchanged(&opened_before, &named_after_open)
     {
-        use std::os::unix::fs::MetadataExt as _;
-        if path_metadata.dev() != file_metadata.dev() || path_metadata.ino() != file_metadata.ino()
-        {
-            return Err(format!(
-                "{label} path changed while it was being opened: {}",
-                path.display()
-            ));
-        }
+        return Err(format!(
+            "{label} path changed while it was being opened: {}",
+            path.display()
+        ));
     }
-    let opened_len = usize::try_from(file_metadata.len()).unwrap_or(usize::MAX);
+    let opened_len = usize::try_from(opened_before.len()).unwrap_or(usize::MAX);
     if opened_len > max_bytes {
         return Err(format!(
             "opened {label} file exceeds the {max_bytes}-byte tooling limit before read"
@@ -19455,7 +19490,8 @@ fn read_zk_key_file_bounded(path: &Path, label: &str, max_bytes: usize) -> Resul
         .unwrap_or(u64::MAX)
         .saturating_add(1);
     let mut bytes = Vec::with_capacity(opened_len.min(max_bytes));
-    file.take(sentinel_limit)
+    (&mut file)
+        .take(sentinel_limit)
         .read_to_end(&mut bytes)
         .map_err(|err| format!("failed to read {label} bytes at {}: {err}", path.display()))?;
     if bytes.len() > max_bytes {
@@ -19463,7 +19499,55 @@ fn read_zk_key_file_bounded(path: &Path, label: &str, max_bytes: usize) -> Resul
             "{label} exceeds the {max_bytes}-byte tooling limit while reading"
         ));
     }
+    let opened_after = from_file(&file).map_err(|err| {
+        format!(
+            "failed to inspect opened {label} at {} after reading: {err}",
+            path.display()
+        )
+    })?;
+    let named_after_read = from_path(path).map_err(|err| {
+        format!(
+            "failed to inspect {label} bytes at {} after reading: {err}",
+            path.display()
+        )
+    })?;
+    if !is_direct_file(&opened_after)
+        || !is_direct_file(&named_after_read)
+        || number_of_links(&opened_after) != Some(1)
+        || number_of_links(&named_after_read) != Some(1)
+        || !same_file(&opened_before, &opened_after)
+        || !unchanged(&opened_before, &opened_after)
+        || !same_file(&opened_after, &named_after_read)
+        || !unchanged(&opened_after, &named_after_read)
+        || !same_file(&named_before, &named_after_read)
+        || !unchanged(&named_before, &named_after_read)
+        || u64::try_from(bytes.len()).ok() != Some(opened_before.len())
+    {
+        return Err(format!(
+            "{label} path changed while it was being read: {}",
+            path.display()
+        ));
+    }
     Ok(bytes)
+}
+#[cfg(all(test, feature = "app_api", any(unix, windows)))]
+mod zk_key_file_security_tests {
+    use super::read_zk_key_file_bounded;
+
+    #[test]
+    fn bounded_key_reader_accepts_the_exact_limit_and_rejects_hard_links() {
+        let directory = tempfile::tempdir().expect("create key reader fixture directory");
+        let path = directory.path().join("fixture.key");
+        let link = directory.path().join("fixture.link.key");
+        std::fs::write(&path, b"key!").expect("write key reader fixture");
+
+        assert_eq!(
+            read_zk_key_file_bounded(&path, "verifying key", 4).expect("read exact-size key"),
+            b"key!"
+        );
+        std::fs::hard_link(&path, &link).expect("create key fixture hard link");
+        assert!(read_zk_key_file_bounded(&path, "verifying key", 4).is_err());
+    }
 }
 #[cfg(feature = "app_api")]
 fn validate_zk_ivm_fee_payment(
@@ -48586,10 +48670,7 @@ fn preflight_sorafs_governance_dag_signer(
     let configured = storage_config.governance_dir().is_some();
     let Some(signer) = signer else {
         return if configured {
-            Err(
-                "configured signed SoraFS Governance DAG requires a raw runtime signer"
-                    .to_owned(),
-            )
+            Err("configured signed SoraFS Governance DAG requires a raw runtime signer".to_owned())
         } else {
             Ok(())
         };

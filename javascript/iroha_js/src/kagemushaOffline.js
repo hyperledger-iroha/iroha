@@ -26,8 +26,13 @@ const TOP_UP_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request";
 const REDEEM_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request";
 const TOP_UP_REQUEST_FIELD_COUNT = 8;
 const TOP_UP_OPERATION_ID_FIELD_INDEX = 6;
+const TOP_UP_AUTHORIZATION_FIELD_INDEX = 7;
 const REDEEM_REQUEST_FIELD_COUNT = 10;
 const REDEEM_OPERATION_ID_FIELD_INDEX = 8;
+const REDEEM_AUTHORIZATION_FIELD_INDEX = 9;
+const REQUEST_AUTHORIZATION_FIELD_COUNT = 10;
+const REQUEST_AUTHORIZATION_OPERATION_ID_FIELD_INDEX = 3;
+const REQUEST_AUTHORIZATION_ISSUED_AT_FIELD_INDEX = 4;
 const KAGEMUSHA_TOP_UP_ANCHOR_WITNESS_KEY_TAG = 0xd2;
 const KAGEMUSHA_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16;
 const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES = 16 * 1024 * 1024;
@@ -136,14 +141,13 @@ function readCompactFieldLength(payload, offset, context) {
   throw new TypeError(`${context} compact field length exceeds u64`);
 }
 
-function operationIdFromCompactRequest(
+function compactFields(
   payload,
   fieldCount,
-  operationIdFieldIndex,
   context,
 ) {
   let offset = 0;
-  let operationId;
+  const fields = [];
   for (let index = 0; index < fieldCount; index += 1) {
     const fieldContext = `${context}.field[${index}]`;
     const { length, bytesRead } = readCompactFieldLength(payload, offset, fieldContext);
@@ -155,20 +159,65 @@ function operationIdFromCompactRequest(
     const end = offset + Number(length);
     const field = payload.subarray(offset, end);
     offset = end;
-    if (index === 0 && (field.length !== 2 || field[0] !== 4 || field[1] !== 0)) {
-      throw new TypeError(`${context} payload version must be the canonical u16 value 4`);
-    }
-    if (index === operationIdFieldIndex) {
-      if (field.length !== 32 || field.every((byte) => byte === 0)) {
-        throw new TypeError(`${fieldContext} must contain one non-zero 32-byte operation id`);
-      }
-      operationId = Array.from(field, (byte) => byte.toString(16).padStart(2, "0")).join("");
-    }
+    fields.push(field);
   }
   if (offset !== payload.length) {
     throw new TypeError(`${context} contains trailing compact fields or bytes`);
   }
-  return operationId;
+  return fields;
+}
+
+function hexBytes(value) {
+  return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function requestIdentityFromCompactRequest(
+  payload,
+  fieldCount,
+  operationIdFieldIndex,
+  authorizationFieldIndex,
+  context,
+) {
+  const fields = compactFields(payload, fieldCount, context);
+  const version = fields[0];
+  if (version.length !== 2 || version[0] !== 4 || version[1] !== 0) {
+    throw new TypeError(`${context} payload version must be the canonical u16 value 4`);
+  }
+  const operationIdField = fields[operationIdFieldIndex];
+  if (operationIdField.length !== 32 || operationIdField.every((byte) => byte === 0)) {
+    throw new TypeError(
+      `${context}.field[${operationIdFieldIndex}] must contain one non-zero 32-byte operation id`,
+    );
+  }
+  const operationId = hexBytes(operationIdField);
+  const authorizationFields = compactFields(
+    fields[authorizationFieldIndex],
+    REQUEST_AUTHORIZATION_FIELD_COUNT,
+    `${context}.authorization`,
+  );
+  const authorizationOperationId = authorizationFields[
+    REQUEST_AUTHORIZATION_OPERATION_ID_FIELD_INDEX
+  ];
+  if (
+    authorizationOperationId.length !== 32 ||
+    hexBytes(authorizationOperationId) !== operationId
+  ) {
+    throw new TypeError(`${context}.authorization operation id must match the request operation id`);
+  }
+  const issuedAtField = authorizationFields[REQUEST_AUTHORIZATION_ISSUED_AT_FIELD_INDEX];
+  if (issuedAtField.length !== 8) {
+    throw new TypeError(`${context}.authorization issued_at_ms must be one canonical u64`);
+  }
+  let issuedAtInteger = 0n;
+  for (let index = 0; index < issuedAtField.length; index += 1) {
+    issuedAtInteger |= BigInt(issuedAtField[index]) << (8n * BigInt(index));
+  }
+  const issuedAtMs = losslessU64(
+    issuedAtInteger,
+    `${context}.authorization issued_at_ms`,
+    { positive: true },
+  );
+  return { operationId, issuedAtMs };
 }
 
 function hash32(value, context, { nonzero = false } = {}) {
@@ -245,6 +294,7 @@ function normalizeKagemushaNoritoRequestV4(
   expectedSchemaName,
   fieldCount,
   operationIdFieldIndex,
+  authorizationFieldIndex,
   context,
 ) {
   const item = exactFields(value, context, ["version", "norito"]);
@@ -266,6 +316,7 @@ function normalizeKagemushaNoritoRequestV4(
     throw new TypeError(`${context}.norito must be a bounded canonical Norito archive`);
   }
   let operationId;
+  let issuedAtMs;
   try {
     const frame = validateNoritoFrame(archive, {
       context: `${context}.norito`,
@@ -278,12 +329,13 @@ function normalizeKagemushaNoritoRequestV4(
         `${context}.norito must use canonical compact-length layout flags`,
       );
     }
-    operationId = operationIdFromCompactRequest(
+    ({ operationId, issuedAtMs } = requestIdentityFromCompactRequest(
       frame.payload,
       fieldCount,
       operationIdFieldIndex,
+      authorizationFieldIndex,
       `${context}.norito payload`,
-    );
+    ));
   } catch (error) {
     throw new TypeError(
       `${context}.norito must be a schema-bound canonical Norito archive: ${error.message}`,
@@ -293,6 +345,7 @@ function normalizeKagemushaNoritoRequestV4(
   return Object.freeze({
     version: KAGEMUSHA_MANIFEST_VERSION,
     operationId,
+    issuedAtMs,
     norito: new Uint8Array(archive),
   });
 }
@@ -307,6 +360,7 @@ export function normalizeKagemushaTopUpRequestV4(
     TOP_UP_REQUEST_SCHEMA_NAME,
     TOP_UP_REQUEST_FIELD_COUNT,
     TOP_UP_OPERATION_ID_FIELD_INDEX,
+    TOP_UP_AUTHORIZATION_FIELD_INDEX,
     context,
   );
 }
@@ -321,6 +375,7 @@ export function normalizeKagemushaRedeemRequestV4(
     REDEEM_REQUEST_SCHEMA_NAME,
     REDEEM_REQUEST_FIELD_COUNT,
     REDEEM_OPERATION_ID_FIELD_INDEX,
+    REDEEM_AUTHORIZATION_FIELD_INDEX,
     context,
   );
 }
@@ -387,15 +442,36 @@ export function normalizeKagemushaOperationReference(
   const detachedExpected = exactFields(
     jsonSnapshot(record(expected, expectedContext)),
     expectedContext,
-    ["expectedOperationId", "expectedKind", "location", "retryAfter"],
+    [
+      "expectedOperationId",
+      "expectedKind",
+      "expectedSubmittedAtMs",
+      "location",
+      "retryAfter",
+    ],
   );
-  const { expectedOperationId, expectedKind, location, retryAfter } = detachedExpected;
+  const {
+    expectedOperationId,
+    expectedKind,
+    expectedSubmittedAtMs,
+    location,
+    retryAfter,
+  } = detachedExpected;
   if (
     normalized.operation_id !== expectedOperationId ||
     normalized.kind.kind !== expectedKind ||
     location !== normalized.status_uri
   ) {
     throw new TypeError(`${context} does not match the submitted V4 command`);
+  }
+  if (
+    normalized.submitted_at_ms !== losslessU64(
+      expectedSubmittedAtMs,
+      `${expectedContext}.expectedSubmittedAtMs`,
+      { positive: true },
+    )
+  ) {
+    throw new TypeError(`${context}.submitted_at_ms does not match the signed request`);
   }
   if (
     typeof retryAfter !== "string" ||
@@ -761,9 +837,8 @@ function normalizeAppliedResult(value, operationId, context) {
  * Normalize one status against the accepted operation identity.
  * The operation id, kind, and status URI remain fixed, while an exact retry or
  * a foreign-authority global Applied winner may advance the transaction hash.
- * After Pending advances its hash and timestamp, use that returned pair as the
- * accepted reference for the next poll so same-attempt timestamp checks remain
- * exact.
+ * Pending may advance only the active carrier hash; its submission timestamp
+ * remains bound to the immutable signed request.
  * Applied top-ups reach this projection only after the exact response bytes
  * pass the native ABI-23 structural validator. JavaScript then independently
  * checks the anchor path and execution post-state projection; Commit-QC
@@ -813,8 +888,7 @@ function normalizeKagemushaOperationStatusCore(
     );
     if (
       kind !== expected.kind.kind ||
-      (transactionHash === expected.transaction_hash &&
-        submittedAtMs !== expected.submitted_at_ms)
+      submittedAtMs !== expected.submitted_at_ms
     ) {
       throw new TypeError(
         `${context}.value does not match the accepted operation reference`,
@@ -956,6 +1030,18 @@ export function _normalizeKagemushaOperationStatusWithNativeValidation(
   if (typeof validator !== "function") {
     throw new TypeError(
       "Native binding does not expose kagemushaOfflineOperationStatusJsonValidateV1",
+    );
+  }
+  const abiVersion = Object.getOwnPropertyDescriptor(
+    nativeBinding ?? {},
+    "connectNoritoBridgeAbiVersion",
+  )?.value;
+  if (
+    typeof abiVersion !== "function" ||
+    abiVersion.call(nativeBinding) !== KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION
+  ) {
+    throw new TypeError(
+      `Native binding must expose connectNoritoBridgeAbiVersion() === ${KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION}`,
     );
   }
   const exactBytes = new Uint8Array(

@@ -12004,6 +12004,13 @@ pub(crate) trait StateBlockCommitAuthorization {
         staged_merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<(), String>;
 }
+/// Slash observability retained until the entire canonical block commits.
+struct PendingPublicLaneSlashObservability {
+    lane_id: LaneId,
+    previous_status: iroha_data_model::nexus::PublicLaneValidatorStatus,
+    slashed_status: iroha_data_model::nexus::PublicLaneValidatorStatus,
+    amount: Quantity,
+}
 /// Struct for block's aggregated changes
 pub struct StateBlock<'state> {
     state_ref: &'state State,
@@ -12114,6 +12121,8 @@ pub struct StateBlock<'state> {
         iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1,
         Option<iroha_data_model::governance::types::ParliamentNoResultKindV1>,
     )>,
+    /// Slash status and metrics waiting for the canonical block commit boundary.
+    pending_public_lane_slash_observability: Vec<PendingPublicLaneSlashObservability>,
     /// Gas used so far by accepted transactions in this block.
     pub gas_used_in_block: u64,
     /// Confidential gas charged so far in this block.
@@ -12182,6 +12191,8 @@ pub struct StateBlock<'state> {
     pending_nexus_fee_receipt_source_ids: BTreeSet<[u8; 32]>,
     /// Whether deterministic start-of-block effects have already been applied.
     start_of_block_effects_applied: bool,
+    /// Whether finality-owned NPoS effects were applied before ordinary execution.
+    npos_consensus_effects_applied: bool,
     /// Whether the permanent AXT counter ratchets reflect the final policy identity.
     axt_policy_transition_ratchets_finalized: bool,
     pub(crate) _curr_block: BlockHeader,
@@ -13287,6 +13298,11 @@ pub struct StateTransaction<'block, 'state> {
         BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingNexusFeeReceipt>,
     /// Charged Nexus fee event staged until the transaction is committed.
     pending_nexus_fee_event: Option<crate::sumeragi::status::NexusFeeEvent>,
+    /// Parent block's slash-observability buffer.
+    block_pending_public_lane_slash_observability:
+        &'block mut Vec<PendingPublicLaneSlashObservability>,
+    /// Slash observability staged until this transaction is accepted.
+    pending_public_lane_slash_observability: Vec<PendingPublicLaneSlashObservability>,
     /// Block fee amount staged until the transaction is committed.
     #[cfg(feature = "telemetry")]
     pending_block_fee_amount: Quantity,
@@ -13551,6 +13567,22 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         );
         self.pending_nexus_fee_event = Some(event);
     }
+    /// Stage one public-lane slash metric update at the transaction commit boundary.
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn stage_public_lane_slash_telemetry(
+        &mut self,
+        lane_id: LaneId,
+        previous_status: iroha_data_model::nexus::PublicLaneValidatorStatus,
+        slashed_status: iroha_data_model::nexus::PublicLaneValidatorStatus,
+        amount: Quantity,
+    ) {
+        self.pending_public_lane_slash_telemetry.push((
+            lane_id,
+            previous_status,
+            slashed_status,
+            amount,
+        ));
+    }
     /// Stage block fee amount so telemetry only reflects committed transactions.
     #[cfg(feature = "telemetry")]
     pub(crate) fn stage_block_fee_amount(&mut self, delta_amount: Quantity) {
@@ -13762,6 +13794,12 @@ impl<'state> StateView<'state> {
     pub fn is_lane_active_for_authority(&self, lane_id: LaneId) -> bool {
         let authority_height = u64::try_from(self.height()).unwrap_or(u64::MAX);
         consensus_lane_dataspace_at_height(lane_id, &self.nexus, authority_height).is_some()
+    }
+    /// Resolve the sole staking-storage owner from this exact state snapshot.
+    #[inline]
+    pub(crate) fn staking_authority_lane(&self, lane_id: LaneId) -> Option<LaneId> {
+        let authority_height = u64::try_from(self.height()).unwrap_or(u64::MAX);
+        nexus_staking_authority_lane_at_height(lane_id, &self.nexus, authority_height)
     }
     /// Latest committed block hash (if any) for this snapshot.
     #[inline]
@@ -28285,11 +28323,13 @@ impl State {
             canonical_carrier_commit_metadata_authorization: None,
             pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
             start_of_block_effects_applied: false,
+            npos_consensus_effects_applied: false,
             axt_policy_transition_ratchets_finalized: false,
             exec_witness: None,
             parliament_timed_ovn_casting_bindings: None,
             #[cfg(feature = "telemetry")]
             pending_parliament_telemetry_events: Vec::new(),
+            pending_public_lane_slash_observability: Vec::new(),
             gas_used_in_block: 0,
             confidential_gas_used_in_block: 0,
             zk_confidential_ops_in_block: 0,
@@ -28864,24 +28904,20 @@ impl State {
     fn merge_preexecution_block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
-        let nexus_snapshot = self.nexus_snapshot();
-        let gas_limit_per_block = {
-            let mut world_view = self.world.view();
-            world_view.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
-            gas_limit_from_parameters(world_view.parameters())
-        };
-        let (world, sccp_registry) = loop {
+        let (world, sccp_registry, nexus, gas_limit_per_block) = loop {
             let generation_before = self.state_view_generation();
             if generation_before % 2 != 0 {
                 std::thread::yield_now();
                 continue;
             }
+            let nexus = self.nexus_snapshot();
             let mut world = self.world.block();
-            world.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
+            world.dataspace_catalog = nexus.dataspace_catalog.clone();
+            let gas_limit_per_block = gas_limit_from_parameters(world.parameters());
             let sccp_registry = self.sccp_registry_snapshot_from_world(world.sccp_registry.get());
             let generation_after = self.state_view_generation();
             if is_stable_state_view_generation(generation_before, generation_after) {
-                break (world, sccp_registry);
+                break (world, sccp_registry, nexus, gas_limit_per_block);
             }
             drop(world);
             std::thread::yield_now();
@@ -28910,7 +28946,9 @@ impl State {
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
             crypto: self.crypto(),
-            nexus: self.nexus_snapshot(),
+            nexus,
+            npos_consensus_effects_applied: false,
+            pending_public_lane_slash_observability: Vec::new(),
             lane_incarnations: self.lane_incarnations_snapshot(),
             lane_incarnation_lineage: self.lane_incarnation_lineage_snapshot(),
             lane_incarnation_activation_heights: self
@@ -28984,6 +29022,16 @@ impl State {
         };
         state_block.freeze_axt_block_start();
         state_block
+    }
+    /// Create a side-effect-free scratch block for exact consensus-effect preflight.
+    ///
+    /// The scope contains one generation-coherent parent world/Nexus snapshot,
+    /// runs no start-of-block lifecycle effects, and must never be committed.
+    pub(crate) fn consensus_effects_probe_block(
+        &self,
+        curr_block: BlockHeader,
+    ) -> StateBlock<'_> {
+        self.merge_preexecution_block(curr_block)
     }
     /// Create structure to execute a block while reverting changes made in the latest block
     pub fn block_and_revert(&self, curr_block: BlockHeader) -> StateBlock<'_> {
@@ -29061,6 +29109,8 @@ impl State {
             pending_da_pin_intents: None,
             pending_autoscale_lifecycle: None,
             autoscale_sample_history,
+            npos_consensus_effects_applied: false,
+            pending_public_lane_slash_observability: Vec::new(),
             autoscale_sample_history_dirty: false,
             autoscale_evaluated_committed_fragment_count: None,
             merge_carrier_entrypoints: HashSet::new(),
@@ -49193,6 +49243,8 @@ impl<'state> StateBlock<'state> {
             pending_nexus_fee_records: BTreeMap::new(),
             pending_nexus_fee_event: None,
             #[cfg(feature = "telemetry")]
+            pending_public_lane_slash_telemetry: Vec::new(),
+            #[cfg(feature = "telemetry")]
             pending_block_fee_amount: Quantity::zero(),
             zk_confidential_ops_in_tx: 0,
             zk_verify_calls_in_tx: 0,
@@ -51944,6 +51996,12 @@ impl<'state> StateBlock<'state> {
             .committed_fragment_count()
             .expect("committed block must contain its required fragment count");
         if let Some(effects) = signed_block.npos_consensus_effects() {
+            let evidence_prune_keys =
+                crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+                    self.state_ref,
+                    signed_block.header().height().get(),
+                    effects.v2_evidence_admissions.len(),
+                );
             let now_ms = signed_block.header().creation_time_ms;
             let expected_beacon_anchor =
                 signed_block.header().prev_block_hash().map(|block_hash| {
@@ -51952,19 +52010,16 @@ impl<'state> StateBlock<'state> {
                         block_hash,
                     }
                 });
-            #[cfg(feature = "telemetry")]
-            let telemetry = Some(self.telemetry);
             let mut transaction = self.transaction();
             crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
                 &mut transaction,
                 effects,
+                &evidence_prune_keys,
                 expected_beacon_anchor,
                 &topology,
                 signed_block.header().height().get(),
                 signed_block.header().view_change_index(),
                 now_ms,
-                #[cfg(feature = "telemetry")]
-                telemetry,
             )
             .expect("committed NPoS consensus effects must be applicable");
             transaction.apply();
@@ -60582,6 +60637,8 @@ impl StateTransaction<'_, '_> {
             pending_nexus_fee_records,
             pending_nexus_fee_event,
             #[cfg(feature = "telemetry")]
+            pending_public_lane_slash_telemetry,
+            #[cfg(feature = "telemetry")]
             pending_block_fee_amount,
             fastpq_transcripts,
             mut pending_transfer_transcripts,
@@ -60710,6 +60767,18 @@ impl StateTransaction<'_, '_> {
         block_hashes.apply();
         world.apply();
         public_lane_staking_status_overlay.commit();
+        #[cfg(feature = "telemetry")]
+        for (lane_id, previous_status, slashed_status, amount) in
+            pending_public_lane_slash_telemetry
+        {
+            telemetry.record_public_lane_validator_status(
+                lane_id,
+                Some(&previous_status),
+                &slashed_status,
+            );
+            telemetry.decrease_public_lane_bonded(lane_id, &amount);
+            telemetry.record_public_lane_slash(lane_id);
+        }
     }
     /// Get and cache the `NumericSpec` for an asset definition within this transaction.
     /// Fetch the numeric specification for a given asset definition.

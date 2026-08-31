@@ -1,5 +1,6 @@
 //! Provider advert ingestion and validation for Torii's SoraFS discovery pipeline.
 use super::admission::{AdmissionCheckError, AdmissionRegistry, verify_advert_against_envelope};
+use crate::secure_file_metadata::{self, SecureMetadata};
 use blake3::hash as blake3_hash;
 use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
@@ -10,7 +11,7 @@ use sorafs_manifest::{
     SignatureAlgorithm,
 };
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
@@ -453,7 +454,7 @@ fn acquire_checkpoint_lock(checkpoint_path: &Path) -> Result<fs::File, ReplayChe
     validate_checkpoint_path(checkpoint_path)?;
     let lock_path = checkpoint_path.with_added_extension("lock");
     validate_checkpoint_path(&lock_path)?;
-    let before_open = match fs::symlink_metadata(&lock_path) {
+    let before_open = match secure_file_metadata::from_path(&lock_path) {
         Ok(metadata) => Some(metadata),
         Err(err) if err.kind() == io::ErrorKind::NotFound => None,
         Err(source) => {
@@ -463,9 +464,13 @@ fn acquire_checkpoint_lock(checkpoint_path: &Path) -> Result<fs::File, ReplayChe
             });
         }
     };
+    if let Some(metadata) = before_open.as_ref() {
+        validate_lock_file_metadata(&lock_path, metadata)?;
+    }
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true);
     set_no_follow_flag(&mut options);
+    set_lock_share_mode(&mut options);
     set_private_create_mode(&mut options);
     let file = options
         .open(&lock_path)
@@ -473,28 +478,29 @@ fn acquire_checkpoint_lock(checkpoint_path: &Path) -> Result<fs::File, ReplayChe
             path: lock_path.clone(),
             source,
         })?;
-    let opened_metadata = file
-        .metadata()
-        .map_err(|source| ReplayCheckpointError::Io {
+    let opened_metadata =
+        secure_file_metadata::from_file(&file).map_err(|source| ReplayCheckpointError::Io {
             path: lock_path.clone(),
             source,
         })?;
     validate_lock_file_metadata(&lock_path, &opened_metadata)?;
     if before_open
         .as_ref()
-        .is_some_and(|metadata| !metadata_identifies_same_file(metadata, &opened_metadata))
+        .is_some_and(|metadata| !secure_file_metadata::same_file(metadata, &opened_metadata))
     {
         return Err(checkpoint_io_error(
             &lock_path,
             "checkpoint lock changed between inspection and open",
         ));
     }
-    let after_open =
-        fs::symlink_metadata(&lock_path).map_err(|source| ReplayCheckpointError::Io {
+    let after_open = secure_file_metadata::from_path(&lock_path).map_err(|source| {
+        ReplayCheckpointError::Io {
             path: lock_path.clone(),
             source,
-        })?;
-    if !metadata_identifies_same_file(&opened_metadata, &after_open) {
+        }
+    })?;
+    validate_lock_file_metadata(&lock_path, &after_open)?;
+    if !secure_file_metadata::same_file(&opened_metadata, &after_open) {
         return Err(checkpoint_io_error(
             &lock_path,
             "checkpoint lock path changed while opening",
@@ -513,12 +519,22 @@ fn acquire_checkpoint_lock(checkpoint_path: &Path) -> Result<fs::File, ReplayChe
             });
         }
     }
-    let locked_path_metadata =
-        fs::symlink_metadata(&lock_path).map_err(|source| ReplayCheckpointError::Io {
+    let locked_open_metadata =
+        secure_file_metadata::from_file(&file).map_err(|source| ReplayCheckpointError::Io {
             path: lock_path.clone(),
             source,
         })?;
-    if !metadata_identifies_same_file(&opened_metadata, &locked_path_metadata) {
+    let locked_path_metadata = secure_file_metadata::from_path(&lock_path).map_err(|source| {
+        ReplayCheckpointError::Io {
+            path: lock_path.clone(),
+            source,
+        }
+    })?;
+    validate_lock_file_metadata(&lock_path, &locked_open_metadata)?;
+    validate_lock_file_metadata(&lock_path, &locked_path_metadata)?;
+    if !secure_file_metadata::same_file(&opened_metadata, &locked_open_metadata)
+        || !secure_file_metadata::same_file(&locked_open_metadata, &locked_path_metadata)
+    {
         return Err(checkpoint_io_error(
             &lock_path,
             "checkpoint lock path changed while acquiring ownership",
@@ -529,12 +545,14 @@ fn acquire_checkpoint_lock(checkpoint_path: &Path) -> Result<fs::File, ReplayChe
 }
 fn validate_lock_file_metadata(
     path: &Path,
-    metadata: &fs::Metadata,
+    metadata: &SecureMetadata,
 ) -> Result<(), ReplayCheckpointError> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if !secure_file_metadata::is_direct_file(metadata)
+        || secure_file_metadata::number_of_links(metadata) != Some(1)
+    {
         return Err(checkpoint_io_error(
             path,
-            "checkpoint lock must be a regular file and must not be a symlink",
+            "checkpoint lock must be a single-link direct regular file",
         ));
     }
     #[cfg(unix)]
@@ -550,7 +568,7 @@ fn read_checkpoint_bounded(
     path: &Path,
     maximum_bytes: u64,
 ) -> Result<Option<Vec<u8>>, ReplayCheckpointError> {
-    let path_metadata = match fs::symlink_metadata(path) {
+    let path_metadata = match secure_file_metadata::from_path(path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(source) => {
@@ -565,20 +583,28 @@ fn read_checkpoint_bounded(
     let mut options = OpenOptions::new();
     options.read(true);
     set_no_follow_flag(&mut options);
+    set_stable_read_share_mode(&mut options);
     let mut file = options
         .open(path)
         .map_err(|source| ReplayCheckpointError::Io {
             path: path.to_path_buf(),
             source,
         })?;
-    let opened_metadata = file
-        .metadata()
-        .map_err(|source| ReplayCheckpointError::Io {
+    let opened_metadata =
+        secure_file_metadata::from_file(&file).map_err(|source| ReplayCheckpointError::Io {
             path: path.to_path_buf(),
             source,
         })?;
     validate_checkpoint_file_metadata(path, &opened_metadata, maximum_bytes)?;
-    if !metadata_identifies_same_file(&path_metadata, &opened_metadata) {
+    let opened_path_metadata =
+        secure_file_metadata::from_path(path).map_err(|source| ReplayCheckpointError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    validate_checkpoint_file_metadata(path, &opened_path_metadata, maximum_bytes)?;
+    if !secure_file_metadata::unchanged(&path_metadata, &opened_metadata)
+        || !secure_file_metadata::unchanged(&opened_metadata, &opened_path_metadata)
+    {
         return Err(checkpoint_io_error(
             path,
             "checkpoint changed between inspection and open",
@@ -600,30 +626,25 @@ fn read_checkpoint_bounded(
             maximum: maximum_bytes,
         });
     }
-    let final_opened_metadata = file
-        .metadata()
-        .map_err(|source| ReplayCheckpointError::Io {
+    let final_opened_metadata =
+        secure_file_metadata::from_file(&file).map_err(|source| ReplayCheckpointError::Io {
             path: path.to_path_buf(),
             source,
         })?;
-    if opened_metadata.len() != final_opened_metadata.len()
-        || opened_metadata.len() != actual
-        || !metadata_identifies_same_file(&opened_metadata, &final_opened_metadata)
+    let final_path_metadata =
+        secure_file_metadata::from_path(path).map_err(|source| ReplayCheckpointError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    validate_checkpoint_file_metadata(path, &final_opened_metadata, maximum_bytes)?;
+    validate_checkpoint_file_metadata(path, &final_path_metadata, maximum_bytes)?;
+    if opened_metadata.len() != actual
+        || !secure_file_metadata::unchanged(&opened_metadata, &final_opened_metadata)
+        || !secure_file_metadata::unchanged(&final_opened_metadata, &final_path_metadata)
     {
         return Err(checkpoint_io_error(
             path,
             "checkpoint changed while reading",
-        ));
-    }
-    let final_path_metadata =
-        fs::symlink_metadata(path).map_err(|source| ReplayCheckpointError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    if !metadata_identifies_same_file(&opened_metadata, &final_path_metadata) {
-        return Err(checkpoint_io_error(
-            path,
-            "checkpoint path changed while reading",
         ));
     }
     validate_checkpoint_path(path)?;
@@ -631,13 +652,15 @@ fn read_checkpoint_bounded(
 }
 fn validate_checkpoint_file_metadata(
     path: &Path,
-    metadata: &fs::Metadata,
+    metadata: &SecureMetadata,
     maximum_bytes: u64,
 ) -> Result<(), ReplayCheckpointError> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if !secure_file_metadata::is_direct_file(metadata)
+        || secure_file_metadata::number_of_links(metadata) != Some(1)
+    {
         return Err(checkpoint_io_error(
             path,
-            "checkpoint must be a regular file and must not be a symlink",
+            "checkpoint must be a single-link direct regular file",
         ));
     }
     if metadata.len() > maximum_bytes {
@@ -655,14 +678,6 @@ fn validate_checkpoint_file_metadata(
     }
     Ok(())
 }
-#[cfg(unix)]
-fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(not(unix))]
-fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len()
-}
 fn write_checkpoint_atomic(path: &Path, bytes: &[u8]) -> Result<(), ReplayCheckpointError> {
     validate_checkpoint_path(path)?;
     let parent = checkpoint_parent(path);
@@ -675,9 +690,11 @@ fn write_checkpoint_atomic(path: &Path, bytes: &[u8]) -> Result<(), ReplayCheckp
     let temp_path = path.with_added_extension(format!("tmp.{}.{}", std::process::id(), counter));
     let mut renamed = false;
     let write_result = (|| {
+        let expected_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         set_no_follow_flag(&mut options);
+        set_writer_share_mode(&mut options);
         set_private_create_mode(&mut options);
         let mut file = options
             .open(&temp_path)
@@ -685,16 +702,23 @@ fn write_checkpoint_atomic(path: &Path, bytes: &[u8]) -> Result<(), ReplayCheckp
                 path: temp_path.clone(),
                 source,
             })?;
-        let metadata = file
-            .metadata()
-            .map_err(|source| ReplayCheckpointError::Io {
+        let opened_before =
+            secure_file_metadata::from_file(&file).map_err(|source| ReplayCheckpointError::Io {
                 path: temp_path.clone(),
                 source,
             })?;
-        if !metadata.is_file() {
+        let named_before = secure_file_metadata::from_path(&temp_path).map_err(|source| {
+            ReplayCheckpointError::Io {
+                path: temp_path.clone(),
+                source,
+            }
+        })?;
+        validate_checkpoint_file_metadata(&temp_path, &opened_before, expected_len)?;
+        validate_checkpoint_file_metadata(&temp_path, &named_before, expected_len)?;
+        if !secure_file_metadata::same_file(&opened_before, &named_before) {
             return Err(checkpoint_io_error(
                 &temp_path,
-                "atomic checkpoint temporary path is not a regular file",
+                "atomic checkpoint temporary path changed while opening",
             ));
         }
         file.write_all(bytes)
@@ -703,19 +727,85 @@ fn write_checkpoint_atomic(path: &Path, bytes: &[u8]) -> Result<(), ReplayCheckp
                 path: temp_path.clone(),
                 source,
             })?;
-        drop(file);
+        let opened_after =
+            secure_file_metadata::from_file(&file).map_err(|source| ReplayCheckpointError::Io {
+                path: temp_path.clone(),
+                source,
+            })?;
+        let named_after = secure_file_metadata::from_path(&temp_path).map_err(|source| {
+            ReplayCheckpointError::Io {
+                path: temp_path.clone(),
+                source,
+            }
+        })?;
+        validate_checkpoint_file_metadata(&temp_path, &opened_after, expected_len)?;
+        validate_checkpoint_file_metadata(&temp_path, &named_after, expected_len)?;
+        if !secure_file_metadata::same_file(&opened_before, &opened_after)
+            || !secure_file_metadata::same_file(&opened_after, &named_after)
+            || opened_after.len() != expected_len
+            || named_after.len() != expected_len
+        {
+            return Err(checkpoint_io_error(
+                &temp_path,
+                "atomic checkpoint temporary path changed while writing",
+            ));
+        }
         validate_checkpoint_path(path)?;
         fs::rename(&temp_path, path).map_err(|source| ReplayCheckpointError::Io {
             path: path.to_path_buf(),
             source,
         })?;
         renamed = true;
+        let persisted_metadata = secure_file_metadata::from_path(path).map_err(|source| {
+            ReplayCheckpointError::DurabilityUncertain {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        validate_checkpoint_file_metadata(path, &persisted_metadata, expected_len).map_err(
+            |error| ReplayCheckpointError::DurabilityUncertain {
+                path: path.to_path_buf(),
+                source: io::Error::other(error.to_string()),
+            },
+        )?;
+        if !secure_file_metadata::same_file(&opened_after, &persisted_metadata)
+            || persisted_metadata.len() != expected_len
+        {
+            return Err(ReplayCheckpointError::DurabilityUncertain {
+                path: path.to_path_buf(),
+                source: io::Error::other(
+                    "checkpoint path changed identity or revision after atomic replacement",
+                ),
+            });
+        }
         sync_checkpoint_parent(parent).map_err(|source| {
             ReplayCheckpointError::DurabilityUncertain {
                 path: path.to_path_buf(),
                 source,
             }
         })?;
+        let durable_metadata = secure_file_metadata::from_path(path).map_err(|source| {
+            ReplayCheckpointError::DurabilityUncertain {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        validate_checkpoint_file_metadata(path, &durable_metadata, expected_len).map_err(
+            |error| ReplayCheckpointError::DurabilityUncertain {
+                path: path.to_path_buf(),
+                source: io::Error::other(error.to_string()),
+            },
+        )?;
+        if !secure_file_metadata::unchanged(&persisted_metadata, &durable_metadata)
+            || durable_metadata.len() != expected_len
+        {
+            return Err(ReplayCheckpointError::DurabilityUncertain {
+                path: path.to_path_buf(),
+                source: io::Error::other(
+                    "checkpoint changed while its directory entry was synchronized",
+                ),
+            });
+        }
         Ok(())
     })();
     if write_result.is_err() && !renamed {
@@ -728,21 +818,18 @@ fn checkpoint_parent(path: &Path) -> &Path {
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
 }
-#[cfg(unix)]
 fn sync_checkpoint_parent(parent: &Path) -> io::Result<()> {
-    fs::File::open(parent)?.sync_all()
-}
-#[cfg(not(unix))]
-fn sync_checkpoint_parent(_parent: &Path) -> io::Result<()> {
-    Ok(())
+    crate::durable_fs::sync_direct_directory(parent)
 }
 fn validate_checkpoint_path(path: &Path) -> Result<(), ReplayCheckpointError> {
-    match fs::symlink_metadata(path) {
+    match secure_file_metadata::from_path(path) {
         Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
+            if !secure_file_metadata::is_direct_file(&metadata)
+                || secure_file_metadata::number_of_links(&metadata) != Some(1)
+            {
                 return Err(checkpoint_io_error(
                     path,
-                    "checkpoint output must be a regular file and must not be a symlink",
+                    "checkpoint output must be a single-link direct regular file",
                 ));
             }
         }
@@ -759,12 +846,12 @@ fn validate_checkpoint_path(path: &Path) -> Result<(), ReplayCheckpointError> {
         if ancestor.as_os_str().is_empty() {
             continue;
         }
-        match fs::symlink_metadata(ancestor) {
+        match secure_file_metadata::from_path(ancestor) {
             Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                if !secure_file_metadata::is_direct_directory(&metadata) {
                     return Err(checkpoint_io_error(
                         ancestor,
-                        "checkpoint parent must be a real directory and must not be a symlink",
+                        "checkpoint parent must be a direct directory",
                     ));
                 }
             }
@@ -789,8 +876,45 @@ fn checkpoint_io_error(path: &Path, message: &'static str) -> ReplayCheckpointEr
 fn set_no_follow_flag(options: &mut OpenOptions) {
     options.custom_flags(libc::O_NOFOLLOW);
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_no_follow_flag(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+#[cfg(not(any(unix, windows)))]
 fn set_no_follow_flag(_options: &mut OpenOptions) {}
+#[cfg(windows)]
+fn set_lock_share_mode(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+}
+#[cfg(not(windows))]
+fn set_lock_share_mode(_options: &mut OpenOptions) {}
+#[cfg(windows)]
+fn set_stable_read_share_mode(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+    options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE);
+}
+#[cfg(not(windows))]
+fn set_stable_read_share_mode(_options: &mut OpenOptions) {}
+#[cfg(windows)]
+fn set_writer_share_mode(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+    options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE);
+}
+#[cfg(not(windows))]
+fn set_writer_share_mode(_options: &mut OpenOptions) {}
 #[cfg(unix)]
 fn set_private_create_mode(options: &mut OpenOptions) {
     options.mode(0o600);
@@ -1248,6 +1372,21 @@ mod replay_checkpoint_tests {
         ReplayCheckpointStore::new(path, max_entries(4))
             .expect("dropping first cache releases replay checkpoint lock");
     }
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn checkpoint_lock_refuses_hard_links() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("replay.to");
+        let lock_path = path.with_added_extension("lock");
+        let alias = temp.path().join("replay.lock.alias");
+        write_private(&lock_path, b"");
+        fs::hard_link(&lock_path, &alias).expect("hardlink checkpoint lock fixture");
+
+        assert!(matches!(
+            ReplayCheckpointStore::new(path, max_entries(4)),
+            Err(ReplayCheckpointError::Io { .. })
+        ));
+    }
     #[test]
     fn checkpoint_preflights_declared_entry_count() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1273,6 +1412,31 @@ mod replay_checkpoint_tests {
             store.load(&AdmissionRegistry::empty()),
             Err(ReplayCheckpointError::TooLarge { actual, maximum })
                 if actual == maximum + 1 && maximum == store.maximum_bytes()
+        ));
+    }
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn checkpoint_read_and_write_refuse_hard_links() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("replay.to");
+        let alias = temp.path().join("replay.alias.to");
+        let store = checkpoint_store(path.clone(), 4);
+        write_private(&path, &to_bytes(&vec![entry(1, 10)]).unwrap());
+        fs::hard_link(&path, &alias).expect("hardlink checkpoint fixture");
+
+        assert!(matches!(
+            store.load(&AdmissionRegistry::empty()),
+            Err(ReplayCheckpointError::Io { .. })
+        ));
+        assert!(matches!(
+            store.persist(&HashMap::from([(
+                [1; 32],
+                AdvertReplayHighWater {
+                    issued_at: 10,
+                    fingerprint: [2; FINGERPRINT_LEN]
+                }
+            )])),
+            Err(ReplayCheckpointError::Io { .. })
         ));
     }
     #[test]

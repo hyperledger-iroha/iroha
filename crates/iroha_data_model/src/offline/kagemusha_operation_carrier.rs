@@ -208,18 +208,19 @@ fn contains_operation(transaction: &SignedTransaction) -> bool {
         )
 }
 
-/// Classify the sole canonical signed-transaction carrier for a Kagemusha operation.
+/// Classify direct Kagemusha instructions in a signed transaction.
 ///
 /// An ordinary transaction returns `Ok(None)`. Once either Kagemusha operation
 /// is present, the executable must be exactly one direct native instruction.
 /// Batches and proved overlays are rejected even when they contain no other
-/// native instruction alongside the operation.
+/// native instruction alongside the operation. Executor-owned deferred
+/// instruction containers require the complete Core classifier.
 ///
 /// # Errors
 ///
 /// Returns a closed carrier-shape or request-validation failure when a
 /// Kagemusha instruction is present but is not one valid singleton carrier.
-pub fn classify_kagemusha_operation_transaction_v4(
+pub fn classify_direct_kagemusha_operation_transaction_v4(
     transaction: &SignedTransaction,
 ) -> Result<Option<KagemushaOperationCarrierV4<'_>>, KagemushaOperationCarrierErrorV4> {
     if !contains_operation(transaction) {
@@ -236,7 +237,7 @@ pub fn classify_kagemusha_operation_transaction_v4(
     KagemushaOperationCarrierV4::new(request).map(Some)
 }
 
-/// Classify a Kagemusha operation at the complete entrypoint trust boundary.
+/// Classify direct Kagemusha instructions at the data-model entrypoint boundary.
 ///
 /// Only [`TransactionEntrypoint::External`] may carry an operation. A sealed
 /// reveal containing either operation is rejected rather than treated as an
@@ -246,12 +247,12 @@ pub fn classify_kagemusha_operation_transaction_v4(
 ///
 /// Returns a closed carrier-shape or request-validation failure when a
 /// Kagemusha instruction is present but is not one valid external carrier.
-pub fn classify_kagemusha_operation_entrypoint_v4(
+pub fn classify_direct_kagemusha_operation_entrypoint_v4(
     entrypoint: &TransactionEntrypoint,
 ) -> Result<Option<KagemushaOperationCarrierV4<'_>>, KagemushaOperationCarrierErrorV4> {
     match entrypoint {
         TransactionEntrypoint::External(transaction) => {
-            classify_kagemusha_operation_transaction_v4(transaction)
+            classify_direct_kagemusha_operation_transaction_v4(transaction)
         }
         TransactionEntrypoint::SealedReveal(reveal)
             if contains_operation(reveal.signed_transaction()) =>

@@ -124,6 +124,7 @@ public sealed class KagemushaToriiTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(4, request.Version);
+        Assert.Equal(1234UL, request.IssuedAtMilliseconds);
         Assert.Equal(ToriiKagemushaOperationKind.TopUp, reference.Kind);
         Assert.Equal(ToriiKagemushaOperationState.Pending, reference.State);
         Assert.Equal(OperationId, reference.OperationId);
@@ -228,6 +229,8 @@ public sealed class KagemushaToriiTests
         var redeemRequest = new ToriiKagemushaRedeemRequestV4(redeem);
         Assert.Equal(OperationId, topUpRequest.OperationId);
         Assert.Equal(OperationId, redeemRequest.OperationId);
+        Assert.Equal(1234UL, topUpRequest.IssuedAtMilliseconds);
+        Assert.Equal(1234UL, redeemRequest.IssuedAtMilliseconds);
 
         Assert.Throws<ArgumentException>(() =>
             new ToriiKagemushaTopUpRequestV4(redeem));
@@ -247,6 +250,40 @@ public sealed class KagemushaToriiTests
             NoritoArchive(
                 TopUpRequestSchemaName,
                 KagemushaRequestPayload(TopUpRequestSchemaName, wireVersion: 3)),
+            NoritoArchive(
+                TopUpRequestSchemaName,
+                KagemushaRequestPayload(
+                    TopUpRequestSchemaName,
+                    authorization: KagemushaRequestAuthorizationPayload(
+                        Convert.FromHexString(OperationId),
+                        fieldCount: 9))),
+            NoritoArchive(
+                TopUpRequestSchemaName,
+                KagemushaRequestPayload(
+                    TopUpRequestSchemaName,
+                    authorization: KagemushaRequestAuthorizationPayload(
+                        Convert.FromHexString(OperationId),
+                        fieldCount: 11))),
+            NoritoArchive(
+                TopUpRequestSchemaName,
+                KagemushaRequestPayload(
+                    TopUpRequestSchemaName,
+                    authorization: KagemushaRequestAuthorizationPayload(
+                        Enumerable.Repeat((byte)0x22, 32).ToArray()))),
+            NoritoArchive(
+                TopUpRequestSchemaName,
+                KagemushaRequestPayload(
+                    TopUpRequestSchemaName,
+                    authorization: KagemushaRequestAuthorizationPayload(
+                        Convert.FromHexString(OperationId),
+                        issuedAtField: [0x01]))),
+            NoritoArchive(
+                TopUpRequestSchemaName,
+                KagemushaRequestPayload(
+                    TopUpRequestSchemaName,
+                    authorization: KagemushaRequestAuthorizationPayload(
+                        Convert.FromHexString(OperationId),
+                        issuedAtMilliseconds: 0))),
             NoritoArchive(TopUpRequestSchemaName, paddingLength: 9),
             NoritoArchive(TopUpRequestSchemaName, Array.Empty<byte>()),
             Mutate(topUp, frame => frame[NoritoHeader.EncodedLength] = 1),
@@ -258,6 +295,41 @@ public sealed class KagemushaToriiTests
             Assert.Throws<ArgumentException>(() =>
                 new ToriiKagemushaTopUpRequestV4(frame));
         }
+    }
+
+    [Theory]
+    [InlineData(TopUpRequestSchemaName, "top_up")]
+    [InlineData(RedeemRequestSchemaName, "redeem")]
+    public async Task SubmissionRejectsReferenceTimestampNotSignedByRequest(
+        string schemaName,
+        string kind)
+    {
+        using var handler = new KagemushaHandler(_ =>
+        {
+            var response = AcceptedOperationReference(
+                OperationReferenceJson(kind, submittedAtMilliseconds: 1235));
+            response.Headers.TryAddWithoutValidation("Retry-After", "1");
+            return response;
+        });
+        using var client = AssuredClient(handler);
+
+        var error = await Assert.ThrowsAsync<JsonException>(async () =>
+        {
+            if (kind == "top_up")
+            {
+                await client.SubmitKagemushaTopUpV4Async(
+                    new ToriiKagemushaTopUpRequestV4(NoritoArchive(schemaName)),
+                    TestContext.Current.CancellationToken);
+            }
+            else
+            {
+                await client.SubmitKagemushaRedeemV4Async(
+                    new ToriiKagemushaRedeemRequestV4(NoritoArchive(schemaName)),
+                    TestContext.Current.CancellationToken);
+            }
+        });
+
+        Assert.Contains("does not match the submitted V4 command", error.Message);
     }
 
     [Fact]
@@ -629,7 +701,7 @@ public sealed class KagemushaToriiTests
 
         var replacementHash = new string('5', 64);
         using var retryHandler = new KagemushaHandler(_ => JsonResponse(
-            PendingStatusJson(1235, replacementHash)));
+            PendingStatusJson(1234, replacementHash)));
         using var retryClient = new ToriiClient(
             new Uri("https://torii.example"),
             new HttpClient(retryHandler));
@@ -637,7 +709,18 @@ public sealed class KagemushaToriiTests
             OperationReference(ToriiKagemushaOperationKind.TopUp),
             TestContext.Current.CancellationToken);
         Assert.Equal(replacementHash, retry.TransactionHash);
-        Assert.Equal(1235UL, retry.SubmittedAtMilliseconds);
+        Assert.Equal(1234UL, retry.SubmittedAtMilliseconds);
+
+        using var rewrittenTimestampHandler = new KagemushaHandler(_ => JsonResponse(
+            PendingStatusJson(1235, replacementHash)));
+        using var rewrittenTimestampClient = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(rewrittenTimestampHandler));
+        var rewrittenTimestamp = await Assert.ThrowsAsync<JsonException>(() =>
+            rewrittenTimestampClient.GetKagemushaOperationStatusForTestAsync(
+                OperationReference(ToriiKagemushaOperationKind.TopUp),
+                TestContext.Current.CancellationToken));
+        Assert.Contains("accepted operation reference", rewrittenTimestamp.Message);
     }
 
     [Fact]
@@ -827,7 +910,9 @@ public sealed class KagemushaToriiTests
     private static byte[] KagemushaRequestPayload(
         string schemaName,
         byte[]? operationId = null,
-        ushort wireVersion = 4)
+        ushort wireVersion = 4,
+        byte[]? authorization = null,
+        ulong issuedAtMilliseconds = 1234)
     {
         var (fieldCount, operationIdFieldIndex) = schemaName switch
         {
@@ -840,9 +925,39 @@ public sealed class KagemushaToriiTests
         BinaryPrimitives.WriteUInt16LittleEndian(version, wireVersion);
         writer.WriteField(version);
         var selectedOperationId = operationId ?? Convert.FromHexString(OperationId);
+        var selectedAuthorization = authorization
+            ?? KagemushaRequestAuthorizationPayload(
+                selectedOperationId,
+                issuedAtMilliseconds);
         for (var index = 1; index < fieldCount; index++)
         {
-            writer.WriteField(index == operationIdFieldIndex ? selectedOperationId : [0x01]);
+            writer.WriteField(index switch
+            {
+                _ when index == operationIdFieldIndex => selectedOperationId,
+                _ when index == fieldCount - 1 => selectedAuthorization,
+                _ => [0x01],
+            });
+        }
+        return writer.ToArray();
+    }
+
+    private static byte[] KagemushaRequestAuthorizationPayload(
+        byte[] operationId,
+        ulong issuedAtMilliseconds = 1234,
+        int fieldCount = 10,
+        byte[]? issuedAtField = null)
+    {
+        var writer = new CanonicalNoritoWriter();
+        Span<byte> encodedIssuedAt = stackalloc byte[sizeof(ulong)];
+        BinaryPrimitives.WriteUInt64LittleEndian(encodedIssuedAt, issuedAtMilliseconds);
+        for (var index = 0; index < fieldCount; index++)
+        {
+            writer.WriteField(index switch
+            {
+                3 => operationId,
+                4 => issuedAtField ?? encodedIssuedAt.ToArray(),
+                _ => [0x01],
+            });
         }
         return writer.ToArray();
     }

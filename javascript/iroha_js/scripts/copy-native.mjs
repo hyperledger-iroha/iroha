@@ -130,6 +130,7 @@ export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
   "noritoEncodeInstruction",
   "noritoDecodeInstruction",
   "inspectSorafsOrderbookSubmissionForDiscriminantV1",
+  "kagemushaOfflineOperationStatusJsonValidateV1",
   "verifySorafsOrderbookSubmissionReceiptV1",
   "compileKotodama",
   "privacyCompiledProfileCatalogV1",

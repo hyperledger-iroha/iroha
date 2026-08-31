@@ -2143,17 +2143,6 @@ class KagemushaRecursiveSpendProverTest {
                 KagemushaRecursiveSpendProver.OperationHandle(
                     operationId,
                     KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
-                    otherOperationId,
-                    7,
-                ),
-            )
-        }
-        assertFailsWith<IllegalStateException> {
-            KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
-                status,
-                KagemushaRecursiveSpendProver.OperationHandle(
-                    operationId,
-                    KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
                     operationId,
                     8,
                 ),
@@ -2203,6 +2192,108 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertFailsWith<IllegalStateException> { client.submitTopUp(request) }
         assertEquals(null, dispatched.get())
+    }
+
+    @Test
+    fun toriiOperationStatusAllowsCarrierReplacementWithImmutableSignedTime() {
+        val operationId = ByteArray(32) { 0x11 }
+        val replacementTransactionHash = ByteArray(32) { 0x13 }
+        val topUpHandle = KagemushaRecursiveSpendProver.ToriiClient
+            .requireOperationReferenceMatches(
+                KagemushaRecursiveSpendProver.OperationReferenceProjection(
+                    KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                    operationId,
+                    operationId,
+                    "/v1/offline/operations/${operationId.toHex()}",
+                    7,
+                ),
+                KagemushaRecursiveSpendProver.OperationRequestIdentity(
+                    KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                    operationId,
+                    7,
+                ),
+            )
+        val replacementPending = KagemushaRecursiveSpendProver.OperationStatusProjection(
+            KagemushaRecursiveSpendProver.OperationState.PENDING,
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            replacementTransactionHash,
+            7,
+            null,
+            null,
+            null,
+        )
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+            replacementPending,
+            topUpHandle,
+        )
+        assertContentEquals(operationId, topUpHandle.transactionHash())
+        assertEquals(7, topUpHandle.submittedAtMilliseconds)
+
+        val changedTimestampPending = KagemushaRecursiveSpendProver.OperationStatusProjection(
+            KagemushaRecursiveSpendProver.OperationState.PENDING,
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            replacementTransactionHash,
+            8,
+            null,
+            null,
+            null,
+        )
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+                changedTimestampPending,
+                topUpHandle,
+            )
+        }
+
+        val redeemHandle = KagemushaRecursiveSpendProver.ToriiClient
+            .requireOperationReferenceMatches(
+                KagemushaRecursiveSpendProver.OperationReferenceProjection(
+                    KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                    operationId,
+                    operationId,
+                    "/v1/offline/operations/${operationId.toHex()}",
+                    7,
+                ),
+                KagemushaRecursiveSpendProver.OperationRequestIdentity(
+                    KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                    operationId,
+                    7,
+                ),
+            )
+        val appliedWinner = KagemushaRecursiveSpendProver.OperationStatusProjection(
+            KagemushaRecursiveSpendProver.OperationState.APPLIED,
+            KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+            operationId,
+            replacementTransactionHash,
+            null,
+            1,
+            null,
+            null,
+        )
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+            appliedWinner,
+            redeemHandle,
+        )
+
+        val rejectedRetry = KagemushaRecursiveSpendProver.OperationStatusProjection(
+            KagemushaRecursiveSpendProver.OperationState.REJECTED,
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            replacementTransactionHash,
+            null,
+            null,
+            null,
+            KagemushaRecursiveSpendProver.OperationRejection(
+                "offline_operation_rejected",
+                "rejected",
+            ),
+        )
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+            rejectedRetry,
+            topUpHandle,
+        )
     }
 
     @Test

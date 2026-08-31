@@ -86,6 +86,7 @@ from iroha_torii_client.native_amx import (  # noqa: E402
     compute_native_amx_validator_set_hash,
 )
 from offline_test_support import (  # noqa: E402
+    OFFLINE_ISSUED_AT_MS,
     OFFLINE_NETWORK_ID,
     OFFLINE_OPERATION_BYTES,
     OFFLINE_OPERATION_ID,
@@ -103,6 +104,9 @@ from offline_test_support import (  # noqa: E402
 )
 from offline_test_support import (  # noqa: E402
     offline_fixed_bytes as _offline_fixed_bytes,
+)
+from offline_test_support import (  # noqa: E402
+    offline_kagemusha_authorization_archive as _offline_kagemusha_authorization_archive,
 )
 from offline_test_support import (  # noqa: E402
     offline_kagemusha_request_frame as _offline_kagemusha_request_frame,
@@ -9322,7 +9326,9 @@ def test_submit_kagemusha_top_up_sends_exact_norito_and_idempotency_key() -> Non
     reference = client.submit_kagemusha_top_up(request, timeout=7.5)
 
     assert request.operation_id == embedded_operation_id
+    assert request.issued_at_ms == OFFLINE_ISSUED_AT_MS
     assert reference.operation_id == embedded_operation_id
+    assert reference.submitted_at_ms == request.issued_at_ms
     assert reference.kind.kind == "top_up"
     assert reference.state.state == "pending"
     call = session.calls[0]
@@ -9353,6 +9359,8 @@ def test_submit_kagemusha_redeem_uses_only_the_final_route() -> None:
     reference = client.submit_kagemusha_redeem(request, timeout=8.5)
 
     assert reference.kind.kind == "redeem"
+    assert request.issued_at_ms == OFFLINE_ISSUED_AT_MS
+    assert reference.submitted_at_ms == request.issued_at_ms
     assert session.calls[0]["url"].endswith("/v1/offline/redeem")
     assert session.calls[0]["headers"]["Content-Type"] == "application/x-norito"
     assert session.calls[0]["data"] is request.norito
@@ -9445,6 +9453,11 @@ def test_kagemusha_command_validation_rejects_noncanonical_inputs_before_network
                 norito=valid_archive,
                 operation_id=OFFLINE_OPERATION_ID,
             )
+        with pytest.raises(TypeError, match="issued_at_ms"):
+            request_type(  # type: ignore[call-arg]
+                norito=valid_archive,
+                issued_at_ms=OFFLINE_ISSUED_AT_MS,
+            )
         with pytest.raises(ValueError, match="truncated field"):
             request_type(norito=_offline_norito_frame(schema_name))
         for operation_id in (
@@ -9481,8 +9494,10 @@ def test_kagemusha_command_requires_exact_schema_bound_norito_frame() -> None:
     redeem_request = KagemushaRedeemRequestV4(redeem)
     assert top_up_request.norito == top_up
     assert top_up_request.operation_id == OFFLINE_OPERATION_ID
+    assert top_up_request.issued_at_ms == OFFLINE_ISSUED_AT_MS
     assert redeem_request.norito == redeem
     assert redeem_request.operation_id == OFFLINE_OPERATION_ID
+    assert redeem_request.issued_at_ms == OFFLINE_ISSUED_AT_MS
     with pytest.raises(ValueError, match="schema hash did not match"):
         KagemushaTopUpRequestV4(redeem)
     with pytest.raises(ValueError, match="schema hash did not match"):
@@ -9525,6 +9540,64 @@ def test_kagemusha_command_requires_exact_schema_bound_norito_frame() -> None:
                 trailing_payload=b"\x00",
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("request_type", "schema_name", "field_count", "operation_id_index"),
+    [
+        (
+            KagemushaTopUpRequestV4,
+            OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+            8,
+            6,
+        ),
+        (
+            KagemushaRedeemRequestV4,
+            OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+            10,
+            8,
+        ),
+    ],
+)
+def test_kagemusha_command_requires_exact_bound_authorization_archive(
+    request_type: type,
+    schema_name: str,
+    field_count: int,
+    operation_id_index: int,
+) -> None:
+    def request_with(authorization: bytes) -> Any:
+        return request_type(
+            _offline_kagemusha_request_frame(
+                schema_name,
+                field_count=field_count,
+                operation_id_field_index=operation_id_index,
+                authorization=authorization,
+            )
+        )
+
+    with pytest.raises(ValueError, match="operation_id must equal the outer"):
+        request_with(
+            _offline_kagemusha_authorization_archive(
+                operation_id=bytes([0x22]) * 32,
+            )
+        )
+    with pytest.raises(ValueError, match="issued_at_ms must be exactly 8 bytes"):
+        request_with(
+            _offline_kagemusha_authorization_archive(
+                issued_at_ms_bytes=b"\x01" * 7,
+            )
+        )
+    with pytest.raises(ValueError, match="issued_at_ms must be positive"):
+        request_with(_offline_kagemusha_authorization_archive(issued_at_ms=0))
+    with pytest.raises(ValueError, match="authorization field 9"):
+        request_with(_offline_kagemusha_authorization_archive(field_count=9))
+    with pytest.raises(ValueError, match="exactly 10 compact-length fields"):
+        request_with(
+            _offline_kagemusha_authorization_archive(trailing_payload=b"\x00")
+        )
+    authorization = _offline_kagemusha_authorization_archive()
+    with pytest.raises(ValueError, match="non-canonical"):
+        request_with(b"\x81\x00" + authorization[1:])
 
 
 def test_offline_acceptance_cross_checks_reference_and_location() -> None:
@@ -9577,6 +9650,43 @@ def test_offline_acceptance_cross_checks_reference_and_location() -> None:
     wrong_media_client = ToriiClient("http://node.test", session=wrong_media_session)
     with pytest.raises(RuntimeError, match="Content-Type application/json"):
         wrong_media_client.submit_kagemusha_top_up(_offline_top_up_request())
+
+
+@pytest.mark.parametrize(
+    ("request_factory", "submit", "kind"),
+    [
+        (
+            _offline_top_up_request,
+            ToriiClient.submit_kagemusha_top_up,
+            "top_up",
+        ),
+        (
+            _offline_redeem_request,
+            ToriiClient.submit_kagemusha_redeem,
+            "redeem",
+        ),
+    ],
+)
+def test_offline_acceptance_requires_signed_request_timestamp(
+    request_factory: Callable[[], Any],
+    submit: Callable[[ToriiClient, Any], OfflineOperationReference],
+    kind: str,
+) -> None:
+    request = request_factory()
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload=_offline_operation_reference(
+                kind={"kind": kind, "value": None},
+                submitted_at_ms=request.issued_at_ms + 1,
+            ),
+            headers={"Location": OFFLINE_STATUS_URI, "Retry-After": "1"},
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="signed request issued_at_ms"):
+        submit(ToriiClient("http://node.test", session=session), request)
 
 
 @pytest.mark.parametrize(
@@ -9638,7 +9748,7 @@ def test_offline_pending_timestamps_must_be_positive() -> None:
         ).get_kagemusha_operation_status(_accepted_operation_reference())
 
 
-def test_kagemusha_status_preserves_identity_and_accepts_newer_attempts() -> None:
+def test_kagemusha_status_preserves_identity_and_accepts_new_carrier_hash() -> None:
     pending = {
         "state": "pending",
         "value": {
@@ -9650,7 +9760,7 @@ def test_kagemusha_status_preserves_identity_and_accepts_newer_attempts() -> Non
     }
     pending_session = RecordingSession()
     pending_session.queue(StubResponse(payload=pending))
-    with pytest.raises(RuntimeError, match="active submission identity"):
+    with pytest.raises(RuntimeError, match="immutable submission timestamp"):
         ToriiClient(
             "http://node.test", session=pending_session
         ).get_kagemusha_operation_status(
@@ -9666,17 +9776,30 @@ def test_kagemusha_status_preserves_identity_and_accepts_newer_attempts() -> Non
             "http://node.test", session=wrong_id_session
         ).get_kagemusha_operation_status(_accepted_operation_reference())
 
+    substituted_pending = copy.deepcopy(pending)
+    substituted_pending["value"]["transaction_hash"] = "25" * 32
+    substituted_pending["value"]["submitted_at_ms"] = 11
+    substituted_pending_session = RecordingSession()
+    substituted_pending_session.queue(StubResponse(payload=substituted_pending))
+    with pytest.raises(RuntimeError, match="immutable submission timestamp"):
+        ToriiClient(
+            "http://node.test", session=substituted_pending_session
+        ).get_kagemusha_operation_status(
+            _accepted_operation_reference(submitted_at_ms=10)
+        )
+
     advanced_pending = copy.deepcopy(pending)
     advanced_pending["value"]["transaction_hash"] = "25" * 32
-    advanced_pending["value"]["submitted_at_ms"] = 11
     advanced_pending_session = RecordingSession()
     advanced_pending_session.queue(StubResponse(payload=advanced_pending))
     advanced = ToriiClient(
         "http://node.test", session=advanced_pending_session
-    ).get_kagemusha_operation_status(_accepted_operation_reference())
+    ).get_kagemusha_operation_status(
+        _accepted_operation_reference(submitted_at_ms=10)
+    )
     assert isinstance(advanced, OfflinePendingOperation)
     assert advanced.transaction_hash == "25" * 32
-    assert advanced.submitted_at_ms == 11
+    assert advanced.submitted_at_ms == 10
 
     applied_redeem = {
         "state": "applied",

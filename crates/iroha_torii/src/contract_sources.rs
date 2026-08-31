@@ -18,12 +18,14 @@ use iroha_data_model::{
 use ivm::analysis::ProgramAnalysis;
 use mv::storage::StorageReadOnly;
 #[cfg(unix)]
+use std::fs::File;
+#[cfg(any(unix, windows))]
 use std::path::Component;
 use std::{
     collections::{BTreeSet, HashMap},
     ffi::OsString,
     fmt::{self, Write as _},
-    fs::{self, File},
+    fs,
     io::{self, Read as _, Write as _},
     num::NonZeroUsize,
     path::{Path, PathBuf},
@@ -849,7 +851,154 @@ fn write_immutable_file(
     publication
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+type PinnedWindowsStorageDirectory = (PathBuf, crate::secure_file_metadata::SecureMetadata);
+
+#[cfg(windows)]
+fn revalidate_windows_storage_directories(
+    directories: &[PinnedWindowsStorageDirectory],
+    label: &str,
+) -> Result<(), Error> {
+    use crate::secure_file_metadata::{from_path, is_direct_directory, same_file};
+
+    for (path, before) in directories {
+        let after = from_path(path).map_err(|error| {
+            map_io_error(error, "failed to re-inspect contract source directory")
+        })?;
+        if !is_direct_directory(&after) || !same_file(before, &after) {
+            return Err(conversion_error(format!(
+                "{label} directory changed while it was in use: {}",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn prepare_windows_storage_parent(
+    parent: &Path,
+    create: bool,
+    label: &str,
+) -> Result<Option<(PathBuf, Vec<PinnedWindowsStorageDirectory>)>, Error> {
+    use crate::secure_file_metadata::{from_path, is_direct_directory};
+
+    let candidate = if parent.is_absolute() {
+        parent.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| map_io_error(error, "failed to resolve contract source directory"))?
+            .join(parent)
+    };
+    if !candidate.is_absolute() {
+        return Err(conversion_error(format!(
+            "{label} directory is not an absolute path: {}",
+            candidate.display()
+        )));
+    }
+
+    let mut cursor = PathBuf::new();
+    let mut directories = Vec::new();
+    for component in candidate.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                cursor.push(component.as_os_str());
+            }
+            Component::CurDir | Component::ParentDir => {
+                return Err(conversion_error(format!(
+                    "{label} directory contains a forbidden traversal component: {}",
+                    candidate.display()
+                )));
+            }
+            Component::Normal(component) => {
+                let containing_directory = cursor.clone();
+                cursor.push(component);
+                let mut created = false;
+                let metadata = match from_path(&cursor) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound && !create => {
+                        return Ok(None);
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        match fs::create_dir(&cursor) {
+                            Ok(()) => created = true,
+                            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                            Err(error) => {
+                                return Err(map_io_error(
+                                    error,
+                                    "failed to create contract source directory",
+                                ));
+                            }
+                        }
+                        from_path(&cursor).map_err(|error| {
+                            map_io_error(error, "failed to inspect contract source directory")
+                        })?
+                    }
+                    Err(error) => {
+                        return Err(map_io_error(
+                            error,
+                            "failed to inspect contract source directory",
+                        ));
+                    }
+                };
+                if !is_direct_directory(&metadata) {
+                    return Err(conversion_error(format!(
+                        "{label} directory contains a non-directory or reparse point: {}",
+                        cursor.display()
+                    )));
+                }
+                revalidate_windows_storage_directories(&directories, label)?;
+                if created && !containing_directory.as_os_str().is_empty() {
+                    crate::durable_fs::sync_direct_directory(&containing_directory).map_err(
+                        |error| {
+                            map_io_error(
+                                error,
+                                "failed to sync a new contract source directory entry",
+                            )
+                        },
+                    )?;
+                    revalidate_windows_storage_directories(&directories, label)?;
+                }
+                directories.push((cursor.clone(), metadata));
+            }
+        }
+    }
+    if directories
+        .last()
+        .is_none_or(|(path, _)| path != &candidate)
+    {
+        let metadata = from_path(&candidate)
+            .map_err(|error| map_io_error(error, "failed to inspect contract source directory"))?;
+        if !is_direct_directory(&metadata) {
+            return Err(conversion_error(format!(
+                "{label} directory is not a direct directory: {}",
+                candidate.display()
+            )));
+        }
+        directories.push((candidate.clone(), metadata));
+    }
+    revalidate_windows_storage_directories(&directories, label)?;
+    Ok(Some((candidate, directories)))
+}
+
+#[cfg(windows)]
+fn validate_windows_storage_file(
+    metadata: &crate::secure_file_metadata::SecureMetadata,
+    path: &Path,
+    label: &str,
+) -> Result<(), Error> {
+    use crate::secure_file_metadata::{is_direct_file, number_of_links};
+
+    if !is_direct_file(metadata) || number_of_links(metadata) != Some(1) {
+        return Err(conversion_error(format!(
+            "{label} must be a direct, single-link regular file: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 fn write_immutable_file(
     path: &Path,
     bytes: &[u8],
@@ -861,29 +1010,140 @@ fn write_immutable_file(
             "{label} exceeds the first-release {maximum_bytes}-byte maximum"
         )));
     }
-    let (parent, _) = storage_parent(path)?;
-    fs::create_dir_all(parent)
-        .map_err(|error| map_io_error(error, "failed to create contract source directory"))?;
-    if let Some(existing) = read_bounded_file(path, maximum_bytes, label)? {
-        return (existing == bytes).then_some(()).ok_or_else(|| {
-            storage_error(format!(
+    let (parent, name) = storage_parent(path)?;
+    let Some((parent, pinned_directories)) = prepare_windows_storage_parent(parent, true, label)?
+    else {
+        return Err(conversion_error(format!(
+            "failed to create {label} directory"
+        )));
+    };
+    let destination = parent.join(name);
+    revalidate_windows_storage_directories(&pinned_directories, label)?;
+    if let Some(existing) = read_bounded_file(&destination, maximum_bytes, label)? {
+        if existing != bytes {
+            return Err(storage_error(format!(
                 "refusing to replace conflicting immutable {label}: {}",
-                path.display()
-            ))
-        });
+                destination.display()
+            )));
+        }
+        crate::durable_fs::sync_direct_directory(&parent).map_err(|error| {
+            map_io_error(error, "failed to sync existing contract source directory")
+        })?;
+        revalidate_windows_storage_directories(&pinned_directories, label)?;
+        return Ok(());
     }
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+    let mut temporary = tempfile::NamedTempFile::new_in(&parent)
         .map_err(|error| map_io_error(error, "failed to create contract source temporary file"))?;
+    let temporary_before = crate::secure_file_metadata::from_file(temporary.as_file())
+        .map_err(|error| map_io_error(error, "failed to inspect contract source temporary file"))?;
+    validate_windows_storage_file(&temporary_before, temporary.path(), label)?;
+    if temporary_before.len() != 0 {
+        return Err(conversion_error(
+            "contract source temporary file was not empty at creation",
+        ));
+    }
+    revalidate_windows_storage_directories(&pinned_directories, label)?;
     temporary
         .write_all(bytes)
         .and_then(|()| temporary.as_file().sync_all())
         .map_err(|error| map_io_error(error, "failed to sync contract source temporary file"))?;
-    temporary.persist_noclobber(path).map_err(|error| {
-        map_io_error(error.error, "failed no-clobber contract source publication")
-    })?;
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| map_io_error(error, "failed to sync contract source directory"))
+    let temporary_ready =
+        crate::secure_file_metadata::from_file(temporary.as_file()).map_err(|error| {
+            map_io_error(
+                error,
+                "failed to inspect synced contract source temporary file",
+            )
+        })?;
+    validate_windows_storage_file(&temporary_ready, temporary.path(), label)?;
+    if !crate::secure_file_metadata::same_file(&temporary_before, &temporary_ready)
+        || usize::try_from(temporary_ready.len()).ok() != Some(bytes.len())
+    {
+        return Err(conversion_error(
+            "contract source temporary file changed unexpectedly while being written",
+        ));
+    }
+    revalidate_windows_storage_directories(&pinned_directories, label)?;
+
+    let published_file = match temporary.persist_noclobber(&destination) {
+        Ok(file) => file,
+        Err(error) => {
+            if error.error.kind() == io::ErrorKind::AlreadyExists
+                && read_bounded_file(&destination, maximum_bytes, label)?
+                    .is_some_and(|existing| existing == bytes)
+            {
+                drop(temporary_ready);
+                drop(error);
+                crate::durable_fs::sync_direct_directory(&parent).map_err(|error| {
+                    map_io_error(error, "failed to sync existing contract source directory")
+                })?;
+                revalidate_windows_storage_directories(&pinned_directories, label)?;
+                return Ok(());
+            }
+            return Err(map_io_error(
+                error.error,
+                "failed no-clobber contract source publication",
+            ));
+        }
+    };
+    let published_before = crate::secure_file_metadata::from_file(&published_file)
+        .map_err(|error| map_io_error(error, "failed to inspect published contract source file"))?;
+    let named_after_publish = crate::secure_file_metadata::from_path(&destination)
+        .map_err(|error| map_io_error(error, "failed to inspect named contract source file"))?;
+    validate_windows_storage_file(&published_before, &destination, label)?;
+    validate_windows_storage_file(&named_after_publish, &destination, label)?;
+    if !crate::secure_file_metadata::same_file(&temporary_ready, &published_before)
+        || !crate::secure_file_metadata::unchanged(&temporary_ready, &published_before)
+        || !crate::secure_file_metadata::same_file(&published_before, &named_after_publish)
+        || !crate::secure_file_metadata::unchanged(&published_before, &named_after_publish)
+    {
+        return Err(conversion_error(format!(
+            "published {label} changed identity or revision: {}",
+            destination.display()
+        )));
+    }
+    revalidate_windows_storage_directories(&pinned_directories, label)?;
+    crate::durable_fs::sync_direct_directory(&parent)
+        .map_err(|error| map_io_error(error, "failed to sync contract source directory"))?;
+    let published_after =
+        crate::secure_file_metadata::from_file(&published_file).map_err(|error| {
+            map_io_error(error, "failed to re-inspect published contract source file")
+        })?;
+    let named_after_sync = crate::secure_file_metadata::from_path(&destination)
+        .map_err(|error| map_io_error(error, "failed to re-inspect named contract source file"))?;
+    validate_windows_storage_file(&published_after, &destination, label)?;
+    validate_windows_storage_file(&named_after_sync, &destination, label)?;
+    if !crate::secure_file_metadata::same_file(&published_before, &published_after)
+        || !crate::secure_file_metadata::unchanged(&published_before, &published_after)
+        || !crate::secure_file_metadata::same_file(&published_after, &named_after_sync)
+        || !crate::secure_file_metadata::unchanged(&published_after, &named_after_sync)
+    {
+        return Err(conversion_error(format!(
+            "published {label} changed while its directory was synchronized: {}",
+            destination.display()
+        )));
+    }
+    revalidate_windows_storage_directories(&pinned_directories, label)?;
+    let readback = read_bounded_file(&destination, maximum_bytes, label)?
+        .ok_or_else(|| conversion_error(format!("published {label} disappeared")))?;
+    revalidate_windows_storage_directories(&pinned_directories, label)?;
+    if readback != bytes {
+        return Err(conversion_error(format!(
+            "published {label} differs from its synced temporary file"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn write_immutable_file(
+    _path: &Path,
+    _bytes: &[u8],
+    _maximum_bytes: usize,
+    label: &str,
+) -> Result<(), Error> {
+    Err(storage_error(format!(
+        "secure immutable {label} storage is unsupported on this platform"
+    )))
 }
 
 #[cfg(unix)]
@@ -898,19 +1158,75 @@ fn read_bounded_file(
     read_bounded_relative(&directory, &name, path, maximum_bytes, label)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn read_bounded_file(
     path: &Path,
     maximum_bytes: usize,
     label: &str,
 ) -> Result<Option<Vec<u8>>, Error> {
-    let mut file = match File::open(path) {
+    use crate::secure_file_metadata::{from_file, from_path, same_file, unchanged};
+
+    let (parent, name) = storage_parent(path)?;
+    let Some((parent, pinned_directories)) = prepare_windows_storage_parent(parent, false, label)?
+    else {
+        return Ok(None);
+    };
+    let path = parent.join(name);
+    revalidate_windows_storage_directories(&pinned_directories, label)?;
+    let maximum_u64 = u64::try_from(maximum_bytes).unwrap_or(u64::MAX);
+    let before = match from_path(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(map_io_error(
+                error,
+                "failed to inspect contract source file",
+            ));
+        }
+    };
+    validate_windows_storage_file(&before, &path, label)?;
+    revalidate_windows_storage_directories(&pinned_directories, label)?;
+    if before.len() > maximum_u64 {
+        return Err(conversion_error(format!(
+            "{label} at {} exceeds the first-release {maximum_bytes}-byte maximum",
+            path.display()
+        )));
+    }
+    let mut file = match crate::secure_file_metadata::open_direct_file(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(map_io_error(error, "failed to open contract source file")),
     };
-    let maximum_u64 = u64::try_from(maximum_bytes).unwrap_or(u64::MAX);
+    let opened_before = from_file(&file)
+        .map_err(|error| map_io_error(error, "failed to inspect contract source file"))?;
+    let named_after_open = from_path(&path)
+        .map_err(|error| map_io_error(error, "failed to re-inspect contract source file"))?;
+    validate_windows_storage_file(&opened_before, &path, label)?;
+    validate_windows_storage_file(&named_after_open, &path, label)?;
+    if !same_file(&before, &opened_before)
+        || !unchanged(&before, &opened_before)
+        || !same_file(&opened_before, &named_after_open)
+        || !unchanged(&opened_before, &named_after_open)
+        || opened_before.len() > maximum_u64
+    {
+        return Err(conversion_error(format!(
+            "{label} changed while it was being opened: {}",
+            path.display()
+        )));
+    }
+    revalidate_windows_storage_directories(&pinned_directories, label)?;
+    let initial_capacity = usize::try_from(opened_before.len()).map_err(|_| {
+        conversion_error(format!(
+            "{label} at {} has a length that does not fit this platform",
+            path.display()
+        ))
+    })?;
     let mut bytes = Vec::new();
+    bytes.try_reserve_exact(initial_capacity).map_err(|error| {
+        conversion_error(format!(
+            "failed to reserve bounded {label} read ({initial_capacity} bytes): {error}"
+        ))
+    })?;
     (&mut file)
         .take(maximum_u64.saturating_add(1))
         .read_to_end(&mut bytes)
@@ -921,7 +1237,38 @@ fn read_bounded_file(
             path.display()
         )));
     }
+    let opened_after = from_file(&file)
+        .map_err(|error| map_io_error(error, "failed to re-inspect contract source file"))?;
+    let named_after_read = from_path(&path)
+        .map_err(|error| map_io_error(error, "failed to re-inspect contract source file"))?;
+    validate_windows_storage_file(&opened_after, &path, label)?;
+    validate_windows_storage_file(&named_after_read, &path, label)?;
+    if !same_file(&opened_before, &opened_after)
+        || !unchanged(&opened_before, &opened_after)
+        || !same_file(&opened_after, &named_after_read)
+        || !unchanged(&opened_after, &named_after_read)
+        || !same_file(&before, &named_after_read)
+        || !unchanged(&before, &named_after_read)
+        || u64::try_from(bytes.len()).ok() != Some(opened_before.len())
+    {
+        return Err(conversion_error(format!(
+            "{label} changed while it was being read: {}",
+            path.display()
+        )));
+    }
+    revalidate_windows_storage_directories(&pinned_directories, label)?;
     Ok(Some(bytes))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_bounded_file(
+    _path: &Path,
+    _maximum_bytes: usize,
+    label: &str,
+) -> Result<Option<Vec<u8>>, Error> {
+    Err(storage_error(format!(
+        "secure bounded {label} reads are unsupported on this platform"
+    )))
 }
 
 fn read_canonical_json_file<T>(
@@ -2389,7 +2736,7 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn verified_source_file_reader_rejects_public_or_multiply_linked_files() {
+    fn verified_source_file_reader_rejects_public_files() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let directory = tempfile::tempdir().expect("verified-source reader directory");
@@ -2398,12 +2745,24 @@ mod tests {
         fs::set_permissions(&public_path, fs::Permissions::from_mode(0o644))
             .expect("make fixture public");
         assert!(read_bounded_file(&public_path, 4, "public source record").is_err());
-
+    }
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn verified_source_file_reader_rejects_multiply_linked_files() {
+        let directory = tempfile::tempdir().expect("verified-source reader directory");
+        let source_path = directory.path().join("source.json");
         let linked_path = directory.path().join("linked.json");
-        fs::set_permissions(&public_path, fs::Permissions::from_mode(0o600))
-            .expect("make fixture private");
-        fs::hard_link(&public_path, &linked_path).expect("create second hard link");
-        assert!(read_bounded_file(&public_path, 4, "linked source record").is_err());
+        fs::write(&source_path, b"null").expect("write source fixture");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&source_path, fs::Permissions::from_mode(0o600))
+                .expect("make fixture private");
+        }
+        fs::hard_link(&source_path, &linked_path).expect("create second hard link");
+
+        assert!(read_bounded_file(&source_path, 4, "linked source record").is_err());
     }
     #[test]
     fn verified_source_record_load_rejects_version_identity_and_source_corruption() {

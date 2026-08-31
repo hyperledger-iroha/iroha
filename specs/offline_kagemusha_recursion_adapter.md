@@ -438,9 +438,9 @@ sealed build, generation, validation, and finalization all reject a nonempty
 tracked diff, any untracked or ignored file, an absent or nonempty
 tracked-gitlink directory, a root `Cargo.lock` that is not exactly one tracked
 mode-`100644` index entry or differs from its separate V1 digest binding, or a
-commit whose signature cannot be verified locally. The legacy
-`ignored_cargo_lock_*` descriptor field names remain unchanged for V1 wire
-compatibility but bind that tracked file. `source_repo_dirty` remains in the
+commit whose signature cannot be verified locally. The exact descriptor fields
+are `tracked_cargo_lock_size_bytes` and `tracked_cargo_lock_sha256`; retired
+`ignored_cargo_lock_*` names are rejected. `source_repo_dirty` remains in the
 closure only as an explicit invariant and must be `false`; the tracked-diff and
 untracked manifest digests must both identify empty byte strings.
 

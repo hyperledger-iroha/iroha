@@ -41710,7 +41710,7 @@ fn parliament_timed_ovn_casting_candidate_index_tracks_exact_phase_windows() {
     let mut block = world.block();
     let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
     attempt
-        .close_ballot_registration(governance_attempt_id, ballot_attempt_id, [0x76; 32], 1, 31)
+        .close_ballot_registration(governance_attempt_id, ballot_attempt_id, [0x76; 32], 3, 31)
         .expect("close registration at its exact boundary");
     transaction
         .put_parliament_attempt(attempt.clone())
@@ -41732,7 +41732,7 @@ fn parliament_timed_ovn_casting_candidate_index_tracks_exact_phase_windows() {
             ballot_attempt_id,
             [0x77; 32],
             [0x78; 32],
-            1,
+            3,
             [0x79; 32],
             34,
         )

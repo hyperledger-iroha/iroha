@@ -13,6 +13,7 @@ use crate::{
 };
 use iroha_data_model::{
     asset::{Asset, AssetDefinitionId, AssetId},
+    block::consensus::EvidencePenaltyStatus,
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError, MathError},
         staking::{
@@ -960,16 +961,18 @@ impl Execute for CancelConsensusEvidencePenalty {
             .get(&key)
             .cloned()
             .ok_or_else(|| Error::InvariantViolation("consensus evidence not found".into()))?;
-        if record.penalty_applied {
-            return Err(Error::InvariantViolation(
-                "consensus evidence penalty already applied".into(),
-            ));
+        match record.penalty_status {
+            EvidencePenaltyStatus::Pending => {}
+            EvidencePenaltyStatus::Applied { .. } => {
+                return Err(Error::InvariantViolation(
+                    "consensus evidence penalty already applied".into(),
+                ));
+            }
+            EvidencePenaltyStatus::Cancelled { .. } => return Ok(()),
         }
-        if record.penalty_cancelled {
-            return Ok(());
-        }
-        record.penalty_cancelled = true;
-        record.penalty_cancelled_at_height = Some(state_transaction.block_height());
+        record.penalty_status = EvidencePenaltyStatus::Cancelled {
+            height: state_transaction.block_height(),
+        };
         state_transaction
             .world
             .consensus_evidence
@@ -1505,7 +1508,7 @@ pub(crate) fn max_slash_amount(total: &Quantity, max_bps: u16) -> Result<Quantit
     if max_bps >= 10_000 {
         return Ok(total.clone());
     }
-    let mut amount = total
+    let amount = total
         .try_mul_div_decimal_round(
             &Numeric::from(u64::from(max_bps)),
             &Numeric::from(10_000_u64),
@@ -1513,10 +1516,6 @@ pub(crate) fn max_slash_amount(total: &Quantity, max_bps: u16) -> Result<Quantit
             RoundingMode::TowardZero,
         )
         .map_err(|_| Error::Math(MathError::Overflow))?;
-    if amount.is_zero() {
-        amount = Quantity::try_from_numeric(Numeric::new(1_u64, total.scale()))
-            .map_err(|_| Error::Math(MathError::Overflow))?;
-    }
     Ok(amount)
 }
 fn ensure_validator_peer_registered(
@@ -1630,6 +1629,68 @@ pub(crate) fn apply_slash_to_validator(
     amount: &Quantity,
     now_ms: u64,
 ) -> Result<(), Error> {
+    apply_slash_to_validator_inner(
+        state_transaction,
+        lane_id,
+        validator,
+        slash_id,
+        amount,
+        now_ms,
+        true,
+        true,
+    )
+}
+/// Apply a finality-owned slash with commit-boundary metrics but no transaction evidence.
+pub(crate) fn apply_consensus_slash_to_validator(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    lane_id: LaneId,
+    validator: &AccountId,
+    slash_id: Hash,
+    amount: &Quantity,
+    now_ms: u64,
+) -> Result<(), Error> {
+    apply_slash_to_validator_inner(
+        state_transaction,
+        lane_id,
+        validator,
+        slash_id,
+        amount,
+        now_ms,
+        false,
+        true,
+    )
+}
+/// Apply a slash in a disposable validation transaction without external observability effects.
+pub(crate) fn apply_slash_to_validator_without_observability(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    lane_id: LaneId,
+    validator: &AccountId,
+    slash_id: Hash,
+    amount: &Quantity,
+    now_ms: u64,
+) -> Result<(), Error> {
+    apply_slash_to_validator_inner(
+        state_transaction,
+        lane_id,
+        validator,
+        slash_id,
+        amount,
+        now_ms,
+        false,
+        false,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn apply_slash_to_validator_inner(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    lane_id: LaneId,
+    validator: &AccountId,
+    slash_id: Hash,
+    amount: &Quantity,
+    now_ms: u64,
+    record_execution_evidence: bool,
+    record_operational_observability: bool,
+) -> Result<(), Error> {
     ensure_canonical_staking_owner(state_transaction, lane_id, "apply_slash_to_validator")?;
     let dataspace_catalog = state_transaction.nexus.dataspace_catalog.clone();
     let staking_cfg = state_transaction.nexus.staking.clone();
@@ -1661,7 +1722,7 @@ pub(crate) fn apply_slash_to_validator(
     assert_numeric_spec_with(amount.as_numeric(), spec)?;
     let slashed_status = PublicLaneValidatorStatus::Slashed(slash_id);
     #[cfg(feature = "telemetry")]
-    let previous_status = Some(validator_snapshot.status.clone());
+    let previous_status = validator_snapshot.status.clone();
     let allowed = slash_within_limit(
         amount,
         &validator_snapshot.total_stake,
@@ -1784,10 +1845,21 @@ pub(crate) fn apply_slash_to_validator(
         stake_ctx.slash_sink_asset.clone(),
         amount.clone(),
     );
-    crate::smartcontracts::isi::asset::isi::execute_verified_staking_slash_transfer(
-        state_transaction,
-        movement,
-    )?;
+    // A consensus slash is a finality effect rather than a transaction
+    // entrypoint. Its balance movement must not enter the transaction FASTPQ
+    // transcript or process-global execution witness. Commit mode publishes
+    // only the slash-specific status and telemetry below.
+    if record_execution_evidence {
+        crate::smartcontracts::isi::asset::isi::execute_verified_staking_slash_transfer(
+            state_transaction,
+            movement,
+        )?;
+    } else {
+        crate::smartcontracts::isi::asset::isi::execute_verified_consensus_staking_slash_transfer(
+            state_transaction,
+            movement,
+        )?;
+    }
     let world = &mut state_transaction.world;
     {
         let validator = world
@@ -1806,20 +1878,18 @@ pub(crate) fn apply_slash_to_validator(
             world.public_lane_stake_shares.remove(key);
         }
     }
-    sumeragi_status::record_public_lane_bonded_delta(lane_id, amount, false);
-    sumeragi_status::record_public_lane_slash(lane_id);
-    #[cfg(feature = "telemetry")]
-    state_transaction
-        .telemetry
-        .record_public_lane_validator_status(lane_id, previous_status.as_ref(), &slashed_status);
-    #[cfg(feature = "telemetry")]
-    state_transaction
-        .telemetry
-        .decrease_public_lane_bonded(lane_id, amount);
-    #[cfg(feature = "telemetry")]
-    state_transaction
-        .telemetry
-        .record_public_lane_slash(lane_id);
+    if record_operational_observability {
+        sumeragi_status::record_public_lane_bonded_delta(lane_id, amount, false);
+        sumeragi_status::record_public_lane_slash(lane_id);
+        #[cfg(feature = "telemetry")]
+        state_transaction
+            .stage_public_lane_slash_telemetry(
+                lane_id,
+                previous_status,
+                slashed_status,
+                amount.clone(),
+            );
+    }
     Ok(())
 }
 #[derive(Debug)]
@@ -1978,7 +2048,9 @@ mod tests {
         account::{Account, MultisigMember, MultisigPolicy},
         asset::{AssetDefinition, AssetDefinitionId},
         block::{
-            consensus::{Evidence, EvidenceRecord, SumeragiV2EquivocationEvidence},
+            consensus::{
+                Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
+            },
             consensus_v2::{
                 BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
                 ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
@@ -5532,6 +5604,79 @@ mod tests {
         assert_eq!(delegator_share.bonded, Quantity::from(500_u64));
     }
     #[test]
+    fn validation_only_consensus_slash_rolls_back_every_world_write() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let lane_id = LaneId::new(13);
+        let (validator, escrow_asset) = {
+            let mut transaction = state_block.transaction();
+            let (validator, _delegator, escrow, asset_definition_id) =
+                prepare_accounts(&mut transaction);
+            RegisterPublicLaneValidator {
+                lane_id,
+                peer_id: validator_peer_id(&validator),
+                validator: validator.clone(),
+                stake_account: validator.clone(),
+                initial_stake: Quantity::from(1_000_u64),
+                metadata: Metadata::default(),
+            }
+            .execute(&validator, &mut transaction)
+            .expect("register validation-only slash target");
+            let escrow_asset = AssetId::new(asset_definition_id, escrow.clone());
+            transaction.apply();
+            (validator, escrow_asset)
+        };
+        let record_before = state_block
+            .world
+            .public_lane_validators
+            .get(&(lane_id, validator.clone()))
+            .cloned()
+            .expect("registered validator remains in the block overlay");
+        let escrow_before = state_block
+            .world
+            .assets
+            .get(&escrow_asset)
+            .map_or_else(Quantity::zero, |asset| asset.as_ref().clone());
+
+        {
+            let mut validation = state_block.transaction();
+            let now_ms = validation.block_unix_timestamp_ms();
+            apply_slash_to_validator_without_observability(
+                &mut validation,
+                lane_id,
+                &validator,
+                Hash::new("validation-only-consensus-slash"),
+                &Quantity::from(100_u64),
+                now_ms,
+            )
+            .expect("a valid slash must be applicable in the disposable overlay");
+            let validation_record = validation
+                .world
+                .public_lane_validators
+                .get(&(lane_id, validator.clone()))
+                .expect("validation overlay retains the slashed validator");
+            assert_eq!(validation_record.total_stake, Quantity::from(900_u64));
+        }
+
+        assert_eq!(
+            state_block
+                .world
+                .public_lane_validators
+                .get(&(lane_id, validator))
+                .expect("discarded validation leaves the validator intact"),
+            &record_before
+        );
+        assert_eq!(
+            state_block
+                .world
+                .assets
+                .get(&escrow_asset)
+                .map_or_else(Quantity::zero, |asset| asset.as_ref().clone()),
+            escrow_before
+        );
+    }
+    #[test]
     fn slash_public_lane_validator_rejects_mismatched_public_lane_validator_row() {
         let state = setup_state();
         let block = new_block();
@@ -6056,10 +6201,7 @@ mod tests {
             recorded_at_height: 1,
             recorded_at_view: 0,
             recorded_at_ms: 0,
-            penalty_applied: false,
-            penalty_cancelled: false,
-            penalty_cancelled_at_height: None,
-            penalty_applied_at_height: None,
+            penalty_status: EvidencePenaltyStatus::Pending,
         };
         let key = evidence_key(&record.evidence);
         {
@@ -6077,8 +6219,9 @@ mod tests {
         state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.world.consensus_evidence.view();
         let updated = view.get(&key).expect("evidence record");
-        assert!(updated.penalty_cancelled);
-        assert!(!updated.penalty_applied);
-        assert_eq!(updated.penalty_cancelled_at_height, Some(2));
+        assert_eq!(
+            updated.penalty_status,
+            EvidencePenaltyStatus::Cancelled { height: 2 }
+        );
     }
 }
