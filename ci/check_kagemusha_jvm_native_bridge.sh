@@ -168,16 +168,36 @@ if (
         "writable, non-symbolic canonical directory disjoint from the Iroha source tree"
     )
 
-try:
-    immediate_entries = list(os.scandir(candidate))
-except OSError as error:
-    raise SystemExit(
-        f"KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR could not be inspected: {error}"
-    ) from error
-if any(entry.is_symlink() for entry in immediate_entries):
-    raise SystemExit(
-        "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR must not contain immediate symbolic entries"
-    )
+pending_directories = [candidate]
+while pending_directories:
+    directory = pending_directories.pop()
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                try:
+                    entry_metadata = entry.stat(follow_symlinks=False)
+                except OSError as error:
+                    raise SystemExit(
+                        "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR could not be "
+                        f"inspected recursively: {error}"
+                    ) from error
+                if stat.S_ISLNK(entry_metadata.st_mode):
+                    raise SystemExit(
+                        "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR must not contain "
+                        "symbolic entries at any depth"
+                    )
+                if stat.S_ISDIR(entry_metadata.st_mode):
+                    pending_directories.append(Path(entry.path))
+                elif not stat.S_ISREG(entry_metadata.st_mode):
+                    raise SystemExit(
+                        "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR must contain only "
+                        "regular files and directories"
+                    )
+    except OSError as error:
+        raise SystemExit(
+            "KAGEMUSHA_JVM_NATIVE_CARGO_TARGET_DIR could not be inspected "
+            f"recursively: {error}"
+        ) from error
 
 if expected_host_triple:
     if re.fullmatch(r"[A-Za-z0-9_.-]+", expected_host_triple) is None:
@@ -205,12 +225,12 @@ if expected_host_triple:
             or stat.S_ISLNK(host_metadata.st_mode)
             or not stat.S_ISDIR(host_metadata.st_mode)
             or host_metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(host_metadata.st_mode) & 0o077
+            or stat.S_IMODE(host_metadata.st_mode) & 0o022
             or not os.access(host_target, os.R_OK | os.W_OK | os.X_OK)
         ):
             raise SystemExit(
-                "restored Cargo host target must be one owned private non-symbolic "
-                "canonical directory within the external target"
+                "restored Cargo host target must be one owned non-group/world-writable "
+                "non-symbolic canonical directory within the private external target"
             )
 print(candidate)
 PY
@@ -491,6 +511,14 @@ verify_cargo_target_identity() {
     || fail "JNI Cargo target identity changed during the release gate"
 }
 
+verify_external_cargo_target_tree() {
+  local verified_target
+  [[ "$EXTERNAL_CARGO_TARGET" == "1" ]] || return 0
+  verified_target="$(resolve_external_cargo_target "$HOST_TRIPLE")" || exit 1
+  [[ "$verified_target" == "$CARGO_TARGET_DIR" ]] \
+    || fail "JNI external Cargo target changed during the release gate"
+}
+
 prepare_retained_native_directory() {
   local configured="${KAGEMUSHA_JVM_NATIVE_RETAIN_DIR:-}"
   "$PYTHON_BINARY" -I -S - \
@@ -756,6 +784,8 @@ source_seal() {
 scrub_external_workspace_outputs() {
   printf '[kagemusha-jvm-native] scrubbing cached workspace outputs for %s; dependency artifacts remain reusable\n' \
     "$HOST_TRIPLE" >&2
+  verify_cargo_target_identity
+  verify_external_cargo_target_tree
   "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
     --profile host-cargo \
     --set "CARGO=$CARGO_BINARY" \
@@ -873,6 +903,8 @@ run_expected_missing_native_failure \
     --console=plain
 
 printf '[kagemusha-jvm-native] building fresh host ABI-22 bridge for %s\n' "$HOST_TRIPLE" >&2
+verify_cargo_target_identity
+verify_external_cargo_target_tree
 "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
   --profile host-cargo \
   --set "CARGO=$CARGO_BINARY" \
@@ -999,6 +1031,8 @@ PY
 
 printf '[kagemusha-jvm-native] building fresh four-peer localnet tools for %s\n' \
   "$HOST_TRIPLE" >&2
+verify_cargo_target_identity
+verify_external_cargo_target_tree
 "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
   --profile host-cargo \
   --set "CARGO=$CARGO_BINARY" \

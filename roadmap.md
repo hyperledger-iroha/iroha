@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-31
+Last updated: 2026-09-01
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).

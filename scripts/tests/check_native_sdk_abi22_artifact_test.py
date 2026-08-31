@@ -1439,10 +1439,12 @@ def test_jvm_native_gate_reuses_only_a_scrubbed_external_dependency_cache() -> N
         "stat.S_IMODE(metadata.st_mode) & 0o077",
         "source_root in candidate.parents",
         "candidate in source_root.parents",
-        "must not contain immediate symbolic entries",
+        "symbolic entries at any depth",
+        "regular files and directories",
         "resolved_host_target.parent != candidate",
-        "stat.S_IMODE(host_metadata.st_mode) & 0o077",
+        "stat.S_IMODE(host_metadata.st_mode) & 0o022",
         "verify_cargo_target_identity",
+        "verify_external_cargo_target_tree",
         'NATIVE_EVIDENCE="$STAGED_NATIVE_DIR/c-jni-native-abi22.json"',
     ):
         assert invariant in gate
@@ -1455,6 +1457,11 @@ def test_jvm_native_gate_reuses_only_a_scrubbed_external_dependency_cache() -> N
     bridge_build = gate.index("building fresh host ABI-22 bridge")
     localnet_build = gate.index("building fresh four-peer localnet tools")
     assert cache_admission < scrub < snapshot < bridge_build < localnet_build
+    assert gate.count("verify_external_cargo_target_tree") == 4
+    for cargo_sink in (scrub, bridge_build, localnet_build):
+        recursive_recheck = gate.index("verify_external_cargo_target_tree", cargo_sink)
+        hermetic_run = gate.index('"$HERMETIC_RUNNER"', recursive_recheck)
+        assert cargo_sink < recursive_recheck < hermetic_run
     scrub_lane = gate[scrub:snapshot]
     for token in (
         '"$CARGO_BINARY" clean --locked --offline --workspace',
@@ -1528,10 +1535,7 @@ def _probe_jvm_external_cargo_target(
     )
 
 
-@pytest.mark.parametrize(
-    "symbolic_name",
-    ("debug", "x86_64-unknown-linux-gnu"),
-)
+@pytest.mark.parametrize("symbolic_name", ("debug", "x86_64-unknown-linux-gnu"))
 def test_jvm_external_cargo_target_rejects_immediate_symbolic_entries(
     tmp_path: Path,
     symbolic_name: str,
@@ -1545,10 +1549,111 @@ def test_jvm_external_cargo_target_rejects_immediate_symbolic_entries(
     result = _probe_jvm_external_cargo_target(target)
 
     assert result.returncode != 0
-    assert "must not contain immediate symbolic entries" in result.stderr
+    assert "must not contain symbolic entries at any depth" in result.stderr
 
 
-@pytest.mark.parametrize("host_entry_kind", ("regular-file", "non-private-directory"))
+def test_jvm_external_cargo_target_rejects_noncanonical_configured_paths(
+    tmp_path: Path,
+) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir(mode=0o700)
+    target = real_parent / "external-cargo-target"
+    target.mkdir(mode=0o700)
+
+    lexical_parent = target / ".." / target.name
+    lexical_result = _probe_jvm_external_cargo_target(lexical_parent)
+    assert lexical_result.returncode != 0
+    assert "must be an absolute canonical directory" in lexical_result.stderr
+
+    symlinked_parent = tmp_path / "symlinked-parent"
+    symlinked_parent.symlink_to(real_parent, target_is_directory=True)
+    ancestor_result = _probe_jvm_external_cargo_target(symlinked_parent / target.name)
+    assert ancestor_result.returncode != 0
+    assert "must be one owner-private" in ancestor_result.stderr
+
+
+@pytest.mark.parametrize(
+    ("symbolic_path", "target_kind"),
+    (
+        (Path("x86_64-unknown-linux-gnu/debug/deps/redirect.rlib"), "file"),
+        (Path("x86_64-unknown-linux-gnu/debug/deps"), "directory"),
+        (Path("x86_64-unknown-linux-gnu/debug/build/redirect/out"), "dangling"),
+    ),
+)
+def test_jvm_external_cargo_target_rejects_nested_symbolic_entries(
+    tmp_path: Path,
+    symbolic_path: Path,
+    target_kind: str,
+) -> None:
+    target = tmp_path / "external-cargo-target"
+    target.mkdir(mode=0o700)
+    host_target = target / "x86_64-unknown-linux-gnu"
+    host_target.mkdir(mode=0o755)
+    link = target / symbolic_path
+    link.parent.mkdir(parents=True, mode=0o755)
+    outside = tmp_path / f"outside-cache-{target_kind}"
+    if target_kind == "file":
+        outside.write_bytes(b"must remain outside the Cargo target\n")
+    elif target_kind == "directory":
+        outside.mkdir(mode=0o700)
+        (outside / "marker").write_bytes(b"must remain outside the Cargo target\n")
+    link.symlink_to(outside, target_is_directory=target_kind != "file")
+
+    result = _probe_jvm_external_cargo_target(target)
+
+    assert result.returncode != 0
+    assert "must not contain symbolic entries at any depth" in result.stderr
+    if target_kind == "file":
+        assert outside.read_bytes() == b"must remain outside the Cargo target\n"
+    elif target_kind == "directory":
+        assert (outside / "marker").read_bytes() == (
+            b"must remain outside the Cargo target\n"
+        )
+    else:
+        assert not outside.exists()
+
+
+def test_jvm_external_cargo_target_rejects_special_entries(tmp_path: Path) -> None:
+    target = tmp_path / "external-cargo-target"
+    target.mkdir(mode=0o700)
+    host_target = target / "x86_64-unknown-linux-gnu"
+    host_target.mkdir(mode=0o755)
+    special_entry = host_target / "debug/cache.fifo"
+    special_entry.parent.mkdir(parents=True, mode=0o755)
+    os.mkfifo(special_entry, mode=0o600)
+
+    result = _probe_jvm_external_cargo_target(target)
+
+    assert result.returncode != 0
+    assert "must contain only regular files and directories" in result.stderr
+
+
+def test_jvm_external_cargo_target_recheck_rejects_link_added_after_admission(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "external-cargo-target"
+    target.mkdir(mode=0o700)
+    host_target = target / "x86_64-unknown-linux-gnu"
+    dependency_cache = host_target / "debug/deps"
+    dependency_cache.mkdir(parents=True, mode=0o755)
+    host_target.chmod(0o755)
+
+    admitted = _probe_jvm_external_cargo_target(target)
+    assert admitted.returncode == 0, admitted.stderr
+
+    outside = tmp_path / "outside-after-admission"
+    outside.mkdir(mode=0o700)
+    redirected_build_output = host_target / "debug/build/redirect/out"
+    redirected_build_output.parent.mkdir(parents=True, mode=0o755)
+    redirected_build_output.symlink_to(outside, target_is_directory=True)
+
+    rechecked = _probe_jvm_external_cargo_target(target)
+
+    assert rechecked.returncode != 0
+    assert "must not contain symbolic entries at any depth" in rechecked.stderr
+
+
+@pytest.mark.parametrize("host_entry_kind", ("regular-file", "group-writable-directory"))
 def test_jvm_external_cargo_target_rejects_unsafe_host_child(
     tmp_path: Path,
     host_entry_kind: str,
@@ -1560,23 +1665,46 @@ def test_jvm_external_cargo_target_rejects_unsafe_host_child(
         host_target.write_bytes(b"not a Cargo target directory\n")
     else:
         host_target.mkdir(mode=0o700)
-        host_target.chmod(0o750)
+        host_target.chmod(0o775)
 
     result = _probe_jvm_external_cargo_target(target)
 
     assert result.returncode != 0
-    assert "must be one owned private non-symbolic canonical directory" in result.stderr
+    assert (
+        "must be one owned non-group/world-writable non-symbolic canonical directory"
+        in result.stderr
+    )
 
 
-def test_jvm_external_cargo_target_accepts_private_host_child(tmp_path: Path) -> None:
+def test_jvm_external_cargo_target_accepts_warm_restore_with_0755_host_child(
+    tmp_path: Path,
+) -> None:
     target = tmp_path / "external-cargo-target"
     target.mkdir(mode=0o700)
-    (target / "x86_64-unknown-linux-gnu").mkdir(mode=0o700)
+    host_target = target / "x86_64-unknown-linux-gnu"
+    dependency_cache = host_target / "debug/deps"
+    dependency_cache.mkdir(parents=True, mode=0o755)
+    host_target.chmod(0o755)
+    (host_target / "debug").chmod(0o755)
+    dependency_cache.chmod(0o755)
+    dependency_artifact = dependency_cache / "libdependency-warm-cache.rlib"
+    dependency_artifact.write_bytes(b"trusted restored dependency cache\n")
+    dependency_hardlink = dependency_cache / "libdependency-warm-cache-copy.rlib"
+    os.link(dependency_artifact, dependency_hardlink)
+    (host_target / "CACHEDIR.TAG").write_text(
+        "Signature: 8a477f597d28d172789f06886806bc55\n",
+        encoding="ascii",
+    )
+    assert stat.S_IMODE(host_target.stat().st_mode) == 0o755
+    assert dependency_artifact.stat().st_ino == dependency_hardlink.stat().st_ino
 
     result = _probe_jvm_external_cargo_target(target)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"{target}\n"
+    assert dependency_artifact.read_bytes() == b"trusted restored dependency cache\n"
+    assert dependency_hardlink.read_bytes() == b"trusted restored dependency cache\n"
+    assert dependency_artifact.stat().st_ino == dependency_hardlink.stat().st_ino
 
 
 def kotlin_localnet_evidence_program() -> str:
