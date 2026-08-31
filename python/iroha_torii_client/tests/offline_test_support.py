@@ -11,6 +11,7 @@ from iroha_torii_client.norito_frame import _crc64_xz, schema_hash_for_type_name
 
 CANONICAL_OWNER = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+CANONICAL_BALANCE_ASSET_ID = f"{CANONICAL_ASSET_ID}#{CANONICAL_OWNER}"
 _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
 )
@@ -83,34 +84,67 @@ def offline_norito_frame(type_name: str, payload: bytes = b"\x01") -> bytes:
     )
 
 
+def _compact_length(value: int) -> bytes:
+    encoded = bytearray()
+    while value >= 0x80:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def offline_kagemusha_request_frame(
+    type_name: str,
+    *,
+    field_count: int,
+    operation_id_field_index: int,
+    operation_id: bytes = bytes(OFFLINE_OPERATION_BYTES),
+    version: int = 4,
+    trailing_payload: bytes = b"",
+) -> bytes:
+    """Build the exact top-level compact struct needed for SDK request binding."""
+
+    fields = [b"\x01" for _ in range(field_count)]
+    fields[0] = version.to_bytes(2, "little")
+    fields[operation_id_field_index] = operation_id
+    payload = b"".join(_compact_length(len(field)) + field for field in fields)
+    return offline_norito_frame(type_name, payload + trailing_payload)
+
+
 def offline_top_up_request(
     *,
     norito: Optional[bytes] = None,
-    operation_id: str = OFFLINE_OPERATION_ID,
 ) -> KagemushaTopUpRequestV4:
     """Build one canonical Kagemusha top-up request fixture."""
 
     archive = (
-        offline_norito_frame(OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME)
+        offline_kagemusha_request_frame(
+            OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+            field_count=8,
+            operation_id_field_index=6,
+        )
         if norito is None
         else norito
     )
-    return KagemushaTopUpRequestV4(norito=archive, operation_id=operation_id)
+    return KagemushaTopUpRequestV4(norito=archive)
 
 
 def offline_redeem_request(
     *,
     norito: Optional[bytes] = None,
-    operation_id: str = OFFLINE_OPERATION_ID,
 ) -> KagemushaRedeemRequestV4:
     """Build one canonical Kagemusha redemption request fixture."""
 
     archive = (
-        offline_norito_frame(OFFLINE_REDEEM_REQUEST_SCHEMA_NAME)
+        offline_kagemusha_request_frame(
+            OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+            field_count=10,
+            operation_id_field_index=8,
+        )
         if norito is None
         else norito
     )
-    return KagemushaRedeemRequestV4(norito=archive, operation_id=operation_id)
+    return KagemushaRedeemRequestV4(norito=archive)
 
 
 def offline_operation_reference(**overrides: Any) -> Dict[str, Any]:
@@ -152,7 +186,7 @@ def offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
         "version": 4,
         "network_id": OFFLINE_NETWORK_ID,
         "payer": CANONICAL_OWNER,
-        "asset": CANONICAL_ASSET_ID,
+        "asset": CANONICAL_BALANCE_ASSET_ID,
         "asset_scale": amount["scale"],
         "amount": amount,
         "initial_root": offline_fixed_bytes(0x10),

@@ -16,6 +16,7 @@ export { inspectCanonicalTransactionPayloadBindings } from "./transactionCodec.j
 export { normalizeGovernanceProposalWireV1 } from "./governanceProposalV1.js";
 
 export {
+  _normalizeKagemushaOperationStatusWithNativeValidation,
   normalizeKagemushaOperationId,
   normalizeKagemushaOperationReference,
   normalizeKagemushaOperationStatus,

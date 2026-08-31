@@ -780,6 +780,19 @@ public enum KagemushaOperationStatus: Equatable, Sendable {
         case let .rejected(value): value.operationId
         }
     }
+
+    /// Canonical operation family shared by every tagged operation state.
+    public var kind: KagemushaOperationKind {
+        switch self {
+        case let .pending(value): value.kind
+        case let .applied(value):
+            switch value.result {
+            case .topUp: .topUp
+            case .redeem: .redeem
+            }
+        case let .rejected(value): value.kind
+        }
+    }
 }
 
 public enum KagemushaOperationCodec {

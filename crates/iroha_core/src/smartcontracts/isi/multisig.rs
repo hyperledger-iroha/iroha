@@ -1558,6 +1558,14 @@ fn execute_propose(
     authority: &AccountId,
     instruction: &MultisigPropose,
 ) -> Result<(), ValidationFail> {
+    if crate::kagemusha_operation::instructions_contain_kagemusha_operation_v4(
+        &instruction.instructions,
+    ) {
+        return Err(ValidationFail::NotPermitted(
+            "Kagemusha operations require one direct external signed transaction and cannot be deferred in a multisig proposal"
+                .to_owned(),
+        ));
+    }
     let proposer = authority.clone();
     let multisig_account = match resolve_signatory_account(state_transaction, &instruction.account)
     {

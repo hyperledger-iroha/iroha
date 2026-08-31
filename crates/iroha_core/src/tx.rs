@@ -3504,7 +3504,7 @@ impl StateBlock<'_> {
         ivm_cache: &mut IvmCache,
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> TransactionResultInner {
-        iroha_data_model::offline::classify_kagemusha_operation_entrypoint_v4(tx.entrypoint())
+        crate::kagemusha_operation::classify_kagemusha_operation_entrypoint_v4(tx.entrypoint())
             .map_err(|error| {
                 TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
                     "invalid Kagemusha operation carrier: {error}"

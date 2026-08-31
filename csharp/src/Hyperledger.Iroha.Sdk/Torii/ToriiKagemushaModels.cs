@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Hyperledger.Iroha.Norito;
@@ -29,13 +30,14 @@ public sealed class ToriiKagemushaTopUpRequestV4
 {
     private readonly byte[] norito;
 
-    public ToriiKagemushaTopUpRequestV4(string operationId, ReadOnlySpan<byte> norito)
+    public ToriiKagemushaTopUpRequestV4(ReadOnlySpan<byte> norito)
     {
-        OperationId = ToriiKagemushaTransport.RequireOperationId(operationId, nameof(operationId));
-        this.norito = ToriiKagemushaTransport.RequireNoritoArchive(
+        (this.norito, OperationId) = ToriiKagemushaTransport.RequireNoritoRequestArchive(
             norito,
             ToriiKagemushaTransport.MaxTopUpNoritoRequestBytes,
             ToriiKagemushaTransport.TopUpRequestSchemaName,
+            fieldCount: 8,
+            operationIdFieldIndex: 6,
             nameof(norito));
     }
 
@@ -53,13 +55,14 @@ public sealed class ToriiKagemushaRedeemRequestV4
 {
     private readonly byte[] norito;
 
-    public ToriiKagemushaRedeemRequestV4(string operationId, ReadOnlySpan<byte> norito)
+    public ToriiKagemushaRedeemRequestV4(ReadOnlySpan<byte> norito)
     {
-        OperationId = ToriiKagemushaTransport.RequireOperationId(operationId, nameof(operationId));
-        this.norito = ToriiKagemushaTransport.RequireNoritoArchive(
+        (this.norito, OperationId) = ToriiKagemushaTransport.RequireNoritoRequestArchive(
             norito,
             ToriiKagemushaTransport.MaxRedeemNoritoRequestBytes,
             ToriiKagemushaTransport.RedeemRequestSchemaName,
+            fieldCount: 10,
+            operationIdFieldIndex: 8,
             nameof(norito));
     }
 
@@ -186,6 +189,7 @@ internal static class ToriiKagemushaTransport
     internal const string RedeemRequestSchemaName = "iroha.torii.v1.offline.redeem.request";
 
     private const int RequiredHeaderPaddingBytes = 8;
+    private const ushort RequestWireVersion = 4;
 
     internal static string RequireOperationId(string? value, string parameterName)
     {
@@ -202,10 +206,12 @@ internal static class ToriiKagemushaTransport
         return value;
     }
 
-    internal static byte[] RequireNoritoArchive(
+    internal static (byte[] Archive, string OperationId) RequireNoritoRequestArchive(
         ReadOnlySpan<byte> value,
         int maximumBytes,
         string expectedSchemaName,
+        int fieldCount,
+        int operationIdFieldIndex,
         string parameterName)
     {
         if (value.Length < NoritoHeader.EncodedLength || value.Length > maximumBytes)
@@ -237,6 +243,39 @@ internal static class ToriiKagemushaTransport
                 parameterName);
         }
 
-        return value.ToArray();
+        if (fieldCount <= 0 || operationIdFieldIndex < 0 || operationIdFieldIndex >= fieldCount)
+        {
+            throw new InvalidOperationException("Kagemusha request field layout is invalid.");
+        }
+
+        var reader = new CanonicalNoritoReader(payload, "Kagemusha V4 request", parameterName);
+        ReadOnlySpan<byte> operationId = default;
+        for (var index = 0; index < fieldCount; index++)
+        {
+            var field = reader.ReadField($"field[{index}]");
+            if (index == 0)
+            {
+                if (field.Length != sizeof(ushort)
+                    || BinaryPrimitives.ReadUInt16LittleEndian(field) != RequestWireVersion)
+                {
+                    throw new ArgumentException(
+                        "Kagemusha request must use first-release wire version 4.",
+                        parameterName);
+                }
+            }
+            if (index == operationIdFieldIndex)
+            {
+                operationId = field;
+            }
+        }
+        reader.RequireEnd();
+        if (operationId.Length != 32 || operationId.IndexOfAnyExcept((byte)0) < 0)
+        {
+            throw new ArgumentException(
+                "Kagemusha request operation id must be a non-zero 32-byte value.",
+                parameterName);
+        }
+
+        return (value.ToArray(), Convert.ToHexString(operationId).ToLowerInvariant());
     }
 }

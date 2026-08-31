@@ -92,11 +92,13 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     func testPendingOperationStatusMatchesRustNoritoGoldenVector() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustPendingStatusArchiveHex))
 
+        let status = try KagemushaOperationCodec.decodeStatus(
+            archive,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+        XCTAssertEqual(status.kind, .topUp)
         XCTAssertEqual(
-            try KagemushaOperationCodec.decodeStatus(
-                archive,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            ),
+            status,
             .pending(try .init(
                 operationId: Self.operationId,
                 kind: .topUp,
@@ -145,11 +147,13 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     func testRejectedOperationStatusMatchesRustNoritoGoldenVector() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustRejectedStatusArchiveHex))
 
+        let status = try KagemushaOperationCodec.decodeStatus(
+            archive,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+        XCTAssertEqual(status.kind, .redeem)
         XCTAssertEqual(
-            try KagemushaOperationCodec.decodeStatus(
-                archive,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            ),
+            status,
             .rejected(try .init(
                 operationId: Self.operationId,
                 kind: .redeem,
@@ -178,11 +182,13 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     func testAppliedRedeemStatusMatchesRustNoritoGoldenVector() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustAppliedRedeemStatusArchiveHex))
 
+        let status = try KagemushaOperationCodec.decodeStatus(
+            archive,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+        XCTAssertEqual(status.kind, .redeem)
         XCTAssertEqual(
-            try KagemushaOperationCodec.decodeStatus(
-                archive,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            ),
+            status,
             .applied(try .init(
                 operationId: Self.operationId,
                 result: .redeem(try KagemushaRedeemResult(

@@ -66,6 +66,16 @@ marker, not a normalization option. Contract `tx_hash_hex` receipt fields use
 the same exact spelling, as do contract entrypoint hashes, multisig transaction
 hashes, and offline-operation status transaction hashes.
 
+## Kagemusha native validation
+
+Applied Kagemusha top-up status validation requires the ABI-23
+`connect_norito_bridge` shared library and its
+`connect_norito_kagemusha_offline_operation_status_json_validate_v1` export.
+Install the platform bridge artifact where the operating-system dynamic loader
+can discover it before starting the Python process. A missing library, a
+different ABI, a missing validator symbol, or a non-zero validation result
+fails closed; the client has no Python or older-ABI compatibility fallback.
+
 ## Caller-trusted unsigned drafts
 
 Contract-call and multisig bytes returned for local signing fail closed unless

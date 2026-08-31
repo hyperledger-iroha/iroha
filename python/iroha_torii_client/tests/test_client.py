@@ -40,6 +40,7 @@ if str(PACKAGE_ROOT) not in sys.path:
 
 import iroha_torii_client as torii_module  # noqa: E402
 import iroha_torii_client.client as client_module  # noqa: E402
+import iroha_torii_client.kagemusha_native as kagemusha_native_module  # noqa: E402
 from iroha_torii_client import (  # noqa: E402  (import depends on sys.path mutation)
     ContractCallDraftIntent,
     ContractCallResponse,
@@ -104,6 +105,9 @@ from offline_test_support import (  # noqa: E402
     offline_fixed_bytes as _offline_fixed_bytes,
 )
 from offline_test_support import (  # noqa: E402
+    offline_kagemusha_request_frame as _offline_kagemusha_request_frame,
+)
+from offline_test_support import (  # noqa: E402
     offline_norito_frame as _offline_norito_frame,
 )
 from offline_test_support import (  # noqa: E402
@@ -143,6 +147,17 @@ def _accepted_operation_reference(
         if status_uri is not None
         else f"/v1/offline/operations/{operation_id}",
         submitted_at_ms=submitted_at_ms,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_native_kagemusha_status_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep projection tests independent of the separately tested native bridge."""
+
+    monkeypatch.setattr(
+        client_module,
+        "_validate_kagemusha_operation_status_json_v1",
+        lambda _status_json: None,
     )
 
 CANONICAL_LARGE_FRACTION = "18446744073709551616.25"
@@ -9262,6 +9277,16 @@ def test_offline_asset_definition_id_validation_matches_canonical_rust_codec() -
             )
 
 
+def test_offline_verifier_key_id_accepts_rust_portable_underscore() -> None:
+    verifier_id = client_module._offline_verifier_key_id(
+        {"backend": "halo2/ipa", "name": "vk_transfer"},
+        "verifier_id",
+    )
+
+    assert verifier_id.backend == "halo2/ipa"
+    assert verifier_id.name == "vk_transfer"
+
+
 def test_offline_status_transaction_hash_requires_iroha_marker() -> None:
     with pytest.raises(RuntimeError, match="canonical Iroha HashOf marker"):
         client_module._offline_transaction_hash(
@@ -9271,20 +9296,33 @@ def test_offline_status_transaction_hash_requires_iroha_marker() -> None:
 
 
 def test_submit_kagemusha_top_up_sends_exact_norito_and_idempotency_key() -> None:
+    embedded_operation_id = "33" * 32
+    embedded_status_uri = f"/v1/offline/operations/{embedded_operation_id}"
     session = RecordingSession()
     session.queue(
         StubResponse(
             status_code=202,
-            payload=_offline_operation_reference(),
-            headers={"Location": OFFLINE_STATUS_URI, "Retry-After": "1"},
+            payload=_offline_operation_reference(
+                operation_id=embedded_operation_id,
+                status_uri=embedded_status_uri,
+            ),
+            headers={"Location": embedded_status_uri, "Retry-After": "1"},
         )
     )
     client = ToriiClient("http://node.test", session=session)
 
-    request = _offline_top_up_request()
+    request = _offline_top_up_request(
+        norito=_offline_kagemusha_request_frame(
+            OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+            field_count=8,
+            operation_id_field_index=6,
+            operation_id=bytes([0x33]) * 32,
+        )
+    )
     reference = client.submit_kagemusha_top_up(request, timeout=7.5)
 
-    assert reference.operation_id == OFFLINE_OPERATION_ID
+    assert request.operation_id == embedded_operation_id
+    assert reference.operation_id == embedded_operation_id
     assert reference.kind.kind == "top_up"
     assert reference.state.state == "pending"
     call = session.calls[0]
@@ -9293,7 +9331,7 @@ def test_submit_kagemusha_top_up_sends_exact_norito_and_idempotency_key() -> Non
     assert call["headers"] == {
         "Accept": "application/json",
         "Content-Type": "application/x-norito",
-        "Idempotency-Key": OFFLINE_OPERATION_ID,
+        "Idempotency-Key": embedded_operation_id,
     }
     assert call["data"] is request.norito
     assert call["allow_redirects"] is False
@@ -9373,67 +9411,120 @@ def test_kagemusha_command_validation_rejects_noncanonical_inputs_before_network
         with pytest.raises(TypeError):
             client.submit_kagemusha_redeem(malformed)  # type: ignore[arg-type]
 
-    for request_type, maximum_bytes in (
-        (KagemushaTopUpRequestV4, 512 * 1024),
-        (KagemushaRedeemRequestV4, 48 * 1024 * 1024),
+    for request_type, maximum_bytes, schema_name, field_count, operation_id_index in (
+        (
+            KagemushaTopUpRequestV4,
+            512 * 1024,
+            OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+            8,
+            6,
+        ),
+        (
+            KagemushaRedeemRequestV4,
+            48 * 1024 * 1024,
+            OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+            10,
+            8,
+        ),
     ):
         with pytest.raises(ValueError, match="must not be empty"):
-            request_type(norito=b"", operation_id=OFFLINE_OPERATION_ID)
+            request_type(norito=b"")
         with pytest.raises(ValueError, match="exceeds"):
-            request_type(norito=b"x" * (maximum_bytes + 1), operation_id=OFFLINE_OPERATION_ID)
+            request_type(norito=b"x" * (maximum_bytes + 1))
         for norito in (bytearray(b"x"), memoryview(b"x"), "x"):
             with pytest.raises(TypeError, match="immutable bytes"):
-                request_type(norito=norito, operation_id=OFFLINE_OPERATION_ID)  # type: ignore[arg-type]
+                request_type(norito=norito)  # type: ignore[arg-type]
+
+        valid_archive = _offline_kagemusha_request_frame(
+            schema_name,
+            field_count=field_count,
+            operation_id_field_index=operation_id_index,
+        )
+        with pytest.raises(TypeError, match="operation_id"):
+            request_type(  # type: ignore[call-arg]
+                norito=valid_archive,
+                operation_id=OFFLINE_OPERATION_ID,
+            )
+        with pytest.raises(ValueError, match="truncated field"):
+            request_type(norito=_offline_norito_frame(schema_name))
         for operation_id in (
-            "0" * 64,
-            "11" * 31,
-            "11" * 33,
-            "AA" * 32,
-            "gg" * 32,
-            f" {OFFLINE_OPERATION_ID}",
+            bytes(32),
+            bytes([0x11]) * 31,
+            bytes([0x11]) * 33,
         ):
-            with pytest.raises(RuntimeError, match="operation_id"):
-                schema_name = (
-                    OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME
-                    if request_type is KagemushaTopUpRequestV4
-                    else OFFLINE_REDEEM_REQUEST_SCHEMA_NAME
-                )
+            with pytest.raises(ValueError, match="operation_id field"):
                 request_type(
-                    norito=_offline_norito_frame(schema_name),
-                    operation_id=operation_id,
+                    norito=_offline_kagemusha_request_frame(
+                        schema_name,
+                        field_count=field_count,
+                        operation_id_field_index=operation_id_index,
+                        operation_id=operation_id,
+                    )
                 )
+        with pytest.raises(ValueError, match="wire version 4"):
+            request_type(
+                norito=_offline_kagemusha_request_frame(
+                    schema_name,
+                    field_count=field_count,
+                    operation_id_field_index=operation_id_index,
+                    version=3,
+                )
+            )
     assert session.calls == []
 
 
 def test_kagemusha_command_requires_exact_schema_bound_norito_frame() -> None:
-    top_up = _offline_norito_frame(OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME)
-    redeem = _offline_norito_frame(OFFLINE_REDEEM_REQUEST_SCHEMA_NAME)
+    top_up = _offline_top_up_request().norito
+    redeem = _offline_redeem_request().norito
 
-    assert KagemushaTopUpRequestV4(top_up, OFFLINE_OPERATION_ID).norito == top_up
-    assert KagemushaRedeemRequestV4(redeem, OFFLINE_OPERATION_ID).norito == redeem
+    top_up_request = KagemushaTopUpRequestV4(top_up)
+    redeem_request = KagemushaRedeemRequestV4(redeem)
+    assert top_up_request.norito == top_up
+    assert top_up_request.operation_id == OFFLINE_OPERATION_ID
+    assert redeem_request.norito == redeem
+    assert redeem_request.operation_id == OFFLINE_OPERATION_ID
     with pytest.raises(ValueError, match="schema hash did not match"):
-        KagemushaTopUpRequestV4(redeem, OFFLINE_OPERATION_ID)
+        KagemushaTopUpRequestV4(redeem)
     with pytest.raises(ValueError, match="schema hash did not match"):
-        KagemushaRedeemRequestV4(top_up, OFFLINE_OPERATION_ID)
+        KagemushaRedeemRequestV4(top_up)
 
     corrupted = bytearray(top_up)
     corrupted[-1] ^= 0xFF
     with pytest.raises(ValueError, match="CRC64 mismatch"):
-        KagemushaTopUpRequestV4(bytes(corrupted), OFFLINE_OPERATION_ID)
+        KagemushaTopUpRequestV4(bytes(corrupted))
 
     compressed = bytearray(top_up)
     compressed[22] = 1
     with pytest.raises(ValueError, match="uncompressed"):
-        KagemushaTopUpRequestV4(bytes(compressed), OFFLINE_OPERATION_ID)
+        KagemushaTopUpRequestV4(bytes(compressed))
 
     without_alignment_padding = top_up[:40] + top_up[48:]
     with pytest.raises(ValueError, match="exact type requires 8"):
-        KagemushaTopUpRequestV4(without_alignment_padding, OFFLINE_OPERATION_ID)
+        KagemushaTopUpRequestV4(without_alignment_padding)
 
     alternate_flags = bytearray(top_up)
     alternate_flags[39] = 0
     with pytest.raises(ValueError, match="exact type requires 0x02"):
-        KagemushaTopUpRequestV4(bytes(alternate_flags), OFFLINE_OPERATION_ID)
+        KagemushaTopUpRequestV4(bytes(alternate_flags))
+
+    noncanonical_payload = b"\x82\x00" + top_up[49:]
+    with pytest.raises(ValueError, match="non-canonical"):
+        KagemushaTopUpRequestV4(
+            _offline_norito_frame(
+                OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+                noncanonical_payload,
+            )
+        )
+
+    with pytest.raises(ValueError, match="exactly 8 compact-length fields"):
+        KagemushaTopUpRequestV4(
+            _offline_kagemusha_request_frame(
+                OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+                field_count=8,
+                operation_id_field_index=6,
+                trailing_payload=b"\x00",
+            )
+        )
 
 
 def test_offline_acceptance_cross_checks_reference_and_location() -> None:
@@ -9774,6 +9865,9 @@ def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
     # binding atomically to the V4 wire contract.
     assert typed_anchor.version == 4
     assert typed_anchor.network_id == OFFLINE_NETWORK_ID
+    assert typed_anchor.asset == f"{CANONICAL_ASSET_ID}#{CANONICAL_OWNER}"
+    assert typed_anchor.current_note.asset == CANONICAL_ASSET_ID
+    assert typed_anchor.payer == CANONICAL_OWNER
     assert typed_anchor.amount.scale == 4
     assert typed_anchor.shield_leaf_index == 7
     assert typed_anchor.shield_verifier_id.backend == "halo2/ipa"
@@ -9783,6 +9877,54 @@ def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
         _offline_fixed_bytes(0x81)
     )
     assert typed_anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
+
+
+def test_kagemusha_applied_top_up_requires_exact_native_status_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _offline_applied_top_up_status()
+    validated: List[bytes] = []
+
+    def reject_invalid_anchor_digest(status_json: bytes) -> None:
+        validated.append(status_json)
+        raise RuntimeError(
+            "native Kagemusha operation-status JSON validator failed closed (status -311)"
+        )
+
+    monkeypatch.setattr(
+        client_module,
+        "_validate_kagemusha_operation_status_json_v1",
+        reject_invalid_anchor_digest,
+    )
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+
+    with pytest.raises(RuntimeError, match="native Kagemusha.*failed closed"):
+        ToriiClient(
+            "http://node.test", session=session
+        ).get_kagemusha_operation_status(_accepted_operation_reference())
+
+    assert len(validated) == 1
+    assert json.loads(validated[0]) == payload
+
+
+def test_kagemusha_native_status_validator_forwards_exact_bytes_and_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: List[bytes] = []
+
+    def validator(buffer: Any, length: int) -> int:
+        received.append(bytes(buffer[:length]))
+        return -311
+
+    monkeypatch.setattr(
+        kagemusha_native_module,
+        "_native_status_validator",
+        lambda: validator,
+    )
+    with pytest.raises(RuntimeError, match=r"status -311"):
+        kagemusha_native_module.validate_offline_operation_status_json_v1(b"{}")
+    assert received == [b"{}"]
 
 
 def test_offline_top_up_finality_proof_is_closed_and_direct_typed() -> None:
@@ -10211,6 +10353,17 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         _offline_top_up_anchor(version=1),
         _offline_top_up_anchor(asset_scale=29),
         _offline_top_up_anchor(asset_scale=3),
+        _offline_top_up_anchor(asset=CANONICAL_ASSET_ID),
+        _offline_top_up_anchor(
+            asset=f"{CANONICAL_ASSET_ID}#{OTHER_CANONICAL_ACCOUNT}"
+        ),
+        _offline_top_up_anchor(
+            asset=f"{CANONICAL_ASSET_ID}#{CANONICAL_OWNER}#dataspace:01"
+        ),
+        _offline_top_up_anchor(payer=OTHER_CANONICAL_ACCOUNT),
+        _offline_top_up_anchor(
+            amount={"atomic_units": 17, "scale": 4, "unexpected": True}
+        ),
         _offline_top_up_anchor(finalized_root=_offline_fixed_bytes(0x10)),
         _offline_top_up_anchor(shield_leaf_index=-1),
         _offline_top_up_anchor(shield_leaf_index=65_463),
@@ -10224,6 +10377,22 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         ),
         _offline_top_up_anchor(
             shield_verifier_id={"backend": "halo2/ipa", "name": "v" * 257}
+        ),
+        _offline_top_up_anchor(
+            shield_verifier_id={"backend": "stark/fri", "name": "asset-topup-shield-v2"}
+        ),
+        _offline_top_up_anchor(
+            shield_verifier_id={"backend": "halo2/ipa", "name": "AssetTopupShield"}
+        ),
+        _offline_top_up_anchor(
+            shield_verifier_id={"backend": "halo2/ipa", "name": "asset/../shield"}
+        ),
+        _offline_top_up_anchor(
+            shield_verifier_id={
+                "backend": "halo2/ipa",
+                "name": "asset-topup-shield-v2",
+                "unexpected": True,
+            }
         ),
         _offline_top_up_anchor(shield_verifier_commitment=_offline_fixed_bytes(0)),
         _offline_top_up_anchor(
@@ -10264,10 +10433,20 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         _offline_top_up_anchor(
             current_note={
                 "network_id": OFFLINE_NETWORK_ID,
-                "asset": "different-asset",
+                "asset": f"{CANONICAL_ASSET_ID}#{CANONICAL_OWNER}",
                 "note_commitment": _offline_fixed_bytes(0x41),
                 "spend_nullifier": _offline_fixed_bytes(0x51),
                 "amount": {"atomic_units": 17, "scale": 4},
+            }
+        ),
+        _offline_top_up_anchor(
+            current_note={
+                "network_id": OFFLINE_NETWORK_ID,
+                "asset": CANONICAL_ASSET_ID,
+                "note_commitment": _offline_fixed_bytes(0x41),
+                "spend_nullifier": _offline_fixed_bytes(0x51),
+                "amount": {"atomic_units": 17, "scale": 4},
+                "unexpected": True,
             }
         ),
         _offline_top_up_anchor(

@@ -405,6 +405,12 @@ ReservationFrame ==
         reservationAuditStep
     >>
 
+\* Each finite trace represents one concrete governance attempt. Successor
+\* attempts are explored by Init's bounded inherited-prefix alternatives, so
+\* the proposal-wide prefix coordinates cannot change within a trace.
+AttemptPrefixFrame ==
+    UNCHANGED <<governanceAttemptSequence, randomnessRedrawsBeforeAttempt>>
+
 CoreFrame ==
     UNCHANGED <<
         height, attemptStatus, sortitionState, sortitionSequence,
@@ -1407,10 +1413,11 @@ ReservationNext ==
        /\ reservationAuditStep' = 8
 
 Next ==
-    \/ /\ reservationAuditStep = 8
-       /\ ReducerNext
-       /\ ReservationFrame
-    \/ ReservationNext
+    /\ AttemptPrefixFrame
+    /\ \/ /\ reservationAuditStep = 8
+          /\ ReducerNext
+          /\ ReservationFrame
+       \/ ReservationNext
 
 Spec == Init /\ [][Next]_vars
 

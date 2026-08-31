@@ -46,10 +46,12 @@ pub(crate) fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn 
                 .into(),
         );
     }
-    let schemas = document
+    let components = document
         .get("components")
         .and_then(Value::as_object)
-        .and_then(|components| components.get("schemas"))
+        .ok_or("release OpenAPI document is missing components")?;
+    let schemas = components
+        .get("schemas")
         .and_then(Value::as_object)
         .ok_or("release OpenAPI document is missing components.schemas")?;
     if schemas.is_empty() {
@@ -60,25 +62,25 @@ pub(crate) fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn 
     }
 
     let mut references_json_value = false;
-    validate_component_schema_refs(spec, schemas, "$", &mut references_json_value)?;
+    validate_component_refs(spec, components, "$", &mut references_json_value)?;
     if references_json_value || schemas.contains_key(JSON_VALUE_SCHEMA_NAME) {
         validate_json_value_schema(schemas)?;
     }
     Ok(())
 }
 
-fn validate_component_schema_refs(
+fn validate_component_refs(
     value: &Value,
-    schemas: &Map,
+    components: &Map,
     location: &str,
     references_json_value: &mut bool,
 ) -> Result<(), Box<dyn Error>> {
     match value {
         Value::Array(values) => {
             for (index, value) in values.iter().enumerate() {
-                validate_component_schema_refs(
+                validate_component_refs(
                     value,
-                    schemas,
+                    components,
                     &format!("{location}[{index}]"),
                     references_json_value,
                 )?;
@@ -91,33 +93,52 @@ fn validate_component_schema_refs(
                     let reference = value.as_str().ok_or_else(|| {
                         format!("release OpenAPI $ref at {child_location} must be a string")
                     })?;
-                    let schema_name = reference
-                        .strip_prefix("#/components/schemas/")
+                    let component_path = reference
+                        .strip_prefix("#/components/")
                         .ok_or_else(|| {
                             format!(
-                                "release OpenAPI $ref at {child_location} must target a local component schema: {reference}"
+                                "release OpenAPI $ref at {child_location} must target a supported local component: {reference}"
                             )
                         })?;
-                    if schema_name.is_empty() || schema_name.contains('/') {
+                    let (component_kind, component_name) =
+                        component_path.split_once('/').ok_or_else(|| {
+                            format!(
+                                "release OpenAPI $ref at {child_location} must target a component root: {reference}"
+                            )
+                        })?;
+                    let component_label = match component_kind {
+                        "schemas" => "schema",
+                        "headers" => "header",
+                        _ => {
+                            return Err(format!(
+                                "release OpenAPI $ref at {child_location} must target a supported local component schema or header: {reference}"
+                            )
+                            .into());
+                        }
+                    };
+                    if component_name.is_empty() || component_name.contains('/') {
                         return Err(format!(
-                            "release OpenAPI $ref at {child_location} must target a component schema root: {reference}"
+                            "release OpenAPI $ref at {child_location} must target a component {component_label} root: {reference}"
                         )
                         .into());
                     }
-                    if !schemas.contains_key(schema_name) {
+                    let component_map = components
+                        .get(component_kind)
+                        .and_then(Value::as_object)
+                        .ok_or_else(|| {
+                            format!(
+                                "release OpenAPI $ref at {child_location} targets missing component {component_label} map {component_kind}"
+                            )
+                        })?;
+                    if !component_map.contains_key(component_name) {
                         return Err(format!(
-                            "release OpenAPI $ref at {child_location} targets missing component schema {schema_name}"
+                            "release OpenAPI $ref at {child_location} targets missing component {component_label} {component_name}"
                         )
                         .into());
                     }
                     *references_json_value |= reference == JSON_VALUE_SCHEMA_REF;
                 }
-                validate_component_schema_refs(
-                    value,
-                    schemas,
-                    &child_location,
-                    references_json_value,
-                )?;
+                validate_component_refs(value, components, &child_location, references_json_value)?;
             }
         }
         _ => {}
@@ -148,6 +169,10 @@ mod tests {
     use super::*;
 
     fn release_spec_with_reference(reference: &str) -> Value {
+        release_spec_with_reference_value(Value::String(reference.to_owned()))
+    }
+
+    fn release_spec_with_reference_value(reference: Value) -> Value {
         norito::json!({
             "openapi": "3.1.0",
             "info": {"title": "Torii fixture", "version": "1.0.0"},
@@ -179,6 +204,34 @@ mod tests {
             .and_then(Value::as_object_mut)
             .expect("fixture components.schemas")
             .insert(JSON_VALUE_SCHEMA_NAME.to_owned(), schema);
+    }
+
+    fn release_spec_with_header_reference(reference: &str) -> Value {
+        norito::json!({
+            "openapi": "3.1.0",
+            "info": {"title": "Torii fixture", "version": "1.0.0"},
+            "paths": {
+                "/config": {
+                    "get": {
+                        "responses": {
+                            "200": {
+                                "description": "ok",
+                                "headers": {"X-Iroha-Signature": {"$ref": (reference)}}
+                            }
+                        }
+                    }
+                }
+            },
+            "components": {
+                "schemas": {"Health": {"type": "object"}},
+                "headers": {
+                    "IrohaSignature": {
+                        "required": true,
+                        "schema": {"type": "string"}
+                    }
+                }
+            }
+        })
     }
 
     #[test]
@@ -229,5 +282,45 @@ mod tests {
             .to_string();
         assert!(error.contains("missing component schema Missing"));
         assert!(error.contains("$.paths./config.get.responses.200"));
+    }
+
+    #[test]
+    fn local_component_header_reference_must_resolve() {
+        let spec = release_spec_with_header_reference("#/components/headers/IrohaSignature");
+        validate_release_openapi_spec(&spec).expect("local component header must resolve");
+    }
+
+    #[test]
+    fn missing_local_component_header_is_rejected() {
+        let spec = release_spec_with_header_reference("#/components/headers/Missing");
+        let error = validate_release_openapi_spec(&spec)
+            .expect_err("a missing component header must fail")
+            .to_string();
+        assert!(error.contains("missing component header Missing"));
+        assert!(error.contains("$.paths./config.get.responses.200.headers"));
+    }
+
+    #[test]
+    fn malformed_or_unsupported_component_references_are_rejected() {
+        for reference in [
+            "https://example.invalid/schema.json",
+            "#/components/schemas/Health/properties/status",
+            "#/components/schemas/",
+            "#/components/schemas",
+            "#/components/responses/Success",
+        ] {
+            let spec = release_spec_with_reference(reference);
+            validate_release_openapi_spec(&spec)
+                .expect_err("external, nested, empty, and unsupported references must fail");
+        }
+    }
+
+    #[test]
+    fn non_string_component_reference_is_rejected() {
+        let spec = release_spec_with_reference_value(norito::json!(7));
+        let error = validate_release_openapi_spec(&spec)
+            .expect_err("a non-string reference must fail")
+            .to_string();
+        assert!(error.contains("must be a string"));
     }
 }

@@ -13603,7 +13603,7 @@ async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Erro
         );
     }
     cfg.torii.require_api_token = true;
-    cfg.torii.api_tokens = tokens.clone();
+    cfg.torii.api_tokens = tokens.clone().into();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();

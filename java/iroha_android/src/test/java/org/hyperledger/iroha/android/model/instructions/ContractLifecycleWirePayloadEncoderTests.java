@@ -1,8 +1,12 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.io.IOException;
 import java.math.BigInteger;
+import java.util.Arrays;
+import java.util.List;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.test.FixtureGeneratorRunner;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.junit.Test;
 
@@ -16,14 +20,39 @@ public final class ContractLifecycleWirePayloadEncoderTests {
 
   /** Runs the mirrored lifecycle codec checks under the Gradle JUnit harness. */
   @Test
-  public void lifecycleWirePayloadParity() {
+  public void lifecycleWirePayloadParity() throws Exception {
     main(new String[0]);
   }
 
-  public static void main(final String[] args) {
+  public static void main(final String[] args) throws Exception {
+    allLifecycleInstructionsMatchRust();
     allLifecycleInstructionsPreserveExpectedRevisionAndOwnerVariant();
     lifecycleRevisionGuardsRejectZeroOverflowAndSchemaSubstitution();
     System.out.println("[IrohaAndroid] Contract lifecycle wire payload tests passed.");
+  }
+
+  private static void allLifecycleInstructionsMatchRust()
+      throws IOException, InterruptedException {
+    final List<String> fixture = FixtureGeneratorRunner.run("contract-lifecycle");
+    assert fixture.size() == 7 : "unexpected Rust lifecycle fixture row count";
+    final String contractAddress = fixture.get(5);
+    final String accountId = fixture.get(6);
+    final InstructionBox[] instructions = {
+      ContractLifecycleWirePayloadEncoder.encodeSetContractParliamentDelegation(
+          contractAddress, BigInteger.valueOf(7), true),
+      ContractLifecycleWirePayloadEncoder.encodeOfferContractOwnershipToAccount(
+          contractAddress, BigInteger.valueOf(8), accountId),
+      ContractLifecycleWirePayloadEncoder.encodeOfferContractOwnershipToParliament(
+          contractAddress, BigInteger.valueOf(9)),
+      ContractLifecycleWirePayloadEncoder.encodeAcceptContractOwnership(
+          contractAddress, BigInteger.TEN),
+      ContractLifecycleWirePayloadEncoder.encodeCancelContractOwnershipOffer(
+          contractAddress, BigInteger.valueOf(11)),
+    };
+    for (int index = 0; index < instructions.length; index++) {
+      assert Arrays.equals(hexToBytes(fixture.get(index)), wirePayload(instructions[index]))
+          : "contract lifecycle payload " + index + " must match Rust";
+    }
   }
 
   private static void allLifecycleInstructionsPreserveExpectedRevisionAndOwnerVariant() {
@@ -121,6 +150,23 @@ public final class ContractLifecycleWirePayloadEncoderTests {
       throw new AssertionError("expected canonical wire payload");
     }
     return wirePayload.payloadBytes();
+  }
+
+  private static byte[] hexToBytes(final String value) {
+    if ((value.length() & 1) != 0) {
+      throw new IllegalArgumentException("hex fixture must have an even length");
+    }
+    final byte[] bytes = new byte[value.length() / 2];
+    for (int index = 0; index < bytes.length; index++) {
+      final int offset = index * 2;
+      final int high = Character.digit(value.charAt(offset), 16);
+      final int low = Character.digit(value.charAt(offset + 1), 16);
+      if (high < 0 || low < 0) {
+        throw new IllegalArgumentException("hex fixture contains a non-hex character");
+      }
+      bytes[index] = (byte) ((high << 4) | low);
+    }
+    return bytes;
   }
 
   private static void expectIllegalArgument(final Runnable action) {

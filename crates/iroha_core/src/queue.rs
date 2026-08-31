@@ -135,10 +135,7 @@ use iroha_data_model::{
         },
     },
     name::Name,
-    offline::{
-        KagemushaOperationKindV4, classify_kagemusha_operation_entrypoint_v4,
-        classify_kagemusha_operation_transaction_v4,
-    },
+    offline::KagemushaOperationKindV4,
     peer::PeerId,
     transaction::{
         Executable, ExecutableBatchItem, SignedTransaction, TransactionAdmissionIntent,
@@ -5395,9 +5392,11 @@ impl Queue {
         let accepted = checked.as_accepted();
         let carrier = match accepted.entrypoint() {
             TransactionEntrypoint::External(transaction) => {
-                classify_kagemusha_operation_transaction_v4(transaction)
+                crate::kagemusha_operation::classify_kagemusha_operation_transaction_v4(transaction)
             }
-            entrypoint => classify_kagemusha_operation_entrypoint_v4(entrypoint),
+            entrypoint => {
+                crate::kagemusha_operation::classify_kagemusha_operation_entrypoint_v4(entrypoint)
+            }
         }
         .map_err(|error| Error::KagemushaOperationCarrierRejected {
             reason: error.to_string(),

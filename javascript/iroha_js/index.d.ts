@@ -88,8 +88,11 @@ export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES: 50331648;
 
 export interface KagemushaNoritoRequestV4 {
   readonly version: 4;
-  readonly operationId: string;
   readonly norito: Uint8Array;
+}
+
+export interface NormalizedKagemushaNoritoRequestV4 extends KagemushaNoritoRequestV4 {
+  readonly operationId: string;
 }
 
 export interface OfflineStatus {
@@ -110,7 +113,7 @@ export interface KagemushaOperationReference {
   readonly state: Readonly<{ state: "pending"; value: null }>;
   readonly transaction_hash: string;
   readonly status_uri: string;
-  readonly submitted_at_ms: number;
+  readonly submitted_at_ms: number | bigint;
 }
 
 export interface KagemushaTopUpAnchorRef {
@@ -134,17 +137,17 @@ export type KagemushaTopUpExecutionCommitment = Readonly<
 }>;
 
 /**
- * Top-up proof whose anchor path and advertised execution post-state projection
- * match. The JavaScript transport parser does not authenticate the QC signature
- * or validator roster.
+ * Top-up proof returned by the Node transport only after the native ABI-23
+ * structural validator accepts the exact response bytes. Commit-QC signature
+ * and validator-roster trust remain separate from this structural boundary.
  */
 export interface KagemushaTopUpFinalityProof {
   readonly version: 1;
   readonly anchor: KagemushaTopUpAnchorRef;
   readonly anchor_path: KagemushaTopUpAnchorMerkleProof;
   readonly commit_qc: Readonly<{
-    height_context: Readonly<Record<string, JsonValue>> & Readonly<{
-      height: number;
+    height_context: Readonly<Record<string, JsonValue | bigint>> & Readonly<{
+      height: number | bigint;
       network_id: string;
     }>;
     certificate: Readonly<Record<string, JsonValue>> & Readonly<{
@@ -153,26 +156,28 @@ export interface KagemushaTopUpFinalityProof {
   }>;
 }
 
-export type KagemushaTopUpAnchor = Readonly<Record<string, JsonValue>> & Readonly<{
+export type KagemushaTopUpAnchor = Readonly<
+  Record<string, JsonValue | bigint>
+> & Readonly<{
   version: 4;
   network_id: string;
   topup_operation_id: number[];
   anchor_digest: number[];
-  finalized_height: number;
+  finalized_height: number | bigint;
   finalized_tx_hash: number[];
   artifact_binding: Readonly<Record<string, JsonValue>> & Readonly<{ version: 4 }>;
 }>;
 
 export interface KagemushaTopUpResult {
   readonly transaction_hash: string;
-  readonly finalized_block_height: number;
+  readonly finalized_block_height: number | bigint;
   readonly anchor: KagemushaTopUpAnchor;
   readonly finality_proof: KagemushaTopUpFinalityProof;
 }
 
 export interface KagemushaRedeemResult {
   readonly transaction_hash: string;
-  readonly finalized_block_height: number;
+  readonly finalized_block_height: number | bigint;
 }
 
 export type KagemushaOperationResult =
@@ -186,7 +191,7 @@ export type KagemushaOperationStatus =
         operation_id: string;
         kind: KagemushaOperationKind;
         transaction_hash: string;
-        submitted_at_ms: number;
+        submitted_at_ms: number | bigint;
       }>;
     }>
   | Readonly<{
@@ -210,15 +215,26 @@ export type KagemushaOperationStatus =
       }>;
     }>;
 
+/** Status variants available without the Node-only native structural validator. */
+export type KagemushaPortableOperationStatus =
+  | Exclude<KagemushaOperationStatus, Readonly<{ state: "applied" }>>
+  | Readonly<{
+      state: "applied";
+      value: Readonly<{
+        operation_id: string;
+        result: Extract<KagemushaOperationResult, Readonly<{ kind: "redeem" }>>;
+      }>;
+    }>;
+
 export function normalizeKagemushaOperationId(value: string, context?: string): string;
 export function normalizeKagemushaTopUpRequestV4(
   value: KagemushaNoritoRequestV4,
   context?: string,
-): KagemushaNoritoRequestV4;
+): NormalizedKagemushaNoritoRequestV4;
 export function normalizeKagemushaRedeemRequestV4(
   value: KagemushaNoritoRequestV4,
   context?: string,
-): KagemushaNoritoRequestV4;
+): NormalizedKagemushaNoritoRequestV4;
 export function normalizeOfflineStatus(
   payload: Record<string, unknown>,
 ): OfflineStatus;
@@ -234,7 +250,7 @@ export function normalizeKagemushaOperationReference(
 export function normalizeKagemushaOperationStatus(
   payload: Record<string, unknown>,
   acceptedReference: KagemushaOperationReference,
-): KagemushaOperationStatus;
+): KagemushaPortableOperationStatus;
 
 export const CRYPTO_ALGORITHMS: Readonly<{
   ED25519: "ed25519";
@@ -10829,7 +10845,7 @@ export declare class ToriiBrowserClient {
   getKagemushaOperationStatus(
     operationReference: KagemushaOperationReference,
     options?: { signal?: AbortSignal },
-  ): Promise<KagemushaOperationStatus>;
+  ): Promise<KagemushaPortableOperationStatus>;
   listExplorerAccounts<T = unknown>(
     options?: ToriiBrowserExplorerAccountsOptions,
   ): Promise<ToriiBrowserExplorerCursorPage<T>>;

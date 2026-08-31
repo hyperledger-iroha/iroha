@@ -13,14 +13,23 @@ import {
   KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
   KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
+  _normalizeKagemushaOperationStatusWithNativeValidation,
   normalizeOfflineStatus,
   normalizeKagemushaOperationReference,
   normalizeKagemushaOperationStatus,
   normalizeKagemushaRedeemRequestV4,
   normalizeKagemushaTopUpRequestV4,
 } from "../src/kagemushaOffline.js";
+import {
+  _normalizeKagemushaOperationStatusWithNativeValidation as normalizeDistKagemushaStatusWithNativeValidation,
+} from "../dist/kagemushaOffline.js";
 import { crc64Xz } from "../src/crc64Xz.js";
 import { computeHashLiteralCrc } from "../src/hashLiteralCrc.js";
+import { stringifyStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
+import { TORII_TEST_NATIVE_BINDING } from "../src/toriiTestHooks.js";
+import {
+  TORII_TEST_NATIVE_BINDING as DIST_TORII_TEST_NATIVE_BINDING,
+} from "../dist/toriiTestHooks.js";
 
 const OPERATION_ID = "11".repeat(32);
 const TRANSACTION_HASH = "23".repeat(32);
@@ -51,8 +60,41 @@ function universalCapability(overrides = {}) {
   };
 }
 
-function noritoArchive(schemaName = TOP_UP_SCHEMA_NAME) {
-  const payload = Buffer.from([0x01]);
+function encodeCompactLength(value) {
+  const bytes = [];
+  let remaining = value;
+  do {
+    const byte = remaining & 0x7f;
+    remaining >>>= 7;
+    bytes.push(remaining === 0 ? byte : byte | 0x80);
+  } while (remaining !== 0);
+  return Buffer.from(bytes);
+}
+
+function requestPayload(
+  schemaName,
+  { operationId = OPERATION_ID, fieldOverrides = {}, extraFields = [] } = {},
+) {
+  const fieldCount = schemaName === TOP_UP_SCHEMA_NAME ? 8 : 10;
+  const operationIdFieldIndex = schemaName === TOP_UP_SCHEMA_NAME ? 6 : 8;
+  const fields = Array.from({ length: fieldCount }, (_, index) => {
+    if (Object.hasOwn(fieldOverrides, index)) return Buffer.from(fieldOverrides[index]);
+    if (index === 0) return Buffer.from([4, 0]);
+    if (index === operationIdFieldIndex) return Buffer.from(operationId, "hex");
+    return Buffer.from([index + 1]);
+  });
+  fields.push(...extraFields.map((field) => Buffer.from(field)));
+  return Buffer.concat(fields.map((field) => Buffer.concat([
+    encodeCompactLength(field.length),
+    field,
+  ])));
+}
+
+function noritoArchive(
+  schemaName = TOP_UP_SCHEMA_NAME,
+  options = {},
+) {
+  const payload = options.payload ?? requestPayload(schemaName, options);
   const archive = Buffer.alloc(48 + payload.length);
   archive.write("NRT0", 0, "ascii");
   createHash("sha256")
@@ -68,7 +110,7 @@ function noritoArchive(schemaName = TOP_UP_SCHEMA_NAME) {
 }
 
 function requestV4(schemaName = TOP_UP_SCHEMA_NAME) {
-  return { version: 4, operationId: OPERATION_ID, norito: noritoArchive(schemaName) };
+  return { version: 4, norito: noritoArchive(schemaName) };
 }
 
 function operationReference(kind) {
@@ -161,6 +203,34 @@ function appliedTopUpStatus() {
   };
 }
 
+const TEST_NATIVE_STATUS_BYTES = Uint8Array.of(0x7b, 0x7d);
+const TEST_NATIVE_STATUS_VALIDATOR = Object.freeze({
+  kagemushaOfflineOperationStatusJsonValidateV1() {},
+});
+
+const POST_NATIVE_TOP_UP_NORMALIZERS = Object.freeze([
+  Object.freeze({
+    label: "source",
+    normalize: (payload, reference) =>
+      _normalizeKagemushaOperationStatusWithNativeValidation(
+        payload,
+        reference,
+        TEST_NATIVE_STATUS_BYTES,
+        TEST_NATIVE_STATUS_VALIDATOR,
+      ),
+  }),
+  Object.freeze({
+    label: "dist",
+    normalize: (payload, reference) =>
+      normalizeDistKagemushaStatusWithNativeValidation(
+        payload,
+        reference,
+        TEST_NATIVE_STATUS_BYTES,
+        TEST_NATIVE_STATUS_VALIDATOR,
+      ),
+  }),
+]);
+
 test("Kagemusha JavaScript surface is transport-only ABI-23/V4", () => {
   assert.equal(KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 23);
   assert.equal(KAGEMUSHA_CASH_HANDOFF_CAPABILITY, "cash_handoff_v1");
@@ -209,10 +279,31 @@ test("Kagemusha JavaScript surface is transport-only ABI-23/V4", () => {
 });
 
 test("Kagemusha requests require an exact schema-bound Norito frame", () => {
-  assert.equal(normalizeKagemushaTopUpRequestV4(requestV4()).norito.length, 49);
+  const normalizedTopUp = normalizeKagemushaTopUpRequestV4(requestV4());
+  assert.equal(normalizedTopUp.operationId, OPERATION_ID);
+  assert.equal(normalizedTopUp.norito.length, 96);
   assert.equal(
     normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME)).norito.length,
-    49,
+    100,
+  );
+  assert.equal(
+    normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME)).operationId,
+    OPERATION_ID,
+  );
+  assert.equal(
+    normalizeKagemushaTopUpRequestV4({
+      version: 4,
+      norito: noritoArchive(TOP_UP_SCHEMA_NAME, { fieldOverrides: { 1: [] } }),
+    }).operationId,
+    OPERATION_ID,
+  );
+
+  assert.throws(
+    () => normalizeKagemushaTopUpRequestV4({
+      ...requestV4(),
+      operationId: OPERATION_ID,
+    }),
+    /missing or unknown fields/u,
   );
 
   const wrongSchema = requestV4();
@@ -243,6 +334,70 @@ test("Kagemusha requests require an exact schema-bound Norito frame", () => {
   assert.throws(
     () => normalizeKagemushaTopUpRequestV4(alternateFlags),
     /canonical compact-length layout flags/u,
+  );
+
+  const wrongPayloadVersion = {
+    version: 4,
+    norito: noritoArchive(TOP_UP_SCHEMA_NAME, {
+      fieldOverrides: { 0: [3, 0] },
+    }),
+  };
+  assert.throws(
+    () => normalizeKagemushaTopUpRequestV4(wrongPayloadVersion),
+    /payload version must be the canonical u16 value 4/u,
+  );
+
+  const malformedOperationId = {
+    version: 4,
+    norito: noritoArchive(TOP_UP_SCHEMA_NAME, {
+      fieldOverrides: { 6: new Uint8Array(31).fill(0x11) },
+    }),
+  };
+  assert.throws(
+    () => normalizeKagemushaTopUpRequestV4(malformedOperationId),
+    /must contain one non-zero 32-byte operation id/u,
+  );
+
+  const zeroOperationId = {
+    version: 4,
+    norito: noritoArchive(REDEEM_SCHEMA_NAME, {
+      fieldOverrides: { 8: new Uint8Array(32) },
+    }),
+  };
+  assert.throws(
+    () => normalizeKagemushaRedeemRequestV4(zeroOperationId),
+    /must contain one non-zero 32-byte operation id/u,
+  );
+
+  const trailingField = {
+    version: 4,
+    norito: noritoArchive(TOP_UP_SCHEMA_NAME, { extraFields: [[0x55]] }),
+  };
+  assert.throws(
+    () => normalizeKagemushaTopUpRequestV4(trailingField),
+    /trailing compact fields or bytes/u,
+  );
+
+  const payload = requestPayload(REDEEM_SCHEMA_NAME);
+  const nonMinimalFirstLength = Buffer.concat([
+    Buffer.from([0x82, 0x00]),
+    payload.subarray(1),
+  ]);
+  assert.throws(
+    () => normalizeKagemushaRedeemRequestV4({
+      version: 4,
+      norito: noritoArchive(REDEEM_SCHEMA_NAME, { payload: nonMinimalFirstLength }),
+    }),
+    /compact field length is not minimally encoded/u,
+  );
+
+  const truncatedLastField = requestPayload(TOP_UP_SCHEMA_NAME).subarray(0, -1);
+  assert.throws(
+    () => normalizeKagemushaTopUpRequestV4({
+      version: 4,
+      norito: noritoArchive(TOP_UP_SCHEMA_NAME, { payload: truncatedLastField }),
+    }),
+    /invalid compact payload length/u,
   );
 });
 
@@ -399,6 +554,207 @@ test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", as
       `/v1/offline/operations/${OPERATION_ID}`,
     ],
   );
+});
+
+test("raw Kagemusha JSON preserves lossless u64 fields", async () => {
+  const firstUnsafeU64 = 1n << 53n;
+  const maxU64 = 0xffff_ffff_ffff_ffffn;
+  const clients = [
+    {
+      label: "source Node",
+      Client: sdk.ToriiClient,
+      nativeBindingSymbol: TORII_TEST_NATIVE_BINDING,
+    },
+    { label: "source browser", Client: sdk.ToriiBrowserClient },
+    {
+      label: "dist Node",
+      Client: distSdk.ToriiClient,
+      nativeBindingSymbol: DIST_TORII_TEST_NATIVE_BINDING,
+    },
+    { label: "dist browser", Client: distSdk.ToriiBrowserClient },
+  ];
+
+  for (const { label, Client, nativeBindingSymbol } of clients) {
+    const topUpReference = {
+      ...operationReference("top_up"),
+      submitted_at_ms: firstUnsafeU64,
+    };
+    const topUpStatus = appliedTopUpStatus();
+    topUpStatus.value.result.result.finalized_block_height = maxU64;
+    topUpStatus.value.result.result.anchor.finalized_height = maxU64;
+    topUpStatus.value.result.result.finality_proof.commit_qc.height_context.height = maxU64;
+    const redeemReference = {
+      ...operationReference("redeem"),
+      submitted_at_ms: maxU64,
+    };
+    const redeemStatus = {
+      state: "applied",
+      value: {
+        operation_id: OPERATION_ID,
+        result: {
+          kind: "redeem",
+          result: {
+            transaction_hash: TRANSACTION_HASH,
+            finalized_block_height: maxU64,
+          },
+        },
+      },
+    };
+    const acceptedHeaders = {
+      location: `/v1/offline/operations/${OPERATION_ID}`,
+      "retry-after": "1",
+    };
+    const rawTopUpStatus = stringifyStrictLosslessIntegerJson(
+      topUpStatus,
+      `${label} top-up status`,
+    );
+    const responses = [
+      rawJsonResponse(
+        stringifyStrictLosslessIntegerJson(topUpReference, `${label} top-up reference`),
+        { status: 202, headers: acceptedHeaders },
+      ),
+      rawJsonResponse(rawTopUpStatus),
+      rawJsonResponse(
+        stringifyStrictLosslessIntegerJson(redeemReference, `${label} redeem reference`),
+        { status: 202, headers: acceptedHeaders },
+      ),
+      rawJsonResponse(
+        stringifyStrictLosslessIntegerJson(redeemStatus, `${label} redeem status`),
+      ),
+    ];
+    let validatedStatusBytes = null;
+    const nativeBinding = {
+      kagemushaOfflineOperationStatusJsonValidateV1(bytes) {
+        validatedStatusBytes = Buffer.from(bytes);
+      },
+    };
+    const options = nativeBindingSymbol === undefined
+      ? {}
+      : {
+        maxRetries: 0,
+        [nativeBindingSymbol]: nativeBinding,
+      };
+    const client = new Client("https://torii.example", {
+      fetchImpl: async () => responses.shift(),
+      ...options,
+    });
+
+    const acceptedTopUp = await client.submitKagemushaTopUpV4(requestV4());
+    const appliedTopUpPromise = client.getKagemushaOperationStatus(acceptedTopUp);
+    const appliedTopUp = nativeBindingSymbol === undefined
+      ? await assert.rejects(
+        appliedTopUpPromise,
+        /requires the native ABI-23 structural validator/u,
+      )
+      : await appliedTopUpPromise;
+    const acceptedRedeem = await client.submitKagemushaRedeemV4(
+      requestV4(REDEEM_SCHEMA_NAME),
+    );
+    const appliedRedeem = await client.getKagemushaOperationStatus(acceptedRedeem);
+
+    assert.equal(acceptedTopUp.submitted_at_ms, firstUnsafeU64, label);
+    assert.equal(typeof acceptedTopUp.submitted_at_ms, "bigint", label);
+    if (nativeBindingSymbol !== undefined) {
+      assert.deepEqual(validatedStatusBytes, Buffer.from(rawTopUpStatus), label);
+      assert.equal(appliedTopUp.value.result.result.finalized_block_height, maxU64, label);
+      assert.equal(appliedTopUp.value.result.result.anchor.finalized_height, maxU64, label);
+      assert.equal(
+        appliedTopUp.value.result.result.finality_proof.commit_qc.height_context.height,
+        maxU64,
+        label,
+      );
+      assert.equal(
+        typeof appliedTopUp.value.result.result.finality_proof.commit_qc.certificate
+          .execution_commitment.topup_anchor_count,
+        "number",
+        label,
+      );
+      assert.equal(
+        typeof appliedTopUp.value.result.result.finality_proof.anchor_path.leaf_count,
+        "number",
+        label,
+      );
+    }
+    assert.equal(acceptedRedeem.submitted_at_ms, maxU64, label);
+    assert.equal(appliedRedeem.value.result.result.finalized_block_height, maxU64, label);
+  }
+});
+
+test("Applied top-up status fails closed without successful native validation", async () => {
+  const status = appliedTopUpStatus();
+  const rawStatus = stringifyStrictLosslessIntegerJson(status, "Applied top-up status");
+  for (const normalize of [
+    sdk.normalizeKagemushaOperationStatus,
+    distSdk.normalizeKagemushaOperationStatus,
+  ]) {
+    assert.throws(
+      () => normalize(status, operationReference("top_up")),
+      /requires the native ABI-23 structural validator/u,
+    );
+  }
+
+  for (const Client of [sdk.ToriiBrowserClient, distSdk.ToriiBrowserClient]) {
+    const client = new Client("https://torii.example", {
+      fetchImpl: async () => rawJsonResponse(rawStatus),
+    });
+    await assert.rejects(
+      () => client.getKagemushaOperationStatus(operationReference("top_up")),
+      /requires the native ABI-23 structural validator/u,
+    );
+  }
+
+  for (const { Client, nativeBindingSymbol } of [
+    { Client: sdk.ToriiClient, nativeBindingSymbol: TORII_TEST_NATIVE_BINDING },
+    { Client: distSdk.ToriiClient, nativeBindingSymbol: DIST_TORII_TEST_NATIVE_BINDING },
+  ]) {
+    const missingValidator = new Client("https://torii.example", {
+      fetchImpl: async () => rawJsonResponse(rawStatus),
+      maxRetries: 0,
+      [nativeBindingSymbol]: {},
+    });
+    await assert.rejects(
+      () => missingValidator.getKagemushaOperationStatus(operationReference("top_up")),
+      /does not expose kagemushaOfflineOperationStatusJsonValidateV1/u,
+    );
+
+    const nativeError = new Error("native structural validation rejected the status");
+    let observedBytes = null;
+    const rejectingValidator = new Client("https://torii.example", {
+      fetchImpl: async () => rawJsonResponse(rawStatus),
+      maxRetries: 0,
+      [nativeBindingSymbol]: {
+        kagemushaOfflineOperationStatusJsonValidateV1(bytes) {
+          observedBytes = Buffer.from(bytes);
+          throw nativeError;
+        },
+      },
+    });
+    await assert.rejects(
+      () => rejectingValidator.getKagemushaOperationStatus(operationReference("top_up")),
+      (error) => error === nativeError,
+    );
+    assert.deepEqual(observedBytes, Buffer.from(rawStatus));
+  }
+});
+
+test("Kagemusha u64 fields reject lossy numbers and overflow", () => {
+  for (const normalize of [
+    sdk.normalizeKagemushaOperationReference,
+    distSdk.normalizeKagemushaOperationReference,
+  ]) {
+    for (const submittedAtMs of [
+      Number.MAX_SAFE_INTEGER + 1,
+      0x1_0000_0000_0000_0000n,
+    ]) {
+      assert.throws(
+        () => normalize({
+          ...operationReference("top_up"),
+          submitted_at_ms: submittedAtMs,
+        }),
+        /submitted_at_ms must be a positive lossless unsigned 64-bit integer/u,
+      );
+    }
+  }
 });
 
 test("Kagemusha readiness responses are exact JSON bounded to 4 KiB", async () => {
@@ -567,7 +923,7 @@ test("pending operation timestamps must be positive", () => {
       location: `/v1/offline/operations/${OPERATION_ID}`,
       retryAfter: "1",
     }),
-    /submitted_at_ms must be a positive safe unsigned integer/u,
+    /submitted_at_ms must be a positive lossless unsigned 64-bit integer/u,
   );
   assert.throws(
     () => normalizeKagemushaOperationStatus({
@@ -579,7 +935,7 @@ test("pending operation timestamps must be positive", () => {
         submitted_at_ms: 0,
       },
     }, operationReference("top_up")),
-    /submitted_at_ms must be a positive safe unsigned integer/u,
+    /submitted_at_ms must be a positive lossless unsigned 64-bit integer/u,
   );
 });
 
@@ -770,36 +1126,32 @@ test("Kagemusha clients reject an invalid accepted reference before fetch", asyn
   assert.equal(browserFetches, 0);
 });
 
-test("operation parsing rejects a V3 top-up anchor instead of upgrading it", async () => {
-  const client = new ToriiBrowserClient("https://torii.example", {
-    fetchImpl: async () => jsonResponse({
-      state: "applied",
-      value: {
-        operation_id: OPERATION_ID,
+test("post-native top-up parsing rejects a V3 anchor instead of upgrading it", () => {
+  const status = {
+    state: "applied",
+    value: {
+      operation_id: OPERATION_ID,
+      result: {
+        kind: "top_up",
         result: {
-          kind: "top_up",
-          result: {
-            transaction_hash: TRANSACTION_HASH,
-            finalized_block_height: 42,
-            anchor: { version: 3, artifact_binding: { version: 4 } },
-            finality_proof: {},
-          },
+          transaction_hash: TRANSACTION_HASH,
+          finalized_block_height: 42,
+          anchor: { version: 3, artifact_binding: { version: 4 } },
+          finality_proof: {},
         },
       },
-    }),
-  });
-
-  await assert.rejects(
-    () => client.getKagemushaOperationStatus(operationReference("top_up")),
-    /anchor and artifact binding must use V4/u,
-  );
+    },
+  };
+  for (const { normalize } of POST_NATIVE_TOP_UP_NORMALIZERS) {
+    assert.throws(
+      () => normalize(status, operationReference("top_up")),
+      /anchor and artifact binding must use V4/u,
+    );
+  }
 });
 
-test("applied top-up parsing authenticates the balanced-Merkle execution commitment", () => {
-  for (const normalize of [
-    normalizeKagemushaOperationStatus,
-    distSdk.normalizeKagemushaOperationStatus,
-  ]) {
+test("post-native top-up parsing checks the balanced-Merkle execution commitment", () => {
+  for (const { normalize } of POST_NATIVE_TOP_UP_NORMALIZERS) {
     const normalized = normalize(
       appliedTopUpStatus(),
       operationReference("top_up"),
@@ -810,11 +1162,8 @@ test("applied top-up parsing authenticates the balanced-Merkle execution commitm
   }
 });
 
-test("applied top-up parsing rejects a forged Merkle sibling and root", () => {
-  for (const normalize of [
-    normalizeKagemushaOperationStatus,
-    distSdk.normalizeKagemushaOperationStatus,
-  ]) {
+test("post-native top-up parsing rejects a forged Merkle sibling and root", () => {
+  for (const { normalize } of POST_NATIVE_TOP_UP_NORMALIZERS) {
     const forgedSibling = appliedTopUpStatus();
     forgedSibling.value.result.result.finality_proof.anchor_path.siblings[0][0] ^= 1;
     assert.throws(
@@ -840,105 +1189,108 @@ test("applied top-up parsing rejects a forged Merkle sibling and root", () => {
   }
 });
 
-test("applied top-up parsing rejects noncanonical siblings and commitment projections", () => {
-  const unmarkedSibling = appliedTopUpStatus();
-  unmarkedSibling.value.result.result.finality_proof.anchor_path.siblings[0][31] &= 0xfe;
-  assert.throws(
-    () => normalizeKagemushaOperationStatus(
-      unmarkedSibling,
-      operationReference("top_up"),
-    ),
-    /invalid Iroha hash marker bit/u,
-  );
-
-  const mismatchedCount = appliedTopUpStatus();
-  mismatchedCount.value.result.result.finality_proof.commit_qc.certificate
-    .execution_commitment.topup_anchor_count = 3;
-  assert.throws(
-    () => normalizeKagemushaOperationStatus(
-      mismatchedCount,
-      operationReference("top_up"),
-    ),
-    /anchor count does not match its path/u,
-  );
-
-  for (const field of ["ordinary_writes_root", "post_state_root"]) {
-    const forgedPostState = appliedTopUpStatus();
-    forgedPostState.value.result.result.finality_proof.commit_qc.certificate
-      .execution_commitment[field] = testHashLiteral(
-        testIrohaHash(new TextEncoder().encode(`forged ${field}`)),
-      );
+test("post-native top-up parsing rejects noncanonical commitment projections", () => {
+  for (const { normalize } of POST_NATIVE_TOP_UP_NORMALIZERS) {
+    const unmarkedSibling = appliedTopUpStatus();
+    unmarkedSibling.value.result.result.finality_proof.anchor_path.siblings[0][31] &= 0xfe;
     assert.throws(
-      () => normalizeKagemushaOperationStatus(
-        forgedPostState,
+      () => normalize(
+        unmarkedSibling,
         operationReference("top_up"),
       ),
-      /execution post-state root is invalid/u,
+      /invalid Iroha hash marker bit/u,
     );
-  }
-});
 
-test("applied top-up parsing binds the anchor, proof, height, network, and transaction", () => {
-  const mismatchedProofAnchor = appliedTopUpStatus();
-  mismatchedProofAnchor.value.result.result.finality_proof.anchor.anchor_digest[0] ^= 1;
-  assert.throws(
-    () => normalizeKagemushaOperationStatus(
-      mismatchedProofAnchor,
-      operationReference("top_up"),
-    ),
-    /finality_proof\.anchor does not match the V4 top-up anchor/u,
-  );
-
-  for (const mutate of [
-    (status) => { status.value.result.result.anchor.finalized_height = 43; },
-    (status) => { status.value.result.result.anchor.finalized_tx_hash[0] ^= 1; },
-    (status) => {
-      status.value.result.result.finality_proof.commit_qc.height_context.network_id =
-        testHashLiteral(testIrohaHash(new TextEncoder().encode("other network")));
-    },
-    (status) => {
-      const markedZero = new Uint8Array(32);
-      markedZero[31] = 1;
-      const markedZeroLiteral = testHashLiteral(markedZero);
-      status.value.result.result.anchor.network_id = markedZeroLiteral;
-      status.value.result.result.finality_proof.commit_qc.height_context.network_id =
-        markedZeroLiteral;
-    },
-  ]) {
-    const status = appliedTopUpStatus();
-    mutate(status);
+    const mismatchedCount = appliedTopUpStatus();
+    mismatchedCount.value.result.result.finality_proof.commit_qc.certificate
+      .execution_commitment.topup_anchor_count = 3;
     assert.throws(
-      () => normalizeKagemushaOperationStatus(status, operationReference("top_up")),
-      /top-up anchor, proof, and terminal result do not match/u,
+      () => normalize(
+        mismatchedCount,
+        operationReference("top_up"),
+      ),
+      /anchor count does not match its path/u,
     );
+
+    for (const field of ["ordinary_writes_root", "post_state_root"]) {
+      const forgedPostState = appliedTopUpStatus();
+      forgedPostState.value.result.result.finality_proof.commit_qc.certificate
+        .execution_commitment[field] = testHashLiteral(
+          testIrohaHash(new TextEncoder().encode(`forged ${field}`)),
+        );
+      assert.throws(
+        () => normalize(
+          forgedPostState,
+          operationReference("top_up"),
+        ),
+        /execution post-state root is invalid/u,
+      );
+    }
   }
 });
 
-test("applied top-up parsing returns the exact proof snapshot it validated", () => {
-  const status = appliedTopUpStatus();
-  const siblings = status.value.result.result.finality_proof.anchor_path.siblings;
-  const validSibling = [...siblings[0]];
-  const forgedSibling = [...validSibling];
-  forgedSibling[0] ^= 1;
-  let reads = 0;
-  Object.defineProperty(siblings, 0, {
-    configurable: true,
-    enumerable: true,
-    get() {
-      reads += 1;
-      return reads === 1 ? validSibling : forgedSibling;
-    },
-  });
+test("post-native top-up parsing binds anchor, proof, height, network, and transaction", () => {
+  for (const { normalize } of POST_NATIVE_TOP_UP_NORMALIZERS) {
+    const mismatchedProofAnchor = appliedTopUpStatus();
+    mismatchedProofAnchor.value.result.result.finality_proof.anchor.anchor_digest[0] ^= 1;
+    assert.throws(
+      () => normalize(
+        mismatchedProofAnchor,
+        operationReference("top_up"),
+      ),
+      /finality_proof\.anchor does not match the V4 top-up anchor/u,
+    );
 
-  const normalized = normalizeKagemushaOperationStatus(
-    status,
-    operationReference("top_up"),
-  );
-  assert.equal(reads, 1);
-  assert.deepEqual(
-    normalized.value.result.result.finality_proof.anchor_path.siblings[0],
-    validSibling,
-  );
+    for (const mutate of [
+      (status) => { status.value.result.result.anchor.finalized_height = 43; },
+      (status) => { status.value.result.result.anchor.finalized_tx_hash[0] ^= 1; },
+      (status) => {
+        status.value.result.result.finality_proof.commit_qc.height_context.network_id =
+          testHashLiteral(testIrohaHash(new TextEncoder().encode("other network")));
+      },
+      (status) => {
+        const markedZero = new Uint8Array(32);
+        markedZero[31] = 1;
+        const markedZeroLiteral = testHashLiteral(markedZero);
+        status.value.result.result.anchor.network_id = markedZeroLiteral;
+        status.value.result.result.finality_proof.commit_qc.height_context.network_id =
+          markedZeroLiteral;
+      },
+    ]) {
+      const status = appliedTopUpStatus();
+      mutate(status);
+      assert.throws(
+        () => normalize(status, operationReference("top_up")),
+        /top-up anchor, proof, and terminal result do not match/u,
+      );
+    }
+  }
+});
+
+test("post-native top-up parsing returns the exact proof snapshot it checked", () => {
+  for (const { normalize } of POST_NATIVE_TOP_UP_NORMALIZERS) {
+    const status = appliedTopUpStatus();
+    const siblings = status.value.result.result.finality_proof.anchor_path.siblings;
+    const validSibling = [...siblings[0]];
+    const forgedSibling = [...validSibling];
+    forgedSibling[0] ^= 1;
+    let reads = 0;
+    Object.defineProperty(siblings, 0, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        reads += 1;
+        return reads === 1 ? validSibling : forgedSibling;
+      },
+    });
+
+    const normalized = normalize(status, operationReference("top_up"));
+    assert.equal(reads, 1);
+    assert.deepEqual(
+      normalized.value.result.result.finality_proof.anchor_path.siblings[0],
+      validSibling,
+    );
+  }
 });
 
 test("rejected operation parsing requires the exact error envelope", () => {
@@ -1065,7 +1417,7 @@ test("applied operation parsing rejects a zero finalized height", () => {
           },
         },
       }, operationReference("redeem")),
-      new RegExp(`${field} must be a positive safe unsigned integer`, "u"),
+      new RegExp(`${field} must be a positive lossless unsigned 64-bit integer`, "u"),
     );
   }
 });

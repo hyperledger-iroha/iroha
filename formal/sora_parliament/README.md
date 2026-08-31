@@ -133,7 +133,9 @@ abstract resource reservations include one symmetric conflict pair and an exact
 capacity of two. A shared redraw ceiling of two is explored from both the first
 attempt's zero prefix and abstract successor-attempt prefixes; the latter model
 whether the inherited proposal history has consumed zero or one unit before
-the successor's initial draw. It is
+the successor's initial draw. `AttemptPrefixFrame` keeps those inherited
+coordinates immutable within each finite trace; successor attempts are the
+separate bounded `Init` alternatives, not an in-trace reset. It is
 intentionally large enough to explore self-absence, early impossible-root
 rejection, conflicting and quorum-matching endorsements, post-deadline
 non-response rejection, successful and unavailable sortition pulses, fresh

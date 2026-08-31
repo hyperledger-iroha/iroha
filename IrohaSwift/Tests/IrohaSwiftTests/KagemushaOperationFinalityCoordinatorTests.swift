@@ -1848,9 +1848,11 @@ private actor TypedFinalityTransport: KagemushaOperationFinalityTransport {
 
     func getKagemushaOperationStatus(
         operationId: String,
+        expectedKind: KagemushaOperationKind,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
-        guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1 else {
+        guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
+              expectedKind == expectedOperation.kind else {
             throw FinalityHarnessError.unexpectedSubmission
         }
         requestedOperationIds.append(operationId)
@@ -1890,10 +1892,12 @@ private struct AppliedOnlyFinalityTransport:
 
     func getKagemushaOperationStatus(
         operationId: String,
+        expectedKind: KagemushaOperationKind,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
-              status.operationId == operationId else {
+              status.operationId == operationId,
+              status.kind == expectedKind else {
             throw FinalityHarnessError.unexpectedSubmission
         }
         return status
@@ -1912,9 +1916,11 @@ private struct DeadlineIgnoringFinalityTransport:
 {
     func getKagemushaOperationStatus(
         operationId: String,
+        expectedKind: KagemushaOperationKind,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
-        guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1 else {
+        guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
+              expectedKind == .topUp else {
             throw FinalityHarnessError.unexpectedSubmission
         }
         return try await withCheckedThrowingContinuation {
@@ -1958,10 +1964,12 @@ private actor LeaseFinalityTransport: KagemushaOperationFinalityTransport {
 
     func getKagemushaOperationStatus(
         operationId: String,
+        expectedKind: KagemushaOperationKind,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
-              operationId == expectedOperation.operationId else {
+              operationId == expectedOperation.operationId,
+              expectedKind == expectedOperation.kind else {
             throw FinalityHarnessError.unexpectedSubmission
         }
         statusCount += 1

@@ -13173,6 +13173,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(acceptedRedeem, try reference(.redeem))
         let operationStatus = try await client.getKagemushaOperationStatus(
             operationId: operationId,
+            expectedKind: .topUp,
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         )
         XCTAssertEqual(
@@ -13209,6 +13210,7 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("missing operation status must return typed HTTP failure")
@@ -13444,6 +13446,7 @@ final class ToriiClientTests: XCTestCase {
         await assertToriiInvalidPayload(contains: "declares more than") {
             _ = try await self.makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
         }
@@ -13459,6 +13462,7 @@ final class ToriiClientTests: XCTestCase {
         await assertToriiInvalidPayload(contains: "response exceeded") {
             _ = try await self.makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
         }
@@ -13474,6 +13478,7 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("exact-limit non-Norito bytes must reach the codec")
@@ -13495,6 +13500,7 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("oversized 404 must fail before absence classification")
@@ -13665,7 +13671,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineStatusRejectsWrongResourceIdentityAndMediaType() async throws {
+    func testOfflineStatusRejectsWrongResourceIdentityKindAndMediaType() async throws {
         let operationId = String(repeating: "11", count: 32)
         let otherOperationId = String(repeating: "33", count: 32)
         let pendingStatus = try XCTUnwrap(Data(hexString:
@@ -13684,11 +13690,23 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: otherOperationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("expected operation identity mismatch to fail")
         } catch {
-            XCTAssertTrue(String(describing: error).contains("operation_id does not match"))
+            XCTAssertTrue(String(describing: error).contains("identity or kind"))
+        }
+
+        do {
+            _ = try await makeClient().getKagemushaOperationStatus(
+                operationId: operationId,
+                expectedKind: .redeem,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
+            XCTFail("expected operation kind mismatch to fail")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("identity or kind"))
         }
 
         for headers in [
@@ -13707,6 +13725,7 @@ final class ToriiClientTests: XCTestCase {
             do {
                 _ = try await makeClient().getKagemushaOperationStatus(
                     operationId: operationId,
+                    expectedKind: .topUp,
                     chainDiscriminant: SccpV1.tairaI105DiscriminantV1
                 )
                 XCTFail("expected invalid operation media type to fail")

@@ -540,6 +540,7 @@ public enum KagemushaOperationSubmission: Equatable, Sendable {
 public protocol KagemushaOperationFinalityTransport: Sendable {
     func getKagemushaOperationStatus(
         operationId: String,
+        expectedKind: KagemushaOperationKind,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus
 
@@ -668,6 +669,7 @@ public enum KagemushaOperationFinalityCoordinator {
                 fetchStatus: { operationId in
                     try await transport.getKagemushaOperationStatus(
                         operationId: operationId,
+                        expectedKind: operation.kind,
                         chainDiscriminant: chainDiscriminant
                     )
                 },

@@ -21,10 +21,16 @@ const OPERATION_ID = /^(?!0{64}$)[0-9a-f]{64}$/u;
 const ERROR_CODE = /^[a-z0-9][a-z0-9_]{0,63}$/u;
 const POSITIVE_DECIMAL = /^[0-9]+$/u;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const TOP_UP_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request";
 const REDEEM_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request";
+const TOP_UP_REQUEST_FIELD_COUNT = 8;
+const TOP_UP_OPERATION_ID_FIELD_INDEX = 6;
+const REDEEM_REQUEST_FIELD_COUNT = 10;
+const REDEEM_OPERATION_ID_FIELD_INDEX = 8;
 const KAGEMUSHA_TOP_UP_ANCHOR_WITNESS_KEY_TAG = 0xd2;
 const KAGEMUSHA_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16;
+const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const KAGEMUSHA_TOP_UP_NODE_DOMAIN = new TextEncoder().encode(
   "iroha:kagemusha:v2:topup-node",
 );
@@ -81,6 +87,88 @@ function safeUnsigned(value, context, { positive = false, maximum = Number.MAX_S
     throw new TypeError(`${context} must be a${positive ? " positive" : "n"} safe unsigned integer`);
   }
   return value;
+}
+
+function losslessU64(value, context, { positive = false } = {}) {
+  let integer;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new TypeError(
+        `${context} must be ${positive ? "a positive" : "a"} lossless unsigned 64-bit integer`,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else {
+    throw new TypeError(
+      `${context} must be ${positive ? "a positive" : "a"} lossless unsigned 64-bit integer`,
+    );
+  }
+  if (integer < (positive ? 1n : 0n) || integer > MAX_U64) {
+    throw new TypeError(
+      `${context} must be ${positive ? "a positive" : "a"} lossless unsigned 64-bit integer`,
+    );
+  }
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
+}
+
+function readCompactFieldLength(payload, offset, context) {
+  let value = 0n;
+  let shift = 0n;
+  for (let used = 0; used < 10; used += 1) {
+    if (offset + used >= payload.length) {
+      throw new TypeError(`${context} has a truncated compact field length`);
+    }
+    const byte = payload[offset + used];
+    if (used === 9 && (byte & 0xfe) !== 0) {
+      throw new TypeError(`${context} compact field length exceeds u64`);
+    }
+    value |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      if (used > 0 && byte === 0) {
+        throw new TypeError(`${context} compact field length is not minimally encoded`);
+      }
+      return { length: value, bytesRead: used + 1 };
+    }
+    shift += 7n;
+  }
+  throw new TypeError(`${context} compact field length exceeds u64`);
+}
+
+function operationIdFromCompactRequest(
+  payload,
+  fieldCount,
+  operationIdFieldIndex,
+  context,
+) {
+  let offset = 0;
+  let operationId;
+  for (let index = 0; index < fieldCount; index += 1) {
+    const fieldContext = `${context}.field[${index}]`;
+    const { length, bytesRead } = readCompactFieldLength(payload, offset, fieldContext);
+    offset += bytesRead;
+    const remaining = BigInt(payload.length - offset);
+    if (length > remaining) {
+      throw new TypeError(`${fieldContext} has an invalid compact payload length`);
+    }
+    const end = offset + Number(length);
+    const field = payload.subarray(offset, end);
+    offset = end;
+    if (index === 0 && (field.length !== 2 || field[0] !== 4 || field[1] !== 0)) {
+      throw new TypeError(`${context} payload version must be the canonical u16 value 4`);
+    }
+    if (index === operationIdFieldIndex) {
+      if (field.length !== 32 || field.every((byte) => byte === 0)) {
+        throw new TypeError(`${fieldContext} must contain one non-zero 32-byte operation id`);
+      }
+      operationId = Array.from(field, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    }
+  }
+  if (offset !== payload.length) {
+    throw new TypeError(`${context} contains trailing compact fields or bytes`);
+  }
+  return operationId;
 }
 
 function hash32(value, context, { nonzero = false } = {}) {
@@ -155,9 +243,11 @@ function normalizeKagemushaNoritoRequestV4(
   value,
   maximumBytes,
   expectedSchemaName,
+  fieldCount,
+  operationIdFieldIndex,
   context,
 ) {
-  const item = exactFields(value, context, ["version", "operationId", "norito"]);
+  const item = exactFields(value, context, ["version", "norito"]);
   if (item.version !== KAGEMUSHA_MANIFEST_VERSION) {
     throw new TypeError(`${context}.version must be 4; V3 archives are not upgraded`);
   }
@@ -175,6 +265,7 @@ function normalizeKagemushaNoritoRequestV4(
   ) {
     throw new TypeError(`${context}.norito must be a bounded canonical Norito archive`);
   }
+  let operationId;
   try {
     const frame = validateNoritoFrame(archive, {
       context: `${context}.norito`,
@@ -187,6 +278,12 @@ function normalizeKagemushaNoritoRequestV4(
         `${context}.norito must use canonical compact-length layout flags`,
       );
     }
+    operationId = operationIdFromCompactRequest(
+      frame.payload,
+      fieldCount,
+      operationIdFieldIndex,
+      `${context}.norito payload`,
+    );
   } catch (error) {
     throw new TypeError(
       `${context}.norito must be a schema-bound canonical Norito archive: ${error.message}`,
@@ -195,7 +292,7 @@ function normalizeKagemushaNoritoRequestV4(
   }
   return Object.freeze({
     version: KAGEMUSHA_MANIFEST_VERSION,
-    operationId: normalizeKagemushaOperationId(item.operationId, `${context}.operationId`),
+    operationId,
     norito: new Uint8Array(archive),
   });
 }
@@ -208,6 +305,8 @@ export function normalizeKagemushaTopUpRequestV4(
     value,
     KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
     TOP_UP_REQUEST_SCHEMA_NAME,
+    TOP_UP_REQUEST_FIELD_COUNT,
+    TOP_UP_OPERATION_ID_FIELD_INDEX,
     context,
   );
 }
@@ -220,6 +319,8 @@ export function normalizeKagemushaRedeemRequestV4(
     value,
     KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
     REDEEM_REQUEST_SCHEMA_NAME,
+    REDEEM_REQUEST_FIELD_COUNT,
+    REDEEM_OPERATION_ID_FIELD_INDEX,
     context,
   );
 }
@@ -268,7 +369,7 @@ function normalizeAcceptedKagemushaOperationReference(
     state: Object.freeze({ state: "pending", value: null }),
     transaction_hash: hash32(item.transaction_hash, `${context}.transaction_hash`),
     status_uri: statusUri,
-    submitted_at_ms: safeUnsigned(item.submitted_at_ms, `${context}.submitted_at_ms`, {
+    submitted_at_ms: losslessU64(item.submitted_at_ms, `${context}.submitted_at_ms`, {
       positive: true,
     }),
   });
@@ -572,7 +673,7 @@ function normalizeAppliedResult(value, operationId, context) {
       kind: "redeem",
       result: Object.freeze({
         transaction_hash: hash32(result.transaction_hash, `${context}.result.transaction_hash`),
-        finalized_block_height: safeUnsigned(
+        finalized_block_height: losslessU64(
           result.finalized_block_height,
           `${context}.result.finalized_block_height`,
           { positive: true },
@@ -608,17 +709,17 @@ function normalizeAppliedResult(value, operationId, context) {
     result.transaction_hash,
     `${context}.result.transaction_hash`,
   );
-  const finalizedBlockHeight = safeUnsigned(
+  const finalizedBlockHeight = losslessU64(
     result.finalized_block_height,
     `${context}.result.finalized_block_height`,
     { positive: true },
   );
-  const anchorFinalizedHeight = safeUnsigned(
+  const anchorFinalizedHeight = losslessU64(
     anchor.finalized_height,
     `${context}.result.anchor.finalized_height`,
     { positive: true },
   );
-  const proofHeight = safeUnsigned(
+  const proofHeight = losslessU64(
     heightContext.height,
     `${context}.result.finality_proof.commit_qc.height_context.height`,
     { positive: true },
@@ -663,11 +764,16 @@ function normalizeAppliedResult(value, operationId, context) {
  * After Pending advances its hash and timestamp, use that returned pair as the
  * accepted reference for the next poll so same-attempt timestamp checks remain
  * exact.
- * Applied top-ups additionally authenticate their anchor path and execution
- * post-state projection, but callers must verify the Commit-QC signature and
- * roster trust separately before treating the proof as finalized consensus.
+ * Applied top-ups reach this projection only after the exact response bytes
+ * pass the native ABI-23 structural validator. JavaScript then independently
+ * checks the anchor path and execution post-state projection; Commit-QC
+ * signature and roster trust remain separate.
  */
-export function normalizeKagemushaOperationStatus(payload, acceptedReference) {
+function normalizeKagemushaOperationStatusCore(
+  payload,
+  acceptedReference,
+  nativeValidatedAppliedTopUp,
+) {
   const context = "Kagemusha operation status";
   // Detach both complete public inputs before reading any discriminants or
   // nested proof bytes. Validation and output then use this same stable graph.
@@ -700,7 +806,7 @@ export function normalizeKagemushaOperationStatus(payload, acceptedReference) {
       value.transaction_hash,
       `${context}.value.transaction_hash`,
     );
-    const submittedAtMs = safeUnsigned(
+    const submittedAtMs = losslessU64(
       value.submitted_at_ms,
       `${context}.value.submitted_at_ms`,
       { positive: true },
@@ -726,6 +832,12 @@ export function normalizeKagemushaOperationStatus(payload, acceptedReference) {
   }
   if (item.state === "applied") {
     exactFields(value, `${context}.value`, ["operation_id", "result"]);
+    const taggedResult = record(value.result, `${context}.value.result`);
+    if (taggedResult.kind === "top_up" && !nativeValidatedAppliedTopUp) {
+      throw new TypeError(
+        `${context} Applied top-up requires the native ABI-23 structural validator`,
+      );
+    }
     const result = normalizeAppliedResult(
       value.result,
       operationId,
@@ -797,4 +909,60 @@ export function normalizeKagemushaOperationStatus(payload, acceptedReference) {
       error: Object.freeze(normalizedError),
     }),
   });
+}
+
+/**
+ * Normalize a status using only the portable JavaScript boundary.
+ * Applied top-ups fail closed because their complete anchor digest must be
+ * recomputed by the native ABI-23 validator before projection.
+ */
+export function normalizeKagemushaOperationStatus(payload, acceptedReference) {
+  return normalizeKagemushaOperationStatusCore(payload, acceptedReference, false);
+}
+
+/** @internal Normalize an Applied top-up only after validating its exact response bytes. */
+export function _normalizeKagemushaOperationStatusWithNativeValidation(
+  payload,
+  acceptedReference,
+  sourceBytes,
+  nativeBinding,
+) {
+  const isAppliedTopUp =
+    payload !== null &&
+    typeof payload === "object" &&
+    payload.state === "applied" &&
+    payload.value !== null &&
+    typeof payload.value === "object" &&
+    payload.value.result !== null &&
+    typeof payload.value.result === "object" &&
+    payload.value.result.kind === "top_up";
+  if (!isAppliedTopUp) {
+    return normalizeKagemushaOperationStatusCore(payload, acceptedReference, false);
+  }
+  if (
+    !ArrayBuffer.isView(sourceBytes) ||
+    sourceBytes.BYTES_PER_ELEMENT !== 1 ||
+    sourceBytes.byteLength === 0 ||
+    sourceBytes.byteLength > KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES
+  ) {
+    throw new TypeError(
+      "Kagemusha native status validation requires the exact bounded response bytes",
+    );
+  }
+  const validator = Object.getOwnPropertyDescriptor(
+    nativeBinding ?? {},
+    "kagemushaOfflineOperationStatusJsonValidateV1",
+  )?.value;
+  if (typeof validator !== "function") {
+    throw new TypeError(
+      "Native binding does not expose kagemushaOfflineOperationStatusJsonValidateV1",
+    );
+  }
+  const exactBytes = new Uint8Array(
+    sourceBytes.buffer,
+    sourceBytes.byteOffset,
+    sourceBytes.byteLength,
+  );
+  validator.call(nativeBinding, exactBytes);
+  return normalizeKagemushaOperationStatusCore(payload, acceptedReference, true);
 }

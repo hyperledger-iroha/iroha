@@ -183,6 +183,16 @@ fn operation_request(instruction: &InstructionBox) -> Option<KagemushaOperationR
     }
 }
 
+/// Return whether an instruction is one of the two native Kagemusha operations.
+///
+/// This predicate intentionally does not validate the embedded request. Carrier
+/// classification must first recognize every occurrence so malformed or
+/// deferred operations cannot be mistaken for ordinary instructions.
+#[must_use]
+pub fn is_kagemusha_operation_instruction_v4(instruction: &InstructionBox) -> bool {
+    operation_request(instruction).is_some()
+}
+
 fn contains_operation(transaction: &SignedTransaction) -> bool {
     let executable = transaction.instructions();
     executable
@@ -245,6 +255,14 @@ pub fn classify_kagemusha_operation_entrypoint_v4(
         }
         TransactionEntrypoint::SealedReveal(reveal)
             if contains_operation(reveal.signed_transaction()) =>
+        {
+            Err(KagemushaOperationCarrierErrorV4::NonExternalEntrypoint)
+        }
+        TransactionEntrypoint::Time(time)
+            if time
+                .instructions
+                .iter()
+                .any(is_kagemusha_operation_instruction_v4) =>
         {
             Err(KagemushaOperationCarrierErrorV4::NonExternalEntrypoint)
         }

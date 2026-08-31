@@ -15688,18 +15688,15 @@ def pop_credentials_production_surface_errors(
         ),
         (
             torii,
-            "torii.sorafs.storage.pop_credentials is enabled but runtime-only "
-            "enrollment/external-software-signer/KMS/authentication dependencies were not injected",
+            "enabled service requires enrollment, external signer, qualified key wrapping, and authentication dependencies",
         ),
         (
             torii,
-            "a SoraFS PoP runtime was injected without enabling "
-            "torii.sorafs.storage.pop_credentials",
+            "runtime supplied while the service is disabled",
         ),
         (
             torii,
-            "injected SoraFS PoP runtime does not match "
-            "torii.sorafs.storage.pop_credentials",
+            "injected runtime does not match configuration",
         ),
     )
     for source, marker in required_config_markers:
@@ -15801,8 +15798,7 @@ def test_pop_credentials_production_surface_matcher_has_negative_controls() -> N
     )
     assert validate(
         mounted=torii.replace(
-            "torii.sorafs.storage.pop_credentials is enabled but runtime-only "
-            "enrollment/external-software-signer/KMS/authentication dependencies were not injected",
+            "enabled service requires enrollment, external signer, qualified key wrapping, and authentication dependencies",
             "runtime missing",
             1,
         )

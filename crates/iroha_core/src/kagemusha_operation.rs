@@ -6,18 +6,126 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
+    isi::{InstructionBox, RegisterBox},
     offline::{
-        KagemushaOperationCarrierErrorV4, KagemushaOperationKindV4, KagemushaOperationRequestV4,
-        classify_kagemusha_operation_entrypoint_v4, classify_kagemusha_operation_transaction_v4,
+        KagemushaOperationCarrierErrorV4, KagemushaOperationCarrierV4, KagemushaOperationKindV4,
+        KagemushaOperationRequestV4,
+        classify_kagemusha_operation_entrypoint_v4 as classify_direct_kagemusha_operation_entrypoint_v4,
+        classify_kagemusha_operation_transaction_v4 as classify_direct_kagemusha_operation_transaction_v4,
+        is_kagemusha_operation_instruction_v4,
     },
     state_path::StatePath,
-    transaction::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    transaction::{
+        Executable, ExecutableBatchItem, SignedTransaction, TransactionEntrypoint,
+        TransactionResult,
+    },
 };
+use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::state::{StateBlock, StateTransaction, WorldReadOnly};
+
+fn append_explicit_kagemusha_candidates_v4(
+    executable: &Executable,
+    pending: &mut Vec<InstructionBox>,
+) {
+    match executable {
+        Executable::Instructions(instructions) => pending.extend(instructions.iter().cloned()),
+        Executable::IvmProved(proved) => pending.extend(proved.overlay.iter().cloned()),
+        Executable::Batch(items) => pending.extend(items.iter().filter_map(|item| match item {
+            ExecutableBatchItem::Instruction(instruction) => Some(instruction.clone()),
+            ExecutableBatchItem::ContractCall(_) => None,
+        })),
+        Executable::ContractCall(_) | Executable::Ivm(_) => {}
+    }
+}
+
+/// Return whether explicit native instructions contain a Kagemusha operation,
+/// including instructions deferred inside trigger registration or a multisig proposal.
+pub(crate) fn instructions_contain_kagemusha_operation_v4(instructions: &[InstructionBox]) -> bool {
+    let mut pending = instructions.to_vec();
+    while let Some(instruction) = pending.pop() {
+        if is_kagemusha_operation_instruction_v4(&instruction) {
+            return true;
+        }
+        if let Ok(MultisigInstructionBox::Propose(proposal)) =
+            MultisigInstructionBox::try_from(&instruction)
+        {
+            pending.extend(proposal.instructions);
+        }
+        if let Some(RegisterBox::Trigger(register)) =
+            instruction.as_any().downcast_ref::<RegisterBox>()
+        {
+            append_explicit_kagemusha_candidates_v4(
+                register.object.action().executable(),
+                &mut pending,
+            );
+        }
+    }
+    false
+}
+
+/// Return whether an executable contains a direct or deferred native Kagemusha operation.
+pub(crate) fn executable_contains_kagemusha_operation_v4(executable: &Executable) -> bool {
+    let mut instructions = Vec::new();
+    append_explicit_kagemusha_candidates_v4(executable, &mut instructions);
+    instructions_contain_kagemusha_operation_v4(&instructions)
+}
+
+/// Classify the only supported Kagemusha signed-transaction carrier.
+///
+/// The data-model classifier owns the direct carrier contract. Core adds the
+/// executor-aware traversal of deferred trigger and multisig payloads so every
+/// runtime admission and recovery path rejects hidden alternate carriers.
+pub fn classify_kagemusha_operation_transaction_v4(
+    transaction: &SignedTransaction,
+) -> Result<Option<KagemushaOperationCarrierV4<'_>>, KagemushaOperationCarrierErrorV4> {
+    let carrier = classify_direct_kagemusha_operation_transaction_v4(transaction)?;
+    if carrier.is_some() {
+        return Ok(carrier);
+    }
+    if executable_contains_kagemusha_operation_v4(transaction.instructions()) {
+        return Err(KagemushaOperationCarrierErrorV4::NonCanonicalExecutable);
+    }
+    Ok(None)
+}
+
+/// Classify a Kagemusha operation across the complete runtime entrypoint boundary.
+pub fn classify_kagemusha_operation_entrypoint_v4(
+    entrypoint: &TransactionEntrypoint,
+) -> Result<Option<KagemushaOperationCarrierV4<'_>>, KagemushaOperationCarrierErrorV4> {
+    let carrier = classify_direct_kagemusha_operation_entrypoint_v4(entrypoint)?;
+    if carrier.is_some() {
+        return Ok(carrier);
+    }
+    let contains_deferred_operation = match entrypoint {
+        TransactionEntrypoint::External(transaction) => {
+            executable_contains_kagemusha_operation_v4(transaction.instructions())
+        }
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            executable_contains_kagemusha_operation_v4(reveal.signed_transaction().instructions())
+        }
+        TransactionEntrypoint::Time(time) => {
+            instructions_contain_kagemusha_operation_v4(time.instructions.0.as_ref())
+        }
+        TransactionEntrypoint::SealedCommitment(_) => false,
+    };
+    if !contains_deferred_operation {
+        return Ok(None);
+    }
+    match entrypoint {
+        TransactionEntrypoint::External(_) => {
+            Err(KagemushaOperationCarrierErrorV4::NonCanonicalExecutable)
+        }
+        TransactionEntrypoint::SealedCommitment(_)
+        | TransactionEntrypoint::SealedReveal(_)
+        | TransactionEntrypoint::Time(_) => {
+            Err(KagemushaOperationCarrierErrorV4::NonExternalEntrypoint)
+        }
+    }
+}
 
 /// State-key prefix reserved for per-submitter Kagemusha operation attempts.
 pub const KAGEMUSHA_OPERATION_OUTCOME_STATE_PREFIX_V4: &str = "kagemusha_operation_outcome_v4_";
@@ -223,9 +331,6 @@ pub enum KagemushaOperationOutcomeErrorV4 {
     /// A reservation disappeared or changed before finalization.
     #[error("Kagemusha operation block-local reservation is missing or inconsistent")]
     MissingReservation,
-    /// A rejected attempt was replaced by a different logical request.
-    #[error("Kagemusha operation retry differs from the rejected attempt")]
-    AttemptIdentityMismatch,
     /// A successful result did not carry a transaction-local fresh economic claim.
     #[error("successful Kagemusha operation has no fresh economic finality claim")]
     MissingFinalityClaim,
@@ -700,7 +805,11 @@ pub(crate) fn reserve_kagemusha_operation_outcomes_v4(
                 return Err(KagemushaOperationOutcomeErrorV4::StalePending);
             }
             if !current.has_same_economic_identity(&record) {
-                return Err(KagemushaOperationOutcomeErrorV4::AttemptIdentityMismatch);
+                // A terminal attempt belongs to the request that created it. A
+                // different request using the same submitter and operation id
+                // receives no reservation and is rejected locally by execution
+                // validation; it must not invalidate the containing batch.
+                continue;
             }
         }
         planned_payloads.insert(key.clone(), encode_outcome_record_v4(&record)?);
@@ -1100,7 +1209,8 @@ mod tests {
         asset::{AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::DomainId,
-        isi::{Log, offline::TopUpKagemushaRecursiveV4},
+        events::execute_trigger::ExecuteTriggerEventFilter,
+        isi::{Log, Register, offline::TopUpKagemushaRecursiveV4},
         level::Level,
         offline::{
             KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2,
@@ -1111,9 +1221,13 @@ mod tests {
             KagemushaTopUpShieldEvidenceV2,
         },
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-        transaction::{FeePaymentIntent, TransactionBuilder},
-        trigger::DataTriggerSequence,
+        transaction::{ExecutionStep, FeePaymentIntent, TransactionBuilder},
+        trigger::{
+            DataTriggerSequence, TimeTriggerEntrypoint, Trigger,
+            prelude::{Action, Repeats},
+        },
     };
+    use iroha_executor_data_model::isi::multisig::MultisigPropose;
 
     use crate::{
         kura::Kura,
@@ -1128,6 +1242,13 @@ mod tests {
     }
 
     fn top_up_request(operation_id: [u8; 32]) -> KagemushaRecursiveSpendTopUpRequestV4 {
+        top_up_request_with_note_commitment(operation_id, [0x61; 32])
+    }
+
+    fn top_up_request_with_note_commitment(
+        operation_id: [u8; 32],
+        note_commitment: [u8; 32],
+    ) -> KagemushaRecursiveSpendTopUpRequestV4 {
         let request_key = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
             .expect("derive request authority");
         let authority = AccountId::new(request_key.public_key().clone());
@@ -1147,7 +1268,7 @@ mod tests {
             current_note: KagemushaSpendableNoteDescriptorV2 {
                 network_id: test_network_id(),
                 asset: definition.clone(),
-                note_commitment: [0x61; 32],
+                note_commitment,
                 spend_nullifier: [0x62; 32],
                 amount,
             },
@@ -1223,6 +1344,18 @@ mod tests {
         request: KagemushaRecursiveSpendTopUpRequestV4,
         nonce: u32,
     ) -> SignedTransaction {
+        instruction_carrier(
+            outer_key,
+            InstructionBox::from(TopUpKagemushaRecursiveV4::new(request)),
+            nonce,
+        )
+    }
+
+    fn instruction_carrier(
+        outer_key: &KeyPair,
+        instruction: InstructionBox,
+        nonce: u32,
+    ) -> SignedTransaction {
         let mut builder = TransactionBuilder::new(
             test_network_id(),
             AccountId::new(outer_key.public_key().clone()),
@@ -1230,8 +1363,24 @@ mod tests {
         );
         builder.set_nonce(NonZeroU32::new(nonce).expect("non-zero fixture nonce"));
         builder
-            .with_instructions([TopUpKagemushaRecursiveV4::new(request)])
+            .with_instructions([instruction])
             .sign(outer_key.private_key())
+    }
+
+    fn trigger_registration_with(
+        authority: AccountId,
+        trigger_name: &str,
+        instructions: Vec<InstructionBox>,
+    ) -> InstructionBox {
+        let trigger_id = trigger_name.parse().expect("valid fixture trigger id");
+        let action = Action::new(
+            instructions,
+            Repeats::Indefinitely,
+            authority,
+            ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+        )
+        .expect("valid fixture trigger action");
+        InstructionBox::from(Register::trigger(Trigger::new(trigger_id, action)))
     }
 
     fn test_state() -> State {
@@ -1291,6 +1440,77 @@ mod tests {
             std::mem::swap(&mut first, &mut second);
         }
         (first, second)
+    }
+
+    #[test]
+    fn complete_classifier_rejects_deferred_and_non_external_carriers() {
+        let operation_id = [0xB2; 32];
+        let outer_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(outer_key.public_key().clone());
+        let operation =
+            InstructionBox::from(TopUpKagemushaRecursiveV4::new(top_up_request(operation_id)));
+
+        let direct = instruction_carrier(&outer_key, operation.clone(), 1);
+        assert!(
+            classify_kagemusha_operation_transaction_v4(&direct)
+                .expect("classify direct carrier")
+                .is_some(),
+            "the direct singleton external carrier must remain canonical"
+        );
+
+        let trigger = trigger_registration_with(
+            authority.clone(),
+            "kagemusha_in_trigger",
+            vec![operation.clone()],
+        );
+        let proposal = InstructionBox::from(MultisigPropose::new(
+            authority.clone(),
+            vec![operation.clone()],
+            None,
+        ));
+        let nested_trigger = trigger_registration_with(
+            authority.clone(),
+            "kagemusha_deep_trigger",
+            vec![proposal.clone()],
+        );
+        let nested_proposal = InstructionBox::from(MultisigPropose::new(
+            authority.clone(),
+            vec![nested_trigger],
+            None,
+        ));
+
+        for (nonce, instruction) in [trigger, proposal.clone(), nested_proposal]
+            .into_iter()
+            .enumerate()
+        {
+            let nonce = u32::try_from(nonce + 2).expect("small fixture nonce");
+            let transaction = instruction_carrier(&outer_key, instruction, nonce);
+            assert!(
+                classify_direct_kagemusha_operation_transaction_v4(&transaction)
+                    .expect("the direct classifier sees an ordinary wrapper")
+                    .is_none(),
+                "the fixture must exercise Core's executor-aware traversal"
+            );
+            assert!(matches!(
+                classify_kagemusha_operation_transaction_v4(&transaction),
+                Err(KagemushaOperationCarrierErrorV4::NonCanonicalExecutable)
+            ));
+        }
+
+        for (trigger_name, instruction) in [
+            ("kagemusha_time_direct", operation),
+            ("kagemusha_time_nested", proposal),
+        ] {
+            let entrypoint = TransactionEntrypoint::Time(TimeTriggerEntrypoint {
+                id: trigger_name.parse().expect("valid time-trigger id"),
+                instructions: ExecutionStep(vec![instruction].into()),
+                authority: authority.clone(),
+            });
+            assert!(matches!(
+                classify_kagemusha_operation_entrypoint_v4(&entrypoint),
+                Err(KagemushaOperationCarrierErrorV4::NonExternalEntrypoint)
+            ));
+        }
     }
 
     #[test]
@@ -1901,6 +2121,113 @@ mod tests {
                 .is_none(),
             "successful retry consumes its rejected-attempt slot"
         );
+    }
+
+    #[test]
+    fn conflicting_retry_preserves_rejected_attempt_and_rejects_only_its_transaction() {
+        for execution_phase in [
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            KagemushaOperationExecutionPhaseV4::Merge,
+        ] {
+            let operation_id = [0xAF; 32];
+            let outer_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let first_request = top_up_request(operation_id);
+            let first = top_up_carrier(&outer_key, first_request, 1);
+            let outer_authority = first.authority().clone();
+            let first_entrypoints = vec![TransactionEntrypoint::External(first)];
+            let first_results = vec![rejected_result("first attempt rejected")];
+            let state = test_state();
+            let header = BlockHeader::new(
+                NonZeroU64::new(1).expect("non-zero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut first_batch = KagemushaOperationReservationBatchV4::new(1, execution_phase);
+            reserve_kagemusha_operation_outcomes_v4(
+                &mut block,
+                &mut first_batch,
+                0,
+                &first_entrypoints,
+            )
+            .expect("reserve first request");
+            finalize_kagemusha_operation_outcomes_v4(
+                &mut block,
+                first_batch,
+                [KagemushaOperationResultSegmentV4::new(
+                    0,
+                    &first_entrypoints,
+                    &first_results,
+                )],
+            )
+            .expect("persist rejected first request");
+
+            let attempt_key =
+                kagemusha_operation_outcome_state_key_v4(&outer_authority, operation_id)
+                    .expect("attempt key");
+            let rejected_payload = block
+                .world
+                .smart_contract_state
+                .get(&attempt_key)
+                .expect("rejected attempt exists")
+                .clone();
+
+            let conflicting_request = top_up_request_with_note_commitment(operation_id, [0x70; 32]);
+            let conflicting = top_up_carrier(&outer_key, conflicting_request, 2);
+            let conflicting_entrypoints =
+                vec![TransactionEntrypoint::External(conflicting.clone())];
+            let conflicting_results = vec![rejected_result("operation id is already terminal")];
+            let mut conflicting_batch =
+                KagemushaOperationReservationBatchV4::new(1, execution_phase);
+            reserve_kagemusha_operation_outcomes_v4(
+                &mut block,
+                &mut conflicting_batch,
+                1,
+                &conflicting_entrypoints,
+            )
+            .expect("a conflicting request must not invalidate its execution batch");
+            assert!(
+                conflicting_batch.reservations.is_empty(),
+                "the conflicting request must not overwrite or own the rejected attempt"
+            );
+            assert_eq!(
+                block.world.smart_contract_state.get(&attempt_key),
+                Some(&rejected_payload),
+                "reservation planning must preserve the original rejected evidence"
+            );
+
+            let mut state_transaction = block.transaction();
+            state_transaction.bind_kagemusha_operation_execution_locator_v4(Some(
+                KagemushaOperationExecutionLocatorV4::new(execution_phase, 1),
+            ));
+            let error =
+                validate_kagemusha_operation_reservation_v4(&conflicting, &state_transaction)
+                    .expect_err("the conflicting transaction must be rejected at execution");
+            assert!(
+                error.to_string().contains("already terminal"),
+                "unexpected transaction-local rejection: {error}"
+            );
+            drop(state_transaction);
+
+            finalize_kagemusha_operation_outcomes_v4(
+                &mut block,
+                conflicting_batch,
+                [KagemushaOperationResultSegmentV4::new(
+                    1,
+                    &conflicting_entrypoints,
+                    &conflicting_results,
+                )],
+            )
+            .expect("an unreserved rejection must not invalidate finalization");
+            assert_eq!(
+                block.world.smart_contract_state.get(&attempt_key),
+                Some(&rejected_payload),
+                "batch finalization must preserve the original rejected evidence"
+            );
+        }
     }
 
     #[test]

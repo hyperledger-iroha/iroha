@@ -3,7 +3,8 @@ use axum::{http::HeaderMap, response::Response as AxResponse};
 use iroha_config::parameters::actual;
 use iroha_core::kagemusha_operation::{
     KagemushaOperationExecutionPhaseV4, KagemushaOperationOutcomeRecordV4,
-    KagemushaOperationOutcomeStateV4, kagemusha_operation_authority_digest_v4,
+    KagemushaOperationOutcomeStateV4, classify_kagemusha_operation_entrypoint_v4,
+    classify_kagemusha_operation_transaction_v4, kagemusha_operation_authority_digest_v4,
     kagemusha_operation_finality_v4,
     kagemusha_operation_outcome_state_key_from_authority_digest_v4, kagemusha_operation_outcome_v4,
     signed_transaction_wire_hash_v4,
@@ -22,7 +23,6 @@ use iroha_data_model::{
     offline::{
         KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2, KagemushaOperationCarrierV4,
         KagemushaOperationRequestV4, KagemushaRecursiveSpendTopUpAnchorV4,
-        classify_kagemusha_operation_entrypoint_v4, classify_kagemusha_operation_transaction_v4,
     },
     state_path::StatePath,
     transaction::{

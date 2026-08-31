@@ -116,7 +116,7 @@ public sealed class KagemushaToriiTests
             return response;
         });
         using var client = AssuredClient(handler);
-        var request = new ToriiKagemushaTopUpRequestV4(OperationId, archive);
+        var request = new ToriiKagemushaTopUpRequestV4(archive);
 
         archive[4] = 0xff;
         var reference = await client.SubmitKagemushaTopUpV4Async(
@@ -168,9 +168,7 @@ public sealed class KagemushaToriiTests
         using var client = AssuredClient(handler);
 
         var reference = await client.SubmitKagemushaRedeemV4Async(
-            new ToriiKagemushaRedeemRequestV4(
-                OperationId,
-                NoritoArchive(RedeemRequestSchemaName)),
+            new ToriiKagemushaRedeemRequestV4(NoritoArchive(RedeemRequestSchemaName)),
             TestContext.Current.CancellationToken);
         var status = await client.GetKagemushaOperationStatusForTestAsync(
             reference,
@@ -226,13 +224,15 @@ public sealed class KagemushaToriiTests
         var topUp = NoritoArchive(TopUpRequestSchemaName);
         var redeem = NoritoArchive(RedeemRequestSchemaName);
 
-        _ = new ToriiKagemushaTopUpRequestV4(OperationId, topUp);
-        _ = new ToriiKagemushaRedeemRequestV4(OperationId, redeem);
+        var topUpRequest = new ToriiKagemushaTopUpRequestV4(topUp);
+        var redeemRequest = new ToriiKagemushaRedeemRequestV4(redeem);
+        Assert.Equal(OperationId, topUpRequest.OperationId);
+        Assert.Equal(OperationId, redeemRequest.OperationId);
 
         Assert.Throws<ArgumentException>(() =>
-            new ToriiKagemushaTopUpRequestV4(OperationId, redeem));
+            new ToriiKagemushaTopUpRequestV4(redeem));
         Assert.Throws<ArgumentException>(() =>
-            new ToriiKagemushaRedeemRequestV4(OperationId, topUp));
+            new ToriiKagemushaRedeemRequestV4(topUp));
 
         var invalidTopUpFrames = new[]
         {
@@ -240,6 +240,13 @@ public sealed class KagemushaToriiTests
             Mutate(topUp, frame => frame[22] = 1),
             NoritoArchive(TopUpRequestSchemaName, flags: 0),
             NoritoCodec.Encode(TopUpRequestSchemaName, [0x01], 0x02),
+            NoritoArchive(TopUpRequestSchemaName, [0x01]),
+            NoritoArchive(
+                TopUpRequestSchemaName,
+                KagemushaRequestPayload(TopUpRequestSchemaName, new byte[32])),
+            NoritoArchive(
+                TopUpRequestSchemaName,
+                KagemushaRequestPayload(TopUpRequestSchemaName, wireVersion: 3)),
             NoritoArchive(TopUpRequestSchemaName, paddingLength: 9),
             NoritoArchive(TopUpRequestSchemaName, Array.Empty<byte>()),
             Mutate(topUp, frame => frame[NoritoHeader.EncodedLength] = 1),
@@ -249,7 +256,7 @@ public sealed class KagemushaToriiTests
         foreach (var frame in invalidTopUpFrames)
         {
             Assert.Throws<ArgumentException>(() =>
-                new ToriiKagemushaTopUpRequestV4(OperationId, frame));
+                new ToriiKagemushaTopUpRequestV4(frame));
         }
     }
 
@@ -283,9 +290,7 @@ public sealed class KagemushaToriiTests
 
             await Assert.ThrowsAsync<InvalidDataException>(() =>
                 client.SubmitKagemushaTopUpV4Async(
-                    new ToriiKagemushaTopUpRequestV4(
-                        OperationId,
-                        NoritoArchive(TopUpRequestSchemaName)),
+                    new ToriiKagemushaTopUpRequestV4(NoritoArchive(TopUpRequestSchemaName)),
                     TestContext.Current.CancellationToken));
         }
 
@@ -299,9 +304,7 @@ public sealed class KagemushaToriiTests
         {
             await Assert.ThrowsAsync<InvalidDataException>(() =>
                 client.SubmitKagemushaTopUpV4Async(
-                    new ToriiKagemushaTopUpRequestV4(
-                        OperationId,
-                        NoritoArchive(TopUpRequestSchemaName)),
+                    new ToriiKagemushaTopUpRequestV4(NoritoArchive(TopUpRequestSchemaName)),
                     TestContext.Current.CancellationToken));
         }
 
@@ -316,9 +319,7 @@ public sealed class KagemushaToriiTests
         {
             await Assert.ThrowsAsync<JsonException>(() =>
                 client.SubmitKagemushaTopUpV4Async(
-                    new ToriiKagemushaTopUpRequestV4(
-                        OperationId,
-                        NoritoArchive(TopUpRequestSchemaName)),
+                    new ToriiKagemushaTopUpRequestV4(NoritoArchive(TopUpRequestSchemaName)),
                     TestContext.Current.CancellationToken));
         }
     }
@@ -338,9 +339,7 @@ public sealed class KagemushaToriiTests
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             client.SubmitKagemushaTopUpV4Async(
-                new ToriiKagemushaTopUpRequestV4(
-                    OperationId,
-                    NoritoArchive(TopUpRequestSchemaName)),
+                new ToriiKagemushaTopUpRequestV4(NoritoArchive(TopUpRequestSchemaName)),
                 TestContext.Current.CancellationToken));
 
         Assert.Contains("one-shot, no-redirect transport", error.Message);
@@ -788,9 +787,7 @@ public sealed class KagemushaToriiTests
         {
             var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
                 client.SubmitKagemushaTopUpV4Async(
-                    new ToriiKagemushaTopUpRequestV4(
-                        OperationId,
-                        NoritoArchive(TopUpRequestSchemaName)),
+                    new ToriiKagemushaTopUpRequestV4(NoritoArchive(TopUpRequestSchemaName)),
                     TestContext.Current.CancellationToken));
             Assert.Contains("4096-byte limit", error.Message);
         }
@@ -816,12 +813,38 @@ public sealed class KagemushaToriiTests
         byte flags = 0x02,
         int paddingLength = 8)
     {
-        var encoded = NoritoCodec.Encode(schemaName, payload ?? [0x01], flags);
+        var encoded = NoritoCodec.Encode(
+            schemaName,
+            payload ?? KagemushaRequestPayload(schemaName),
+            flags);
         var archive = new byte[encoded.Length + paddingLength];
         encoded.AsSpan(0, NoritoHeader.EncodedLength).CopyTo(archive);
         encoded.AsSpan(NoritoHeader.EncodedLength).CopyTo(
             archive.AsSpan(NoritoHeader.EncodedLength + paddingLength));
         return archive;
+    }
+
+    private static byte[] KagemushaRequestPayload(
+        string schemaName,
+        byte[]? operationId = null,
+        ushort wireVersion = 4)
+    {
+        var (fieldCount, operationIdFieldIndex) = schemaName switch
+        {
+            TopUpRequestSchemaName => (8, 6),
+            RedeemRequestSchemaName => (10, 8),
+            _ => throw new ArgumentException("Unknown Kagemusha request schema.", nameof(schemaName)),
+        };
+        var writer = new CanonicalNoritoWriter();
+        Span<byte> version = stackalloc byte[sizeof(ushort)];
+        BinaryPrimitives.WriteUInt16LittleEndian(version, wireVersion);
+        writer.WriteField(version);
+        var selectedOperationId = operationId ?? Convert.FromHexString(OperationId);
+        for (var index = 1; index < fieldCount; index++)
+        {
+            writer.WriteField(index == operationIdFieldIndex ? selectedOperationId : [0x01]);
+        }
+        return writer.ToArray();
     }
 
     private static ToriiClient AssuredClient(HttpMessageHandler handler) =>

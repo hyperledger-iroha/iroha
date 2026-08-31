@@ -1097,7 +1097,8 @@ pub mod sorafs {
         /// authority bundle and its reviewed digest are configured.
         pub const MODERATION_SCREENING_ENABLED: bool = false;
         /// Proof-of-personhood credential services require explicit governed
-        /// policy plus runtime-injected signer/KMS/authentication dependencies.
+        /// policy plus runtime-injected signing, key-custody, and authentication
+        /// providers.
         pub mod pop_credentials {
             use std::path::PathBuf;
             /// PoP service routes and workers are disabled by default.

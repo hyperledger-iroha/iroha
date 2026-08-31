@@ -1816,8 +1816,8 @@ export class ToriiClient {
   /** Poll the operation identified by an accepted Kagemusha operation reference. */
   async getKagemushaOperationStatus(operationReference, options = {}) {
     const {
+      _normalizeKagemushaOperationStatusWithNativeValidation,
       normalizeKagemushaOperationReference,
-      normalizeKagemushaOperationStatus,
       requireKagemushaJsonContentType,
     } = await loadToriiOptionalModule();
     const accepted = normalizeKagemushaOperationReference(operationReference);
@@ -1836,13 +1836,30 @@ export class ToriiClient {
       this._getHeader(response, "content-type"),
       "Kagemusha operation status response",
     );
-    const payload = await this._readBoundedLosslessIntegerJson(
+    const { payload, sourceBytes } = await this._readBoundedLosslessIntegerJson(
       response,
       KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES,
       "Kagemusha operation status response",
-      { signal },
+      { signal, includeSourceBytes: true },
     );
-    return normalizeKagemushaOperationStatus(payload, accepted);
+    const needsNativeValidation =
+      payload !== null &&
+      typeof payload === "object" &&
+      payload.state === "applied" &&
+      payload.value !== null &&
+      typeof payload.value === "object" &&
+      payload.value.result !== null &&
+      typeof payload.value.result === "object" &&
+      payload.value.result.kind === "top_up";
+    const nativeBinding = needsNativeValidation
+      ? resolveNativeRuntimeBinding(this._nativeRuntime)
+      : null;
+    return _normalizeKagemushaOperationStatusWithNativeValidation(
+      payload,
+      accepted,
+      sourceBytes,
+      nativeBinding,
+    );
   }
 
   async _submitKagemushaCommandV4(path, kind, request, options, context) {
@@ -11968,7 +11985,7 @@ export class ToriiClient {
     response,
     maxBytes,
     context,
-    { signal, plainObjects = false } = {},
+    { signal, plainObjects = false, includeSourceBytes = false } = {},
   ) {
     let contentType;
     try {
@@ -12006,7 +12023,10 @@ export class ToriiClient {
         cancelReadableBodyBestEffort(body, `${context} was aborted`);
         throw bodyReadAbortError(signal, context);
       }
-      return plainObjects ? JSON.parse(text) : parsed;
+      const payload = plainObjects ? JSON.parse(text) : parsed;
+      return includeSourceBytes
+        ? Object.freeze({ payload, sourceBytes: new Uint8Array(bytes) })
+        : payload;
     } catch (error) {
       if (signalIsAborted(signal) || error?.name === "AbortError") {
         cancelReadableBodyBestEffort(body, `${context} was aborted`);

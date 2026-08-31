@@ -417,6 +417,16 @@ pub mod isi {
                 ),
             ));
         }
+        if crate::kagemusha_operation::executable_contains_kagemusha_operation_v4(
+            new_trigger.action().executable(),
+        ) {
+            return Err(Error::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "Kagemusha operations require one direct external signed transaction and cannot be registered in a trigger"
+                        .into(),
+                ),
+            ));
+        }
         enforce_ivm_trigger_program_policy(
             new_trigger.action().executable(),
             new_trigger.metadata(),

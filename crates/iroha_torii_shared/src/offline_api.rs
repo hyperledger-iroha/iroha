@@ -685,12 +685,14 @@ impl OfflineOperationReference {
                 ..
             } => {
                 if *kind != self.kind {
-                    return Err("operation status kind does not match the accepted operation".into());
+                    return Err(
+                        "operation status kind does not match the accepted operation".into(),
+                    );
                 }
                 if transaction_hash == &self.transaction_hash {
                     if *submitted_at_ms != self.submitted_at_ms {
                         return Err(
-                            "current pending transaction changed its submission time".into(),
+                            "current pending transaction changed its submission time".into()
                         );
                     }
                 } else {
@@ -713,8 +715,7 @@ impl OfflineOperationReference {
             OfflineOperationStatus::Rejected { kind, .. } if *kind != self.kind => {
                 return Err("operation status kind does not match the accepted operation".into());
             }
-            OfflineOperationStatus::Applied { .. }
-            | OfflineOperationStatus::Rejected { .. } => {}
+            OfflineOperationStatus::Applied { .. } | OfflineOperationStatus::Rejected { .. } => {}
         }
         Ok(())
     }
@@ -909,7 +910,6 @@ impl OfflineOperationStatus {
         }
         Ok(())
     }
-
 }
 
 fn exact_nonzero_operation_id(value: &str) -> Result<[u8; 32], String> {
@@ -1265,20 +1265,43 @@ mod tests {
     #[test]
     fn operation_status_structure_rejects_invalid_continuity_fields() {
         let operation_id = "11".repeat(32);
-        let transaction_hash = format!("{}25", "22".repeat(31));
         let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
-        reference.transaction_hash.clone_from(&transaction_hash);
-        let pending = OfflineOperationStatus::Pending {
+        let original_reference = reference.clone();
+        let current = OfflineOperationStatus::Pending {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
-            transaction_hash: transaction_hash.clone(),
+            transaction_hash: reference.transaction_hash.clone(),
             submitted_at_ms: 42,
         };
-        pending
-            .validate_for_reference(&reference)
+        reference
+            .observe_status(&current)
             .expect("canonical pending status");
+        assert_eq!(reference, original_reference);
 
-        let mut zero_time = pending.clone();
+        let changed_time = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: reference.transaction_hash.clone(),
+            submitted_at_ms: 43,
+        };
+        assert!(reference.observe_status(&changed_time).is_err());
+        assert_eq!(reference, original_reference);
+
+        let newer_transaction_hash = format!("{}25", "22".repeat(31));
+        let newer_pending = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: newer_transaction_hash.clone(),
+            submitted_at_ms: 43,
+        };
+        reference
+            .observe_status(&newer_pending)
+            .expect("newer pending attempt");
+        assert_eq!(reference.transaction_hash, newer_transaction_hash);
+        assert_eq!(reference.submitted_at_ms, 43);
+
+        let before_invalid = reference.clone();
+        let mut zero_time = newer_pending.clone();
         let OfflineOperationStatus::Pending {
             submitted_at_ms, ..
         } = &mut zero_time
@@ -1286,7 +1309,8 @@ mod tests {
             unreachable!()
         };
         *submitted_at_ms = 0;
-        assert!(zero_time.validate_structure().is_err());
+        assert!(reference.observe_status(&zero_time).is_err());
+        assert_eq!(reference, before_invalid);
 
         let unmarked = OfflineOperationStatus::Pending {
             operation_id: operation_id.clone(),
@@ -1295,18 +1319,28 @@ mod tests {
             submitted_at_ms: 42,
         };
         assert!(unmarked.validate_structure().is_err());
-        let mismatched_reference =
+        let mut mismatched_reference =
             operation_reference(&"33".repeat(32), OfflineOperationKind::TopUp);
-        assert!(
-            pending
-                .validate_for_reference(&mismatched_reference)
-                .is_err()
-        );
+        let before_mismatch = mismatched_reference.clone();
+        assert!(mismatched_reference.observe_status(&current).is_err());
+        assert_eq!(mismatched_reference, before_mismatch);
+
+        let rejected = OfflineOperationStatus::Rejected {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: format!("{}27", "22".repeat(31)),
+            error: ErrorEnvelope::new("rejected", "retry with the next carrier"),
+        };
+        let before_rejected = reference.clone();
+        reference
+            .observe_status(&rejected)
+            .expect("newer rejected carrier remains the same operation");
+        assert_eq!(reference, before_rejected);
 
         let redeem = OfflineOperationStatus::Applied {
-            operation_id,
+            operation_id: operation_id.clone(),
             result: OfflineOperationResult::Redeem(OfflineRedeemResult {
-                transaction_hash: transaction_hash.clone(),
+                transaction_hash: format!("{}29", "22".repeat(31)),
                 finalized_block_height: 1,
             }),
         };
@@ -1315,13 +1349,14 @@ mod tests {
             .expect("canonical applied redemption");
         let mut redeem_reference =
             operation_reference(redeem.operation_id(), OfflineOperationKind::Redeem);
-        redeem_reference.transaction_hash = transaction_hash;
-        redeem
-            .validate_for_reference(&redeem_reference)
-            .expect("applied redemption matches its accepted transaction");
-        let mut swapped_reference = redeem_reference.clone();
-        swapped_reference.transaction_hash = format!("{}27", "22".repeat(31));
-        assert!(redeem.validate_for_reference(&swapped_reference).is_err());
+        let before_applied = redeem_reference.clone();
+        redeem_reference
+            .observe_status(&redeem)
+            .expect("another authorized carrier may win global finality");
+        assert_eq!(redeem_reference, before_applied);
+        let before_wrong_kind = reference.clone();
+        assert!(reference.observe_status(&redeem).is_err());
+        assert_eq!(reference, before_wrong_kind);
         let mut zero_height = redeem;
         let OfflineOperationStatus::Applied {
             result: OfflineOperationResult::Redeem(result),

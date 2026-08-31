@@ -22412,12 +22412,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func getKagemushaOperationStatus(
         operationId: String,
+        expectedKind: KagemushaOperationKind,
         chainDiscriminant: UInt16,
         completion: @escaping (Result<KagemushaOperationStatus, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: expectedKind,
                 chainDiscriminant: chainDiscriminant
             )
         }
@@ -26678,6 +26680,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func getKagemushaOperationStatus(
         operationId: String,
+        expectedKind: KagemushaOperationKind,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         let path = try KagemushaToriiAPI.operationPath(operationId)
@@ -26699,9 +26702,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             responseData,
             chainDiscriminant: chainDiscriminant
         )
-        guard status.operationId == operationId else {
+        guard status.operationId == operationId,
+              status.kind == expectedKind else {
             throw ToriiClientError.invalidPayload(
-                "Kagemusha operation status operation_id does not match the requested resource"
+                "Kagemusha operation status identity or kind does not match the requested resource"
             )
         }
         return status
