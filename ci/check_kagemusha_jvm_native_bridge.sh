@@ -636,12 +636,27 @@ printf '[kagemusha-jvm-native] building fresh host ABI-22 bridge for %s\n' "$HOS
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
 
 case "$HOST_TRIPLE" in
-  *-apple-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.dylib" ;;
-  *-windows-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/connect_norito_bridge.dll" ;;
-  *) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.so" ;;
+  *-apple-*) NATIVE_BUILD_OUTPUT="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.dylib" ;;
+  *-windows-*) NATIVE_BUILD_OUTPUT="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/connect_norito_bridge.dll" ;;
+  *) NATIVE_BUILD_OUTPUT="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.so" ;;
 esac
-[[ -f "$NATIVE_LIBRARY" && ! -L "$NATIVE_LIBRARY" ]] \
-  || fail "fresh host bridge library is missing: $NATIVE_LIBRARY"
+[[ -f "$NATIVE_BUILD_OUTPUT" && ! -L "$NATIVE_BUILD_OUTPUT" ]] \
+  || fail "fresh host bridge library is missing: $NATIVE_BUILD_OUTPUT"
+STAGED_NATIVE_DIR="$BUILD_SESSION/staged-native"
+mkdir -m 0700 -- "$STAGED_NATIVE_DIR"
+STAGED_NATIVE_DIR="$(
+  "$PYTHON_BINARY" -I -S -c \
+    'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+    "$STAGED_NATIVE_DIR"
+)"
+NATIVE_LIBRARY_NAME="${NATIVE_BUILD_OUTPUT##*/}"
+NATIVE_LIBRARY="$(
+  "$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" stage \
+    --artifact "$NATIVE_BUILD_OUTPUT" \
+    --output "$STAGED_NATIVE_DIR/$NATIVE_LIBRARY_NAME"
+)"
+[[ "$NATIVE_LIBRARY" == "$STAGED_NATIVE_DIR/$NATIVE_LIBRARY_NAME" ]] \
+  || fail "native artifact staging returned an unexpected path: $NATIVE_LIBRARY"
 NATIVE_LIBRARY_DIR="${NATIVE_LIBRARY%/*}"
 NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi22.json"
 "$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" record \

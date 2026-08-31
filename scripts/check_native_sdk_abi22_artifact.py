@@ -255,6 +255,163 @@ def workspace_source_manifest_sha256(root: Path) -> str:
     return digest
 
 
+def stage_artifact(source: Path, destination: Path) -> Path:
+    """Copy one stable build output into a fresh private single-link inode.
+
+    Cargo may hard-link its top-level dynamic-library output to the matching
+    artifact under ``deps/``.  That is a valid build-cache implementation
+    detail, but an artifact admitted to the release evidence boundary must
+    have exactly one name.  Copy through authenticated file descriptors so
+    the strict evidence checker can retain its one-hard-link invariant.
+    """
+
+    if not source.is_absolute() or not destination.is_absolute():
+        fail("native artifact staging paths must be absolute")
+    try:
+        before = source.lstat()
+    except OSError as error:
+        raise ArtifactContractError(
+            f"native build output is unavailable: {source}"
+        ) from error
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or before.st_nlink < 1
+        or before.st_size <= 0
+    ):
+        fail("native build output must be one non-empty non-symbolic regular file")
+
+    try:
+        parent = destination.parent.resolve(strict=True)
+        parent_metadata = parent.lstat()
+    except OSError as error:
+        raise ArtifactContractError(
+            f"native artifact staging directory is unavailable: {destination.parent}"
+        ) from error
+    if not stat.S_ISDIR(parent_metadata.st_mode) or stat.S_ISLNK(
+        parent_metadata.st_mode
+    ):
+        fail("native artifact staging parent must resolve to a real directory")
+    if destination.name in {"", ".", ".."}:
+        fail("native artifact staging output must name one file")
+    output = parent / destination.name
+
+    source_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    output_flags = (
+        os.O_CREAT
+        | os.O_EXCL
+        | os.O_WRONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        source_descriptor = os.open(source, source_flags)
+    except OSError as error:
+        raise ArtifactContractError(
+            f"native build output could not be opened: {source}"
+        ) from error
+
+    output_descriptor: int | None = None
+    output_identity: tuple[int, int] | None = None
+    source_digest = hashlib.sha256()
+    try:
+        opened = os.fstat(source_descriptor)
+        before_identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+            before.st_nlink,
+        )
+        opened_identity = (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_mode,
+            opened.st_size,
+            opened.st_mtime_ns,
+            opened.st_ctime_ns,
+            opened.st_nlink,
+        )
+        if opened_identity != before_identity:
+            fail("native build output changed while it was opened")
+        try:
+            output_descriptor = os.open(output, output_flags, 0o600)
+        except OSError as error:
+            raise ArtifactContractError(
+                f"native artifact staging output must be fresh: {output}"
+            ) from error
+        created = os.fstat(output_descriptor)
+        output_identity = (created.st_dev, created.st_ino)
+        if (
+            not stat.S_ISREG(created.st_mode)
+            or stat.S_IMODE(created.st_mode) != 0o600
+            or created.st_nlink != 1
+            or created.st_size != 0
+        ):
+            fail("native artifact staging output was not created privately")
+
+        copied = 0
+        while True:
+            chunk = os.read(source_descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            source_digest.update(chunk)
+            offset = 0
+            while offset < len(chunk):
+                offset += os.write(output_descriptor, chunk[offset:])
+            copied += len(chunk)
+        os.fsync(output_descriptor)
+
+        source_after = os.fstat(source_descriptor)
+        source_after_identity = (
+            source_after.st_dev,
+            source_after.st_ino,
+            source_after.st_mode,
+            source_after.st_size,
+            source_after.st_mtime_ns,
+            source_after.st_ctime_ns,
+            source_after.st_nlink,
+        )
+        written = os.fstat(output_descriptor)
+        current_output = output.lstat()
+        if source_after_identity != opened_identity:
+            fail("native build output changed while it was staged")
+        if copied != opened.st_size:
+            fail("native build output size changed while it was staged")
+        if (
+            not stat.S_ISREG(written.st_mode)
+            or stat.S_IMODE(written.st_mode) != 0o600
+            or written.st_nlink != 1
+            or written.st_size != copied
+            or stat.S_ISLNK(current_output.st_mode)
+            or (written.st_dev, written.st_ino)
+            != (current_output.st_dev, current_output.st_ino)
+        ):
+            fail("staged native artifact changed while it was written")
+    except BaseException:
+        if output_descriptor is not None and output_identity is not None:
+            try:
+                current = output.lstat()
+                if (current.st_dev, current.st_ino) == output_identity:
+                    output.unlink()
+            except OSError:
+                pass
+        raise
+    finally:
+        if output_descriptor is not None:
+            os.close(output_descriptor)
+        os.close(source_descriptor)
+
+    staged_digest, staged_size = stable_artifact_identity(output)
+    if staged_digest != source_digest.hexdigest() or staged_size != before.st_size:
+        fail("staged native artifact bytes differ from the fresh build output")
+    return output
+
+
 def stable_artifact_identity(path: Path) -> tuple[str, int]:
     """Hash one regular, non-linked file while detecting replacement races."""
 
@@ -1097,13 +1254,14 @@ def retain_verified_manifest(
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse the record/verify command line."""
+    """Parse the stage/record/verify command line."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("record", "verify"))
+    parser.add_argument("mode", choices=("stage", "record", "verify"))
     parser.add_argument("--artifact", required=True, type=Path)
-    parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument("--source-root", required=True, type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--source-root", type=Path)
     parser.add_argument("--node", default="node")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--sdk", choices=tuple(sorted(SDK_VALUES)))
@@ -1121,6 +1279,30 @@ def main() -> int:
     artifact = Path(os.path.abspath(args.artifact))
     if not artifact.exists() and not artifact.is_symlink():
         fail(f"native artifact is unavailable: {artifact}")
+    if args.mode == "stage":
+        if args.output is None:
+            fail("stage mode requires --output")
+        if any(
+            value is not None
+            for value in (
+                args.manifest,
+                args.source_root,
+                args.sdk,
+                args.target,
+                args.evidence_dir,
+            )
+        ):
+            fail("stage mode accepts only --artifact and --output")
+        staged = stage_artifact(
+            artifact,
+            Path(os.path.abspath(args.output)),
+        )
+        print(staged)
+        return 0
+    if args.output is not None:
+        fail("record and verify modes do not accept --output")
+    if args.manifest is None or args.source_root is None:
+        fail("record and verify modes require --manifest and --source-root")
     source_root = args.source_root.resolve(strict=True)
     probe = lambda sdk, path: probe_artifact(
         sdk,

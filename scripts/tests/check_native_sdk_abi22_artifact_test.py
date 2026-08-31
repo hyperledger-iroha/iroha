@@ -37,6 +37,44 @@ def test_checker_loads_under_exact_isolated_ci_invocation() -> None:
     assert result.returncode == 0, result.stderr
     assert "usage: check_native_sdk_abi22_artifact.py" in result.stdout
     assert "--evidence-dir" in result.stdout
+    assert "{stage,record,verify}" in result.stdout
+
+
+def test_stage_artifact_breaks_cargo_hard_link_and_preserves_bytes(
+    tmp_path: Path,
+) -> None:
+    cargo_output = tmp_path / "libconnect_norito_bridge.so"
+    cargo_output.write_bytes(b"fresh ABI-22 bridge bytes\n")
+    cargo_deps_link = tmp_path / "libconnect_norito_bridge-hash.so"
+    os.link(cargo_output, cargo_deps_link)
+    destination = tmp_path / "staged" / cargo_output.name
+    destination.parent.mkdir(mode=0o700)
+
+    staged = checker.stage_artifact(cargo_output.resolve(), destination.resolve())
+
+    assert staged == destination.resolve()
+    assert staged.read_bytes() == cargo_output.read_bytes()
+    assert cargo_output.stat().st_nlink == 2
+    assert staged.stat().st_nlink == 1
+    assert stat.S_IMODE(staged.stat().st_mode) == 0o600
+    checker.stable_artifact_identity(staged)
+
+
+def test_stage_artifact_rejects_symbolic_input_and_existing_output(
+    tmp_path: Path,
+) -> None:
+    cargo_output = tmp_path / "libconnect_norito_bridge.so"
+    cargo_output.write_bytes(b"fresh ABI-22 bridge bytes\n")
+    symbolic_input = tmp_path / "cargo-output-link.so"
+    symbolic_input.symlink_to(cargo_output)
+    destination = tmp_path / "staged.so"
+
+    with pytest.raises(checker.ArtifactContractError, match="non-symbolic"):
+        checker.stage_artifact(symbolic_input.absolute(), destination.absolute())
+
+    destination.write_bytes(b"preexisting")
+    with pytest.raises(checker.ArtifactContractError, match="must be fresh"):
+        checker.stage_artifact(cargo_output.absolute(), destination.absolute())
 
 
 def _write_fake_cargo(path: Path, source: str) -> None:
@@ -1902,3 +1940,9 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert '"$PYTHON_BINARY" -I -S' in jni_lane
     assert '--set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1"' in jni_lane
     assert "--sdk c-jni" in jni_lane
+    stage = jni_lane.index('"$ABI22_ARTIFACT_CHECKER" stage')
+    record = jni_lane.index('"$ABI22_ARTIFACT_CHECKER" record')
+    assert stage < record
+    assert '--artifact "$NATIVE_BUILD_OUTPUT"' in jni_lane[stage:record]
+    assert '--output "$STAGED_NATIVE_DIR/$NATIVE_LIBRARY_NAME"' in jni_lane[stage:record]
+    assert '--artifact "$NATIVE_LIBRARY"' in jni_lane[record:]
