@@ -29886,8 +29886,18 @@
         "additionalProperties": false,
         "description": "Redacted durable approval result.",
         "properties": {
+          "authoritative_height": {
+            "description": "Node-authoritative height at which the approval result is durable.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "bundle_id": {
             "$ref": "#/components/schemas/Hash"
+          },
+          "committee_authority": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact four-validator authority serving the acknowledgement."
           },
           "collected": {
             "format": "uint8",
@@ -29915,16 +29925,23 @@
             "maximum": 255,
             "minimum": 0,
             "type": "integer"
+          },
+          "responder_attestation": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Purpose-separated BLS authentication by the exact responding committee validator."
           }
         },
         "required": [
+          "authoritative_height",
           "bundle_id",
           "payload_digest",
           "leg_ordinal",
+          "committee_authority",
           "collected",
           "required",
           "newly_recorded",
-          "lifecycle"
+          "lifecycle",
+          "responder_attestation"
         ],
         "type": "object",
         "x-iroha-redaction-v1": {
@@ -29952,6 +29969,12 @@
             "$ref": "#/components/schemas/JsonValue",
             "description": "Governed audit policy."
           },
+          "authoritative_height": {
+            "description": "Node-authoritative height used for access and lifecycle evaluation.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "availability": {
             "$ref": "#/components/schemas/JsonValue",
             "description": "Durable restricted-DA certificate."
@@ -29971,12 +29994,17 @@
             "$ref": "#/components/schemas/JsonValue",
             "description": "Exact public AtomicPrivateSettlementV1 manifest."
           },
+          "responder_attestation": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Purpose-separated BLS authentication by the exact responding committee validator."
+          },
           "statement": {
             "$ref": "#/components/schemas/JsonValue",
             "description": "Restricted proof statement; proof bytes omitted."
           }
         },
         "required": [
+          "authoritative_height",
           "manifest",
           "audit_policy",
           "committee_authority",
@@ -29984,7 +30012,8 @@
           "delta",
           "audit_capsule",
           "availability",
-          "lifecycle"
+          "lifecycle",
+          "responder_attestation"
         ],
         "type": "object",
         "x-iroha-redaction-v1": {

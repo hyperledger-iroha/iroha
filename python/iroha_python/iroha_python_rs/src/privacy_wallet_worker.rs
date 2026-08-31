@@ -21,8 +21,9 @@ use crate::{
     },
 };
 use iroha_core::privacy_engines::atomic_private_settlement::{
-    AtomicPrivateSettlementPreparedProofV1, AtomicPrivateSettlementWalletErrorV1,
-    AtomicPrivateSettlementWalletInspectionV1, consume_atomic_private_settlement_wallet_bundle_v1,
+    AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementWalletErrorV1,
+    AtomicPrivateSettlementWalletInspectionV1, complete_atomic_private_settlement_prepared_leg_v1,
+    consume_atomic_private_settlement_wallet_bundle_v1,
     inspect_atomic_private_settlement_wallet_bundle_v1,
 };
 use iroha_crypto::Algorithm;
@@ -33,7 +34,7 @@ use iroha_data_model::{
         PrivateSettlementProofProfileV1, PrivateSettlementProofStatementV1,
     },
     prelude::AccountId,
-    privacy::PrivacyProtocolIdV1,
+    privacy::{PrivacyProtocolIdV1, PrivacyRootV1},
     transaction::FeePaymentIntent,
 };
 use rand_core_06::{OsRng, RngCore};
@@ -846,6 +847,7 @@ struct PrivateSettlementProveRequestV1 {
     policy: PrivateSettlementAuditPolicyV1,
     canonical_genesis_hash: [u8; DIGEST_BYTES],
     current_height: u64,
+    new_root: PrivacyRootV1,
 }
 
 struct PrivateSettlementProofResponseV1 {
@@ -855,7 +857,7 @@ struct PrivateSettlementProofResponseV1 {
     statement_digest: [u8; DIGEST_BYTES],
     capsule_digest: [u8; DIGEST_BYTES],
     audit_plaintext_commitment: [u8; DIGEST_BYTES],
-    prepared: AtomicPrivateSettlementPreparedProofV1,
+    prepared: AtomicPrivateSettlementPreparedLegV1,
 }
 struct ValidatedPublicIntentV1 {
     operation_schema: String,
@@ -997,6 +999,7 @@ pub fn encode_private_settlement_prove_payload(
     policy: &PrivateSettlementAuditPolicyV1,
     canonical_genesis_hash: [u8; DIGEST_BYTES],
     current_height: u64,
+    new_root: PrivacyRootV1,
 ) -> Result<Vec<u8>, WorkerError> {
     binding.validate()?;
     if binding.protocol != ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1 {
@@ -1034,6 +1037,7 @@ pub fn encode_private_settlement_prove_payload(
     put_bytes_u32(&mut payload, &policy_bytes)?;
     payload.extend_from_slice(&canonical_genesis_hash);
     payload.extend_from_slice(&current_height.to_be_bytes());
+    payload.extend_from_slice(new_root.as_bytes());
     if payload.len() > MAX_FRAME_BYTES {
         return Err(WorkerError::FrameTooLarge);
     }
@@ -1093,6 +1097,7 @@ fn decode_private_settlement_prove_payload(
     let policy_bytes = cursor.bytes_u32(MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES)?;
     let canonical_genesis_hash = cursor.array()?;
     let current_height = cursor.u64()?;
+    let new_root = PrivacyRootV1::new(cursor.array()?);
     cursor.finish()?;
     let manifest = norito::decode_canonical::<AtomicPrivateSettlementV1>(manifest_bytes)
         .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
@@ -1126,6 +1131,7 @@ fn decode_private_settlement_prove_payload(
         policy,
         canonical_genesis_hash,
         current_height,
+        new_root,
     })
 }
 
@@ -1159,6 +1165,8 @@ fn prove_private_settlement_v1(
         .map_err(|error| match error {
             ConsumeError::Custody(error) | ConsumeError::Operation(error) => error,
         })?;
+    let prepared = complete_atomic_private_settlement_prepared_leg_v1(prepared, request.new_root)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
     if prepared.statement != request.statement || prepared.audit_capsule != request.capsule {
         return Err(WorkerError::NativePrivateSettlementProofFailed);
     }
@@ -1251,6 +1259,8 @@ fn validate_private_settlement_public_request(
         || request.capsule.aad.leg_ordinal != request.statement.leg_ordinal
         || request.capsule.aad.route != request.statement.route
         || request.capsule.aad.plaintext_commitment != request.statement.audit_plaintext_commitment
+        || request.new_root.is_zero()
+        || request.new_root == request.statement.old_root
         || request.current_height < request.manifest.authority_context_height
         || request.current_height > request.manifest.expiry_height
     {
@@ -1464,9 +1474,12 @@ fn encode_response(response: CommandResponse) -> Vec<u8> {
                 .expect("validated private-settlement statement");
             let capsule = norito::encode_canonical(&response.prepared.audit_capsule)
                 .expect("validated private-settlement audit capsule");
+            let delta = norito::encode_canonical(&response.prepared.delta)
+                .expect("validated private-settlement delta");
             put_bytes_u32(&mut output, &statement).expect("bounded private-settlement statement");
             put_bytes_u32(&mut output, &response.prepared.proof)
                 .expect("bounded private-settlement proof");
+            put_bytes_u32(&mut output, &delta).expect("bounded private-settlement delta");
             put_bytes_u32(&mut output, &capsule).expect("bounded private-settlement audit capsule");
         }
         CommandResponse::Error(error) => {

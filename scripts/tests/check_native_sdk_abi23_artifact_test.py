@@ -1219,6 +1219,53 @@ def test_hijiri_quote_release_symbol_contract_is_closed() -> None:
     assert '" is missing"' in java_bridge
 
 
+def test_private_settlement_response_jni_release_symbol_contract_is_closed() -> None:
+    methods = (
+        "nativeBridgeAbiVersion",
+        "nativeVerifyCommitteeProofResponseV1",
+        "nativeVerifyAuditorCapsuleResponseV1",
+        "nativeVerifyAuditApprovalResponseV1",
+    )
+    expected = tuple(
+        "Java_org_hyperledger_iroha_"
+        f"{namespace}_client_AtomicPrivateSettlementNativeResponseVerifierV1_{method}"
+        for namespace in ("sdk", "android")
+        for method in methods
+    )
+
+    c_jni = checker.REQUIRED_SYMBOLS["c-jni"]
+    start = c_jni.index(expected[0])
+    assert c_jni[start : start + len(expected)] == expected
+
+    mobile_gate = (REPO_ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
+        encoding="utf-8"
+    )
+    inventory = re.search(
+        r"^PRIVATE_SETTLEMENT_RESPONSE_JNI_SYMBOLS=\(\n(?P<body>.*?)^\)$",
+        mobile_gate,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert inventory is not None
+    assert tuple(inventory.group("body").split()) == expected
+    assert '"${PRIVATE_SETTLEMENT_RESPONSE_JNI_SYMBOLS[@]}"' in mobile_gate
+
+    mobile_gate_tests = (
+        REPO_ROOT / "scripts/check_mobile_sdk_artifacts_test.sh"
+    ).read_text(encoding="utf-8")
+    for export in expected:
+        assert export in mobile_gate_tests
+
+    jni_gate = (REPO_ROOT / "ci/check_kagemusha_jvm_native_bridge.sh").read_text(
+        encoding="utf-8"
+    )
+    for method in methods:
+        assert f'"{method}",' in jni_gate
+    assert (
+        'f"{namespace}_client_AtomicPrivateSettlementNativeResponseVerifierV1_{method}"'
+        in jni_gate
+    )
+
+
 def test_node_and_python_do_not_invent_a_c_export_contract(tmp_path: Path) -> None:
     source = clean_source(tmp_path)
     artifact = native_artifact(tmp_path)
@@ -1886,6 +1933,9 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
         "sorafsValidateAppealFinanceCancelAssetLockJson() {}"
         ",validationFeeHijiriQuoteRequestV1() {}"
         ",validationFeeVerifyHijiriQuoteResponseV1() {}"
+        ",privateSettlementVerifyCommitteeProofResponseV1() {}"
+        ",privateSettlementVerifyAuditorCapsuleResponseV1() {}"
+        ",privateSettlementVerifyAuditApprovalResponseV1() {}"
         ",verifySorafsOrderbookSubmissionReceiptV1() {}"
         "};\n",
         encoding="utf-8",
@@ -1901,6 +1951,9 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
     source = complete.read_text(encoding="utf-8")
     for symbol in (
         "inspectSorafsOrderbookSubmissionForDiscriminantV1",
+        "privateSettlementVerifyAuditApprovalResponseV1",
+        "privateSettlementVerifyAuditorCapsuleResponseV1",
+        "privateSettlementVerifyCommitteeProofResponseV1",
         "validationFeeHijiriQuoteRequestV1",
         "validationFeeVerifyHijiriQuoteResponseV1",
         "verifySorafsOrderbookSubmissionReceiptV1",
@@ -1935,6 +1988,12 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
         "    return b'quote-request'\n"
         "def validation_fee_verify_hijiri_quote_response_v1():\n"
         "    return '{}'\n"
+        "def private_settlement_verify_committee_proof_response_v1():\n"
+        "    return None\n"
+        "def private_settlement_verify_auditor_capsule_response_v1():\n"
+        "    return None\n"
+        "def private_settlement_verify_audit_approval_response_v1():\n"
+        "    return None\n"
         "def verify_sorafs_orderbook_submission_receipt_v1():\n"
         "    return '{}'\n",
         encoding="utf-8",
@@ -1950,6 +2009,9 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
     source = complete.read_text(encoding="utf-8")
     for symbol in (
         "inspect_sorafs_orderbook_submission_for_discriminant_v1",
+        "private_settlement_verify_audit_approval_response_v1",
+        "private_settlement_verify_auditor_capsule_response_v1",
+        "private_settlement_verify_committee_proof_response_v1",
         "validation_fee_hijiri_quote_request_v1",
         "validation_fee_verify_hijiri_quote_response_v1",
         "verify_sorafs_orderbook_submission_receipt_v1",
@@ -1973,6 +2035,12 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
         "    return b'quote-request'\n"
         "def validation_fee_verify_hijiri_quote_response_v1():\n"
         "    return '{}'\n"
+        "def private_settlement_verify_committee_proof_response_v1():\n"
+        "    return None\n"
+        "def private_settlement_verify_auditor_capsule_response_v1():\n"
+        "    return None\n"
+        "def private_settlement_verify_audit_approval_response_v1():\n"
+        "    return None\n"
         "def verify_sorafs_orderbook_submission_receipt_v1():\n"
         "    return '{}'\n",
         encoding="utf-8",

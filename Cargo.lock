@@ -5317,6 +5317,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_primitives",
  "iroha_schema",
+ "iroha_torii_shared",
  "iroha_version",
  "iroha_zkp_halo2",
  "kaigi_zk",

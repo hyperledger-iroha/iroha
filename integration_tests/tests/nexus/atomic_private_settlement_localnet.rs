@@ -12,9 +12,9 @@ use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::{
-        Client, PrivateSettlementAuditApprovalRequestV1, PrivateSettlementBundleReceiptResponseV1,
-        PrivateSettlementBundleSubmitRequestV1, PrivateSettlementLegUploadRequestV1,
-        PrivateSettlementLifecycleDtoV1,
+        BorrowedKeyPairIdentityRequestSignerV1, Client, PrivateSettlementAuditApprovalRequestV1,
+        PrivateSettlementBundleReceiptResponseV1, PrivateSettlementBundleSubmitRequestV1,
+        PrivateSettlementLegUploadRequestV1, PrivateSettlementLifecycleDtoV1,
     },
     data_model::{
         Level,
@@ -42,9 +42,10 @@ use iroha::{
         metadata::Metadata,
         nexus::{
             ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, DataSpaceId, LaneId,
-            PrivateSettlementAuditAadV1, PrivateSettlementAuditEncryptionOpeningV1,
-            PrivateSettlementAuditNoteOpeningV1, PrivateSettlementAuditOutputRoleV1,
-            PrivateSettlementAuditOutputV1, PrivateSettlementAuditPayerAuthorizationBodyV1,
+            PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1, PrivateSettlementAuditAadV1,
+            PrivateSettlementAuditEncryptionOpeningV1, PrivateSettlementAuditNoteOpeningV1,
+            PrivateSettlementAuditOutputRoleV1, PrivateSettlementAuditOutputV1,
+            PrivateSettlementAuditPayerAuthorizationBodyV1,
             PrivateSettlementAuditPayerAuthorizationV1, PrivateSettlementAuditPayerInputV1,
             PrivateSettlementAuditPayerSignatureV1, PrivateSettlementAuditPlaintextV1,
             PrivateSettlementAuditPolicyBodyV1, PrivateSettlementAuditPolicyV1,
@@ -57,7 +58,6 @@ use iroha::{
             PrivateSettlementPoolGovernanceLifecycleV1, PrivateSettlementPoolGovernanceV1,
             PrivateSettlementProofProfileV1, PrivateSettlementProofStatementV1,
             PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementRouteV1,
-            PrivateSettlementSidecarAvailabilityBodyV1,
         },
         peer::PeerId,
         permission::Permission,
@@ -76,9 +76,12 @@ use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_engines::{
         atomic_private_settlement::{
+            AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementProvisionalLegInputV1,
+            complete_atomic_private_settlement_prepared_leg_v1,
             consume_atomic_private_settlement_wallet_bundle_v1,
             derive_atomic_private_settlement_input_nullifiers_v1,
             encode_atomic_private_settlement_wallet_bundle_v1,
+            finalize_atomic_private_settlement_provisional_bundle_v1,
             plan_atomic_private_settlement_bootstrap_v1,
             prepare_atomic_private_settlement_input_openings_v1,
             prepare_atomic_private_settlement_outputs_v1,
@@ -181,10 +184,7 @@ struct GovernedLeg {
 
 struct PreparedLeg {
     governed: GovernedLeg,
-    statement: PrivateSettlementProofStatementV1,
-    proof: Vec<u8>,
-    delta: PrivateSettlementDeltaV1,
-    capsule: iroha::data_model::nexus::PrivateSettlementAuditCapsuleV1,
+    prepared: AtomicPrivateSettlementPreparedLegV1,
     initial_commitments: [PrivacyCommitmentV1; 2],
 }
 
@@ -405,7 +405,14 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
     NetworkBuilder::new()
         .with_base_seed("atomic-private-settlement-n3-real-process-v1")
         .with_peers(shape.peer_count())
-        .with_block_cadence(Duration::from_millis(50))
+        // Sixteen independent daemons share the release-test host.  A 50 ms
+        // cadence derives a 500 ms view deadline and 100 ms retransmission
+        // interval, so startup traffic can saturate consensus ingress before
+        // the height-one leader claims the staged genesis proposal.  Keep this
+        // correctness smoke on the production-like cadence used by the other
+        // real-process integration suites; phase latency is measured by the
+        // dedicated benchmark profiles below.
+        .with_block_cadence(Duration::from_secs(4))
         .with_peer_startup_timeout(Duration::from_secs(20 * 60))
         .with_npos_consensus()
         .without_npos_genesis_bootstrap()
@@ -1324,90 +1331,41 @@ fn prepare_leg_with_private_data_and_rngs(
         owner_material.iter().all(|byte| *byte == 0),
         "owner bundle was not wiped"
     );
-    let delta = PrivateSettlementDeltaV1 {
-        version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-        bundle_id: manifest.bundle_id,
-        leg_ordinal: ordinal as u8,
-        route: governed.route,
-        pool_id: governed.governance.body.pool_id,
-        asset_binding_commitment: governed.governance.body.asset_binding_commitment,
-        old_root: statement.old_root,
-        new_root,
-        old_epoch: 1,
-        new_epoch: 2,
-        nullifiers: statement.nullifiers.clone(),
-        output_commitments: statement.output_commitments.clone(),
-        encrypted_outputs: statement.encrypted_outputs.clone(),
-        statement_digest: statement.digest()?,
-        proof_digest: iroha::data_model::nexus::private_settlement_proof_digest_v1(&prepared.proof),
-        capsule_digest: capsule.digest()?,
-        audit_policy_digest: governed.policy.policy_digest,
-        audit_key_epoch: governed.policy.body.key_epoch,
-    };
-    delta.validate_against(&statement)?;
+    let prepared = complete_atomic_private_settlement_prepared_leg_v1(prepared, new_root)?;
     Ok(PreparedLeg {
         governed,
-        statement,
-        proof: prepared.proof,
-        delta,
-        capsule,
+        prepared,
         initial_commitments,
     })
 }
 
 fn provisional_materials(
-    mut manifest: AtomicPrivateSettlementV1,
+    manifest: AtomicPrivateSettlementV1,
     prepared: &[PreparedLeg],
     committees: &[CommitteeEndpoints],
 ) -> Result<Vec<PrivateSettlementProvisionalLegMaterialV1>> {
-    for leg in &mut manifest.legs {
-        leg.availability_certificate_digest = zero_hash();
-    }
-    let mut materials = prepared
+    ensure!(
+        prepared.len() == committees.len() && prepared.len() == manifest.legs.len(),
+        "private-settlement prepared-leg and committee counts must match the manifest"
+    );
+    let retention_until_height = manifest
+        .authority_context_height
+        .checked_add(SIDECAR_RETENTION_BLOCKS)
+        .and_then(|height| height.checked_add(512))
+        .ok_or_else(|| eyre!("private-settlement sidecar retention height overflow"))?;
+    let inputs = prepared
         .iter()
         .zip(committees)
-        .enumerate()
-        .map(|(ordinal, (leg, committee))| {
-            Ok(PrivateSettlementProvisionalLegMaterialV1 {
-                version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-                manifest: manifest.clone(),
-                audit_policy: leg.governed.policy.clone(),
-                committee_authority: committee.authority.clone(),
-                statement: leg.statement.clone(),
-                proof: leg.proof.clone(),
-                delta: leg.delta.clone(),
-                audit_capsule: leg.capsule.clone(),
-                availability_body: PrivateSettlementSidecarAvailabilityBodyV1 {
-                    version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-                    network_id: manifest.network_id,
-                    bundle_id: manifest.bundle_id,
-                    leg_ordinal: ordinal as u8,
-                    route: leg.governed.route,
-                    authority_digest: committee.authority.digest()?,
-                    authority_context_height: manifest.authority_context_height,
-                    payload_digest: hash(0xF0 + ordinal as u8),
-                    payload_bytes: 1,
-                    retention_until_height: manifest.authority_context_height
-                        + SIDECAR_RETENTION_BLOCKS
-                        + 512,
-                },
-            })
+        .map(|(leg, committee)| {
+            AtomicPrivateSettlementProvisionalLegInputV1::new(
+                leg.prepared.clone(),
+                leg.governed.policy.clone(),
+                committee.authority.clone(),
+                retention_until_height,
+            )
         })
-        .collect::<Result<Vec<_>>>()?;
-    for (ordinal, material) in materials.iter_mut().enumerate() {
-        let payload_digest = material.payload_digest()?;
-        let payload_bytes = u32::try_from(material.sidecar_material_bytes_len()?)?;
-        material.availability_body.payload_digest = payload_digest;
-        material.availability_body.payload_bytes = payload_bytes;
-        manifest.legs[ordinal].payload_digest = payload_digest;
-        manifest.legs[ordinal].delta_digest = material.delta.digest()?;
-    }
-    manifest.validate_provisional()?;
-    for material in &mut materials {
-        material.manifest = manifest.clone();
-        material.validate()?;
-    }
-    Ok(materials)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(finalize_atomic_private_settlement_provisional_bundle_v1(manifest, inputs)?.materials)
 }
 
 fn assert_no_partial_visibility(network: &Network, bundle_id: Hash, phase: &str) -> Result<()> {
@@ -1560,14 +1518,19 @@ fn run_n3_real_process_smoke() -> Result<()> {
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "collecting")?;
 
     for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
-        let fetched = sponsor.private_settlement_auditor_capsule_v1(
+        let auditor_transport_signer =
+            BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
+        let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
+            &committee.endpoints,
+            &materials[ordinal].committee_authority,
             final_manifest.legs[ordinal].payload_digest,
-            &leg.governed.auditor_signing,
+            &auditor_transport_signer,
         )?;
         ensure!(
             fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
             "unexpected audit lifecycle"
         );
+        let authoritative_height = fetched.authoritative_height;
         let view = PrivateSettlementAuditorSidecarViewV1 {
             manifest: fetched.manifest,
             policy: fetched.audit_policy,
@@ -1582,27 +1545,23 @@ fn run_n3_real_process_smoke() -> Result<()> {
         let approval = approve_private_settlement_leg_v1(
             &view,
             &leg.governed.governance,
-            authority_context_height,
+            authoritative_height,
             &auditor_id,
             leg.governed.auditor_encryption.secret(),
             &leg.governed.auditor_signing,
             &approve_all_audit_material,
         )?;
-        for endpoint in &committee.endpoints {
-            let mut endpoint_client = sponsor.clone();
-            endpoint_client.torii_url = endpoint.clone();
-            let response = endpoint_client.submit_private_settlement_audit_approval_v1(
-                final_manifest.legs[ordinal].payload_digest,
-                &leg.governed.auditor_signing,
-                &PrivateSettlementAuditApprovalRequestV1 {
-                    approval: approval.clone(),
-                },
-            )?;
-            ensure!(
-                response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
-                "approval was not durable"
-            );
-        }
+        let response = sponsor.submit_private_settlement_audit_approval_quorum_for_authority_v1(
+            &committee.endpoints,
+            &materials[ordinal].committee_authority,
+            final_manifest.legs[ordinal].payload_digest,
+            &auditor_transport_signer,
+            &PrivateSettlementAuditApprovalRequestV1 { approval },
+        )?;
+        ensure!(
+            response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
+            "approval quorum was not durable"
+        );
     }
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "audited")?;
 
@@ -1616,7 +1575,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
         .collect::<Vec<_>>();
     let deltas = prepared
         .iter()
-        .map(|leg| leg.delta.clone())
+        .map(|leg| leg.prepared.delta.clone())
         .collect::<Vec<_>>();
     let barrier = sponsor.prepare_private_settlement_bundle_v1(
         &endpoint_matrix,
@@ -1628,30 +1587,12 @@ fn run_n3_real_process_smoke() -> Result<()> {
     let commits = sponsor.commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "commit-certified")?;
 
-    let legs = deltas
-        .into_iter()
-        .zip(barrier.prepare_certificates)
-        .zip(commits)
-        .map(|((delta, prepare), commit)| PrivateSettlementLegReceiptV1 {
-            delta,
-            prepare,
-            commit,
-        })
-        .collect();
-    let carrier = FinalizeAtomicPrivateSettlementV1::new(PrivateSettlementCommitBundleV1 {
-        version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-        manifest: final_manifest.clone(),
-        authority_catalog: authorities,
-        legs,
-    });
-    let transaction = sponsor.build_transaction(
-        [InstructionBox::from(carrier)],
-        final_manifest.public_fee_intent.clone(),
-        Metadata::default(),
-    );
-    let request = PrivateSettlementBundleSubmitRequestV1 {
-        transaction: transaction.clone(),
-    };
+    let request = sponsor.build_private_settlement_finalization_request_v1(
+        &barrier,
+        &commits,
+        u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+            .expect("V1 carrier ceiling fits u64"),
+    )?;
     sponsor.submit_private_settlement_bundle_v1(&request)?;
     let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
     ensure!(

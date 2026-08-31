@@ -44,6 +44,10 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
     bundleAdmissionUsesTheSharedExactNonterminalResponse();
     bundleAdmissionRejectsNoncanonicalHashesInvalidHeightsAndFieldDrift();
     auditorApprovalUsesPurposeSeparatedRoleHeaders();
+    auditorCapsuleRequiresExactNonzeroAuthoritativeHeight();
+    restrictedResponsesRequireNativeVerificationAndExactBindings();
+    unavailableVerifierFailsBeforeRestrictedHttpButNotPublicQueries();
+    restrictedAttestationsBindNetworkPayloadResponderSignatureCountsAndEncoding();
     publicBundleQueriesAreUnsignedAndBindReceiptIdentity();
     rejectCodesAreAllowlistedBeforeEnteringPublicStatusErrors();
     malformedOrSubstitutedMaterialFailsWithoutLeakingErrorBodies();
@@ -284,10 +288,7 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
         objectField(objectField(FIXTURE, "responses"), "audit_approval");
     final CapturingExecutor executor = new CapturingExecutor(jsonResponse(response));
     final AtomicPrivateSettlementToriiClientV1 client = client(executor);
-    final AtomicPrivateSettlementPreparedRequestV1 request =
-        AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
-            AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
-            "{\"approval\":{}}".getBytes(StandardCharsets.UTF_8));
+    final AtomicPrivateSettlementPreparedRequestV1 request = auditApprovalRequest();
     final OperatorSigningContext roleContext =
         new OperatorSigningContext(
             TestNetworkIds.canonical(),
@@ -307,6 +308,293 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
         : "auditor role signature missing";
     assert !executor.request.headers().containsKey(CanonicalRequestSigner.HEADER_SIGNATURE)
         : "auditor request must not fall back to sponsor identity";
+  }
+
+  private static void auditorCapsuleRequiresExactNonzeroAuthoritativeHeight() {
+    final Map<String, Object> valid =
+        objectField(objectField(FIXTURE, "responses"), "auditor_capsule");
+    final OperatorSigningContext roleContext =
+        new OperatorSigningContext(
+            TestNetworkIds.canonical(),
+            "ed0120" + "12".repeat(32),
+            AtomicPrivateSettlementToriiClientV1Tests::nonZeroSignature);
+    final CapturingExecutor executor = new CapturingExecutor(jsonResponse(valid));
+
+    client(executor).getAuditorCapsule(PAYLOAD, roleContext).join();
+
+    assert executor.request.uri().getPath().equals(
+            "/api/v1/nexus/private-settlements/legs/"
+                + PAYLOAD.pathComponent()
+                + "/audit-capsule")
+        : "auditor capsule path must bind the payload digest";
+    assert executor.request.replayPolicy() == RequestReplayPolicy.ONE_SHOT
+        : "auditor capsule fetch must not retry an identity signature";
+    assert executor.request.headers().containsKey(OperatorRequestSigner.HEADER_SIGNATURE)
+        : "auditor role signature missing";
+
+    final List<Object> invalidHeights =
+        List.of(
+            0L,
+            -1L,
+            new BigDecimal("105.0"),
+            "105",
+            new BigInteger("18446744073709551616"));
+    for (int index = 0; index < invalidHeights.size(); index++) {
+      final Map<String, Object> invalid = new LinkedHashMap<>(valid);
+      invalid.put("authoritative_height", invalidHeights.get(index));
+      final CompletionException error =
+          assertThrows(
+              CompletionException.class,
+              () ->
+                  client(new CapturingExecutor(jsonResponse(invalid)))
+                      .getAuditorCapsule(PAYLOAD, roleContext)
+                      .join());
+      assert error.getCause() instanceof AtomicPrivateSettlementToriiExceptionV1
+          : "auditor capsule height case " + index + " must fail closed";
+    }
+  }
+
+  private static void restrictedResponsesRequireNativeVerificationAndExactBindings() {
+    final Map<String, Object> responses = objectField(FIXTURE, "responses");
+    final RecordingResponseVerifier verifier = new RecordingResponseVerifier();
+    final OperatorSigningContext validator =
+        new OperatorSigningContext(
+            TestNetworkIds.canonical(),
+            "ed0120" + "31".repeat(32),
+            AtomicPrivateSettlementToriiClientV1Tests::nonZeroSignature);
+    final OperatorSigningContext auditor =
+        new OperatorSigningContext(
+            TestNetworkIds.canonical(),
+            "ed0120" + "32".repeat(32),
+            AtomicPrivateSettlementToriiClientV1Tests::nonZeroSignature);
+
+    final TransportResponse committeeResponse =
+        jsonResponse(objectField(responses, "committee_proof"));
+    client(new CapturingExecutor(committeeResponse), verifier)
+        .getCommitteeProof(PAYLOAD, validator)
+        .join();
+    assert Arrays.equals(committeeResponse.body(), verifier.committeeResponse)
+        : "committee verifier must receive the exact response bytes";
+    assert Arrays.equals(TestNetworkIds.canonical().bytes(), verifier.committeeNetwork)
+        : "committee verifier network binding drift";
+    assert Arrays.equals(PAYLOAD.bytes(), verifier.committeePayload)
+        : "committee verifier payload binding drift";
+
+    final TransportResponse capsuleResponse =
+        jsonResponse(objectField(responses, "auditor_capsule"));
+    client(new CapturingExecutor(capsuleResponse), verifier)
+        .getAuditorCapsule(PAYLOAD, auditor)
+        .join();
+    assert Arrays.equals(capsuleResponse.body(), verifier.capsuleResponse)
+        : "capsule verifier must receive the exact response bytes";
+    assert Arrays.equals(TestNetworkIds.canonical().bytes(), verifier.capsuleNetwork)
+        : "capsule verifier network binding drift";
+    assert Arrays.equals(PAYLOAD.bytes(), verifier.capsulePayload)
+        : "capsule verifier payload binding drift";
+    assert auditor.publicKey().equals(verifier.capsuleAuditorPublicKey)
+        : "capsule verifier auditor-key binding drift";
+
+    final AtomicPrivateSettlementPreparedRequestV1 approvalRequest = auditApprovalRequest();
+    final byte[] approvalRequestBytes = approvalRequest.bytes();
+    final TransportResponse approvalResponse =
+        jsonResponse(objectField(responses, "audit_approval"));
+    client(new CapturingExecutor(approvalResponse), verifier)
+        .submitAuditApproval(PAYLOAD, approvalRequest, auditor)
+        .join();
+    assert Arrays.equals(approvalResponse.body(), verifier.approvalResponse)
+        : "approval verifier must receive the exact response bytes";
+    assert Arrays.equals(approvalRequestBytes, verifier.approvalRequest)
+        : "approval verifier must receive the exact sent request bytes";
+    assert Arrays.equals(TestNetworkIds.canonical().bytes(), verifier.approvalNetwork)
+        : "approval verifier network binding drift";
+    assert Arrays.equals(PAYLOAD.bytes(), verifier.approvalPayload)
+        : "approval verifier payload binding drift";
+    assert auditor.publicKey().equals(verifier.approvalAuditorPublicKey)
+        : "approval verifier auditor-key binding drift";
+    assert verifier.availabilityChecks == 3
+        : "every restricted request must preflight the verifier exactly once";
+  }
+
+  private static void unavailableVerifierFailsBeforeRestrictedHttpButNotPublicQueries() {
+    final Map<String, Object> responses = objectField(FIXTURE, "responses");
+    final RecordingResponseVerifier unavailable = new RecordingResponseVerifier();
+    unavailable.available = false;
+    final OperatorSigningContext validator =
+        new OperatorSigningContext(
+            TestNetworkIds.canonical(),
+            "ed0120" + "33".repeat(32),
+            AtomicPrivateSettlementToriiClientV1Tests::nonZeroSignature);
+    final CapturingExecutor restrictedExecutor =
+        new CapturingExecutor(jsonResponse(objectField(responses, "committee_proof")));
+
+    final IllegalStateException failure =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                client(restrictedExecutor, unavailable)
+                    .getCommitteeProof(PAYLOAD, validator));
+    assert "native private settlement response verifier is unavailable"
+        .equals(failure.getMessage()) : "unavailable verifier error must be fixed and redacted";
+    assert restrictedExecutor.request == null
+        : "restricted HTTP must not start before native verifier preflight";
+
+    final CapturingExecutor publicExecutor =
+        new CapturingExecutor(jsonResponse(objectField(responses, "bundle_status_aborted")));
+    client(publicExecutor, unavailable).getBundleStatus(BUNDLE).join();
+    assert publicExecutor.request != null
+        : "public redacted queries must not depend on the restricted verifier";
+  }
+
+  private static void restrictedAttestationsBindNetworkPayloadResponderSignatureCountsAndEncoding() {
+    final Map<String, Object> responses = objectField(FIXTURE, "responses");
+    final OperatorSigningContext roleContext =
+        new OperatorSigningContext(
+            TestNetworkIds.canonical(),
+            "ed0120" + "13".repeat(32),
+            AtomicPrivateSettlementToriiClientV1Tests::nonZeroSignature);
+
+    final Map<String, Object> capsule = objectField(responses, "auditor_capsule");
+    final List<Map<String, Object>> invalidCapsules = new ArrayList<>();
+    invalidCapsules.add(
+        changedAttestation(
+            capsule, "network_id", stringField(IDENTIFIERS, "payload_json"), null));
+    invalidCapsules.add(
+        changedAttestation(
+            capsule, "payload_digest", stringField(IDENTIFIERS, "bundle_json"), null));
+    invalidCapsules.add(changedAttestation(capsule, "responder", "", null));
+    invalidCapsules.add(changedAttestation(capsule, null, null, "AQ=="));
+    for (int index = 0; index < invalidCapsules.size(); index++) {
+      final Map<String, Object> candidate = invalidCapsules.get(index);
+      final CompletionException error =
+          assertThrows(
+              CompletionException.class,
+              () ->
+                  client(new CapturingExecutor(jsonResponse(candidate)))
+                      .getAuditorCapsule(PAYLOAD, roleContext)
+                      .join());
+      assert error.getCause() instanceof AtomicPrivateSettlementToriiExceptionV1
+          : "capsule attestation case " + index + " must fail closed";
+    }
+
+    final Map<String, Object> approval = objectField(responses, "audit_approval");
+    final List<Map<String, Object>> invalidApprovals = new ArrayList<>();
+    invalidApprovals.add(
+        changedAttestation(
+            approval, "network_id", stringField(IDENTIFIERS, "payload_json"), null));
+    invalidApprovals.add(
+        changedAttestation(
+            approval, "payload_digest", stringField(IDENTIFIERS, "bundle_json"), null));
+    invalidApprovals.add(changedField(approval, "collected", 2L));
+    invalidApprovals.add(changedField(approval, "required", 0L));
+    invalidApprovals.add(changedField(approval, "leg_ordinal", 255L));
+    invalidApprovals.add(changedField(approval, "newly_recorded", 1L));
+    final Map<String, Object> collectingLifecycle = new LinkedHashMap<>();
+    collectingLifecycle.put("status", "collecting");
+    collectingLifecycle.put("value", null);
+    invalidApprovals.add(changedField(approval, "lifecycle", collectingLifecycle));
+    invalidApprovals.add(changedAttestation(approval, "responder", "", null));
+    invalidApprovals.add(changedAttestation(approval, null, null, "AQ=="));
+    final Map<String, Object> wrongAuthority = new LinkedHashMap<>(approval);
+    final Map<String, Object> authority =
+        new LinkedHashMap<>(objectField(wrongAuthority, "committee_authority"));
+    final Map<String, Object> route =
+        new LinkedHashMap<>(objectField(authority, "route"));
+    route.put("dataspace_id", 8L);
+    authority.put("route", route);
+    wrongAuthority.put("committee_authority", authority);
+    invalidApprovals.add(wrongAuthority);
+    final Map<String, Object> expired = new LinkedHashMap<>(approval);
+    expired.put("authoritative_height", 201L);
+    expired.put(
+        "responder_attestation",
+        changedAttestation(approval, "authoritative_height", 201L, null)
+            .get("responder_attestation"));
+    invalidApprovals.add(expired);
+    for (int index = 0; index < invalidApprovals.size(); index++) {
+      final AtomicPrivateSettlementPreparedRequestV1 request = auditApprovalRequest();
+      final Map<String, Object> candidate = invalidApprovals.get(index);
+      final CompletionException error =
+          assertThrows(
+              CompletionException.class,
+              () ->
+                  client(new CapturingExecutor(jsonResponse(candidate)))
+                      .submitAuditApproval(PAYLOAD, request, roleContext)
+                      .join());
+      assert error.getCause() instanceof AtomicPrivateSettlementToriiExceptionV1
+          : "approval attestation case " + index + " must fail closed";
+    }
+
+    final OperatorSigningContext wrongNetworkContext =
+        new OperatorSigningContext(
+            TestNetworkIds.fromSeed(99L),
+            "ed0120" + "14".repeat(32),
+            AtomicPrivateSettlementToriiClientV1Tests::nonZeroSignature);
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            client(new CapturingExecutor(jsonResponse(capsule)))
+                .getAuditorCapsule(PAYLOAD, wrongNetworkContext));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            client(new CapturingExecutor(jsonResponse(approval)))
+                .submitAuditApproval(
+                    PAYLOAD,
+                    auditApprovalRequest(TestNetworkIds.fromSeed(99L).literal()),
+                    roleContext));
+
+    final TransportResponse compressed =
+        TransportResponse.builder()
+            .setStatusCode(200)
+            .setBody(
+                JsonEncoder.encode(objectField(responses, "bundle_status_aborted"))
+                    .getBytes(StandardCharsets.UTF_8))
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Content-Encoding", "gzip")
+            .build();
+    final CompletionException encodingError =
+        assertThrows(
+            CompletionException.class,
+            () ->
+                client(new CapturingExecutor(compressed)).getBundleStatus(BUNDLE).join());
+    assert encodingError.getCause() instanceof AtomicPrivateSettlementToriiExceptionV1
+        : "compressed response must fail closed";
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
+                AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
+                "{\"approval\":{\"fractional\":1e0}}".getBytes(StandardCharsets.UTF_8)));
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> changedAttestation(
+      final Map<String, Object> source,
+      final String bodyField,
+      final Object bodyValue,
+      final String signature) {
+    final Map<String, Object> changed = new LinkedHashMap<>(source);
+    final Map<String, Object> attestation =
+        new LinkedHashMap<>(objectField(source, "responder_attestation"));
+    final Map<String, Object> body =
+        new LinkedHashMap<>(objectField(attestation, "body"));
+    if (bodyField != null) {
+      body.put(bodyField, bodyValue);
+    }
+    attestation.put("body", body);
+    if (signature != null) {
+      attestation.put("signature", signature);
+    }
+    changed.put("responder_attestation", attestation);
+    return changed;
+  }
+
+  private static Map<String, Object> changedField(
+      final Map<String, Object> source, final String field, final Object value) {
+    final Map<String, Object> changed = new LinkedHashMap<>(source);
+    changed.put(field, value);
+    return changed;
   }
 
   private static void publicBundleQueriesAreUnsignedAndBindReceiptIdentity() {
@@ -429,10 +717,7 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
             AtomicPrivateSettlementToriiClientV1Tests::nonZeroSignature);
     assertThrows(IllegalArgumentException.class, () -> client.uploadLeg(wrong, sponsor));
 
-    final AtomicPrivateSettlementPreparedRequestV1 approval =
-        AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
-            AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
-            "{\"approval\":{}}".getBytes(StandardCharsets.UTF_8));
+    final AtomicPrivateSettlementPreparedRequestV1 approval = auditApprovalRequest();
     final OperatorSigningContext auditor =
         new OperatorSigningContext(
             TestNetworkIds.canonical(),
@@ -500,10 +785,17 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
 
   private static AtomicPrivateSettlementToriiClientV1 client(
       final HttpTransportExecutor executor) {
+    return client(executor, new RecordingResponseVerifier());
+  }
+
+  private static AtomicPrivateSettlementToriiClientV1 client(
+      final HttpTransportExecutor executor,
+      final AtomicPrivateSettlementResponseVerifierV1 responseVerifier) {
     return AtomicPrivateSettlementToriiClientV1.builder()
         .executor(executor)
         .baseUri(URI.create("https://torii.example/api"))
         .localSigningContext(new LocalSigningContext(TestNetworkIds.canonical()))
+        .responseVerifier(responseVerifier)
         .build();
   }
 
@@ -511,6 +803,37 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
     return AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
         AtomicPrivateSettlementOperationV1.BUNDLE_SUBMIT,
         "{\"transaction\":{}}".getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static AtomicPrivateSettlementPreparedRequestV1 auditApprovalRequest() {
+    return auditApprovalRequest(TestNetworkIds.canonical().literal());
+  }
+
+  private static AtomicPrivateSettlementPreparedRequestV1 auditApprovalRequest(
+      final String networkId) {
+    final Map<String, Object> body = new LinkedHashMap<>();
+    body.put("version", 1L);
+    body.put("network_id", networkId);
+    body.put("bundle_id", stringField(IDENTIFIERS, "bundle_json"));
+    body.put("leg_ordinal", 0L);
+    body.put("dataspace_id", 7L);
+    body.put("auditor_id", "auditor-test");
+    body.put("audit_policy_digest", stringField(IDENTIFIERS, "payload_json"));
+    body.put("audit_key_epoch", 1L);
+    body.put("proof_digest", stringField(IDENTIFIERS, "payload_json"));
+    body.put("capsule_digest", stringField(IDENTIFIERS, "payload_json"));
+    body.put("delta_digest", stringField(IDENTIFIERS, "payload_json"));
+    body.put("old_root", "11".repeat(32));
+    body.put("new_root", "22".repeat(32));
+    body.put("expiry_height", 200L);
+    final Map<String, Object> approval = new LinkedHashMap<>();
+    approval.put("body", body);
+    approval.put("signature", "opaque-native-signature");
+    final Map<String, Object> request = new LinkedHashMap<>();
+    request.put("approval", approval);
+    return AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
+        AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
+        JsonEncoder.encode(request).getBytes(StandardCharsets.UTF_8));
   }
 
   private static ToriiCanonicalRequestAuth sponsorAuth() {
@@ -637,6 +960,68 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
               response.headers(),
               finalUri,
               response.redirected()));
+    }
+  }
+
+  private static final class RecordingResponseVerifier
+      implements AtomicPrivateSettlementResponseVerifierV1 {
+    private boolean available = true;
+    private int availabilityChecks;
+    private byte[] committeeResponse;
+    private byte[] committeeNetwork;
+    private byte[] committeePayload;
+    private byte[] capsuleResponse;
+    private byte[] capsuleNetwork;
+    private byte[] capsulePayload;
+    private String capsuleAuditorPublicKey;
+    private byte[] approvalResponse;
+    private byte[] approvalRequest;
+    private byte[] approvalNetwork;
+    private byte[] approvalPayload;
+    private String approvalAuditorPublicKey;
+
+    @Override
+    public void requireAvailable() {
+      availabilityChecks++;
+      if (!available) {
+        throw new IllegalStateException("injected verifier is unavailable");
+      }
+    }
+
+    @Override
+    public void verifyCommitteeProofResponse(
+        final byte[] responseJson,
+        final byte[] expectedNetworkId,
+        final byte[] requestedPayloadDigest) {
+      committeeResponse = responseJson.clone();
+      committeeNetwork = expectedNetworkId.clone();
+      committeePayload = requestedPayloadDigest.clone();
+    }
+
+    @Override
+    public void verifyAuditorCapsuleResponse(
+        final byte[] responseJson,
+        final byte[] expectedNetworkId,
+        final byte[] requestedPayloadDigest,
+        final String auditorPublicKey) {
+      capsuleResponse = responseJson.clone();
+      capsuleNetwork = expectedNetworkId.clone();
+      capsulePayload = requestedPayloadDigest.clone();
+      capsuleAuditorPublicKey = auditorPublicKey;
+    }
+
+    @Override
+    public void verifyAuditApprovalResponse(
+        final byte[] responseJson,
+        final byte[] requestJson,
+        final byte[] expectedNetworkId,
+        final byte[] requestedPayloadDigest,
+        final String auditorPublicKey) {
+      approvalResponse = responseJson.clone();
+      approvalRequest = requestJson.clone();
+      approvalNetwork = expectedNetworkId.clone();
+      approvalPayload = requestedPayloadDigest.clone();
+      approvalAuditorPublicKey = auditorPublicKey;
     }
   }
 }

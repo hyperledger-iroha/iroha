@@ -1707,12 +1707,11 @@ fn load_credentials(
         .checked_add(1)
         .ok_or_else(|| "credentials payload read bound overflow".to_owned())?;
     let mut raw = String::new();
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(read_limit)
         .read_to_string(&mut raw)
         .map_err(|error| error.to_string())?;
-    if u64::try_from(raw.len()).map_err(|_| "credentials payload length overflow")?
-        > max_file_bytes
+    if u64::try_from(raw.len()).map_err(|_| "credentials payload length overflow")? > max_file_bytes
     {
         return Err(format!(
             "credentials payload exceeds the configured {max_file_bytes}-byte bound"

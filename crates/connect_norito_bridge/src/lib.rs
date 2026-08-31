@@ -138,6 +138,14 @@ use connect_approval_ffi::{
     parse_algorithm_cstr, validate_exact_connect_identity,
 };
 mod confidential_note_ffi;
+mod private_settlement_ffi;
+pub use private_settlement_ffi::{
+    CONNECT_NORITO_PRIVATE_SETTLEMENT_REQUEST_MAX_BYTES_V1,
+    CONNECT_NORITO_PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1,
+    connect_norito_private_settlement_audit_approval_response_verify_v1,
+    connect_norito_private_settlement_auditor_capsule_response_verify_v1,
+    connect_norito_private_settlement_committee_proof_response_verify_v1,
+};
 #[cfg(all(
     feature = "kagemusha-candidate-evidence-lab",
     target_os = "ios",
@@ -293,6 +301,7 @@ const ERR_CANONICAL_JSON: c_int = -503;
 const ERR_VALIDATION_FEE_POLICY_PROOF: c_int = -504;
 const ERR_PARLIAMENT_TIMED_OVN: c_int = -505;
 const ERR_VALIDATION_FEE_HIJIRI_QUOTE: c_int = -506;
+const ERR_PRIVATE_SETTLEMENT_RESPONSE: c_int = -507;
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 enum BridgeError {
@@ -341,6 +350,7 @@ enum BridgeError {
     ValidationFeePolicyProof,
     ParliamentTimedOvn,
     ValidationFeeHijiriQuote,
+    PrivateSettlementResponse,
 }
 impl BridgeError {
     const fn code(self) -> c_int {
@@ -394,6 +404,7 @@ impl BridgeError {
             BridgeError::ValidationFeePolicyProof => ERR_VALIDATION_FEE_POLICY_PROOF,
             BridgeError::ParliamentTimedOvn => ERR_PARLIAMENT_TIMED_OVN,
             BridgeError::ValidationFeeHijiriQuote => ERR_VALIDATION_FEE_HIJIRI_QUOTE,
+            BridgeError::PrivateSettlementResponse => ERR_PRIVATE_SETTLEMENT_RESPONSE,
         }
     }
 }

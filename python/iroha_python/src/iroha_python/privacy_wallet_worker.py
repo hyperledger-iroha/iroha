@@ -213,7 +213,7 @@ class PrivateSettlementWalletLeaseV1:
 
 @dataclass(frozen=True, repr=False)
 class PrivateSettlementPreparedProofV1:
-    """Public artifacts returned by terminal native settlement proving."""
+    """Public proof, canonical delta, and capsule returned by native proving."""
 
     wallet_id: str
     canonical_genesis_hash: bytes
@@ -223,6 +223,7 @@ class PrivateSettlementPreparedProofV1:
     audit_plaintext_commitment: bytes
     statement_norito: bytes
     proof: bytes
+    delta_norito: bytes
     audit_capsule_norito: bytes
 
     def __repr__(self) -> str:
@@ -556,8 +557,9 @@ class PrivacyWalletWorkerControllerV1:
         audit_policy_norito: bytes,
         canonical_genesis_hash: bytes,
         current_height: int,
+        successor_root: bytes,
     ) -> PrivateSettlementPreparedProofV1:
-        """Consume one handle in Rust and return only public proof artifacts."""
+        """Consume one handle in Rust and return the proof-bound public leg."""
 
         _require_private_settlement_binding(binding)
         manifest = _require_opaque_public_bytes(
@@ -589,6 +591,11 @@ class PrivacyWalletWorkerControllerV1:
             raise ValueError("canonical_genesis_hash does not match the witness binding")
         if type(current_height) is not int or not 1 <= current_height <= _U64_MAX:
             raise ValueError("current_height is outside the canonical u64 range")
+        new_root = _require_nonzero_bytes(
+            successor_root,
+            _DIGEST_BYTES_V1,
+            "successor_root",
+        )
         payload = b"".join(
             (
                 _encode_handle_binding(handle, binding),
@@ -598,6 +605,7 @@ class PrivacyWalletWorkerControllerV1:
                 _put_bytes_u32(policy),
                 genesis_hash,
                 struct.pack(">Q", current_height),
+                new_root,
             )
         )
         response = self._exchange(
@@ -837,6 +845,7 @@ class PrivacyWalletWorkerControllerV1:
         expected_statement: bytes,
         expected_capsule: bytes,
     ) -> PrivateSettlementPreparedProofV1:
+        substituted = "private-settlement proof response substituted public artifacts"
         try:
             cursor = _Cursor(payload)
             if cursor.u8() != 5:
@@ -854,6 +863,10 @@ class PrivacyWalletWorkerControllerV1:
                 PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PROOF_BYTES_V1,
                 "private-settlement proof",
             )
+            delta = cursor.bytes_u32(
+                PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1,
+                "private-settlement delta",
+            )
             capsule = cursor.bytes_u32(
                 PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1,
                 "private-settlement audit capsule",
@@ -864,12 +877,12 @@ class PrivacyWalletWorkerControllerV1:
                 or not hmac.compare_digest(genesis_hash, binding.network_id)
                 or not hmac.compare_digest(digests[0], binding.public_intent_digest)
                 or any(not any(digest) for digest in digests)
+                or not proof
+                or not delta
                 or not hmac.compare_digest(statement, expected_statement)
                 or not hmac.compare_digest(capsule, expected_capsule)
             ):
-                raise PrivacyWalletWorkerErrorV1(
-                    "private-settlement proof response substituted public artifacts"
-                )
+                raise PrivacyWalletWorkerErrorV1(substituted)
             return PrivateSettlementPreparedProofV1(
                 wallet_id=wallet_id,
                 canonical_genesis_hash=genesis_hash,
@@ -879,10 +892,11 @@ class PrivacyWalletWorkerControllerV1:
                 audit_plaintext_commitment=digests[3],
                 statement_norito=statement,
                 proof=proof,
+                delta_norito=delta,
                 audit_capsule_norito=capsule,
             )
-        except (PrivacyWalletWorkerErrorV1, TypeError, ValueError) as error:
-            raise self._malformed(str(error)) from error
+        except (PrivacyWalletWorkerErrorV1, TypeError, ValueError):
+            raise self._malformed(substituted) from None
 
 
 def privacy_wallet_public_intent_digest_v1(canonical_public_intent: bytes) -> bytes:

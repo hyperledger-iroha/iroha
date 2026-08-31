@@ -4,10 +4,50 @@ use super::evidence_http_tests::{
 };
 use super::{
     HEADER_OPERATOR_NONCE, HEADER_OPERATOR_PUBLIC_KEY, HEADER_OPERATOR_SIGNATURE,
-    HEADER_OPERATOR_TIMESTAMP_MS, checked_random_keypair,
+    HEADER_OPERATOR_TIMESTAMP_MS, IdentityRequestSignerV1, IdentityRequestSigningErrorV1,
+    checked_random_keypair,
 };
 use crate::http::{Method as HttpMethod, Response, StatusCode};
+use iroha_crypto::{KeyPair, PublicKey, Signature};
 use std::sync::{Arc, Mutex};
+
+struct SubstitutingIdentityRequestSignerV1 {
+    advertised: KeyPair,
+    actual: KeyPair,
+}
+
+impl IdentityRequestSignerV1 for SubstitutingIdentityRequestSignerV1 {
+    fn public_key(&self) -> &PublicKey {
+        self.advertised.public_key()
+    }
+
+    fn sign_identity_request(
+        &self,
+        message: &[u8],
+    ) -> core::result::Result<Signature, IdentityRequestSigningErrorV1> {
+        Signature::try_new(self.actual.private_key(), message)
+            .map_err(|_| IdentityRequestSigningErrorV1)
+    }
+}
+
+#[test]
+fn identity_request_signer_cannot_substitute_its_advertised_public_key() {
+    let signer = SubstitutingIdentityRequestSignerV1 {
+        advertised: checked_random_keypair(),
+        actual: checked_random_keypair(),
+    };
+    let error = match client_with_base_url(base_url()).identity_signed_request_with_signer(
+        &signer,
+        HttpMethod::GET,
+        base_url(),
+        Vec::new(),
+    ) {
+        Ok(_) => panic!("substituted signer output must fail before transport"),
+        Err(error) => error,
+    };
+    assert_eq!(error.to_string(), "identity-bound request signing failed");
+}
+
 #[test]
 fn operator_endpoint_requires_a_signing_key_before_dispatch() {
     let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));

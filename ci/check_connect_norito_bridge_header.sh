@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_LIB="${ROOT_DIR}/crates/connect_norito_bridge/src/lib.rs"
 PARLIAMENT_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/parliament_timed_ovn_ffi.rs"
+PRIVATE_SETTLEMENT_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/private_settlement_ffi.rs"
 DATA_MODEL_PRIVACY="${ROOT_DIR}/crates/iroha_data_model/src/privacy/protocol.rs"
 HIJIRI_API="${ROOT_DIR}/crates/iroha_torii_shared/src/validation_fee_api.rs"
 HEADER="${ROOT_DIR}/crates/connect_norito_bridge/include/connect_norito_bridge.h"
@@ -61,8 +62,9 @@ run_contract_check() {
   local data_model_privacy="$5"
   local parliament_rust="$6"
   local hijiri_api="$7"
+  local private_settlement_rust="$8"
 
-  python3 - "${rust_lib}" "${header}" "${umbrella}" "${swift_contract}" "${data_model_privacy}" "${parliament_rust}" "${hijiri_api}" <<'PY'
+  python3 - "${rust_lib}" "${header}" "${umbrella}" "${swift_contract}" "${data_model_privacy}" "${parliament_rust}" "${hijiri_api}" "${private_settlement_rust}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -74,6 +76,7 @@ swift = Path(sys.argv[4]).read_text(encoding="utf-8")
 privacy_model = Path(sys.argv[5]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[6]).read_text(encoding="utf-8")
 hijiri_api = Path(sys.argv[7]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[8]).read_text(encoding="utf-8")
 
 KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
@@ -196,6 +199,12 @@ PARLIAMENT_TIMED_OVN_EXPORTS = {
 VALIDATION_FEE_HIJIRI_QUOTE_EXPORTS = {
     "connect_norito_validation_fee_hijiri_quote_request_v1",
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+}
+
+PRIVATE_SETTLEMENT_RESPONSE_EXPORTS = {
+    "connect_norito_private_settlement_committee_proof_response_verify_v1",
+    "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+    "connect_norito_private_settlement_audit_approval_response_verify_v1",
 }
 
 TRANSACTION_SIGNER_BASE_EXPORTS = {
@@ -570,6 +579,19 @@ exact(
     header_hijiri_quote,
 )
 
+rust_private_settlement_response = rust_exports("connect_norito_private_settlement_")
+header_private_settlement_response = header_exports("connect_norito_private_settlement_")
+exact(
+    "Rust private-settlement response verifier",
+    PRIVATE_SETTLEMENT_RESPONSE_EXPORTS,
+    rust_private_settlement_response,
+)
+exact(
+    "C header private-settlement response verifier",
+    PRIVATE_SETTLEMENT_RESPONSE_EXPORTS,
+    header_private_settlement_response,
+)
+
 signer_name = re.compile(
     r"^connect_norito_encode_[a-z0-9_]+_signed_transaction(?:_alg)?$"
 )
@@ -627,6 +649,7 @@ require_signature_parity(
     | DETACHED_EXPORTS
     | PARLIAMENT_TIMED_OVN_EXPORTS
     | VALIDATION_FEE_HIJIRI_QUOTE_EXPORTS
+    | PRIVATE_SETTLEMENT_RESPONSE_EXPORTS
     | rust_transaction_signers
     | {"connect_norito_bridge_abi_version", "connect_norito_free"}
 )
@@ -778,7 +801,8 @@ print(
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS exports, "
     f"{len(DETACHED_EXPORTS)} detached-transaction exports, and "
     f"{len(PARLIAMENT_TIMED_OVN_EXPORTS)} Parliament timed-OVN exports, and "
-    f"{len(VALIDATION_FEE_HIJIRI_QUOTE_EXPORTS)} validation-fee Hijiri quote exports"
+    f"{len(VALIDATION_FEE_HIJIRI_QUOTE_EXPORTS)} validation-fee Hijiri quote exports, and "
+    f"{len(PRIVATE_SETTLEMENT_RESPONSE_EXPORTS)} private-settlement response exports"
 )
 PY
 }
@@ -826,6 +850,7 @@ make_negative_workspace() {
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/iroha-bridge-header.XXXXXX")"
   cp "${RUST_LIB}" "${tmp}/lib.rs"
   cp "${PARLIAMENT_RUST}" "${tmp}/parliament_timed_ovn_ffi.rs"
+  cp "${PRIVATE_SETTLEMENT_RUST}" "${tmp}/private_settlement_ffi.rs"
   cp "${DATA_MODEL_PRIVACY}" "${tmp}/privacy.rs"
   cp "${HIJIRI_API}" "${tmp}/validation_fee_api.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
@@ -844,7 +869,8 @@ expect_contract_rejection() {
       "${tmp}/KagemushaRecursiveSpendV2.swift" \
       "${tmp}/privacy.rs" \
       "${tmp}/parliament_timed_ovn_ffi.rs" \
-      "${tmp}/validation_fee_api.rs" 2>&1)"; then
+      "${tmp}/validation_fee_api.rs" \
+      "${tmp}/private_settlement_ffi.rs" 2>&1)"; then
     echo "[bridge-header] negative control unexpectedly passed: ${MODE}" >&2
     exit 1
   fi
@@ -870,7 +896,8 @@ if [[ "${MODE}" == --self-test-* ]]; then
     "${SWIFT_CONTRACT}" \
     "${DATA_MODEL_PRIVACY}" \
     "${PARLIAMENT_RUST}" \
-    "${HIJIRI_API}" >/dev/null
+    "${HIJIRI_API}" \
+    "${PRIVATE_SETTLEMENT_RUST}" >/dev/null
   tmp="$(make_negative_workspace)"
   trap 'rm -rf "${tmp}"' EXIT
   tmp_rust="${tmp}/lib.rs"
@@ -1080,7 +1107,8 @@ run_contract_check \
   "${SWIFT_CONTRACT}" \
   "${DATA_MODEL_PRIVACY}" \
   "${PARLIAMENT_RUST}" \
-  "${HIJIRI_API}"
+  "${HIJIRI_API}" \
+  "${PRIVATE_SETTLEMENT_RUST}"
 
 if ! command -v "${CC:-cc}" >/dev/null 2>&1; then
   echo "[connect-norito-header] required C compiler not found: ${CC:-cc}" >&2

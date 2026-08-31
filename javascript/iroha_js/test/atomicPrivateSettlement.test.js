@@ -83,6 +83,55 @@ function roleHeaders() {
   };
 }
 
+function acceptingNativeVerifier(calls = undefined) {
+  return {
+    privateSettlementVerifyCommitteeProofResponseV1(...arguments_) {
+      calls?.committee.push(arguments_);
+    },
+    privateSettlementVerifyAuditorCapsuleResponseV1(...arguments_) {
+      calls?.capsule.push(arguments_);
+    },
+    privateSettlementVerifyAuditApprovalResponseV1(...arguments_) {
+      calls?.approval.push(arguments_);
+    },
+  };
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function attestationNetworkId() {
+  return fixture.responses.auditor_capsule.responder_attestation.body.network_id;
+}
+
+function auditApprovalRequest(networkId = attestationNetworkId()) {
+  return new AtomicPrivateSettlementPreparedRequestV1(
+    AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
+    JSON.stringify({
+      approval: {
+        body: {
+          version: 1,
+          network_id: networkId,
+          bundle_id: fixture.identifiers.bundle_json,
+          leg_ordinal: 0,
+          dataspace_id: 7,
+          auditor_id: "auditor-test",
+          audit_policy_digest: fixture.identifiers.payload_json,
+          audit_key_epoch: 1,
+          proof_digest: fixture.identifiers.payload_json,
+          capsule_digest: fixture.identifiers.payload_json,
+          delta_digest: fixture.identifiers.payload_json,
+          old_root: "11".repeat(32),
+          new_root: "22".repeat(32),
+          expiry_height: 200,
+        },
+        signature: "opaque-native-signature",
+      },
+    }),
+  );
+}
+
 test("shared fixture pins the complete JavaScript operation catalog", () => {
   assert.equal(fixture.fixture_kind, "norito_json_transport_contract_v1");
   assert.equal(fixture.version, 1);
@@ -378,6 +427,8 @@ test("role and public queries use disjoint authentication policies", async () =>
   const bundlePath = fixture.identifiers.bundle_hex;
   const seen = [];
   const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    networkId: attestationNetworkId(),
+    nativeVerifier: acceptingNativeVerifier(),
     async fetchImpl(target, options) {
       seen.push({ target, headers: options.headers });
       if (target.endsWith("/audit-approvals")) {
@@ -389,10 +440,7 @@ test("role and public queries use disjoint authentication policies", async () =>
       return response(fixture.responses.bundle_status_aborted, target);
     },
   });
-  const approval = new AtomicPrivateSettlementPreparedRequestV1(
-    AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
-    '{"approval":{}}',
-  );
+  const approval = auditApprovalRequest();
   await client.submitAuditApproval(payloadPath, approval, {
     roleHeaderProvider: roleHeaders,
   });
@@ -414,6 +462,337 @@ test("role and public queries use disjoint authentication policies", async () =>
   await assert.rejects(
     () => wrongStatusClient.getBundleReceipt(bundlePath),
     /response status is invalid/u,
+  );
+});
+
+test("auditor capsule requires one exact nonzero authoritative height", async () => {
+  const valid = fixture.responses.auditor_capsule;
+  assert.notEqual(attestationNetworkId(), fixture.identifiers.payload_json);
+  const nativeCalls = { committee: [], capsule: [], approval: [] };
+  const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    networkId: attestationNetworkId(),
+    nativeVerifier: acceptingNativeVerifier(nativeCalls),
+    async fetchImpl(target) {
+      return response(valid, target);
+    },
+  });
+  const received = await client.getAuditorCapsule(fixture.identifiers.payload_hex, {
+    roleHeaderProvider: roleHeaders,
+  });
+  assert.deepEqual(
+    JSON.parse(new TextDecoder().decode(received.bytes())),
+    valid,
+  );
+  assert.equal(nativeCalls.capsule.length, 1);
+  assert.deepEqual(
+    nativeCalls.capsule[0].map((value) => (
+      value instanceof Uint8Array ? Buffer.from(value).toString("hex") : value
+    )),
+    [
+      Buffer.from(jsonBytes(valid)).toString("hex"),
+      attestationNetworkId().slice(5, 69).toLowerCase(),
+      fixture.identifiers.payload_hex,
+      roleHeaders()["x-iroha-operator-public-key"],
+    ],
+  );
+
+  const invalidHeights = [true, 0, -1, 1.5, "105", 18446744073709551616n];
+  for (const authoritativeHeight of invalidHeights) {
+    const invalid = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+      networkId: attestationNetworkId(),
+      nativeVerifier: acceptingNativeVerifier(),
+      async fetchImpl(target) {
+        const body = { ...valid, authoritative_height: authoritativeHeight };
+        if (typeof authoritativeHeight === "bigint") {
+          const encoded = JSON.stringify(valid).replace(
+            '"authoritative_height":105',
+            `"authoritative_height":${authoritativeHeight}`,
+          );
+          return response(new TextEncoder().encode(encoded), target);
+        }
+        return response(body, target);
+      },
+    });
+    await assert.rejects(
+      () => invalid.getAuditorCapsule(fixture.identifiers.payload_hex, {
+        roleHeaderProvider: roleHeaders,
+      }),
+      /atomic private settlement response is invalid/u,
+    );
+  }
+});
+
+test("auditor capsule attestation rejects substitutions and malformed scalar types", async () => {
+  const valid = fixture.responses.auditor_capsule;
+  const candidates = [];
+  for (const [field, replacement] of [
+    ["network_id", fixture.identifiers.payload_json],
+    ["payload_digest", fixture.identifiers.bundle_json],
+    ["view_digest", fixture.identifiers.payload_hex],
+    ["authority_digest", fixture.identifiers.payload_hex],
+    ["responder", ""],
+    ["version", true],
+    ["lifecycle_code", true],
+  ]) {
+    const candidate = cloneJson(valid);
+    candidate.responder_attestation.body[field] = replacement;
+    candidates.push(candidate);
+  }
+
+  const wrongSignature = cloneJson(valid);
+  wrongSignature.responder_attestation.signature = "AQ==";
+  candidates.push(wrongSignature);
+
+  const booleanHeight = cloneJson(valid);
+  booleanHeight.authoritative_height = 1;
+  booleanHeight.responder_attestation.body.authoritative_height = true;
+  candidates.push(booleanHeight);
+
+  const manifestNetwork = cloneJson(valid);
+  manifestNetwork.manifest.network_id = fixture.identifiers.payload_json;
+  candidates.push(manifestNetwork);
+
+  for (const candidate of candidates) {
+    const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+      networkId: attestationNetworkId(),
+      nativeVerifier: acceptingNativeVerifier(),
+      async fetchImpl(target) {
+        return response(candidate, target);
+      },
+    });
+    await assert.rejects(
+      () => client.getAuditorCapsule(fixture.identifiers.payload_hex, {
+        roleHeaderProvider: roleHeaders,
+      }),
+      /atomic private settlement response is invalid/u,
+    );
+  }
+
+  const wrongContext = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    networkId: fixture.identifiers.payload_json,
+    nativeVerifier: acceptingNativeVerifier(),
+    async fetchImpl(target) {
+      return response(valid, target);
+    },
+  });
+  await assert.rejects(
+    () => wrongContext.getAuditorCapsule(fixture.identifiers.payload_hex, {
+      roleHeaderProvider: roleHeaders,
+    }),
+    /response is invalid/u,
+  );
+
+  let fetched = false;
+  const unconfigured = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    async fetchImpl() {
+      fetched = true;
+      throw new Error("must not fetch");
+    },
+  });
+  await assert.rejects(
+    () => unconfigured.getAuditorCapsule(fixture.identifiers.payload_hex, {
+      roleHeaderProvider: roleHeaders,
+    }),
+    /configured settlement networkId/u,
+  );
+  assert.equal(fetched, false);
+});
+
+test("approval acknowledgement binds the prepared request and rejects substitutions", async () => {
+  const valid = fixture.responses.audit_approval;
+  const nativeCalls = { committee: [], capsule: [], approval: [] };
+  const validClient = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    networkId: attestationNetworkId(),
+    nativeVerifier: acceptingNativeVerifier(nativeCalls),
+    async fetchImpl(target) {
+      return response(valid, target);
+    },
+  });
+  const request = auditApprovalRequest();
+  const received = await validClient.submitAuditApproval(
+    fixture.identifiers.payload_hex,
+    request,
+    { roleHeaderProvider: roleHeaders },
+  );
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(received.bytes())), valid);
+  assert.equal(nativeCalls.approval.length, 1);
+  assert.deepEqual(
+    nativeCalls.approval[0].map((value) => (
+      value instanceof Uint8Array ? Buffer.from(value).toString("hex") : value
+    )),
+    [
+      Buffer.from(jsonBytes(valid)).toString("hex"),
+      Buffer.from(request.bytes()).toString("hex"),
+      attestationNetworkId().slice(5, 69).toLowerCase(),
+      fixture.identifiers.payload_hex,
+      roleHeaders()["x-iroha-operator-public-key"],
+    ],
+  );
+
+  const candidates = [];
+  for (const [field, replacement] of [
+    ["network_id", fixture.identifiers.payload_json],
+    ["payload_digest", fixture.identifiers.bundle_json],
+    ["approval_digest", fixture.identifiers.payload_hex],
+    ["acknowledgement_digest", fixture.identifiers.payload_hex],
+    ["authority_digest", fixture.identifiers.payload_hex],
+    ["responder", ""],
+    ["version", true],
+    ["lifecycle_code", true],
+  ]) {
+    const candidate = cloneJson(valid);
+    candidate.responder_attestation.body[field] = replacement;
+    candidates.push(candidate);
+  }
+
+  const wrongSignature = cloneJson(valid);
+  wrongSignature.responder_attestation.signature = "AQ==";
+  candidates.push(wrongSignature);
+
+  const booleanHeight = cloneJson(valid);
+  booleanHeight.authoritative_height = 1;
+  booleanHeight.responder_attestation.body.authoritative_height = true;
+  candidates.push(booleanHeight);
+
+  for (const [field, replacement] of [
+    ["bundle_id", fixture.identifiers.payload_json],
+    ["payload_digest", fixture.identifiers.bundle_json],
+    ["leg_ordinal", true],
+    ["leg_ordinal", 255],
+    ["collected", true],
+    ["required", true],
+    ["newly_recorded", 1],
+  ]) {
+    const candidate = cloneJson(valid);
+    candidate[field] = replacement;
+    candidates.push(candidate);
+  }
+
+  const wrongDataspace = cloneJson(valid);
+  wrongDataspace.committee_authority.route.dataspace_id = 8;
+  candidates.push(wrongDataspace);
+
+  const expired = cloneJson(valid);
+  expired.authoritative_height = 201;
+  expired.responder_attestation.body.authoritative_height = 201;
+  candidates.push(expired);
+
+  for (const candidate of candidates) {
+    const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+      networkId: attestationNetworkId(),
+      nativeVerifier: acceptingNativeVerifier(),
+      async fetchImpl(target) {
+        return response(candidate, target);
+      },
+    });
+    await assert.rejects(
+      () => client.submitAuditApproval(
+        fixture.identifiers.payload_hex,
+        auditApprovalRequest(),
+        { roleHeaderProvider: roleHeaders },
+      ),
+      /atomic private settlement response is invalid/u,
+    );
+  }
+
+  let fetched = false;
+  const mismatchedRequest = new AtomicPrivateSettlementToriiClientV1(
+    "https://torii.example",
+    {
+      networkId: attestationNetworkId(),
+      async fetchImpl() {
+        fetched = true;
+        throw new Error("must not fetch");
+      },
+    },
+  );
+  await assert.rejects(
+    () => mismatchedRequest.submitAuditApproval(
+      fixture.identifiers.payload_hex,
+      auditApprovalRequest(fixture.identifiers.payload_json),
+      { roleHeaderProvider: roleHeaders },
+    ),
+    /differs from the configured networkId/u,
+  );
+  assert.equal(fetched, false);
+});
+
+test("committee proof is network-bound and restricted routes fail closed natively", async () => {
+  const committeeProof = {
+    manifest: {},
+    audit_policy: {},
+    committee_authority: {},
+    statement: {},
+    proof: "AQ==",
+    delta: {},
+    audit_approvals: [],
+    audit_capsule_digest: fixture.identifiers.payload_json,
+    availability: {},
+    lifecycle: { status: "collecting", value: null },
+  };
+  const nativeCalls = { committee: [], capsule: [], approval: [] };
+  const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    networkId: attestationNetworkId(),
+    nativeVerifier: acceptingNativeVerifier(nativeCalls),
+    async fetchImpl(target) {
+      return response(committeeProof, target);
+    },
+  });
+
+  const received = await client.getCommitteeProof(
+    fixture.identifiers.payload_hex,
+    { roleHeaderProvider: roleHeaders },
+  );
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(received.bytes())), committeeProof);
+  assert.equal(nativeCalls.committee.length, 1);
+  assert.deepEqual(
+    nativeCalls.committee[0].map((value) => Buffer.from(value).toString("hex")),
+    [
+      Buffer.from(jsonBytes(committeeProof)).toString("hex"),
+      attestationNetworkId().slice(5, 69).toLowerCase(),
+      fixture.identifiers.payload_hex,
+    ],
+  );
+
+  let fetched = false;
+  const missing = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    networkId: attestationNetworkId(),
+    nativeVerifier: {},
+    async fetchImpl() {
+      fetched = true;
+      throw new Error("must not fetch");
+    },
+  });
+  await assert.rejects(
+    () => missing.getCommitteeProof(
+      fixture.identifiers.payload_hex,
+      { roleHeaderProvider: roleHeaders },
+    ),
+    /restricted response verifier is unavailable/u,
+  );
+  assert.equal(fetched, false);
+
+  const rejecting = acceptingNativeVerifier();
+  rejecting.privateSettlementVerifyAuditorCapsuleResponseV1 = () => {
+    throw new Error("LEAK_CANARY_NATIVE_RESPONSE");
+  };
+  const rejected = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    networkId: attestationNetworkId(),
+    nativeVerifier: rejecting,
+    async fetchImpl(target) {
+      return response(fixture.responses.auditor_capsule, target);
+    },
+  });
+  await assert.rejects(
+    () => rejected.getAuditorCapsule(
+      fixture.identifiers.payload_hex,
+      { roleHeaderProvider: roleHeaders },
+    ),
+    (error) => {
+      assert.equal(error.message, "atomic private settlement response is invalid");
+      assert.doesNotMatch(String(error), /LEAK_CANARY_NATIVE_RESPONSE/u);
+      return true;
+    },
   );
 });
 

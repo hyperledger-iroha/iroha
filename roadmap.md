@@ -149,14 +149,24 @@ Completed history lives in [`status.md`](./status.md).
 
 - Release-candidate-qualify the implemented prepared-leg, audit, coordination,
   restart-certificate recovery, carrier, status, and receipt APIs in Rust/CLI,
-  Kotlin, mirrored Java, Swift, Python, and JavaScript. Carrier admission now
-  uses one exact non-terminal three-field acknowledgement in the Rust DTO and
-  all six maintained non-Rust clients, and the packaged OpenAPI source plus
-  both artifact mirrors agree on that shape. Regenerate and verify their stale
-  publication manifests, run the focused Rust/OpenAPI contract test, and run
-  every complete SDK suite from the settled candidate. Rebuild the missing
-  Swift native bridge from that same commit and preserve opaque witness handles
-  and plaintext redaction through packaging and clean-consumer tests.
+  Kotlin, mirrored Java, Swift, Python, and JavaScript. Carrier admission uses
+  one exact non-terminal three-field acknowledgement in the Rust DTO and all
+  six maintained non-Rust clients, and the packaged OpenAPI source plus both
+  artifact mirrors agree on that shape. Swift's restricted routes now
+  preflight all three native response verifiers before dispatch, retain public
+  status/receipt access without them, strictly validate responder/approval
+  data, and preserve exact canonical `u128` JSON integers on macOS 12/iOS 15.
+  The fingerprint-bound dirty-source XCFramework and focused 14/14, 17/17, and
+  1/1 Swift passes recorded in `status.md` are local integration evidence only.
+  Repair the fail-closed current-source OpenAPI generator's ISO 20022
+  response-header reference, then regenerate, verify, and sign the stale
+  publication manifests from the settled candidate; the three mutable JSON
+  authorities are already byte-identical. Track all new Swift/Java/Kotlin
+  verifier sources in that candidate, rerun both reviewed SDK source-closure
+  suites, rebuild the privacy-production bridge from one clean settled
+  candidate, and run every complete SDK suite and clean-consumer/package check
+  from that same source while preserving opaque witness handles and plaintext
+  redaction.
 - Run real four-validator processes for every participating dataspace at
   N=2,3,4,8,16, with N=3 as the paper configuration and mandatory signed RS16
   DA/RBC throughout. Exercise one validator unavailable per committee,

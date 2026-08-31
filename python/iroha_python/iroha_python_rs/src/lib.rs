@@ -87,9 +87,10 @@ use iroha_data_model::{
     musubi::ArchiveId,
     name::Name,
     nexus::{
-        DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision,
-        LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneId, LaneLifecycleParameterV1, LaneLifecyclePlan,
-        LaneLifecycleStatusV1, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash,
+        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, FeeSponsorProgram,
+        FeeSponsorProgramId, FeeSponsorProgramRevision, LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneId,
+        LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1, LanePrivacyProof,
+        LaneRelayEnvelope, compute_settlement_hash,
     },
     nft::NftId,
     parameter::Parameter,
@@ -162,6 +163,14 @@ use iroha_torii_shared::{
         SignInProofV1, WalletSignatureV1,
     },
     connect_sdk,
+    private_settlement_api::{
+        PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
+        PrivateSettlementAuditorCapsuleResponseV1, PrivateSettlementCommitteeProofResponseV1,
+        validate_private_settlement_audit_approval_response_v1,
+        validate_private_settlement_auditor_capsule_response_v1,
+        validate_private_settlement_auditor_identity_v1,
+        validate_private_settlement_committee_proof_response_v1,
+    },
     validation_fee_api::{
         VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
         VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1, VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
@@ -14867,6 +14876,145 @@ fn privacy_compiled_profile_catalog_v1_py(py: Python<'_>) -> PyResult<Py<PyBytes
 fn privacy_validate_compiled_profile_catalog_v1_py(archive: &[u8]) -> i32 {
     validate_local_privacy_compiled_profile_catalog_archive_v1(archive).code()
 }
+
+const PRIVATE_SETTLEMENT_RESPONSE_JSON_MAX_BYTES_V1: usize = 32 * 1024 * 1024;
+const PRIVATE_SETTLEMENT_APPROVAL_REQUEST_JSON_MAX_BYTES_V1: usize = 1024 * 1024;
+const PRIVATE_SETTLEMENT_AUDITOR_KEY_MAX_BYTES_V1: usize = 1024;
+
+fn private_settlement_expected_network_id_v1(bytes: &[u8]) -> PyResult<NetworkId> {
+    let bytes = fixed_array::<32>(bytes, "expected_network_id")?;
+    Ok(NetworkId::from_genesis_hash(
+        HashOf::from_untyped_unchecked(Hash::prehashed(bytes)),
+    ))
+}
+
+fn private_settlement_requested_payload_digest_v1(bytes: &[u8]) -> PyResult<Hash> {
+    fixed_array::<32>(bytes, "requested_payload_digest").map(Hash::prehashed)
+}
+
+fn private_settlement_auditor_signing_key_v1(literal: &str) -> PyResult<PublicKey> {
+    if literal.is_empty()
+        || literal.trim() != literal
+        || literal.len() > PRIVATE_SETTLEMENT_AUDITOR_KEY_MAX_BYTES_V1
+        || literal.contains('\0')
+    {
+        return Err(PyValueError::new_err(
+            "atomic private settlement response is invalid",
+        ));
+    }
+    let key = PublicKey::from_str(literal).map_err(|_| {
+        PyValueError::new_err("atomic private settlement response is invalid")
+    })?;
+    if key.to_string() != literal {
+        return Err(PyValueError::new_err(
+            "atomic private settlement response is invalid",
+        ));
+    }
+    Ok(key)
+}
+
+fn private_settlement_response_bytes_v1<'a>(bytes: &'a [u8], maximum: usize) -> PyResult<&'a [u8]> {
+    if bytes.is_empty() || bytes.len() > maximum {
+        return Err(PyValueError::new_err(
+            "atomic private settlement response is invalid",
+        ));
+    }
+    Ok(bytes)
+}
+
+#[pyfunction]
+#[pyo3(name = "private_settlement_verify_committee_proof_response_v1")]
+fn private_settlement_verify_committee_proof_response_v1_py(
+    response_json: &[u8],
+    expected_network_id: &[u8],
+    requested_payload_digest: &[u8],
+) -> PyResult<()> {
+    let response_json = private_settlement_response_bytes_v1(
+        response_json,
+        PRIVATE_SETTLEMENT_RESPONSE_JSON_MAX_BYTES_V1,
+    )?;
+    let expected_network = private_settlement_expected_network_id_v1(expected_network_id)?;
+    let requested = private_settlement_requested_payload_digest_v1(requested_payload_digest)?;
+    let response: PrivateSettlementCommitteeProofResponseV1 =
+        json::from_slice(response_json).map_err(|_| {
+            PyValueError::new_err("atomic private settlement response is invalid")
+        })?;
+    validate_private_settlement_committee_proof_response_v1(
+        &expected_network,
+        requested,
+        &response,
+    )
+    .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))
+}
+
+#[pyfunction]
+#[pyo3(name = "private_settlement_verify_auditor_capsule_response_v1")]
+fn private_settlement_verify_auditor_capsule_response_v1_py(
+    response_json: &[u8],
+    expected_network_id: &[u8],
+    requested_payload_digest: &[u8],
+    auditor_signing_key: &str,
+) -> PyResult<()> {
+    let response_json = private_settlement_response_bytes_v1(
+        response_json,
+        PRIVATE_SETTLEMENT_RESPONSE_JSON_MAX_BYTES_V1,
+    )?;
+    let expected_network = private_settlement_expected_network_id_v1(expected_network_id)?;
+    let requested = private_settlement_requested_payload_digest_v1(requested_payload_digest)?;
+    let auditor_key = private_settlement_auditor_signing_key_v1(auditor_signing_key)?;
+    let response: PrivateSettlementAuditorCapsuleResponseV1 = json::from_slice(response_json)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    validate_private_settlement_auditor_capsule_response_v1(
+        &expected_network,
+        requested,
+        &response,
+    )
+    .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    validate_private_settlement_auditor_identity_v1(&auditor_key, &response)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))
+}
+
+#[pyfunction]
+#[pyo3(name = "private_settlement_verify_audit_approval_response_v1")]
+fn private_settlement_verify_audit_approval_response_v1_py(
+    response_json: &[u8],
+    request_json: &[u8],
+    expected_network_id: &[u8],
+    requested_payload_digest: &[u8],
+    auditor_signing_key: &str,
+) -> PyResult<()> {
+    let response_json = private_settlement_response_bytes_v1(
+        response_json,
+        PRIVATE_SETTLEMENT_RESPONSE_JSON_MAX_BYTES_V1,
+    )?;
+    let request_json = private_settlement_response_bytes_v1(
+        request_json,
+        PRIVATE_SETTLEMENT_APPROVAL_REQUEST_JSON_MAX_BYTES_V1,
+    )?;
+    let expected_network = private_settlement_expected_network_id_v1(expected_network_id)?;
+    let requested = private_settlement_requested_payload_digest_v1(requested_payload_digest)?;
+    let auditor_key = private_settlement_auditor_signing_key_v1(auditor_signing_key)?;
+    let request: PrivateSettlementAuditApprovalRequestV1 = json::from_slice(request_json)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    if request.approval.body.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
+        || request.approval.body.network_id != expected_network
+        || request
+            .approval
+            .signature
+            .verify(&auditor_key, &request.approval.body)
+            .is_err()
+    {
+        return Err(PyValueError::new_err(
+            "atomic private settlement response is invalid",
+        ));
+    }
+    let response: PrivateSettlementAuditApprovalResponseV1 = json::from_slice(response_json)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    validate_private_settlement_audit_approval_response_v1(requested, &request, &response)
+        .map(|_| ())
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))
+}
+
 #[pyfunction]
 #[pyo3(name = "validation_fee_hijiri_quote_request_v1")]
 fn validation_fee_hijiri_quote_request_v1_py(
@@ -15326,6 +15474,18 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         privacy_validate_compiled_profile_catalog_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        private_settlement_verify_committee_proof_response_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        private_settlement_verify_auditor_capsule_response_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        private_settlement_verify_audit_approval_response_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

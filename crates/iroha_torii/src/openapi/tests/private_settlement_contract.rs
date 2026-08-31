@@ -491,6 +491,7 @@ fn private_settlement_top_level_v1_dtos_are_strict() {
         (
             "PrivateSettlementAuditorCapsuleResponseV1",
             &[
+                "authoritative_height",
                 "manifest",
                 "audit_policy",
                 "committee_authority",
@@ -499,19 +500,23 @@ fn private_settlement_top_level_v1_dtos_are_strict() {
                 "audit_capsule",
                 "availability",
                 "lifecycle",
+                "responder_attestation",
             ][..],
         ),
         ("PrivateSettlementAuditApprovalRequestV1", &["approval"][..]),
         (
             "PrivateSettlementAuditApprovalResponseV1",
             &[
+                "authoritative_height",
                 "bundle_id",
                 "payload_digest",
                 "leg_ordinal",
+                "committee_authority",
                 "collected",
                 "required",
                 "newly_recorded",
                 "lifecycle",
+                "responder_attestation",
             ][..],
         ),
         (

@@ -22,6 +22,7 @@ use norito::core::{self as ncore, DecodeFromSlice};
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use std::{cell::RefCell, format, string::String, vec, vec::Vec};
+use zeroize::Zeroize;
 ffi::ffi_item! {
     /// Represents a signature of the data (`Block` or `Transaction` for example).
     #[derive(
@@ -32,6 +33,14 @@ ffi::ffi_item! {
     #[debug("{{ {} }}", hex::encode_upper(payload))]
     pub struct Signature {
         payload: ConstVec<u8>
+    }
+}
+
+impl Zeroize for Signature {
+    fn zeroize(&mut self) {
+        let mut bytes = core::mem::take(&mut self.payload).into_vec();
+        bytes.zeroize();
+        self.payload = ConstVec::from(bytes);
     }
 }
 const PUBLIC_KEY_FULL_CACHE_LIMIT: usize = 128;
@@ -587,6 +596,11 @@ impl<T> core::fmt::Debug for SignatureOf<T> {
 impl<T> Clone for SignatureOf<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone(), PhantomData)
+    }
+}
+impl<T> Zeroize for SignatureOf<T> {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
     }
 }
 #[allow(clippy::unconditional_recursion)] // False-positive

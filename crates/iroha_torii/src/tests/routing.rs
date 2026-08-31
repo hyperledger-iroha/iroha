@@ -259,8 +259,8 @@ mod tests {
             Some("smartcontract::deploy")
         );
     }
-    #[test]
-    fn status_exact_probes_return_independent_json_scalars() {
+    #[tokio::test]
+    async fn status_exact_probes_return_independent_json_scalars() {
         let metrics = Arc::new(Metrics::default());
         metrics.block_height.inc_by(4_193);
         let telemetry = MaybeTelemetry::from_profile(

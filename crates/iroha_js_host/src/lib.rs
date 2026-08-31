@@ -11,6 +11,7 @@
     clippy::unnecessary_wraps
 )]
 mod authenticated_block_proofs;
+mod private_settlement_response;
 mod secure_private_fs;
 mod sorafs_orderbook_submission;
 macro_rules! norito_json {

@@ -27,6 +27,101 @@ private final class AtomicPrivateSettlementStubURLProtocolV1: URLProtocol {
     override func stopLoading() {}
 }
 
+private struct AtomicPrivateSettlementAcceptingVerifierV1:
+    AtomicPrivateSettlementResponseVerifyingV1
+{
+    func requireAvailable() throws {}
+
+    func verifyCommitteeProof(
+        responseJSON: Data,
+        expectedNetworkID: Data,
+        requestedPayloadDigest: Data
+    ) throws {}
+
+    func verifyAuditorCapsule(
+        responseJSON: Data,
+        expectedNetworkID: Data,
+        requestedPayloadDigest: Data,
+        auditorSigningKey: String
+    ) throws {}
+
+    func verifyAuditApproval(
+        responseJSON: Data,
+        requestJSON: Data,
+        expectedNetworkID: Data,
+        requestedPayloadDigest: Data,
+        auditorSigningKey: String
+    ) throws {}
+}
+
+private struct AtomicPrivateSettlementRejectingVerifierV1:
+    AtomicPrivateSettlementResponseVerifyingV1
+{
+    func requireAvailable() throws {}
+
+    func verifyCommitteeProof(
+        responseJSON: Data,
+        expectedNetworkID: Data,
+        requestedPayloadDigest: Data
+    ) throws {
+        throw AtomicPrivateSettlementNativeVerifierErrorV1.nativeRejected(-507)
+    }
+
+    func verifyAuditorCapsule(
+        responseJSON: Data,
+        expectedNetworkID: Data,
+        requestedPayloadDigest: Data,
+        auditorSigningKey: String
+    ) throws {
+        throw AtomicPrivateSettlementNativeVerifierErrorV1.nativeRejected(-507)
+    }
+
+    func verifyAuditApproval(
+        responseJSON: Data,
+        requestJSON: Data,
+        expectedNetworkID: Data,
+        requestedPayloadDigest: Data,
+        auditorSigningKey: String
+    ) throws {
+        throw AtomicPrivateSettlementNativeVerifierErrorV1.nativeRejected(-507)
+    }
+}
+
+private struct AtomicPrivateSettlementUnavailableVerifierV1:
+    AtomicPrivateSettlementResponseVerifyingV1
+{
+    func requireAvailable() throws {
+        throw AtomicPrivateSettlementNativeVerifierErrorV1.bridgeUnavailable
+    }
+
+    func verifyCommitteeProof(
+        responseJSON: Data,
+        expectedNetworkID: Data,
+        requestedPayloadDigest: Data
+    ) throws {
+        XCTFail("unavailable verifier must fail before committee-proof verification")
+    }
+
+    func verifyAuditorCapsule(
+        responseJSON: Data,
+        expectedNetworkID: Data,
+        requestedPayloadDigest: Data,
+        auditorSigningKey: String
+    ) throws {
+        XCTFail("unavailable verifier must fail before capsule verification")
+    }
+
+    func verifyAuditApproval(
+        responseJSON: Data,
+        requestJSON: Data,
+        expectedNetworkID: Data,
+        requestedPayloadDigest: Data,
+        auditorSigningKey: String
+    ) throws {
+        XCTFail("unavailable verifier must fail before approval verification")
+    }
+}
+
 @available(iOS 15.0, macOS 12.0, *)
 final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
     private let sponsorSeed = Data(repeating: 0x61, count: 32)
@@ -36,6 +131,14 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         AtomicPrivateSettlementStubURLProtocolV1.lastRequest = nil
         AtomicPrivateSettlementStubURLProtocolV1.dispatchCount = 0
         super.tearDown()
+    }
+
+    func testNativeResponseVerifierLinkageProbeResolvesAllRestrictedSymbols() throws {
+        #if canImport(Darwin)
+        try AtomicPrivateSettlementNativeResponseVerifierV1().requireAvailable()
+        #else
+        throw XCTSkip("the native Apple bridge is only available on Darwin")
+        #endif
     }
 
     func testSharedNoritoJSONFixturePinsEveryPreparedRouteAndShape() throws {
@@ -145,7 +248,6 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
             ("accepted_at_height", true as Any),
             ("accepted_at_height", -1 as Any),
             ("accepted_at_height", "105" as Any),
-            ("accepted_at_height", 105.0 as Any),
         ] {
             var candidate = valid
             candidate[field] = value
@@ -172,6 +274,19 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
                 XCTFail("malformed carrier admission DTO must fail closed")
             } catch AtomicPrivateSettlementClientErrorV1.invalidResponse {}
         }
+
+        let floatingHeight = canonicalText.replacingOccurrences(
+            of: #""accepted_at_height":105"#,
+            with: #""accepted_at_height":105.0"#
+        )
+        installRaw(Data(floatingHeight.utf8), statusCode: 202)
+        do {
+            _ = try await makeClient().submitBundle(
+                request,
+                sponsorAuth: try sponsorAuth()
+            )
+            XCTFail("floating-point height must fail closed")
+        } catch AtomicPrivateSettlementClientErrorV1.invalidResponse {}
 
         let negativeZero = canonicalText
             .replacingOccurrences(of: #""accepted_at_height":105"#, with: #""accepted_at_height":-0"#)
@@ -295,20 +410,22 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         let payload = try AtomicPrivateSettlementIdentifierV1(
             try XCTUnwrap(ids["payload_hex"] as? String)
         )
-        let request = try AtomicPrivateSettlementPreparedRequestV1(
-            operation: .auditApproval,
-            nativePreparedJSON: Data(#"{"approval":{}}"#.utf8)
-        )
+        let request = try auditApprovalRequest(root)
         let role = try ToriiOperatorSigningContext(
             networkId: TestNetworkIds.canonical,
             signingKey: .ed25519(privateKey: Data(repeating: 0x72, count: 32))
         )
 
-        _ = try await makeClient().submitAuditApproval(
+        let response = try await makeClient().submitAuditApproval(
             payloadDigest: payload,
             request: request,
             auditorSigningContext: role
         )
+
+        XCTAssertFalse(try response.bytes().isEmpty)
+        XCTAssertTrue(response.description.contains("[REDACTED]"))
+        response.close()
+        XCTAssertThrowsError(try response.bytes())
 
         let captured = try XCTUnwrap(AtomicPrivateSettlementStubURLProtocolV1.lastRequest)
         XCTAssertEqual(
@@ -317,6 +434,307 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         )
         XCTAssertNotNil(captured.value(forHTTPHeaderField: "X-Iroha-Operator-Signature"))
         XCTAssertNil(captured.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
+    }
+
+    func testRestrictedResponsesFailClosedWhenNativeVerifierRejects() async throws {
+        let root = try fixture()
+        let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])
+        let responses = try XCTUnwrap(root["responses"] as? [String: Any])
+        let payload = try AtomicPrivateSettlementIdentifierV1(
+            try XCTUnwrap(ids["payload_hex"] as? String)
+        )
+        let role = try ToriiOperatorSigningContext(
+            networkId: TestNetworkIds.canonical,
+            signingKey: .ed25519(privateKey: Data(repeating: 0x7A, count: 32))
+        )
+        let verifier = AtomicPrivateSettlementRejectingVerifierV1()
+
+        install(try XCTUnwrap(responses["auditor_capsule"] as? [String: Any]))
+        do {
+            _ = try await makeClient(responseVerifier: verifier).getAuditorCapsule(
+                payloadDigest: payload,
+                auditorSigningContext: role
+            )
+            XCTFail("native capsule rejection must fail closed")
+        } catch AtomicPrivateSettlementClientErrorV1.invalidResponse {}
+
+        install(try XCTUnwrap(responses["audit_approval"] as? [String: Any]))
+        do {
+            _ = try await makeClient(responseVerifier: verifier).submitAuditApproval(
+                payloadDigest: payload,
+                request: try auditApprovalRequest(root),
+                auditorSigningContext: role
+            )
+            XCTFail("native approval rejection must fail closed")
+        } catch AtomicPrivateSettlementClientErrorV1.invalidResponse {}
+    }
+
+    func testRestrictedRoutesRequireNativeVerifierBeforeHTTPDispatch() async throws {
+        let root = try fixture()
+        let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])
+        let responses = try XCTUnwrap(root["responses"] as? [String: Any])
+        let payload = try AtomicPrivateSettlementIdentifierV1(
+            try XCTUnwrap(ids["payload_hex"] as? String)
+        )
+        let role = try ToriiOperatorSigningContext(
+            networkId: TestNetworkIds.canonical,
+            signingKey: .ed25519(privateKey: Data(repeating: 0x7B, count: 32))
+        )
+        let client = try makeClient(
+            responseVerifier: AtomicPrivateSettlementUnavailableVerifierV1()
+        )
+
+        let restrictedCalls: [() async throws -> AtomicPrivateSettlementJSONResponseV1] = [
+            { try await client.getCommitteeProof(
+                payloadDigest: payload,
+                validatorSigningContext: role
+            ) },
+            { try await client.getAuditorCapsule(
+                payloadDigest: payload,
+                auditorSigningContext: role
+            ) },
+            { try await client.submitAuditApproval(
+                payloadDigest: payload,
+                request: try self.auditApprovalRequest(root),
+                auditorSigningContext: role
+            ) },
+        ]
+        for restrictedCall in restrictedCalls {
+            do {
+                _ = try await restrictedCall()
+                XCTFail("restricted route must fail when the native verifier is unavailable")
+            } catch AtomicPrivateSettlementClientErrorV1.invalidResponse {}
+            XCTAssertEqual(AtomicPrivateSettlementStubURLProtocolV1.dispatchCount, 0)
+        }
+
+        install(try XCTUnwrap(responses["bundle_status_aborted"] as? [String: Any]))
+        let bundle = try AtomicPrivateSettlementIdentifierV1(
+            try XCTUnwrap(ids["bundle_hex"] as? String)
+        )
+        _ = try await client.getBundleStatus(bundleId: bundle)
+        XCTAssertEqual(AtomicPrivateSettlementStubURLProtocolV1.dispatchCount, 1)
+    }
+
+    func testAuditorCapsuleRequiresExactNonzeroAuthoritativeHeight() async throws {
+        let root = try fixture()
+        let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])
+        let responses = try XCTUnwrap(root["responses"] as? [String: Any])
+        let valid = try XCTUnwrap(responses["auditor_capsule"] as? [String: Any])
+        let payload = try AtomicPrivateSettlementIdentifierV1(
+            try XCTUnwrap(ids["payload_hex"] as? String)
+        )
+        let role = try ToriiOperatorSigningContext(
+            networkId: TestNetworkIds.canonical,
+            signingKey: .ed25519(privateKey: Data(repeating: 0x73, count: 32))
+        )
+
+        install(valid)
+        _ = try await makeClient().getAuditorCapsule(
+            payloadDigest: payload,
+            auditorSigningContext: role
+        )
+        let captured = try XCTUnwrap(AtomicPrivateSettlementStubURLProtocolV1.lastRequest)
+        XCTAssertEqual(
+            captured.url?.path,
+            "/api/v1/nexus/private-settlements/legs/\(payload.pathComponent)/audit-capsule"
+        )
+        XCTAssertNotNil(captured.value(forHTTPHeaderField: "X-Iroha-Operator-Signature"))
+
+        for invalidHeight: Any in [0, -1, 105.5, "105"] {
+            var invalid = valid
+            invalid["authoritative_height"] = invalidHeight
+            install(invalid)
+            do {
+                _ = try await makeClient().getAuditorCapsule(
+                    payloadDigest: payload,
+                    auditorSigningContext: role
+                )
+                XCTFail("invalid authoritative height must fail closed")
+            } catch {
+                XCTAssertEqual(
+                    error as? AtomicPrivateSettlementClientErrorV1,
+                    .invalidResponse
+                )
+            }
+        }
+
+        let validData = try JSONSerialization.data(withJSONObject: valid, options: [.sortedKeys])
+        let validText = try XCTUnwrap(String(data: validData, encoding: .utf8))
+        let overflow = validText.replacingOccurrences(
+            of: "\"authoritative_height\":105",
+            with: "\"authoritative_height\":18446744073709551616"
+        )
+        installRaw(Data(overflow.utf8), statusCode: 200)
+        do {
+            _ = try await makeClient().getAuditorCapsule(
+                payloadDigest: payload,
+                auditorSigningContext: role
+            )
+            XCTFail("overflow authoritative height must fail closed")
+        } catch {
+            XCTAssertEqual(error as? AtomicPrivateSettlementClientErrorV1, .invalidResponse)
+        }
+    }
+
+    func testRestrictedAttestationsRejectSubstitutionMalformedShapeAndEncoding() async throws {
+        let root = try fixture()
+        let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])
+        let responses = try XCTUnwrap(root["responses"] as? [String: Any])
+        let payload = try AtomicPrivateSettlementIdentifierV1(
+            try XCTUnwrap(ids["payload_hex"] as? String)
+        )
+        let role = try ToriiOperatorSigningContext(
+            networkId: TestNetworkIds.canonical,
+            signingKey: .ed25519(privateKey: Data(repeating: 0x74, count: 32))
+        )
+        let capsule = try XCTUnwrap(responses["auditor_capsule"] as? [String: Any])
+
+        var invalidCapsules: [[String: Any]] = []
+        invalidCapsules.append(
+            changingAttestationBody(capsule) {
+                $0["network_id"] = ids["payload_json"]
+            }
+        )
+        invalidCapsules.append(
+            changingAttestationBody(capsule) {
+                $0["payload_digest"] = ids["bundle_json"]
+            }
+        )
+        invalidCapsules.append(
+            changingAttestationBody(capsule) {
+                $0["responder"] = ""
+            }
+        )
+        invalidCapsules.append(changingAttestationSignature(capsule, to: "AQ=="))
+        for invalid in invalidCapsules {
+            install(invalid)
+            do {
+                _ = try await makeClient().getAuditorCapsule(
+                    payloadDigest: payload,
+                    auditorSigningContext: role
+                )
+                XCTFail("substituted or malformed capsule attestation must fail closed")
+            } catch {
+                XCTAssertEqual(error as? AtomicPrivateSettlementClientErrorV1, .invalidResponse)
+            }
+        }
+
+        let approval = try XCTUnwrap(responses["audit_approval"] as? [String: Any])
+        var invalidApprovals: [[String: Any]] = []
+        invalidApprovals.append(
+            changingAttestationBody(approval) {
+                $0["network_id"] = ids["payload_json"]
+            }
+        )
+        invalidApprovals.append(
+            changingAttestationBody(approval) {
+                $0["payload_digest"] = ids["bundle_json"]
+            }
+        )
+        var wrongBundle = approval
+        wrongBundle["bundle_id"] = ids["payload_json"]
+        invalidApprovals.append(wrongBundle)
+        var wrongOrdinal = approval
+        wrongOrdinal["leg_ordinal"] = 1
+        invalidApprovals.append(wrongOrdinal)
+        var expired = approval
+        expired["authoritative_height"] = 201
+        if var attestation = expired["responder_attestation"] as? [String: Any],
+           var body = attestation["body"] as? [String: Any] {
+            body["authoritative_height"] = 201
+            attestation["body"] = body
+            expired["responder_attestation"] = attestation
+        }
+        invalidApprovals.append(expired)
+        var wrongDataspace = approval
+        if var authority = wrongDataspace["committee_authority"] as? [String: Any],
+           var route = authority["route"] as? [String: Any] {
+            route["dataspace_id"] = 8
+            authority["route"] = route
+            wrongDataspace["committee_authority"] = authority
+        }
+        invalidApprovals.append(wrongDataspace)
+        var invalidCounts = approval
+        invalidCounts["collected"] = 2
+        invalidApprovals.append(invalidCounts)
+        var invalidRequired = approval
+        invalidRequired["required"] = 0
+        invalidApprovals.append(invalidRequired)
+        var invalidBoolean = approval
+        invalidBoolean["newly_recorded"] = 1
+        invalidApprovals.append(invalidBoolean)
+        var invalidLifecycle = approval
+        invalidLifecycle["lifecycle"] = ["status": "collecting", "value": NSNull()]
+        invalidApprovals.append(invalidLifecycle)
+        invalidApprovals.append(
+            changingAttestationBody(approval) {
+                $0["responder"] = ""
+            }
+        )
+        invalidApprovals.append(changingAttestationSignature(approval, to: "AQ=="))
+
+        for invalid in invalidApprovals {
+            install(invalid)
+            do {
+                _ = try await makeClient().submitAuditApproval(
+                    payloadDigest: payload,
+                    request: try auditApprovalRequest(root),
+                    auditorSigningContext: role
+                )
+                XCTFail("substituted or malformed approval acknowledgement must fail closed")
+            } catch {
+                XCTAssertEqual(error as? AtomicPrivateSettlementClientErrorV1, .invalidResponse)
+            }
+        }
+
+        let wrongNetworkRole = try ToriiOperatorSigningContext(
+            networkId: TestNetworkIds.other,
+            signingKey: .ed25519(privateKey: Data(repeating: 0x75, count: 32))
+        )
+        XCTAssertEqual(AtomicPrivateSettlementStubURLProtocolV1.dispatchCount, invalidCapsules.count + invalidApprovals.count)
+        do {
+            _ = try await makeClient().getAuditorCapsule(
+                payloadDigest: payload,
+                auditorSigningContext: wrongNetworkRole
+            )
+            XCTFail("a role identity from another network must fail before dispatch")
+        } catch {
+            XCTAssertEqual(error as? AtomicPrivateSettlementClientErrorV1, .invalidPreparedRequest)
+        }
+        XCTAssertEqual(AtomicPrivateSettlementStubURLProtocolV1.dispatchCount, invalidCapsules.count + invalidApprovals.count)
+
+        do {
+            _ = try await makeClient().submitAuditApproval(
+                payloadDigest: payload,
+                request: try auditApprovalRequest(root, networkId: TestNetworkIds.other),
+                auditorSigningContext: role
+            )
+            XCTFail("an approval prepared for another network must fail before dispatch")
+        } catch {
+            XCTAssertEqual(error as? AtomicPrivateSettlementClientErrorV1, .invalidPreparedRequest)
+        }
+        XCTAssertEqual(AtomicPrivateSettlementStubURLProtocolV1.dispatchCount, invalidCapsules.count + invalidApprovals.count)
+
+        install(
+            try XCTUnwrap(responses["bundle_status_aborted"] as? [String: Any]),
+            headers: ["Content-Type": "application/json", "Content-Encoding": "gzip"]
+        )
+        let bundle = try AtomicPrivateSettlementIdentifierV1(
+            try XCTUnwrap(ids["bundle_hex"] as? String)
+        )
+        do {
+            _ = try await makeClient().getBundleStatus(bundleId: bundle)
+            XCTFail("non-identity response encoding must fail closed")
+        } catch {
+            XCTAssertEqual(error as? AtomicPrivateSettlementClientErrorV1, .invalidResponse)
+        }
+
+        XCTAssertThrowsError(
+            try AtomicPrivateSettlementPreparedRequestV1(
+                operation: .auditApproval,
+                nativePreparedJSON: Data(#"{"approval":{"fractional":1e0}}"#.utf8)
+            )
+        )
     }
 
     func testPublicReceiptIsUnsignedAndSubstitutionFailsClosed() async throws {
@@ -426,13 +844,17 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         } catch AtomicPrivateSettlementClientErrorV1.responseSubstitution {}
     }
 
-    private func makeClient() throws -> AtomicPrivateSettlementToriiClientV1 {
+    private func makeClient(
+        responseVerifier: any AtomicPrivateSettlementResponseVerifyingV1 =
+            AtomicPrivateSettlementAcceptingVerifierV1()
+    ) throws -> AtomicPrivateSettlementToriiClientV1 {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [AtomicPrivateSettlementStubURLProtocolV1.self]
         return try AtomicPrivateSettlementToriiClientV1(
             baseURL: try XCTUnwrap(URL(string: "https://torii.example/api/")),
             localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
-            session: URLSession(configuration: configuration)
+            session: URLSession(configuration: configuration),
+            responseVerifier: responseVerifier
         )
     }
 
@@ -446,14 +868,18 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         )
     }
 
-    private func install(_ object: [String: Any], statusCode: Int = 200) {
+    private func install(
+        _ object: [String: Any],
+        statusCode: Int = 200,
+        headers: [String: String] = ["Content-Type": "application/json"]
+    ) {
         AtomicPrivateSettlementStubURLProtocolV1.handler = { request in
             let response = try XCTUnwrap(
                 HTTPURLResponse(
                     url: try XCTUnwrap(request.url),
                     statusCode: statusCode,
                     httpVersion: "HTTP/1.1",
-                    headerFields: ["Content-Type": "application/json"]
+                    headerFields: headers
                 )
             )
             return (
@@ -492,6 +918,67 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
             )
             return (response, Data("memo=LEAK_CANARY amount=987654".utf8))
         }
+    }
+
+    private func auditApprovalRequest(
+        _ root: [String: Any],
+        networkId: NetworkId = TestNetworkIds.canonical
+    ) throws -> AtomicPrivateSettlementPreparedRequestV1 {
+        let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])
+        let body: [String: Any] = [
+            "version": 1,
+            "network_id": networkId.literal,
+            "bundle_id": try XCTUnwrap(ids["bundle_json"] as? String),
+            "leg_ordinal": 0,
+            "dataspace_id": 7,
+            "auditor_id": "auditor-test",
+            "audit_policy_digest": try XCTUnwrap(ids["payload_json"] as? String),
+            "audit_key_epoch": 1,
+            "proof_digest": try XCTUnwrap(ids["payload_json"] as? String),
+            "capsule_digest": try XCTUnwrap(ids["payload_json"] as? String),
+            "delta_digest": try XCTUnwrap(ids["payload_json"] as? String),
+            "old_root": String(repeating: "11", count: 32),
+            "new_root": String(repeating: "22", count: 32),
+            "expiry_height": 200,
+        ]
+        let object: [String: Any] = [
+            "approval": ["body": body, "signature": "opaque-native-signature"],
+        ]
+        return try AtomicPrivateSettlementPreparedRequestV1(
+            operation: .auditApproval,
+            nativePreparedJSON: try JSONSerialization.data(
+                withJSONObject: object,
+                options: [.sortedKeys]
+            )
+        )
+    }
+
+    private func changingAttestationBody(
+        _ object: [String: Any],
+        _ change: (inout [String: Any]) -> Void
+    ) -> [String: Any] {
+        var candidate = object
+        guard var attestation = candidate["responder_attestation"] as? [String: Any],
+              var body = attestation["body"] as? [String: Any] else {
+            return candidate
+        }
+        change(&body)
+        attestation["body"] = body
+        candidate["responder_attestation"] = attestation
+        return candidate
+    }
+
+    private func changingAttestationSignature(
+        _ object: [String: Any],
+        to signature: String
+    ) -> [String: Any] {
+        var candidate = object
+        guard var attestation = candidate["responder_attestation"] as? [String: Any] else {
+            return candidate
+        }
+        attestation["signature"] = signature
+        candidate["responder_attestation"] = attestation
+        return candidate
     }
 
     private func fixture() throws -> [String: Any] {

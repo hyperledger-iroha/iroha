@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from iroha_torii_client import (
     AtomicPrivateSettlementToriiErrorV1,
     ToriiCanonicalRequestAuth,
     ToriiClient,
+    ToriiOperatorSigningContext,
 )
 
 FIXTURE_PATH = (
@@ -76,8 +78,93 @@ class _ExactSession(requests.Session):
         return self.response
 
 
+class _AcceptingNativeVerifier:
+    def __init__(self) -> None:
+        self.committee_calls: list[tuple[Any, ...]] = []
+        self.capsule_calls: list[tuple[Any, ...]] = []
+        self.approval_calls: list[tuple[Any, ...]] = []
+
+    def private_settlement_verify_committee_proof_response_v1(
+        self, *arguments: Any
+    ) -> None:
+        self.committee_calls.append(arguments)
+
+    def private_settlement_verify_auditor_capsule_response_v1(
+        self, *arguments: Any
+    ) -> None:
+        self.capsule_calls.append(arguments)
+
+    def private_settlement_verify_audit_approval_response_v1(
+        self, *arguments: Any
+    ) -> None:
+        self.approval_calls.append(arguments)
+
+
+class _RejectingNativeVerifier(_AcceptingNativeVerifier):
+    @staticmethod
+    def _reject(*_arguments: Any) -> None:
+        raise ValueError("LEAK_CANARY_NATIVE_RESPONSE")
+
+    private_settlement_verify_committee_proof_response_v1 = _reject
+    private_settlement_verify_auditor_capsule_response_v1 = _reject
+    private_settlement_verify_audit_approval_response_v1 = _reject
+
+
+def _restricted_client(
+    response: _ExactResponse,
+    *,
+    verifier: Any = None,
+) -> ToriiClient:
+    return ToriiClient(
+        "https://node.test",
+        session=_ExactSession(response),
+        private_settlement_native_verifier=(
+            _AcceptingNativeVerifier() if verifier is None else verifier
+        ),
+    )
+
+
 def _fixture() -> dict[str, Any]:
     return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _role_context(network_id: str) -> ToriiOperatorSigningContext:
+    return ToriiOperatorSigningContext(
+        network_id=network_id,
+        public_key=f"ed0120{'11' * 32}",
+        signer=lambda _message: b"\x77" * 64,
+    )
+
+
+def _approval_request(fixture: dict[str, Any]) -> AtomicPrivateSettlementPreparedRequestV1:
+    network_id = fixture["responses"]["audit_approval"]["responder_attestation"][
+        "body"
+    ]["network_id"]
+    body = {
+        "approval": {
+            "body": {
+                "version": 1,
+                "network_id": network_id,
+                "bundle_id": fixture["identifiers"]["bundle_json"],
+                "leg_ordinal": 0,
+                "dataspace_id": 7,
+                "auditor_id": "auditor-test",
+                "audit_policy_digest": fixture["identifiers"]["payload_json"],
+                "audit_key_epoch": 1,
+                "proof_digest": fixture["identifiers"]["payload_json"],
+                "capsule_digest": fixture["identifiers"]["payload_json"],
+                "delta_digest": fixture["identifiers"]["payload_json"],
+                "old_root": "11" * 32,
+                "new_root": "22" * 32,
+                "expiry_height": 200,
+            },
+            "signature": "opaque-native-signature",
+        }
+    }
+    return AtomicPrivateSettlementPreparedRequestV1.from_native_prepared_json(
+        AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
+        json.dumps(body, separators=(",", ":")).encode("utf-8"),
+    )
 
 
 def test_shared_route_fixture_matches_python_operation_catalog() -> None:
@@ -199,6 +286,302 @@ def test_prepared_request_rejects_duplicate_fields_and_redacts_body() -> None:
     request.close()
     with pytest.raises(RuntimeError, match="closed"):
         request.bytes()
+
+
+def test_committee_proof_accepts_the_authoritative_dto_without_a_height() -> None:
+    fixture = _fixture()
+    payload = AtomicPrivateSettlementIdentifierV1(fixture["identifiers"]["payload_hex"])
+    network_id = fixture["responses"]["auditor_capsule"]["responder_attestation"][
+        "body"
+    ]["network_id"]
+    committee_proof = {
+        "manifest": {},
+        "audit_policy": {},
+        "committee_authority": {},
+        "statement": {},
+        "proof": "AQ==",
+        "delta": {},
+        "audit_approvals": [],
+        "audit_capsule_digest": fixture["identifiers"]["payload_json"],
+        "availability": {},
+        "lifecycle": {"status": "collecting", "value": None},
+    }
+
+    verifier = _AcceptingNativeVerifier()
+    received = _restricted_client(
+        _ExactResponse(committee_proof), verifier=verifier
+    ).private_settlement_committee_proof_v1(
+        payload,
+        validator_signing_context=_role_context(network_id),
+    )
+
+    assert json.loads(received.bytes()) == committee_proof
+    assert verifier.committee_calls == [
+        (
+            json.dumps(committee_proof, separators=(",", ":")).encode("utf-8"),
+            AtomicPrivateSettlementIdentifierV1(network_id).bytes,
+            payload.bytes,
+        )
+    ]
+
+    invalid = dict(committee_proof)
+    invalid["authoritative_height"] = 105
+    with pytest.raises(AtomicPrivateSettlementToriiErrorV1, match="response is invalid"):
+        _restricted_client(_ExactResponse(invalid)).private_settlement_committee_proof_v1(
+            payload,
+            validator_signing_context=_role_context(network_id),
+        )
+
+
+def test_auditor_capsule_requires_exact_nonzero_authoritative_height() -> None:
+    fixture = _fixture()
+    valid = fixture["responses"]["auditor_capsule"]
+    network_id = valid["responder_attestation"]["body"]["network_id"]
+    role = _role_context(network_id)
+    assert network_id != fixture["identifiers"]["payload_json"]
+
+    verifier = _AcceptingNativeVerifier()
+    received = _restricted_client(
+        _ExactResponse(valid), verifier=verifier
+    ).private_settlement_auditor_capsule_v1(
+        fixture["identifiers"]["payload_hex"],
+        auditor_signing_context=role,
+    )
+    assert json.loads(received.bytes()) == valid
+    assert verifier.capsule_calls == [
+        (
+            json.dumps(valid, separators=(",", ":")).encode("utf-8"),
+            AtomicPrivateSettlementIdentifierV1(network_id).bytes,
+            AtomicPrivateSettlementIdentifierV1(
+                fixture["identifiers"]["payload_hex"]
+            ).bytes,
+            role.public_key,
+        )
+    ]
+
+    invalid_heights: tuple[Any, ...] = (True, 0, -1, 1.5, "105", 2**64)
+    for authoritative_height in invalid_heights:
+        invalid = dict(valid)
+        invalid["authoritative_height"] = authoritative_height
+        with pytest.raises(
+            AtomicPrivateSettlementToriiErrorV1,
+            match="atomic private settlement response is invalid",
+        ):
+            _restricted_client(
+                _ExactResponse(invalid)
+            ).private_settlement_auditor_capsule_v1(
+                fixture["identifiers"]["payload_hex"],
+                auditor_signing_context=role,
+            )
+
+
+def test_auditor_capsule_attestation_rejects_substitution_and_type_confusion() -> None:
+    fixture = _fixture()
+    valid = fixture["responses"]["auditor_capsule"]
+    network_id = valid["responder_attestation"]["body"]["network_id"]
+    role = _role_context(network_id)
+
+    candidates: list[dict[str, Any]] = []
+    mutations = (
+        ("network_id", fixture["identifiers"]["payload_json"]),
+        ("payload_digest", fixture["identifiers"]["bundle_json"]),
+        ("view_digest", fixture["identifiers"]["payload_hex"]),
+        ("authority_digest", fixture["identifiers"]["payload_hex"]),
+        ("responder", ""),
+        ("version", True),
+        ("lifecycle_code", True),
+    )
+    for field, replacement in mutations:
+        candidate = copy.deepcopy(valid)
+        candidate["responder_attestation"]["body"][field] = replacement
+        candidates.append(candidate)
+
+    wrong_signature = copy.deepcopy(valid)
+    wrong_signature["responder_attestation"]["signature"] = "AQ=="
+    candidates.append(wrong_signature)
+
+    boolean_height = copy.deepcopy(valid)
+    boolean_height["authoritative_height"] = 1
+    boolean_height["responder_attestation"]["body"]["authoritative_height"] = True
+    candidates.append(boolean_height)
+
+    manifest_network = copy.deepcopy(valid)
+    manifest_network["manifest"]["network_id"] = fixture["identifiers"][
+        "payload_json"
+    ]
+    candidates.append(manifest_network)
+
+    for candidate in candidates:
+        with pytest.raises(
+            AtomicPrivateSettlementToriiErrorV1,
+            match="atomic private settlement response is invalid",
+        ):
+            _restricted_client(
+                _ExactResponse(candidate)
+            ).private_settlement_auditor_capsule_v1(
+                fixture["identifiers"]["payload_hex"],
+                auditor_signing_context=role,
+            )
+
+    wrong_context = _role_context(fixture["identifiers"]["payload_json"])
+    with pytest.raises(AtomicPrivateSettlementToriiErrorV1, match="response is invalid"):
+        _restricted_client(_ExactResponse(valid)).private_settlement_auditor_capsule_v1(
+            fixture["identifiers"]["payload_hex"],
+            auditor_signing_context=wrong_context,
+        )
+
+
+def test_approval_acknowledgement_binds_request_and_rejects_attestation_substitution() -> None:
+    fixture = _fixture()
+    valid = fixture["responses"]["audit_approval"]
+    network_id = valid["responder_attestation"]["body"]["network_id"]
+    role = _role_context(network_id)
+
+    verifier = _AcceptingNativeVerifier()
+    approval_request = _approval_request(fixture)
+    received = _restricted_client(
+        _ExactResponse(valid), verifier=verifier
+    ).submit_private_settlement_audit_approval_v1(
+        fixture["identifiers"]["payload_hex"],
+        approval_request,
+        auditor_signing_context=role,
+    )
+    assert json.loads(received.bytes()) == valid
+    assert verifier.approval_calls == [
+        (
+            json.dumps(valid, separators=(",", ":")).encode("utf-8"),
+            approval_request.bytes(),
+            AtomicPrivateSettlementIdentifierV1(network_id).bytes,
+            AtomicPrivateSettlementIdentifierV1(
+                fixture["identifiers"]["payload_hex"]
+            ).bytes,
+            role.public_key,
+        )
+    ]
+
+    candidates: list[dict[str, Any]] = []
+    body_mutations = (
+        ("network_id", fixture["identifiers"]["payload_json"]),
+        ("payload_digest", fixture["identifiers"]["bundle_json"]),
+        ("approval_digest", fixture["identifiers"]["payload_hex"]),
+        ("acknowledgement_digest", fixture["identifiers"]["payload_hex"]),
+        ("authority_digest", fixture["identifiers"]["payload_hex"]),
+        ("responder", ""),
+        ("version", True),
+        ("lifecycle_code", True),
+    )
+    for field, replacement in body_mutations:
+        candidate = copy.deepcopy(valid)
+        candidate["responder_attestation"]["body"][field] = replacement
+        candidates.append(candidate)
+
+    wrong_signature = copy.deepcopy(valid)
+    wrong_signature["responder_attestation"]["signature"] = "AQ=="
+    candidates.append(wrong_signature)
+
+    boolean_height = copy.deepcopy(valid)
+    boolean_height["authoritative_height"] = 1
+    boolean_height["responder_attestation"]["body"]["authoritative_height"] = True
+    candidates.append(boolean_height)
+
+    for field, replacement in (
+        ("bundle_id", fixture["identifiers"]["payload_json"]),
+        ("payload_digest", fixture["identifiers"]["bundle_json"]),
+        ("leg_ordinal", True),
+        ("leg_ordinal", 255),
+        ("collected", True),
+        ("required", True),
+        ("newly_recorded", 1),
+    ):
+        candidate = copy.deepcopy(valid)
+        candidate[field] = replacement
+        candidates.append(candidate)
+
+    wrong_dataspace = copy.deepcopy(valid)
+    wrong_dataspace["committee_authority"]["route"]["dataspace_id"] = 8
+    candidates.append(wrong_dataspace)
+
+    expired = copy.deepcopy(valid)
+    expired["authoritative_height"] = 201
+    expired["responder_attestation"]["body"]["authoritative_height"] = 201
+    candidates.append(expired)
+
+    for candidate in candidates:
+        with pytest.raises(
+            AtomicPrivateSettlementToriiErrorV1,
+            match="atomic private settlement response is invalid",
+        ):
+            _restricted_client(
+                _ExactResponse(candidate)
+            ).submit_private_settlement_audit_approval_v1(
+                fixture["identifiers"]["payload_hex"],
+                _approval_request(fixture),
+                auditor_signing_context=role,
+            )
+
+    mismatched_request_body = {
+        "approval": {
+            "body": {
+                "version": 1,
+                "network_id": fixture["identifiers"]["payload_json"],
+                "bundle_id": fixture["identifiers"]["bundle_json"],
+                "leg_ordinal": 0,
+                "dataspace_id": 7,
+                "auditor_id": "auditor-test",
+                "audit_policy_digest": fixture["identifiers"]["payload_json"],
+                "audit_key_epoch": 1,
+                "proof_digest": fixture["identifiers"]["payload_json"],
+                "capsule_digest": fixture["identifiers"]["payload_json"],
+                "delta_digest": fixture["identifiers"]["payload_json"],
+                "old_root": "11" * 32,
+                "new_root": "22" * 32,
+                "expiry_height": 200,
+            },
+            "signature": "opaque-native-signature",
+        }
+    }
+    mismatched_request = AtomicPrivateSettlementPreparedRequestV1.from_native_prepared_json(
+        AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
+        json.dumps(mismatched_request_body, separators=(",", ":")).encode("utf-8"),
+    )
+    with pytest.raises(ValueError, match="differs from the signing context"):
+        _restricted_client(_ExactResponse(valid)).submit_private_settlement_audit_approval_v1(
+            fixture["identifiers"]["payload_hex"],
+            mismatched_request,
+            auditor_signing_context=role,
+        )
+
+
+def test_restricted_routes_require_and_redact_native_verification() -> None:
+    fixture = _fixture()
+    payload = AtomicPrivateSettlementIdentifierV1(
+        fixture["identifiers"]["payload_hex"]
+    )
+    valid = fixture["responses"]["auditor_capsule"]
+    network_id = valid["responder_attestation"]["body"]["network_id"]
+    role = _role_context(network_id)
+
+    missing_session = _ExactSession(_ExactResponse(valid))
+    with pytest.raises(RuntimeError, match="injected native verifier"):
+        ToriiClient(
+            "https://node.test", session=missing_session
+        ).private_settlement_auditor_capsule_v1(
+            payload,
+            auditor_signing_context=role,
+        )
+    assert missing_session.calls == []
+
+    with pytest.raises(AtomicPrivateSettlementToriiErrorV1) as rejected:
+        _restricted_client(
+            _ExactResponse(valid), verifier=_RejectingNativeVerifier()
+        ).private_settlement_auditor_capsule_v1(
+            payload,
+            auditor_signing_context=role,
+        )
+    assert str(rejected.value) == "atomic private settlement response is invalid"
+    assert rejected.value.__cause__ is None
+    assert rejected.value.__context__ is None
+    assert "LEAK_CANARY_NATIVE_RESPONSE" not in repr(rejected.value)
 
 
 def test_http_errors_redact_bodies_and_untrusted_reject_codes() -> None:

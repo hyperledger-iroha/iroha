@@ -208,12 +208,14 @@ same authenticated process boundary. Call
 `import_private_settlement_credential()` with an owner-only native `APWB`
 file, then `prove_private_settlement()` with only canonical public Norito
 manifest, fixed-shape statement, encrypted audit capsule, governed audit
-policy, genesis hash, and height. Python receives the public statement,
-self-verified proof, encrypted capsule, and binding digests; note spending
-secrets, audit plaintext, and membership paths are decoded and wiped in Rust
-and never cross the Python API or worker pipe. Settlement handles occupy a
-separate opaque namespace and are consumed even when terminal native proving
-fails.
+policy, genesis hash, authoritative height, and the public successor root from
+the wallet's authenticated accumulator view. Rust derives the complete
+fixed-shape delta after self-verifying the proof. Python receives only canonical
+Norito statement, proof, delta, encrypted capsule, and binding digests; note
+spending secrets, audit plaintext, and membership paths are decoded and wiped
+in Rust and never cross the Python API or worker pipe. Settlement handles
+occupy a separate opaque namespace and are consumed even when terminal native
+proving fails.
 
 Reserve-backed ZK-ACE, Orchard, and private-IVM actions always bind one exact
 transparent balance bucket. Their worker-owned public action requires

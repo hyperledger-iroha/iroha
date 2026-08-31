@@ -1971,7 +1971,12 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .binary_search_by(|candidate| candidate.body.auditor_id.cmp(&approval.body.auditor_id))
         {
             Ok(index) => {
-                if durable.audit_approvals[index] != approval {
+                // HSM/KMS providers are allowed to produce different valid
+                // encodings for the same purpose-separated approval body.
+                // Identity and every settlement binding live in the body, so
+                // a body-equivalent retry is idempotent after the new
+                // signature has already passed validation above.
+                if durable.audit_approvals[index].body != approval.body {
                     return Err(PrivateSettlementSidecarStoreErrorV1::Conflict);
                 }
                 let collected = u8::try_from(durable.audit_approvals.len())

@@ -120,7 +120,10 @@ enum NoritoBridgeLoader {
         "connect_norito_sorafs_reference_validate_governance_dag_block_json",
         "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
         "connect_norito_validation_fee_hijiri_quote_request_v1",
-        "connect_norito_validation_fee_hijiri_quote_response_verify_v1"
+        "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+        "connect_norito_private_settlement_committee_proof_response_verify_v1",
+        "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+        "connect_norito_private_settlement_audit_approval_response_verify_v1"
     ] + parliamentTimedOvnWalletRequiredSymbols
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32

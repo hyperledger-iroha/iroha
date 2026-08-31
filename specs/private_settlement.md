@@ -104,9 +104,16 @@ only after native verification of the exact public statement.
 The Rust wallet owns witness material in an owner-only APWB V1 envelope, exposes
 only public inspection, and consumes the envelope on every terminal proof
 attempt. Its secret input type is deliberately not cloneable, debuggable, or
-serializable. The Python native worker retains the envelope in a native vault
-addressed by an opaque one-shot handle; Python receives only public bindings and
-the final public proof result.
+serializable. After proof self-verification, the native completion boundary
+derives the exact fixed-shape delta from the proved statement and an
+authenticated successor root. A second native boundary binds each completed leg
+to its governed audit policy, exact four-validator authority, and retention
+height, then derives every payload/delta content address and one identical
+all-leg provisional manifest. Callers cannot supply those post-proof digests as
+trusted values. The Python native worker retains the envelope in a native vault
+addressed by an opaque one-shot handle; Python supplies only the public
+successor root and receives the statement, proof, derived delta, and encrypted
+capsule. No witness enters Python.
 
 ## Audit capsule and approval
 
@@ -127,8 +134,65 @@ The capsule includes the exact parties, asset, amount, memo, policy references,
 view data, note openings, and output-encryption openings required for audit. It
 does not contain spending authorities. Decryption returns a zeroizing buffer.
 The auditor recomputes every public binding, validates policy and height, then
-signs through `crates/iroha_core/src/private_settlement/auditor.rs`. Missing,
-stale, unauthorized, or insufficient approvals prevent Prepare.
+signs through `crates/iroha_core/src/private_settlement/auditor.rs`. A
+deployment-owned credential-provider boundary permits encryption and signing
+keys to remain in an HSM, KMS, enclave, or threshold service; Iroha independently
+checks the provider's governed public keys and returned approval signature.
+The Rust production transport accepts a separately governed
+`PrivateSettlementCommitteeAuthorityV1` and contacts exactly four distinct
+endpoints in that authority's canonical validator order. Every auditor response
+carries a purpose-separated BLS attestation by the validator at its endpoint's
+roster index. The signed body binds the network, payload digest, authority
+digest (including route/incarnation and roster), complete restricted-view
+digest, exact lifecycle, node-authoritative height, and responder peer ID.
+The transport excludes an authority mismatch, an endpoint serving as another
+roster member, or the same responder identity appearing through multiple URLs
+from quorum counting. One Byzantine or unavailable endpoint therefore cannot
+veto three aligned responders. It requires three canonically identical views
+after normalizing only the retry-equivalent Collecting/Audited lifecycle and
+height, then returns the actually signed middle-height response; it never
+rewrites an authenticated height after verification. The authority-bootstrap
+compatibility method is not a production trust anchor. Approval delivery is
+then attempted at all four authority-ordered endpoints. Each durable
+acknowledgement carries a separate purpose-separated BLS responder attestation
+binding the network, exact signed approval digest, payload, authority/roster,
+complete acknowledgement view, lifecycle, node-authoritative height, and
+responder peer ID. The production client accepts only three unique
+roster-aligned responders. It normalizes `newly_recorded` and height solely for
+retry-equivalent grouping, keeps `collected`, `required`, and lifecycle exact,
+and returns an actually signed middle-height response without rewriting any
+authenticated field. Misaligned or duplicate responses are excluded rather
+than giving one Byzantine endpoint a veto. The authority-bootstrap approval
+method remains compatibility-only.
+Missing, stale, unauthorized, split-view, or insufficient approvals prevent
+Prepare.
+
+The shipping online-auditor CLI uses only the authority-pinned transport. It
+requires the ordered committee authority as a separate absolute, owner-only,
+non-symlink governance trust-anchor file without unapproved xattrs or extended
+ACL entries and requires an owner-only strict business-policy file under the same descriptor-bound custody
+rules in addition to an explicit local `approve` decision. Restricted files
+are opened nonblocking so a checked-path replacement with a FIFO cannot stall
+admission before the post-open inode and file-type checks. That
+policy binds one exact network, route,
+pool, audit-policy lineage and key epoch, canonical payer/recipient/sponsor and
+asset allowlists, amount and reimbursement limits, memo bounds, policy
+references, and a maximum remaining-height window. Empty identity or asset
+allowlists are not wildcards, unknown fields fail closed, and an operator's
+`approve` decision cannot bypass a policy mismatch. The business-policy,
+decryption-key, and restricted pool-governance inputs have no production
+environment-variable fallback.
+
+Restricted files are xattr-free on Linux. On macOS only the exact
+`com.apple.provenance` metadata attribute is permitted; the platform ACL
+authority attribute `com.apple.system.Security`, every other xattr, and every
+extended ACL entry fail closed. Descriptor-bound xattr and ACL checks run both
+before and after the bounded read.
+Operators must place these files on a qualified local filesystem whose
+descriptor-bound xattr and ACL APIs expose every effective access grant. The
+release qualification matrix includes native macOS APFS, Linux filesystems
+with and without SELinux labels, and rejects unqualified NFS/SMB custody rather
+than assuming mode `0600` fully represents remote ACL semantics.
 
 Retired decryption keys must be retained, or retained capsules must be rewrapped,
 for the applicable regulatory retention period. That is an operator/governance
@@ -306,6 +370,21 @@ Success status is part of the exact V1 contract: carrier admission requires
 HTTP `202`, while every other private-settlement operation requires HTTP `200`.
 SDKs reject an alternate successful `2xx` code before accepting its body and
 do not echo that unexpected response body through client errors.
+
+Restricted response acceptance is a native cryptographic boundary, not a
+schema-only SDK check. Rust performs the authoritative validation directly;
+Python, JavaScript, Kotlin/JVM, mirrored Java Android, and Swift call the same
+Rust rules through their shipping native bridge. Committee-proof verification
+binds the exact response bytes to the configured network and requested payload
+digest and validates the complete authority roster, proofs of possession,
+signatures, proof statement, opaque delta, approvals, availability, and
+lifecycle. Auditor-capsule verification additionally binds the exact governed
+auditor signing key, while approval acknowledgement verification also binds the
+exact request bytes sent by the client and verifies the local approval
+signature. Missing bridge symbols, an ABI mismatch, or any native rejection
+fails closed with a fixed redacted error; restricted HTTP dispatch does not
+begin until bridge availability is established. Public redacted status and
+receipt queries do not depend on access to restricted verification material.
 
 ## Configuration
 

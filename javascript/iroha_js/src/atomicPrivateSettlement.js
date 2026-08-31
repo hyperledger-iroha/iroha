@@ -1,4 +1,10 @@
+import { Buffer } from "buffer";
+
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
+import {
+  createNativeRuntime,
+  resolveNativeRuntimeBinding,
+} from "./nativeRuntime.js";
 import {
   parseStrictLosslessIntegerJson,
 } from "./strictLosslessJson.js";
@@ -7,6 +13,7 @@ const JSON_MEDIA_TYPE = "application/json";
 const RESPONSE_SMALL_MAX_BYTES = 1024 * 1024;
 const RESPONSE_PUBLIC_BUNDLE_MAX_BYTES = 8 * 1024 * 1024;
 const RESPONSE_RESTRICTED_MAX_BYTES = 32 * 1024 * 1024;
+const U64_MAX = 0xffffffffffffffffn;
 
 /** Authentication classes for atomic-private-settlement V1 routes. */
 export const AtomicPrivateSettlementAuthV1 = Object.freeze({
@@ -156,6 +163,10 @@ export class AtomicPrivateSettlementIdentifierV1 {
     return this.#jsonLiteral;
   }
 
+  get bytes() {
+    return Uint8Array.from(Buffer.from(this.#pathComponent, "hex"));
+  }
+
   toString() {
     return this.#pathComponent;
   }
@@ -263,13 +274,16 @@ const RESPONSE_FIELDS = Object.freeze([
   [
     "/audit-approvals",
     [
+      "authoritative_height",
       "bundle_id",
       "payload_digest",
       "leg_ordinal",
+      "committee_authority",
       "collected",
       "required",
       "newly_recorded",
       "lifecycle",
+      "responder_attestation",
     ],
   ],
   [
@@ -303,6 +317,7 @@ const RESPONSE_FIELDS = Object.freeze([
   [
     "/audit-capsule",
     [
+      "authoritative_height",
       "manifest",
       "audit_policy",
       "committee_authority",
@@ -311,6 +326,7 @@ const RESPONSE_FIELDS = Object.freeze([
       "audit_capsule",
       "availability",
       "lifecycle",
+      "responder_attestation",
     ],
   ],
   ["/receipt", ["status", "value"]],
@@ -348,6 +364,311 @@ function validateBundleAdmission(value) {
   if (!validNumber && !validBigInt) {
     throw new TypeError("settlement bundle admission accepted_at_height must be a u64");
   }
+}
+
+function canonicalAttestationHash(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a canonical hash literal`);
+  }
+  const parsed = new AtomicPrivateSettlementIdentifierV1(value);
+  if (parsed.jsonLiteral !== value) {
+    throw new TypeError(`${context} must be a canonical hash literal`);
+  }
+  return parsed;
+}
+
+function isU8(value, nonzero = false) {
+  return typeof value === "number"
+    && Number.isInteger(value)
+    && value >= (nonzero ? 1 : 0)
+    && value <= 0xff;
+}
+
+function isLegOrdinal(value) {
+  return isU8(value) && value < 0xff;
+}
+
+function isU64(value, nonzero = false) {
+  const minimum = nonzero ? 1n : 0n;
+  return (typeof value === "number"
+      && Number.isSafeInteger(value)
+      && value >= Number(minimum))
+    || (typeof value === "bigint" && value >= minimum && value <= U64_MAX);
+}
+
+function u64BigInt(value) {
+  return typeof value === "bigint" ? value : BigInt(value);
+}
+
+function validateBlsNormalSignatureLiteral(value, context) {
+  // TODO: Verify the responder PoP and signature once the JavaScript SDK
+  // exports the typed Norito attestation preimages and BLS-Normal PoP boundary.
+  if (typeof value !== "string" || !/^[A-Za-z0-9+/]{128}$/u.test(value)) {
+    throw new TypeError(`${context} must be exact standard base64 for 96 bytes`);
+  }
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.byteLength !== 96 || decoded.toString("base64") !== value) {
+    throw new TypeError(`${context} must be exact standard base64 for 96 bytes`);
+  }
+}
+
+function auditApprovalRequestContext(request) {
+  const bytes = request.bytes();
+  try {
+    const parsed = strictObject(bytes, "prepared settlement audit approval");
+    const approval = parsed.approval;
+    if (approval === null || typeof approval !== "object" || Array.isArray(approval)) {
+      throw new TypeError("prepared settlement audit approval is invalid");
+    }
+    exactFields(
+      approval,
+      ["body", "signature"],
+      "prepared settlement audit approval",
+    );
+    if (approval.signature === null || approval.signature === undefined) {
+      throw new TypeError("prepared settlement audit approval signature is missing");
+    }
+    const body = approval.body;
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      throw new TypeError("prepared settlement audit approval body is invalid");
+    }
+    exactFields(
+      body,
+      [
+        "version",
+        "network_id",
+        "bundle_id",
+        "leg_ordinal",
+        "dataspace_id",
+        "auditor_id",
+        "audit_policy_digest",
+        "audit_key_epoch",
+        "proof_digest",
+        "capsule_digest",
+        "delta_digest",
+        "old_root",
+        "new_root",
+        "expiry_height",
+      ],
+      "prepared settlement audit approval body",
+    );
+    const networkId = canonicalAttestationHash(
+      body.network_id,
+      "prepared settlement approval network_id",
+    );
+    const bundleId = canonicalAttestationHash(
+      body.bundle_id,
+      "prepared settlement approval bundle_id",
+    );
+    for (const field of [
+      "audit_policy_digest",
+      "proof_digest",
+      "capsule_digest",
+      "delta_digest",
+    ]) {
+      canonicalAttestationHash(
+        body[field],
+        `prepared settlement approval ${field}`,
+      );
+    }
+    if (body.version !== 1) {
+      throw new TypeError("prepared settlement approval version must be one");
+    }
+    if (!isLegOrdinal(body.leg_ordinal)) {
+      throw new TypeError("prepared settlement approval leg_ordinal must be in 0..=254");
+    }
+    if (!isU64(body.dataspace_id)) {
+      throw new TypeError("prepared settlement approval dataspace_id must be a u64");
+    }
+    if (!isU64(body.expiry_height, true)) {
+      throw new TypeError("prepared settlement approval expiry_height must be a nonzero u64");
+    }
+    return Object.freeze({
+      networkId,
+      bundleId,
+      legOrdinal: body.leg_ordinal,
+      dataspaceId: body.dataspace_id,
+      expiryHeight: body.expiry_height,
+    });
+  } finally {
+    bytes.fill(0);
+  }
+}
+
+function validateAuditorCapsuleAttestation(value, identity) {
+  const attestation = value.responder_attestation;
+  if (attestation === null || typeof attestation !== "object" || Array.isArray(attestation)) {
+    throw new TypeError("settlement auditor capsule responder attestation must be an object");
+  }
+  exactFields(attestation, ["body", "signature"], "settlement auditor capsule attestation");
+  const body = attestation.body;
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw new TypeError("settlement auditor capsule attestation body must be an object");
+  }
+  exactFields(
+    body,
+    [
+      "version",
+      "network_id",
+      "payload_digest",
+      "view_digest",
+      "authority_digest",
+      "lifecycle_code",
+      "authoritative_height",
+      "responder",
+    ],
+    "settlement auditor capsule attestation body",
+  );
+  const lifecycleCodes = new Map([
+    ["collecting", 0],
+    ["audited", 1],
+    ["prepared", 2],
+    ["commit_certified", 3],
+    ["finalized", 4],
+    ["aborted", 5],
+    ["expired", 6],
+  ]);
+  const expectedCode = lifecycleCodes.get(value.lifecycle?.status);
+  if (
+    !isU8(body.version, true)
+    || body.version !== 1
+    || !isU64(body.authoritative_height, true)
+    || body.authoritative_height !== value.authoritative_height
+    || !isU8(body.lifecycle_code)
+    || body.lifecycle_code !== expectedCode
+    || typeof body.responder !== "string"
+    || body.responder.length === 0
+    || body.responder.trim() !== body.responder
+  ) {
+    throw new TypeError("settlement auditor capsule responder attestation is invalid");
+  }
+  for (const field of ["network_id", "payload_digest", "view_digest", "authority_digest"]) {
+    canonicalAttestationHash(body[field], "settlement auditor capsule attestation digest");
+  }
+  if (
+    body.network_id !== identity.network.jsonLiteral
+    || body.payload_digest !== identity.value.jsonLiteral
+  ) {
+    throw new TypeError("settlement auditor capsule attestation binding is invalid");
+  }
+  if (value.manifest === null || typeof value.manifest !== "object" || Array.isArray(value.manifest)) {
+    throw new TypeError("settlement auditor capsule manifest is invalid");
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(value.manifest, "network_id")
+    && canonicalAttestationHash(
+      value.manifest.network_id,
+      "settlement auditor capsule manifest network_id",
+    ).jsonLiteral !== identity.network.jsonLiteral
+  ) {
+    throw new TypeError("settlement auditor capsule network binding is invalid");
+  }
+  validateBlsNormalSignatureLiteral(
+    attestation.signature,
+    "settlement auditor capsule responder signature",
+  );
+}
+
+function validateAuditApprovalAcknowledgementAttestation(value, identity) {
+  const attestation = value.responder_attestation;
+  if (attestation === null || typeof attestation !== "object" || Array.isArray(attestation)) {
+    throw new TypeError("settlement approval acknowledgement responder attestation must be an object");
+  }
+  exactFields(attestation, ["body", "signature"], "settlement approval acknowledgement attestation");
+  const body = attestation.body;
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw new TypeError("settlement approval acknowledgement attestation body must be an object");
+  }
+  exactFields(
+    body,
+    [
+      "version",
+      "network_id",
+      "payload_digest",
+      "approval_digest",
+      "acknowledgement_digest",
+      "authority_digest",
+      "lifecycle_code",
+      "authoritative_height",
+      "responder",
+    ],
+    "settlement approval acknowledgement attestation body",
+  );
+  const expectedCode = new Map([["collecting", 0], ["audited", 1]])
+    .get(value.lifecycle?.status);
+  const height = value.authoritative_height;
+  const validHeight = isU64(height, true);
+  const collected = value.collected;
+  const required = value.required;
+  if (
+    !validHeight
+    || u64BigInt(height) > u64BigInt(identity.approvalContext.expiryHeight)
+    || !isU8(body.version, true)
+    || body.version !== 1
+    || !isU64(body.authoritative_height, true)
+    || body.authoritative_height !== height
+    || body.payload_digest !== value.payload_digest
+    || !isU8(body.lifecycle_code)
+    || body.lifecycle_code !== expectedCode
+    || typeof body.responder !== "string"
+    || body.responder.length === 0
+    || body.responder.trim() !== body.responder
+    || !isLegOrdinal(value.leg_ordinal)
+    || !isU8(collected, true)
+    || !isU8(required, true)
+    || collected > required
+    || typeof value.newly_recorded !== "boolean"
+    || value.lifecycle?.status !== (collected < required ? "collecting" : "audited")
+    || value.leg_ordinal !== identity.approvalContext.legOrdinal
+  ) {
+    throw new TypeError("settlement approval acknowledgement responder attestation is invalid");
+  }
+  for (const field of [
+    "network_id",
+    "payload_digest",
+    "approval_digest",
+    "acknowledgement_digest",
+    "authority_digest",
+  ]) {
+    canonicalAttestationHash(
+      body[field],
+      "settlement approval acknowledgement attestation digest",
+    );
+  }
+  const payloadDigest = canonicalAttestationHash(
+    value.payload_digest,
+    "settlement approval acknowledgement payload_digest",
+  );
+  const bundleId = canonicalAttestationHash(
+    value.bundle_id,
+    "settlement approval acknowledgement bundle_id",
+  );
+  if (
+    body.network_id !== identity.network.jsonLiteral
+    || body.network_id !== identity.approvalContext.networkId.jsonLiteral
+    || payloadDigest.jsonLiteral !== identity.value.jsonLiteral
+    || body.payload_digest !== identity.value.jsonLiteral
+    || bundleId.jsonLiteral !== identity.approvalContext.bundleId.jsonLiteral
+  ) {
+    throw new TypeError("settlement approval acknowledgement binding is invalid");
+  }
+  if (
+    value.committee_authority === null
+    || typeof value.committee_authority !== "object"
+    || Array.isArray(value.committee_authority)
+    || value.committee_authority.route === null
+    || typeof value.committee_authority.route !== "object"
+    || Array.isArray(value.committee_authority.route)
+    || !isU64(value.committee_authority.route.dataspace_id)
+    || u64BigInt(value.committee_authority.route.dataspace_id)
+      !== u64BigInt(identity.approvalContext.dataspaceId)
+  ) {
+    throw new TypeError("settlement approval acknowledgement authority is invalid");
+  }
+  validateBlsNormalSignatureLiteral(
+    attestation.signature,
+    "settlement approval acknowledgement responder signature",
+  );
 }
 
 function identifier(value) {
@@ -508,8 +829,18 @@ export class AtomicPrivateSettlementToriiClientV1 {
   #baseUrl;
   #fetch;
   #sponsorHeaderProvider;
+  #networkId;
+  #nativeRuntime;
 
-  constructor(baseUrl, { fetchImpl = globalThis.fetch, sponsorHeaderProvider } = {}) {
+  constructor(
+    baseUrl,
+    {
+      fetchImpl = globalThis.fetch,
+      sponsorHeaderProvider,
+      networkId,
+      nativeVerifier,
+    } = {},
+  ) {
     const parsed = new URL(String(baseUrl));
     if (
       !["http:", "https:"].includes(parsed.protocol)
@@ -526,6 +857,32 @@ export class AtomicPrivateSettlementToriiClientV1 {
     this.#baseUrl = parsed.href.replace(/\/+$/u, "");
     this.#fetch = fetchImpl;
     this.#sponsorHeaderProvider = sponsorHeaderProvider;
+    this.#networkId = networkId === undefined || networkId === null
+      ? null
+      : identifier(networkId);
+    this.#nativeRuntime = createNativeRuntime(nativeVerifier);
+  }
+
+  #requireAttestationNetwork(context) {
+    if (this.#networkId === null) {
+      throw new TypeError(`${context} requires a configured settlement networkId`);
+    }
+    return this.#networkId;
+  }
+
+  #nativeFunction(name) {
+    try {
+      const binding = resolveNativeRuntimeBinding(this.#nativeRuntime);
+      const verifier = binding[name];
+      if (typeof verifier !== "function") {
+        throw new TypeError("native response verifier is unavailable");
+      }
+      return verifier;
+    } catch {
+      throw new AtomicPrivateSettlementToriiErrorV1(
+        "atomic private settlement restricted response verifier is unavailable",
+      );
+    }
   }
 
   async #request(method, route, body, headerProvider, headerNames, maximumBytes, identity) {
@@ -550,7 +907,18 @@ export class AtomicPrivateSettlementToriiClientV1 {
       } finally {
         authBody.fill(0);
       }
-      Object.assign(headers, exactAuthHeaders(generated, headerNames, "settlement auth provider"));
+      const generatedHeaders = exactAuthHeaders(
+        generated,
+        headerNames,
+        "settlement auth provider",
+      );
+      Object.assign(headers, generatedHeaders);
+      if (identity?.auditorKeyFromRoleHeader === true) {
+        identity = {
+          ...identity,
+          auditorSigningKey: generatedHeaders["x-iroha-operator-public-key"],
+        };
+      }
     }
 
     const transportBody = body.byteLength > 0 ? body.slice() : null;
@@ -617,6 +985,28 @@ export class AtomicPrivateSettlementToriiClientV1 {
       const parsedBody = strictObject(responseBytes, "atomic private settlement response");
       exactFields(parsedBody, responseFields(route), "atomic private settlement response");
       if (route.endsWith("/bundles")) validateBundleAdmission(parsedBody);
+      if (route.endsWith("/audit-capsule")) {
+        const height = parsedBody.authoritative_height;
+        const validNumber = typeof height === "number" && Number.isSafeInteger(height) && height > 0;
+        const validBigInt = typeof height === "bigint" && height > 0n && height <= 0xffffffffffffffffn;
+        if (!validNumber && !validBigInt) {
+          throw new TypeError("settlement auditor capsule authoritative_height must be a nonzero u64");
+        }
+        if (identity?.network === undefined || identity?.value === undefined) {
+          throw new TypeError("settlement auditor capsule request binding is missing");
+        }
+        validateAuditorCapsuleAttestation(parsedBody, identity);
+      }
+      if (route.endsWith("/audit-approvals")) {
+        if (
+          identity?.network === undefined
+          || identity?.value === undefined
+          || identity?.approvalContext === undefined
+        ) {
+          throw new TypeError("settlement approval acknowledgement request binding is missing");
+        }
+        validateAuditApprovalAcknowledgementAttestation(parsedBody, identity);
+      }
       if (identity?.field !== undefined && parsedBody[identity.field] !== identity.value.jsonLiteral) {
         throw new TypeError("settlement response identifier is substituted");
       }
@@ -650,6 +1040,29 @@ export class AtomicPrivateSettlementToriiClientV1 {
           || parsedBody.manifest.bundle_id !== identity.value.jsonLiteral
         ) {
           throw new TypeError("settlement bundle status is substituted");
+        }
+      }
+      if (identity?.nativeVerification !== undefined) {
+        const { kind, verify } = identity.nativeVerification;
+        if (kind === "committee") {
+          await verify(responseBytes, identity.network.bytes, identity.value.bytes);
+        } else if (kind === "capsule") {
+          await verify(
+            responseBytes,
+            identity.network.bytes,
+            identity.value.bytes,
+            identity.auditorSigningKey,
+          );
+        } else if (kind === "approval") {
+          await verify(
+            responseBytes,
+            body,
+            identity.network.bytes,
+            identity.value.bytes,
+            identity.auditorSigningKey,
+          );
+        } else {
+          throw new TypeError("settlement native verification mode is invalid");
         }
       }
       return new AtomicPrivateSettlementJsonResponseV1(route, responseBytes);
@@ -749,6 +1162,16 @@ export class AtomicPrivateSettlementToriiClientV1 {
       "settlement auditor approval",
     );
     const digest = identifier(payloadDigest);
+    const network = this.#requireAttestationNetwork("settlement auditor approval");
+    const approvalContext = auditApprovalRequestContext(request);
+    if (approvalContext.networkId.jsonLiteral !== network.jsonLiteral) {
+      throw new TypeError(
+        "prepared settlement approval network differs from the configured networkId",
+      );
+    }
+    const nativeVerifier = this.#nativeFunction(
+      "privateSettlementVerifyAuditApprovalResponseV1",
+    );
     const route = request.operation.path.replace("{payload_digest}", digest.pathComponent);
     return this.#request(
       "POST",
@@ -757,7 +1180,15 @@ export class AtomicPrivateSettlementToriiClientV1 {
       requireProvider(normalized.roleHeaderProvider, "settlement auditor approval"),
       ROLE_HEADER_NAMES,
       RESPONSE_RESTRICTED_MAX_BYTES,
-      { field: "payload_digest", value: digest, signal: normalized.signal },
+      {
+        field: "payload_digest",
+        value: digest,
+        network,
+        approvalContext,
+        auditorKeyFromRoleHeader: true,
+        nativeVerification: { kind: "approval", verify: nativeVerifier },
+        signal: normalized.signal,
+      },
     );
   }
 
@@ -821,6 +1252,13 @@ export class AtomicPrivateSettlementToriiClientV1 {
       context,
     );
     const digest = identifier(payloadDigest);
+    const network = this.#requireAttestationNetwork(context);
+    const capsule = suffix === "audit-capsule";
+    const nativeVerifier = this.#nativeFunction(
+      capsule
+        ? "privateSettlementVerifyAuditorCapsuleResponseV1"
+        : "privateSettlementVerifyCommitteeProofResponseV1",
+    );
     const route = `/v1/nexus/private-settlements/legs/${digest.pathComponent}/${suffix}`;
     return this.#request(
       "GET",
@@ -829,7 +1267,16 @@ export class AtomicPrivateSettlementToriiClientV1 {
       requireProvider(normalized.roleHeaderProvider, context),
       ROLE_HEADER_NAMES,
       RESPONSE_RESTRICTED_MAX_BYTES,
-      { signal: normalized.signal },
+      {
+        value: digest,
+        network,
+        auditorKeyFromRoleHeader: capsule,
+        nativeVerification: {
+          kind: capsule ? "capsule" : "committee",
+          verify: nativeVerifier,
+        },
+        signal: normalized.signal,
+      },
     );
   }
 

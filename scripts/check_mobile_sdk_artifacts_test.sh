@@ -665,6 +665,8 @@ for namespace in (
         emit(f"Java_{namespace}_KagemushaRecursiveSpendProver_{method}")
 for symbol in shell_array("VALIDATION_FEE_JNI_SYMBOLS"):
     emit(symbol)
+for symbol in shell_array("PRIVATE_SETTLEMENT_RESPONSE_JNI_SYMBOLS"):
+    emit(symbol)
 for symbol in shell_array("PARLIAMENT_TIMED_OVN_JNI_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("SORAFS_APPEAL_FINANCE_JNI_SYMBOLS"):
@@ -2584,6 +2586,20 @@ for hijiri_quote_jni_symbol in \
   run_expect_android_missing_symbol_fail \
     "$with_android_outputs" \
     "$hijiri_quote_jni_symbol" \
+    "$android_inspection_tools"
+done
+for private_settlement_response_jni_symbol in \
+  Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1 \
+  Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1 \
+  Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1 \
+  Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1 \
+  Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1 \
+  Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1; do
+  run_expect_android_missing_symbol_fail \
+    "$with_android_outputs" \
+    "$private_settlement_response_jni_symbol" \
     "$android_inspection_tools"
 done
 run_expect_android_missing_symbol_fail \

@@ -14212,7 +14212,7 @@ mod evidence_http_tests {
             }),
             "request should set Accept: application/json"
         );
-        assert_canonical_account_signed_request(&client, &snapshot);
+        super::tests::assert_canonical_account_signed_request(&client, &snapshot);
     }
 
     #[test]
@@ -26042,7 +26042,10 @@ mod tests {
         fs,
         io::{Read, Write},
         net::TcpListener,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::{Duration, Instant},
     };
     use tempfile::tempdir;

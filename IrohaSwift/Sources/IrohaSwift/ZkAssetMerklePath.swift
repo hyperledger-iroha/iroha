@@ -663,7 +663,8 @@ enum StrictJSONDuplicateKeyRejector {
     static func rejectDuplicateObjectKeys(
         in data: Data,
         integerKeys: Set<String> = [],
-        integerArrayKeys: Set<String> = []
+        integerArrayKeys: Set<String> = [],
+        requireAllNumbersInteger: Bool = false
     ) throws {
         guard let text = String(data: data, encoding: .utf8) else {
             throw ZkAssetMerklePathError.invalidField("json")
@@ -671,7 +672,8 @@ enum StrictJSONDuplicateKeyRejector {
         var parser = Parser(
             text,
             integerKeys: integerKeys,
-            integerArrayKeys: integerArrayKeys
+            integerArrayKeys: integerArrayKeys,
+            requireAllNumbersInteger: requireAllNumbersInteger
         )
         try parser.parse()
     }
@@ -681,16 +683,19 @@ enum StrictJSONDuplicateKeyRejector {
         private let text: String
         private let integerKeys: Set<String>
         private let integerArrayKeys: Set<String>
+        private let requireAllNumbersInteger: Bool
         private var index: String.Index
 
         init(
             _ text: String,
             integerKeys: Set<String>,
-            integerArrayKeys: Set<String>
+            integerArrayKeys: Set<String>,
+            requireAllNumbersInteger: Bool
         ) {
             self.text = text
             self.integerKeys = integerKeys
             self.integerArrayKeys = integerArrayKeys
+            self.requireAllNumbersInteger = requireAllNumbersInteger
             self.index = text.startIndex
         }
 
@@ -732,7 +737,7 @@ enum StrictJSONDuplicateKeyRejector {
             case "\"":
                 _ = try parseString()
             case "-", "0"..."9":
-                try parseNumber(requireInteger: requireInteger)
+                try parseNumber(requireInteger: requireInteger || requireAllNumbersInteger)
             case "t":
                 try consume("true")
             case "f":

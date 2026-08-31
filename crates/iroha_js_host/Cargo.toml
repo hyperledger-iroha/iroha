@@ -23,6 +23,7 @@ iroha_core = { workspace = true, features = ["node"], default-features = false }
 iroha_data_model = { workspace = true, features = ["application-model", "transparent_api", "gost", "sm", "bls"], default-features = false }
 iroha_primitives = { workspace = true }
 iroha_schema = { workspace = true }
+iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
 iroha_zkp_halo2 = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

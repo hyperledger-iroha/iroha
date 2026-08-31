@@ -90,6 +90,70 @@ an unsigned payload unless every signature-bound field matches it.
 Run `iroha tools markdown-help` for the complete reference generated from the
 installed CLI.
 
+### Atomic private-settlement online auditor
+
+The governed online-auditor flow uses one purpose-specific approval key from
+the global `--operator-private-key-file` option and a distinct hybrid capsule
+decryption key from an owner-only runtime file. It pins the four ordered Torii
+endpoints to a separately governed committee-authority record, verifies each
+responder's purpose-separated BLS attestation and proof of possession, requires
+one exact three-of-four view, evaluates the decrypted capsule at the middle
+ordered node-authoritative height so one outlier cannot choose it, then requires
+an exact three-of-four, roster-authenticated approval acknowledgement. Neither
+the capsule plaintext nor either secret is
+printed. The signing key must be listed in the active local audit policy and
+must not be a committee consensus key.
+
+```bash
+iroha --operator-private-key-file /run/secrets/aps-auditor-signing.key \
+  nexus private-settlement audit-online \
+  --committee-endpoint https://validator-1.example/ \
+  --committee-endpoint https://validator-2.example/ \
+  --committee-endpoint https://validator-3.example/ \
+  --committee-endpoint https://validator-4.example/ \
+  --committee-authority /etc/iroha/aps-committee-authority.json \
+  --payload-digest <LEG_PAYLOAD_DIGEST> \
+  --pool-governance /run/secrets/aps-pool-governance.json \
+  --auditor-decryption-key-file /run/secrets/aps-auditor-hybrid.json \
+  --business-policy /run/secrets/aps-business-policy.json \
+  --decision approve
+```
+
+The committee-authority file must come from the participant dataspace's
+governed configuration; endpoint order must match its ordered validator roster
+exactly. Because it is the local trust anchor, it and the three restricted
+input files must be absolute, owner-owned, singly linked regular files with
+exact mode `0600`; on Linux they must be xattr-free, while macOS permits only
+the exact `com.apple.provenance` metadata attribute. Extended ACL entries and
+all other xattrs are rejected, and final path components cannot be symlinks. Files are opened
+nonblocking and without following the final component, then rechecked through
+the retained descriptor before and after the bounded read. The
+restricted files must reside on a qualified local filesystem whose
+descriptor-bound ACL and xattr APIs expose every effective access grant; NFS
+and SMB custody is not qualified by POSIX mode bits alone. The
+decryption-key file's strict Norito JSON shape is:
+
+```json
+{
+  "version": 1,
+  "x25519_secret_hex": "<64 lowercase hexadecimal characters>",
+  "ml_kem_768_secret_hex": "<canonical lowercase hexadecimal ML-KEM-768 secret>"
+}
+```
+
+The business-policy file is also strict Norito JSON. It binds one exact
+network, route, opaque pool, audit-policy lineage/revision/key epoch, canonical
+non-empty allowlists for payer, recipient, sponsor, and asset, inclusive amount
+and reimbursement ceilings, a memo-size ceiling, canonical allowed/required
+policy-reference lists, and a maximum remaining-height window. Unknown fields,
+wildcard identity/asset lists, unordered or duplicate values, a zero window, or
+a required reference absent from the allowed list fail closed. There is no
+environment-variable fallback. `--decision approve` is necessary but not
+sufficient: the decrypted leg must also match every business-policy constraint.
+Omitting the decision or using `--decision reject` cannot create or submit an
+approval. Decryption-key and pool-governance files are limited to 16 KiB; the
+bounded business-policy file is limited to 256 KiB.
+
 Refer to [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instructions.html) for more information about Iroha instructions such as register, mint, grant, and so on.
 
 ### Sumeragi consensus helpers

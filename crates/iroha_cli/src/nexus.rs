@@ -1,10 +1,17 @@
 //! Nexus helpers for lane governance, public lanes, and private settlement.
+mod private_settlement_online_auditor;
+
 use crate::{Run, RunContext};
 use eyre::{Result, eyre};
+use iroha::client::BorrowedKeyPairIdentityRequestSignerV1;
 use iroha::data_model::nexus::{
     AtomicPrivateSettlementV1, LaneId, PrivateSettlementCommitteeAuthorityV1,
     PrivateSettlementPhaseCertificateV1, PrivateSettlementPrepareBarrierV1,
     PrivateSettlementProvisionalLegMaterialV1,
+};
+use iroha_core::private_settlement::{
+    PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditPolicyEvaluatorV1,
+    SoftwarePrivateSettlementAuditorCredentialsV1,
 };
 use iroha_crypto::{Hash, KeyPair};
 use iroha_torii_shared::private_settlement_api::{
@@ -19,6 +26,12 @@ use std::{
     str::FromStr as _,
 };
 use url::Url;
+
+use self::private_settlement_online_auditor::{
+    PrivateSettlementAuditorBusinessPolicyV1, coordinate_private_settlement_online_auditor_v1,
+    load_private_settlement_auditor_business_policy_v1, load_private_settlement_auditor_secret_v1,
+    load_private_settlement_committee_authority_v1, load_private_settlement_pool_governance_v1,
+};
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Show governance manifest status per lane
@@ -73,6 +86,8 @@ pub enum PrivateSettlementCommand {
     AuditCapsule(PrivateSettlementDigestArgs),
     /// Submit one purpose-separated auditor approval
     AuditApproval(PrivateSettlementAuditApprovalArgs),
+    /// Fetch, decrypt, decide, sign, and quorum-submit one auditor approval
+    AuditOnline(PrivateSettlementAuditOnlineArgs),
     /// Submit the exact sponsor-signed global finalization carrier
     BundleSubmit(PrivateSettlementJsonFileArgs),
     /// Read the public bundle lifecycle
@@ -174,6 +189,53 @@ pub struct PrivateSettlementAuditApprovalArgs {
     /// Bounded Norito JSON `PrivateSettlementAuditApprovalRequestV1` file.
     #[arg(long, value_name = "PATH")]
     pub request: PathBuf,
+}
+
+/// Explicit fail-closed online-auditor decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum PrivateSettlementAuditDecisionV1 {
+    /// Approve only after all cryptographic and governance checks pass.
+    Approve,
+    /// Decrypt and validate, but reject without creating or submitting an approval.
+    Reject,
+}
+
+struct PrivateSettlementAuditDecisionPolicyV1<'a> {
+    decision: PrivateSettlementAuditDecisionV1,
+    business_policy: &'a PrivateSettlementAuditorBusinessPolicyV1,
+}
+
+impl PrivateSettlementAuditPolicyEvaluatorV1 for PrivateSettlementAuditDecisionPolicyV1<'_> {
+    fn approves(&self, context: PrivateSettlementAuditEvaluationV1<'_>) -> bool {
+        self.decision == PrivateSettlementAuditDecisionV1::Approve
+            && self.business_policy.approves(context)
+    }
+}
+
+/// End-to-end governed online-auditor operation.
+#[derive(clap::Args, Debug)]
+pub struct PrivateSettlementAuditOnlineArgs {
+    /// Participant committee Torii root; repeat exactly four times.
+    #[arg(long = "committee-endpoint", required = true)]
+    pub committee_endpoints: Vec<Url>,
+    /// Separately governed ordered four-validator committee authority record.
+    #[arg(long, value_name = "PATH")]
+    pub committee_authority: PathBuf,
+    /// Exact leg payload digest.
+    #[arg(long)]
+    pub payload_digest: String,
+    /// Absolute owner-only restricted Norito JSON pool-governance file.
+    #[arg(long, value_name = "PATH")]
+    pub pool_governance: PathBuf,
+    /// Absolute owner-only Norito JSON hybrid decryption-key file.
+    #[arg(long, value_name = "PATH")]
+    pub auditor_decryption_key_file: PathBuf,
+    /// Absolute owner-only strict Norito JSON business-policy file.
+    #[arg(long, value_name = "PATH")]
+    pub business_policy: PathBuf,
+    /// Explicit local decision in addition to the strict business policy.
+    #[arg(long, value_enum)]
+    pub decision: PrivateSettlementAuditDecisionV1,
 }
 
 #[derive(clap::Args, Debug)]
@@ -345,6 +407,36 @@ fn private_settlement<C: RunContext>(
                 &role_key,
                 &request,
             )?)
+        }
+        PrivateSettlementCommand::AuditOnline(args) => {
+            let role_key = private_settlement_operator_key(context)?;
+            let payload_digest = private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let committee_authority =
+                load_private_settlement_committee_authority_v1(&args.committee_authority)?;
+            let pool_governance =
+                load_private_settlement_pool_governance_v1(&args.pool_governance)?;
+            let decryption_secret =
+                load_private_settlement_auditor_secret_v1(&args.auditor_decryption_key_file)?;
+            let business_policy =
+                load_private_settlement_auditor_business_policy_v1(&args.business_policy)?;
+            let credentials =
+                SoftwarePrivateSettlementAuditorCredentialsV1::new(&decryption_secret, &role_key);
+            let request_signer = BorrowedKeyPairIdentityRequestSignerV1::new(&role_key);
+            let evaluator = PrivateSettlementAuditDecisionPolicyV1 {
+                decision: args.decision,
+                business_policy: &business_policy,
+            };
+            let response = coordinate_private_settlement_online_auditor_v1(
+                &client,
+                &args.committee_endpoints,
+                &committee_authority,
+                payload_digest,
+                &pool_governance,
+                &credentials,
+                &request_signer,
+                &evaluator,
+            )?;
+            context.print_data(&response)
         }
         PrivateSettlementCommand::BundleSubmit(args) => {
             let request: PrivateSettlementBundleSubmitRequestV1 =
@@ -865,6 +957,47 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(argument_ids.contains(&"endpoint"));
         assert!(argument_ids.contains(&"payload_digest"));
+    }
+
+    #[test]
+    fn private_settlement_cli_exposes_fail_closed_online_auditor_inputs() {
+        let command = <PrivateSettlementCommand as clap::Subcommand>::augment_subcommands(
+            clap::Command::new("private-settlement"),
+        );
+        let online = command
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "audit-online")
+            .expect("online auditor subcommand");
+        let argument_ids = online
+            .get_arguments()
+            .map(|argument| argument.get_id().as_str())
+            .collect::<Vec<_>>();
+        for required in [
+            "committee_endpoints",
+            "committee_authority",
+            "payload_digest",
+            "pool_governance",
+            "auditor_decryption_key_file",
+            "business_policy",
+            "decision",
+        ] {
+            assert!(argument_ids.contains(&required), "missing {required}");
+        }
+        let decision = online
+            .get_arguments()
+            .find(|argument| argument.get_id().as_str() == "decision")
+            .expect("explicit decision argument");
+        assert!(decision.is_required_set());
+        let business_policy = online
+            .get_arguments()
+            .find(|argument| argument.get_id().as_str() == "business_policy")
+            .expect("strict business-policy argument");
+        assert!(business_policy.is_required_set());
+        let committee_authority = online
+            .get_arguments()
+            .find(|argument| argument.get_id().as_str() == "committee_authority")
+            .expect("governed committee-authority argument");
+        assert!(committee_authority.is_required_set());
     }
 
     #[test]
