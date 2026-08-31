@@ -386,9 +386,7 @@ fn lifecycle_owner_config() -> SumeragiV2Config {
             activation_lead_blocks: 1,
             overlap_grace_blocks: 1,
             expiry_grace_blocks: 1,
-            require_hsm: false,
             allowed_algorithms: vec![Algorithm::BlsNormal],
-            allowed_hsm_providers: Vec::new(),
         },
     }
 }

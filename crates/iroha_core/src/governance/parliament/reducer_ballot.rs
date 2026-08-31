@@ -363,11 +363,11 @@ impl ParliamentAttemptStateV1 {
         Ok(())
     }
 
-    /// Freeze the canonical nonempty survivor roster before accepting any ballot.
+    /// Freeze a canonical survivor roster meeting the V1 anonymity floor.
     ///
     /// # Errors
-    /// Returns an error for replay, zero roots, wrong attempt, an empty survivor
-    /// set, or a survivor count exceeding the frozen registration.
+    /// Returns an error for replay, zero roots, wrong attempt, a sub-floor
+    /// survivor set, or a survivor count exceeding the frozen registration.
     pub fn freeze_ballot_survivors(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
@@ -393,7 +393,10 @@ impl ParliamentAttemptStateV1 {
         let registered = ballot
             .registered_voters
             .ok_or(ParliamentReducerErrorV1::ImmutableBindingMismatch)?;
-        if survivors == 0 || survivors > registered || survivors > ballot.max_corpus_entries {
+        if survivors < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+            || survivors > registered
+            || survivors > ballot.max_corpus_entries
+        {
             return Err(ParliamentReducerErrorV1::InvalidBallotCount);
         }
         let ballot = self
@@ -441,6 +444,7 @@ impl ParliamentAttemptStateV1 {
             return Err(ParliamentReducerErrorV1::AcceptedCorpusMutation);
         }
         if ballot.survivors != Some(accepted_ballots)
+            || accepted_ballots < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
             || accepted_ballots > ballot.max_corpus_entries
         {
             return Err(ParliamentReducerErrorV1::InvalidBallotCount);
@@ -518,6 +522,9 @@ impl ParliamentAttemptStateV1 {
                 || ballot.attempt.status != BallotAttemptStatusV1::AwaitingRelease
                 || ballot.release_beacon_session_id != Some(release_beacon_session_id)
                 || ballot.release_height != Some(release_height)
+                || ballot
+                    .accepted_ballots
+                    .is_none_or(|accepted| accepted < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
                 || at_height > ballot.opening_deadline_height
                 || !timed_commitment_completed_in_window(ballot)
             {
@@ -637,7 +644,7 @@ impl ParliamentAttemptStateV1 {
     /// Policy Jury with a strictly sub-five-percent decisive margin dynamically
     /// requires a fresh, disjoint Confirmation Jury. Exactly five percent does
     /// not trigger confirmation. A narrow result is not committed when fewer
-    /// than two eligible fresh Confirmation candidates remain or when its
+    /// than the V1 anonymity floor of eligible fresh Confirmation candidates remain or when its
     /// required fresh draw would exceed the proposal-wide redraw budget; the
     /// verified opening instead becomes an objective terminal `NoResult`.
     ///
@@ -691,6 +698,11 @@ impl ParliamentAttemptStateV1 {
         }
         if ballot.survivors != Some(opened_survivors) {
             return Err(ParliamentReducerErrorV1::IncompleteOpening);
+        }
+        if opened_survivors < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+            || tally.accepted_ballots < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+        {
+            return Err(ParliamentReducerErrorV1::InvalidBallotCount);
         }
         let opening_height = ballot
             .opening_height
@@ -806,16 +818,17 @@ impl ParliamentAttemptStateV1 {
         {
             return Err(ParliamentReducerErrorV1::InvalidRequiredBodyPipeline);
         }
-        let confirmation_failure_kind =
-            if requires_confirmation && eligible_confirmation_candidates < 2 {
-                Some(ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable)
-            } else if requires_confirmation
-                && self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
-            {
-                Some(ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted)
-            } else {
-                None
-            };
+        let confirmation_failure_kind = if requires_confirmation
+            && eligible_confirmation_candidates < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+        {
+            Some(ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable)
+        } else if requires_confirmation
+            && self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+        {
+            Some(ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted)
+        } else {
+            None
+        };
         if let Some(failure_kind) = confirmation_failure_kind {
             let failure_root = parliament_ballot_failure_root_v1(
                 governance_attempt_id,

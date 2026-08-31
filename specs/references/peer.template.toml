@@ -130,9 +130,7 @@ expected_hash_file = "genesis.expected_hash"
 # activation_lead_blocks = 1
 # overlap_grace_blocks = 8
 # expiry_grace_blocks = 0
-# require_hsm = false
 # allowed_algorithms = ["bls_normal"]
-# allowed_hsm_providers = ["pkcs11", "softkey", "yubihsm"]
 
 [torii]
 # address =

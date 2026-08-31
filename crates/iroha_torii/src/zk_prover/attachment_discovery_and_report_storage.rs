@@ -43,6 +43,7 @@ enum AttachmentDirectoryStep {
 }
 impl AttachmentDirectoryStream {
     fn open(root: PathBuf) -> std::io::Result<Self> {
+        super::zk_attachments::verify_direct_directory(&root)?;
         let tenant_entries = fs::read_dir(&root)?;
         Ok(Self {
             root,
@@ -55,7 +56,7 @@ impl AttachmentDirectoryStream {
     /// Keeping the iterator open across scan cycles ensures a bounded work
     /// window eventually reaches later entries instead of restarting at the
     /// beginning of an oversized namespace on every cycle.
-    fn step(&mut self) -> AttachmentDirectoryStep {
+    fn step(&mut self) -> std::io::Result<AttachmentDirectoryStep> {
         if self.current_tenant.is_some() {
             let next = self
                 .current_tenant
@@ -64,54 +65,230 @@ impl AttachmentDirectoryStream {
                 .1
                 .next();
             let Some(entry) = next else {
+                let tenant_key = &self.current_tenant.as_ref().expect("checked above").0;
+                match super::zk_attachments::verify_direct_directory(&self.root.join(tenant_key)) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == IoErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
                 self.current_tenant = None;
-                return AttachmentDirectoryStep::Advanced;
+                return Ok(AttachmentDirectoryStep::Advanced);
             };
-            let Ok(entry) = entry else {
-                return AttachmentDirectoryStep::Advanced;
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == IoErrorKind::NotFound => {
+                    return Ok(AttachmentDirectoryStep::Advanced);
+                }
+                Err(error) => return Err(error),
             };
-            if !entry.file_type().is_ok_and(|file_type| file_type.is_file()) {
-                return AttachmentDirectoryStep::Advanced;
-            }
             let file_name = entry.file_name();
-            let Some(name) = file_name.to_str() else {
-                return AttachmentDirectoryStep::Advanced;
+            let name = file_name.to_str().ok_or_else(|| {
+                IoError::new(
+                    IoErrorKind::InvalidData,
+                    "ZK attachment directory contains a non-UTF-8 entry",
+                )
+            })?;
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) if error.kind() == IoErrorKind::NotFound => {
+                    return Ok(AttachmentDirectoryStep::Advanced);
+                }
+                Err(error) => return Err(error),
             };
-            let Some(id) = name.strip_suffix(".json") else {
-                return AttachmentDirectoryStep::Advanced;
+            if is_prover_persistence_temp_name(name) {
+                if !file_type.is_file() {
+                    return Err(IoError::new(
+                        IoErrorKind::InvalidData,
+                        format!(
+                            "ZK attachment temporary path is not a direct regular file: {}",
+                            entry.path().display()
+                        ),
+                    ));
+                }
+                return Ok(AttachmentDirectoryStep::Advanced);
+            }
+            let (raw_id, is_metadata) = if let Some(id) = name.strip_suffix(".json") {
+                (id, true)
+            } else if let Some(id) = name.strip_suffix(".bin") {
+                (id, false)
+            } else {
+                return Err(IoError::new(
+                    IoErrorKind::InvalidData,
+                    format!("ZK attachment directory contains an unexpected entry: {name}"),
+                ));
             };
-            let Some(id) = sanitize_attachment_id(id) else {
-                return AttachmentDirectoryStep::Advanced;
-            };
+            let id = sanitize_attachment_id(raw_id)
+                .filter(|id| id == raw_id)
+                .ok_or_else(|| {
+                    IoError::new(
+                        IoErrorKind::InvalidData,
+                        format!("ZK attachment directory has a non-canonical entry: {name}"),
+                    )
+                })?;
+            if !file_type.is_file() {
+                return Err(IoError::new(
+                    IoErrorKind::InvalidData,
+                    format!(
+                        "ZK attachment metadata path is not a direct regular file: {}",
+                        entry.path().display()
+                    ),
+                ));
+            }
+            if !is_metadata {
+                return Ok(AttachmentDirectoryStep::Advanced);
+            }
             let tenant_key = self
                 .current_tenant
                 .as_ref()
                 .expect("tenant remains active")
                 .0
                 .clone();
-            return AttachmentDirectoryStep::Location(AttachmentLocation { tenant_key, id });
+            return Ok(AttachmentDirectoryStep::Location(AttachmentLocation {
+                tenant_key,
+                id,
+            }));
         }
         let Some(entry) = self.tenant_entries.next() else {
-            return AttachmentDirectoryStep::Complete;
+            super::zk_attachments::verify_direct_directory(&self.root)?;
+            return Ok(AttachmentDirectoryStep::Complete);
         };
-        let Ok(entry) = entry else {
-            return AttachmentDirectoryStep::Advanced;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.kind() == IoErrorKind::NotFound => {
+                return Ok(AttachmentDirectoryStep::Advanced);
+            }
+            Err(error) => return Err(error),
         };
-        if !entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
-            return AttachmentDirectoryStep::Advanced;
+        let file_name = entry.file_name();
+        let name = file_name.to_str().ok_or_else(|| {
+            IoError::new(
+                IoErrorKind::InvalidData,
+                "ZK attachment root contains a non-UTF-8 entry",
+            )
+        })?;
+        let tenant_key = sanitize_tenant_key(name)
+            .filter(|tenant| tenant == name)
+            .ok_or_else(|| {
+                IoError::new(
+                    IoErrorKind::InvalidData,
+                    format!("ZK attachment root has a non-canonical tenant entry: {name}"),
+                )
+            })?;
+        let tenant_path = self.root.join(&tenant_key);
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) if error.kind() == IoErrorKind::NotFound => {
+                return Ok(AttachmentDirectoryStep::Advanced);
+            }
+            Err(error) => return Err(error),
+        };
+        if !file_type.is_dir() {
+            return Err(IoError::new(
+                IoErrorKind::InvalidData,
+                format!(
+                    "ZK attachment tenant path is not a direct directory: {}",
+                    tenant_path.display()
+                ),
+            ));
+        }
+        match super::zk_attachments::verify_direct_directory(&tenant_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == IoErrorKind::NotFound => {
+                return Ok(AttachmentDirectoryStep::Advanced);
+            }
+            Err(error) => return Err(error),
+        }
+        let entries = match fs::read_dir(&tenant_path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == IoErrorKind::NotFound => {
+                return Ok(AttachmentDirectoryStep::Advanced);
+            }
+            Err(error) => return Err(error),
+        };
+        self.current_tenant = Some((tenant_key, entries));
+        Ok(AttachmentDirectoryStep::Advanced)
+    }
+}
+fn is_prover_persistence_temp_name(name: &str) -> bool {
+    name.strip_prefix(".tmp").is_some_and(|suffix| {
+        suffix.len() == 6 && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
+}
+fn remove_prover_writer_temps_in(directory: &Path, max_entries: u64) -> std::io::Result<()> {
+    super::zk_attachments::verify_direct_directory(directory)?;
+    let mut scanned = 0_u64;
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        scanned = scanned.saturating_add(1);
+        if scanned > max_entries {
+            return Err(IoError::new(
+                IoErrorKind::InvalidData,
+                format!(
+                    "ZK prover temporary-file recovery exceeds {max_entries} entries in {}",
+                    directory.display()
+                ),
+            ));
         }
         let file_name = entry.file_name();
-        let Some(name) = file_name.to_str() else {
-            return AttachmentDirectoryStep::Advanced;
-        };
-        let Some(tenant_key) = sanitize_tenant_key(name) else {
-            return AttachmentDirectoryStep::Advanced;
-        };
-        if let Ok(entries) = fs::read_dir(self.root.join(&tenant_key)) {
-            self.current_tenant = Some((tenant_key, entries));
+        let name = file_name.to_str().ok_or_else(|| {
+            IoError::new(
+                IoErrorKind::InvalidData,
+                "ZK prover persistence directory contains a non-UTF-8 entry",
+            )
+        })?;
+        if !is_prover_persistence_temp_name(name) {
+            let raw_id = name.strip_suffix(".json").ok_or_else(|| {
+                IoError::new(
+                    IoErrorKind::InvalidData,
+                    format!("ZK prover persistence directory contains an unexpected entry: {name}"),
+                )
+            })?;
+            sanitize_report_id(raw_id)
+                .filter(|clean| clean == raw_id)
+                .ok_or_else(|| {
+                    IoError::new(
+                        IoErrorKind::InvalidData,
+                        format!(
+                            "ZK prover persistence directory contains a non-canonical entry: {name}"
+                        ),
+                    )
+                })?;
+            if !entry.file_type()?.is_file() {
+                return Err(IoError::new(
+                    IoErrorKind::InvalidData,
+                    format!(
+                        "ZK prover persistence path is not a direct regular file: {}",
+                        entry.path().display()
+                    ),
+                ));
+            }
+            drop(super::zk_attachments::open_attachment_regular_file(
+                &entry.path(),
+            )?);
+            continue;
         }
-        AttachmentDirectoryStep::Advanced
+        if !entry.file_type()?.is_file() {
+            return Err(IoError::new(
+                IoErrorKind::InvalidData,
+                format!(
+                    "ZK prover temporary path is not a direct regular file: {}",
+                    entry.path().display()
+                ),
+            ));
+        }
+        drop(super::zk_attachments::open_attachment_regular_file(
+            &entry.path(),
+        )?);
+        remove_file_if_present(&entry.path())?;
     }
+    super::zk_attachments::verify_direct_directory(directory)
+}
+fn recover_prover_writer_temps() -> std::io::Result<()> {
+    let max_entries = cfg_reports_max_count()
+        .max(iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT)
+        .saturating_add(1_024);
+    remove_prover_writer_temps_in(&reports_dir(), max_entries)?;
+    remove_prover_writer_temps_in(&report_index_dir(), max_entries)
 }
 #[derive(Debug, Default)]
 struct AttachmentDiscovery {
@@ -259,17 +436,14 @@ fn normalize_report_summaries(raw: Vec<ProverReportSummary>) -> Vec<ProverReport
     by_id.into_values().collect()
 }
 fn persist_report_summary_locked(summary: &ProverReportSummary) -> std::io::Result<()> {
-    let Some(id) = sanitize_report_id(&summary.id) else {
+    let Some(id) = sanitize_report_id(&summary.id).filter(|id| id == &summary.id) else {
         return Err(IoError::new(
             IoErrorKind::InvalidInput,
             "invalid prover report summary id",
         ));
     };
-    ensure_dirs();
-    fs::create_dir_all(report_index_dir())?;
+    ensure_dirs()?;
     let path = report_summary_path_from_sanitized(&id);
-    let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
     let mut normalized = summary.clone();
     normalized.id = id;
     let body = norito::json::to_json(&normalized)
@@ -280,8 +454,5 @@ fn persist_report_summary_locked(summary: &ProverReportSummary) -> std::io::Resu
             "prover report summary exceeds the hard size limit",
         ));
     }
-    use std::io::Write as _;
-    tmp.write_all(body.as_bytes())?;
-    tmp.flush()?;
-    tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
+    super::zk_attachments::persist_bytes_atomically(&path, body.as_bytes(), ".tmp")
 }

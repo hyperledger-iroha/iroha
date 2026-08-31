@@ -1944,19 +1944,19 @@ fn committed_outbound_replay_admission(
         transfer,
     )?;
     let boundary = SccpReplayBoundaryV1::SoraOutboundLock;
+    let domain = SccpReplayDomainV1 {
+        source_network: validated.context.lane.source,
+        target_network: validated.context.lane.target,
+        boundary,
+        route_revision: transfer.route_revision,
+        route_configuration_hash: validated.context.route_configuration_hash,
+        actor: SccpReplayActorV1::Route,
+    };
+    let accumulator_id = SccpReplayAccumulatorIdV1::from_domain(route_key, &domain)
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
     Ok(SccpCommittedReplayAdmissionV1 {
-        accumulator_id: SccpReplayAccumulatorIdV1 {
-            route_key,
-            boundary,
-        },
-        domain: SccpReplayDomainV1 {
-            source_network: validated.context.lane.source,
-            target_network: validated.context.lane.target,
-            boundary,
-            route_revision: transfer.route_revision,
-            route_configuration_hash: validated.context.route_configuration_hash,
-            actor: SccpReplayActorV1::Route,
-        },
+        accumulator_id,
+        domain,
         record: SccpReplayRecordV1 {
             operation: boundary,
             replay_id: validated.key.message_id,
@@ -2030,19 +2030,19 @@ fn committed_native_replay_admission(
     let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&decoded.payload)
         .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
     let boundary = SccpReplayBoundaryV1::SoraInboundRelease;
+    let domain = SccpReplayDomainV1 {
+        source_network: decoded.source.lane.source,
+        target_network: decoded.source.lane.target,
+        boundary,
+        route_revision: transfer.route_revision,
+        route_configuration_hash: native.route_configuration_hash,
+        actor: SccpReplayActorV1::Route,
+    };
+    let accumulator_id = SccpReplayAccumulatorIdV1::from_domain(route_key, &domain)
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
     Ok(Some(SccpCommittedReplayAdmissionV1 {
-        accumulator_id: SccpReplayAccumulatorIdV1 {
-            route_key,
-            boundary,
-        },
-        domain: SccpReplayDomainV1 {
-            source_network: decoded.source.lane.source,
-            target_network: decoded.source.lane.target,
-            boundary,
-            route_revision: transfer.route_revision,
-            route_configuration_hash: native.route_configuration_hash,
-            actor: SccpReplayActorV1::Route,
-        },
+        accumulator_id,
+        domain,
         record: SccpReplayRecordV1 {
             operation: boundary,
             replay_id: decoded.source.message_id,
@@ -2258,16 +2258,12 @@ pub fn rebuild_sccp_replay_archive_from_kura_v1(
             if expected_domain != &admission.domain {
                 return Err(SccpReplayRebuildErrorV1::UnknownAccumulator);
             }
-            let mut forest = archive
-                .forest(&admission.accumulator_id)
-                .map_err(|_| SccpReplayRebuildErrorV1::UnknownAccumulator)?
-                .1
-                .clone();
-            let delta = forest
-                .occupy(&admission.domain, &admission.record, &admission.witness)
-                .map_err(|_| SccpReplayRebuildErrorV1::ForestMismatch)?;
             archive
-                .apply_delta(admission.accumulator_id, delta)
+                .apply_record(
+                    admission.accumulator_id,
+                    &admission.record,
+                    &admission.witness,
+                )
                 .map_err(|_| SccpReplayRebuildErrorV1::ForestMismatch)?;
         }
     }

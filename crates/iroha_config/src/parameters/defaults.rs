@@ -1097,7 +1097,8 @@ pub mod sorafs {
         /// authority bundle and its reviewed digest are configured.
         pub const MODERATION_SCREENING_ENABLED: bool = false;
         /// Proof-of-personhood credential services require explicit governed
-        /// policy plus runtime-injected signer/KMS/authentication dependencies.
+        /// policy plus runtime-injected signing, key-custody, and authentication
+        /// providers.
         pub mod pop_credentials {
             use std::path::PathBuf;
             /// PoP service routes and workers are disabled by default.
@@ -2260,22 +2261,23 @@ pub mod torii {
         /// Replay archive reads are unavailable until an operator supplies the
         /// complete signed three-replica production policy.
         pub const ENABLED: bool = false;
-        /// Complete bounded checkpoint-set response.
-        pub const MAX_RESPONSE_BYTES: Bytes = Bytes(1024 * 1024 * 1024);
-        /// Maximum encoded bytes in one independently verified snapshot.
-        pub const MAX_SNAPSHOT_BYTES: Bytes = Bytes(1024 * 1024 * 1024);
-        /// Maximum leaves retained by one snapshot.
-        pub const MAX_SNAPSHOT_LEAVES: usize = 8 * 1024 * 1024;
+        /// Complete checkpoint-set response buffered before verification.
+        pub const MAX_RESPONSE_BYTES: Bytes = Bytes(64 * 1024 * 1024);
+        /// Maximum encoded bytes buffered for one independently verified snapshot.
+        pub const MAX_SNAPSHOT_BYTES: Bytes = Bytes(32 * 1024 * 1024);
+        /// Maximum leaves retained by one in-memory snapshot.
+        pub const MAX_SNAPSHOT_LEAVES: usize = 256 * 1024;
         /// Maximum route/boundary accumulators in one checkpoint set.
         pub const MAX_ACCUMULATORS: usize = 4_096;
         /// Complete deadline for one pinned replica fetch.
         pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-        /// First-release response-size ceiling.
-        pub const MAX_RESPONSE_BYTES_HARD: u64 = 8 * 1024 * 1024 * 1024;
-        /// First-release per-snapshot size ceiling.
-        pub const MAX_SNAPSHOT_BYTES_HARD: u64 = 8 * 1024 * 1024 * 1024;
-        /// First-release per-snapshot leaf ceiling.
-        pub const MAX_SNAPSHOT_LEAVES_HARD: u64 = 64 * 1024 * 1024;
+        /// First-release response-size ceiling for one buffered response.
+        pub const MAX_RESPONSE_BYTES_HARD: u64 = 256 * 1024 * 1024;
+        /// First-release per-snapshot size ceiling, below the Norito archive limit.
+        pub const MAX_SNAPSHOT_BYTES_HARD: u64 = 128 * 1024 * 1024;
+        const _: () = assert!(MAX_SNAPSHOT_BYTES_HARD <= super::super::norito::MAX_ARCHIVE_LEN);
+        /// First-release per-snapshot in-memory leaf ceiling.
+        pub const MAX_SNAPSHOT_LEAVES_HARD: u64 = 1024 * 1024;
         /// First-release checkpoint-set cardinality ceiling.
         pub const MAX_ACCUMULATORS_HARD: u64 = 65_536;
         /// First-release request deadline ceiling.
@@ -2491,6 +2493,12 @@ pub mod torii {
     // API tokens are disabled by default.
     /// Whether Torii requires API tokens for authentication.
     pub const REQUIRE_API_TOKEN: bool = false;
+    /// Maximum number of listener-wide API tokens admitted by first-release configuration.
+    pub const API_TOKEN_MAX_COUNT_V1: usize = 256;
+    /// Minimum byte length of a listener-wide API token.
+    pub const API_TOKEN_MIN_BYTES_V1: usize = 32;
+    /// Maximum byte length of a listener-wide API token.
+    pub const API_TOKEN_MAX_BYTES_V1: usize = 256;
     /// Faucet defaults.
     pub mod faucet {
         use super::*;
@@ -4105,22 +4113,11 @@ pub mod sumeragi {
     pub const KEY_OVERLAP_GRACE_BLOCKS: u64 = 8;
     /// Grace window after declared consensus-key expiry.
     pub const KEY_EXPIRY_GRACE_BLOCKS: u64 = 0;
-    /// Whether consensus keys must be bound to an admitted HSM provider.
-    pub const KEY_REQUIRE_HSM: bool = false;
     /// Allowed consensus signing algorithms.
     pub const KEY_ALLOWED_ALGOS: &[Algorithm] = &[Algorithm::BlsNormal];
-    /// Admitted HSM provider identifiers.
-    pub const KEY_ALLOWED_HSM_PROVIDERS: &[&str] = &["pkcs11", "softkey", "yubihsm"];
     /// Default list of allowed consensus signing algorithms.
     pub fn key_allowed_algorithms() -> Vec<Algorithm> {
         KEY_ALLOWED_ALGOS.to_vec()
-    }
-    /// Default list of admitted consensus-key HSM providers.
-    pub fn key_allowed_hsm_providers() -> Vec<String> {
-        KEY_ALLOWED_HSM_PROVIDERS
-            .iter()
-            .map(|provider| (*provider).to_owned())
-            .collect()
     }
     /// NPoS epoch, randomness, election, and reconfiguration defaults.
     pub mod npos {
@@ -4219,6 +4216,10 @@ pub mod governance {
     pub const ALIAS_FRONTIER_TELEMETRY: bool = true;
     /// Emit governance pipeline trace logs.
     pub const DEBUG_TRACE_PIPELINE: bool = false;
+    /// Maximum number of non-closed governance referenda retained at once.
+    pub const MAX_ACTIVE_REFERENDA: NonZeroU32 = nonzero!(64_u32);
+    /// Maximum distinct governance-lock owners retained for one referendum.
+    pub const MAX_LOCK_OWNERS_PER_REFERENDUM: NonZeroU32 = nonzero!(1_000_u32);
     /// Default JDG signature schemes accepted during attestation validation.
     pub const JDG_SIGNATURE_SCHEMES: &[&str] = &["simple_threshold"];
     /// Default runtime-upgrade provenance enforcement mode.
@@ -4263,9 +4264,9 @@ pub mod governance {
     pub const PARLIAMENT_REVIEW_PANEL_SIZE: usize = 150;
     /// Default Coordination Council size.
     pub const PARLIAMENT_COORDINATION_COUNCIL_SIZE: usize = 150;
-    /// Default Policy Jury size (hidden timed-OVN bodies require at least two seats).
+    /// Default Policy Jury size (hidden timed-OVN bodies require the V1 anonymity floor).
     pub const PARLIAMENT_POLICY_JURY_SIZE: usize = 500;
-    /// Configured Confirmation Jury target/cap (hidden timed-OVN bodies require at least two).
+    /// Configured Confirmation Jury target/cap (hidden timed-OVN bodies require the V1 anonymity floor).
     pub const PARLIAMENT_CONFIRMATION_JURY_SIZE: usize = 1_000;
     /// Default Oversight Committee size.
     pub const PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE: usize = 50;

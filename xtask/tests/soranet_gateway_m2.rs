@@ -53,8 +53,8 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     fs::write(&sbom_path, r#"{"sbom":"ok"}"#).expect("sbom");
     let vuln_report = temp.path().join("vuln.txt");
     fs::write(&vuln_report, "no critical vulns").expect("vuln");
-    let hsm_policy = temp.path().join("hsm.txt");
-    fs::write(&hsm_policy, "YubiHSM policy").expect("hsm");
+    let signing_policy = temp.path().join("signing-policy.txt");
+    fs::write(&signing_policy, "external signing policy").expect("signing policy");
     let sandbox_profile = temp.path().join("sandbox.json");
     fs::write(&sandbox_profile, r#"{"profile":"cgroup"}"#).expect("sandbox");
     let descriptor = workspace_root
@@ -104,7 +104,7 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
         "hardening": {
             "sbom": sbom_path,
             "vuln_report": vuln_report,
-            "hsm_policy": hsm_policy,
+            "signing_policy": signing_policy,
             "sandbox_profile": sandbox_profile,
             "data_retention_days": 14,
             "log_retention_days": 14

@@ -15,13 +15,17 @@ required|canonical_factory|let apply_service = super::v2_apply::V2ApplyService::
 required|canonical_factory|.into_revalidated_lifecycle_startup(|consume the fixed marker replay cut
 required|canonical_factory|let RecoveredLifecycleStorageAuthorityV1 {|open the storage seal only after exact validation
 required|canonical_factory|self.open_production_lifecycle_owner_v1_at_authenticated_roots(|enter the private implementation after exact target checks
+required|canonical_factory|authority: serve_payload_directory_authority,|consume the recovery-minted Serve directory authority with the exact retained Kura
 required|canonical_factory|owner.with_recovered_kura_binding_and_apply_service(|retain exact Kura and replay service together
-order|canonical_factory|11|factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1|if !self.effects.is_empty()|Arc::ptr_eq(&adapter_owner, &self.factory_owner)|storage.context_id != context.id()|body_store.matches_lifecycle_storage_root(|self.adapter.wal.matches_path(&storage.wal_path)|let apply_service = super::v2_apply::V2ApplyService::new(|.into_revalidated_lifecycle_startup(|let RecoveredLifecycleStorageAuthorityV1 {|self.open_production_lifecycle_owner_v1_at_authenticated_roots(|owner.with_recovered_kura_binding_and_apply_service(|factory inputs, residual-effect rejection, startup/context/storage/WAL binding, Apply construction, marker replay, seal opening, authenticated-root entry, and Kura binding must remain ordered
+order|canonical_factory|12|factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1|if !self.effects.is_empty()|Arc::ptr_eq(&adapter_owner, &self.factory_owner)|storage.context_id != context.id()|body_store.matches_lifecycle_storage_root(|self.adapter.wal.matches_path(&storage.wal_path)|let apply_service = super::v2_apply::V2ApplyService::new(|.into_revalidated_lifecycle_startup(|let RecoveredLifecycleStorageAuthorityV1 {|self.open_production_lifecycle_owner_v1_at_authenticated_roots(|authority: serve_payload_directory_authority,|owner.with_recovered_kura_binding_and_apply_service(|factory inputs, residual-effect rejection, startup/context/storage/WAL binding, Apply construction, marker replay, seal opening, recovery-minted Serve authority consumption, and Kura binding must remain ordered
 forbidden|canonical_factory|kura: &Kura|production owner factory retained caller-supplied kura: &Kura
 forbidden|canonical_factory|ledger_root: &std::path::Path|production owner factory retained caller-supplied ledger_root: &std::path::Path
 forbidden|canonical_factory|serve_payload_root: &std::path::Path|production owner factory retained caller-supplied serve_payload_root: &std::path::Path
 forbidden|canonical_factory|body_root: &std::path::Path|production owner factory retained caller-supplied body_root: &std::path::Path
 forbidden|canonical_factory|body_signature_policy:|production owner factory retained caller-supplied body_signature_policy:
+region|certified_serve_production_surface|certified_serve_store|at|pub(crate) struct CertifiedServePayloadStoreV1 {|before|mod tests {
+required|certified_serve_production_surface|fn open_with_kura_authority(|production Certified-Serve storage must consume recovery-minted Kura authority
+forbidden|certified_serve_production_surface|fn open_with_kura(|production Certified-Serve storage must not mint authority at the point of use
 region|quarantine|body_store|after|impl QuarantinedV2BodyStore {|before|impl RevalidatedV2BodyStore {
 required|quarantine|fn into_revalidated_lifecycle_startup(|quarantined recovered-startup cut must expose the fixed lifecycle replay
 forbidden|quarantine|fn retain_recovered_markers_for_subject(|quarantined recovered-startup cut must not expose marker subject filtering
@@ -39,14 +43,14 @@ required|factory|project_recovered_wal_decision_fetch|Decision Fetch projection 
 required|factory|detach_recovered_decision_apply_body|locate the opaque Decision body preflight
 required|factory|.into_adapter_preview(adapter, verified, fetch, lineage)|locate the consuming recovered Decision adapter preview
 required|factory|into_lifecycle_owner_store|locate the revalidated same-store handoff
-required|factory|CertifiedServePayloadStoreV1::open|locate Serve store open
+required|factory|payload_store_target.open(|locate the sealed Serve store open
 required|factory|ProductionLifecycleOwnerV1::open_recovered_control_startup|locate control owner open
 required|factory|ProductionLifecycleOwnerV1::open_recovered_decision_fetch_startup|locate Decision Fetch owner open
 required|factory|ProductionLifecycleOwnerV1::open_recovered_decision_apply_startup|validated Decision body enters the exact Apply owner transaction
 order|factory|2|project_recovered_wal_control_sign|into_lifecycle_owner_store|control projection must precede the revalidated same-store handoff
 order|factory|4|project_recovered_wal_decision_fetch|detach_recovered_decision_apply_body|.into_adapter_preview(adapter, verified, fetch, lineage)|into_lifecycle_owner_store|Decision Fetch projection, body preflight, adapter preview, and same-store handoff must remain ordered
-order|factory|3|into_lifecycle_owner_store|CertifiedServePayloadStoreV1::open|ProductionLifecycleOwnerV1::open_recovered_control_startup|body-store handoff and Serve open must precede recovered control owner open
-order|factory|2|CertifiedServePayloadStoreV1::open|ProductionLifecycleOwnerV1::open_recovered_decision_fetch_startup|Serve store must open before recovered Decision Fetch owner
+order|factory|3|into_lifecycle_owner_store|payload_store_target.open(|ProductionLifecycleOwnerV1::open_recovered_control_startup|body-store handoff and sealed Serve open must precede recovered control owner open
+order|factory|2|payload_store_target.open(|ProductionLifecycleOwnerV1::open_recovered_decision_fetch_startup|sealed Serve store must open before recovered Decision Fetch owner
 order|factory|2|.into_adapter_preview(adapter, verified, fetch, lineage)|ProductionLifecycleOwnerV1::open_recovered_decision_apply_startup|Decision adapter preview must precede recovered Decision Apply owner open
 forbidden|factory|publish_recovered_adapter_status|unified production owner factory must not publish recovered adapter status
 region|factory_before_control_projection|adapter|at|pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(|before|project_recovered_wal_control_sign

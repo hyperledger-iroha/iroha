@@ -299,6 +299,25 @@ class ParliamentApiV1Test {
     }
 
     @Test
+    fun effectSensitiveProposalsRequireExactOperator() {
+        listOf("DeployContract", "RuntimeUpgrade", "ContractLifecycleGovernance").forEach { kind ->
+            val valid = validProposal(kind)
+            ParliamentApiV1.Proposal.fromJson(encode(valid))
+
+            @Suppress("UNCHECKED_CAST")
+            val payload = valid["payload"] as MutableMap<String, Any?>
+            payload.remove("proposal_operator")
+            assertFailsWith<IllegalArgumentException>("accepted missing operator for $kind") {
+                ParliamentApiV1.Proposal.fromJson(encode(valid))
+            }
+            payload["proposal_operator"] = "not-an-account"
+            assertFailsWith<IllegalArgumentException>("accepted malformed operator for $kind") {
+                ParliamentApiV1.Proposal.fromJson(encode(valid))
+            }
+        }
+    }
+
+    @Test
     fun contractLifecycleUnitActionsRequireExplicitNullPayload() {
         listOf("CancelOwnershipOffer", "AcceptParliamentOwnership").forEach { action ->
             val proposal = validProposal("ContractLifecycleGovernance")
@@ -1368,6 +1387,7 @@ class ParliamentApiV1Test {
     private fun validProposal(kind: String): MutableMap<String, Any?> {
         val payload: MutableMap<String, Any?> = when (kind) {
             "DeployContract" -> linkedMapOf(
+                "proposal_operator" to account(1),
                 "contract_address" to CONTRACT_ADDRESS,
                 "code_hash" to "11".repeat(32),
                 "abi_hash" to "22".repeat(32),
@@ -1375,6 +1395,7 @@ class ParliamentApiV1Test {
                 "manifest_provenance" to null,
             )
             "RuntimeUpgrade" -> linkedMapOf(
+                "proposal_operator" to account(1),
                 "manifest" to linkedMapOf(
                     "name" to "runtime-v1",
                     "description" to "first release runtime",
@@ -1434,6 +1455,7 @@ class ParliamentApiV1Test {
                 ),
             )
             "ContractLifecycleGovernance" -> linkedMapOf(
+                "proposal_operator" to account(1),
                 "contract_address" to CONTRACT_ADDRESS,
                 "expected_revision" to 3,
                 "action" to linkedMapOf(

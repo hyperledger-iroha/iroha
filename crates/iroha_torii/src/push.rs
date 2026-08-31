@@ -1,9 +1,10 @@
 //! Best-effort Torii push notification bridge.
 //!
 //! Local device, delivery, and provider-credential files are consumed through bounded direct-file
-//! reads. Startup enumeration and dispatch are likewise count-bounded so corrupted local
-//! persistence cannot determine peak memory. Remote provider bodies are streamed under one
-//! source-coupled ceiling, and successful delivery responses are not buffered.
+//! reads. Each device is one flat, token-fingerprint-keyed record, so an account reassignment is a
+//! single atomic replacement. Startup enumeration and dispatch are likewise count-bounded so
+//! corrupted local persistence cannot determine peak memory. Remote provider bodies are streamed
+//! under one source-coupled ceiling, and successful delivery responses are not buffered.
 use crate::account_activity::AccountActivityRole;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD};
@@ -13,13 +14,14 @@ use iroha_core::{EventsSender, kura::Kura};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     account::AccountId,
-    block::SignedBlock,
+    block::{BlockHeader, SignedBlock},
     events::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox},
     },
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
 };
+use iroha_futures::supervisor::ShutdownSignal;
 use jsonwebtoken::{Algorithm, EncodingKey};
 #[cfg(test)]
 use nonzero_ext::nonzero;
@@ -29,6 +31,7 @@ use sha2::{Digest as _, Sha256};
 #[cfg(test)]
 use std::sync::Mutex;
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Read as _, Write as _},
     num::NonZeroUsize,
@@ -37,8 +40,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 const PUSH_DIR: &str = "push";
+const PUSH_INITIALIZATION_DIR: &str = ".push-initialize-v1";
 const DEVICES_DIR: &str = "devices";
 const QUEUE_DIR: &str = "queue";
+const APPLIED_BLOCK_CURSOR_FILE: &str = "applied-block-cursor.json";
+const APPLIED_BLOCK_CURSOR_VERSION: u32 = 1;
 const FCM_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const FCM_SCOPE: &str = "https://www.googleapis.com/auth/firebase.messaging";
 const APNS_SANDBOX_ENDPOINT: &str = "https://api.sandbox.push.apple.com";
@@ -52,9 +58,10 @@ const DISPATCH_TICK: Duration = Duration::from_secs(5);
 // bounded on-disk representation into unbounded strings or collections.
 const MAX_PUSH_DEVICES: usize = 4 * 1024;
 const MAX_PUSH_QUEUE_JOBS: usize = 4 * MAX_PUSH_DEVICES;
-const MAX_PUSH_DEVICE_ACCOUNT_ENTRIES: usize = MAX_PUSH_DEVICES;
 const MAX_PUSH_DEVICE_RECORD_BYTES: usize = 64 * 1024;
 const MAX_PUSH_QUEUE_JOB_BYTES: usize = 16 * 1024;
+const MAX_PUSH_APPLIED_BLOCK_CURSOR_BYTES: usize = 1024;
+const MAX_PUSH_RECOVERABLE_TEMP_FILES: usize = 1;
 const MAX_PUSH_TOKEN_BYTES: usize = 8 * 1024;
 // `torii.push.max_topics_per_device` may lower, but never raise, this invariant.
 const MAX_PUSH_TOPICS: usize = 256;
@@ -71,11 +78,11 @@ const MAX_APNS_PRIVATE_KEY_BYTES: usize = 16 * 1024;
 // dispatch task's retained buffer without bound.
 const MAX_PUSH_PROVIDER_RESPONSE_BYTES: usize = 64 * 1024;
 const PUSH_DISPATCH_BATCH_SIZE: usize = 256;
+static PUSH_INITIALIZATION_GUARD: StorageMutex<()> = StorageMutex::new(());
 #[derive(Clone, Copy, Debug)]
 struct PushStorageLimits {
     max_devices: usize,
     max_queue_jobs: usize,
-    max_device_account_entries: usize,
     max_device_record_bytes: usize,
     max_queue_job_bytes: usize,
     dispatch_batch_size: usize,
@@ -83,7 +90,6 @@ struct PushStorageLimits {
 const PUSH_STORAGE_LIMITS: PushStorageLimits = PushStorageLimits {
     max_devices: MAX_PUSH_DEVICES,
     max_queue_jobs: MAX_PUSH_QUEUE_JOBS,
-    max_device_account_entries: MAX_PUSH_DEVICE_ACCOUNT_ENTRIES,
     max_device_record_bytes: MAX_PUSH_DEVICE_RECORD_BYTES,
     max_queue_job_bytes: MAX_PUSH_QUEUE_JOB_BYTES,
     dispatch_batch_size: PUSH_DISPATCH_BATCH_SIZE,
@@ -96,10 +102,10 @@ pub enum Platform {
 }
 impl Platform {
     fn from_label(label: &str) -> Result<Self, PushError> {
-        match label.trim().to_ascii_uppercase().as_str() {
+        match label {
             "FCM" => Ok(Self::Fcm),
             "APNS" => Ok(Self::Apns),
-            other => Err(PushError::InvalidPlatform(other.to_string())),
+            _ => Err(PushError::InvalidPlatform(label.to_owned())),
         }
     }
     fn from_stored(label: &str) -> Option<Self> {
@@ -150,6 +156,7 @@ pub struct RegisteredDevice {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct PushActivityPayload {
     pub account_id: String,
     pub activity_kind: String,
@@ -167,6 +174,10 @@ pub enum PushError {
     MissingCredentials { platform: Platform },
     TooManyTopics { max: usize },
     EmptyToken,
+    InvalidToken,
+    InvalidTopic { index: usize },
+    DuplicateTopic { index: usize },
+    TopicsTooLarge { max_bytes: usize },
     Storage(String),
 }
 /// Dispatch settings derived from configuration.
@@ -205,6 +216,74 @@ pub enum DispatchOutcome {
     Retry(String),
     InvalidToken(String),
     PermanentFailure(String),
+}
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+struct AppliedBlockCursor {
+    version: u32,
+    height: u64,
+    block_hash: Option<HashOf<BlockHeader>>,
+}
+impl AppliedBlockCursor {
+    const fn origin() -> Self {
+        Self {
+            version: APPLIED_BLOCK_CURSOR_VERSION,
+            height: 0,
+            block_hash: None,
+        }
+    }
+
+    fn validate(&self) -> io::Result<()> {
+        if self.version != APPLIED_BLOCK_CURSOR_VERSION {
+            return Err(invalid_data(format!(
+                "unsupported push applied-block cursor version {}; expected {}",
+                self.version, APPLIED_BLOCK_CURSOR_VERSION
+            )));
+        }
+        match (self.height, self.block_hash.as_ref()) {
+            (0, None) | (1.., Some(_)) => Ok(()),
+            (0, Some(_)) => Err(invalid_data(
+                "push applied-block cursor at origin must not carry a block hash",
+            )),
+            (_, None) => Err(invalid_data(
+                "nonzero push applied-block cursor must carry its block hash",
+            )),
+        }
+    }
+}
+#[derive(Debug)]
+enum PushReplayError {
+    Backpressure {
+        height: u64,
+        queued: usize,
+        required: usize,
+        maximum: usize,
+    },
+    Fatal(PushError),
+}
+impl From<PushError> for PushReplayError {
+    fn from(error: PushError) -> Self {
+        Self::Fatal(error)
+    }
+}
+#[derive(Clone, Copy)]
+enum PushReplayTarget {
+    Authoritative,
+    Height(u64),
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PushReplayOutcome {
+    Complete,
+    StoppedByShutdown,
 }
 /// Dispatcher trait so provider delivery can be mocked in tests.
 #[async_trait]
@@ -263,24 +342,65 @@ pub struct PushBridge {
     data_dir: Arc<PathBuf>,
     storage_limits: PushStorageLimits,
     mutation_guard: Arc<StorageMutex<()>>,
+    applied_block_cursor: Arc<StorageMutex<AppliedBlockCursor>>,
 }
 impl PushBridge {
+    #[cfg(test)]
     pub fn new(config: actual::Push) -> Self {
-        Self::with_dispatcher(config, Arc::new(RealPushDispatcher))
+        Self::new_in(config, crate::data_dir::base_dir())
+            .expect("test push persistence must be valid")
     }
+    /// Construct a push bridge rooted at the explicitly configured Torii data directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any existing device or delivery record is unsafe,
+    /// malformed, conflicting, or exceeds the bounded storage geometry.
+    pub fn new_in(config: actual::Push, data_dir: PathBuf) -> Result<Self, PushError> {
+        Self::with_dispatcher_and_limits_in(
+            config,
+            Arc::new(RealPushDispatcher),
+            PUSH_STORAGE_LIMITS,
+            data_dir,
+        )
+    }
+    #[cfg(test)]
     pub fn with_dispatcher(config: actual::Push, dispatcher: Arc<dyn PushDispatcher>) -> Self {
-        Self::with_dispatcher_and_limits(config, dispatcher, PUSH_STORAGE_LIMITS)
+        Self::with_dispatcher_and_limits_in(
+            config,
+            dispatcher,
+            PUSH_STORAGE_LIMITS,
+            crate::data_dir::base_dir(),
+        )
+        .expect("test push persistence must be valid")
     }
+    #[cfg(test)]
     fn with_dispatcher_and_limits(
         config: actual::Push,
         dispatcher: Arc<dyn PushDispatcher>,
         storage_limits: PushStorageLimits,
     ) -> Self {
+        Self::with_dispatcher_and_limits_in(
+            config,
+            dispatcher,
+            storage_limits,
+            crate::data_dir::base_dir(),
+        )
+        .expect("test push persistence must be valid")
+    }
+    fn with_dispatcher_and_limits_in(
+        config: actual::Push,
+        dispatcher: Arc<dyn PushDispatcher>,
+        storage_limits: PushStorageLimits,
+        data_dir: PathBuf,
+    ) -> Result<Self, PushError> {
         let settings = DispatchSettings {
             connect_timeout: config.connect_timeout,
             request_timeout: config.request_timeout,
         };
-        let data_dir = Arc::new(crate::data_dir::base_dir().join(PUSH_DIR));
+        let data_dir = Arc::new(data_dir.join(PUSH_DIR));
+        let applied_block_cursor =
+            load_or_initialize_applied_block_cursor(&data_dir).map_err(storage_error)?;
         let bridge = Self {
             config,
             settings,
@@ -290,11 +410,19 @@ impl PushBridge {
             data_dir,
             storage_limits,
             mutation_guard: Arc::new(StorageMutex::new(())),
+            applied_block_cursor: Arc::new(StorageMutex::new(applied_block_cursor)),
         };
-        bridge.load_from_disk();
-        bridge
+        bridge.load_from_disk().map_err(storage_error)?;
+        Ok(bridge)
     }
     pub fn register_device(&self, request: RegisterDeviceRequest) -> Result<(), PushError> {
+        self.register_device_with(request, |record| self.persist_device(record))
+    }
+    fn register_device_with(
+        &self,
+        request: RegisterDeviceRequest,
+        persist: impl FnOnce(&DeviceRecord) -> Result<(), AtomicWriteError>,
+    ) -> Result<(), PushError> {
         if !self.config.enabled {
             return Err(PushError::Disabled);
         }
@@ -303,19 +431,9 @@ impl PushBridge {
         if !self.has_credentials(platform) {
             return Err(PushError::MissingCredentials { platform });
         }
-        let token = request.token.trim();
-        if token.is_empty() {
-            return Err(PushError::EmptyToken);
-        }
-        if token.len() > MAX_PUSH_TOKEN_BYTES {
-            return Err(storage_limit_error(
-                "device token bytes",
-                token.len(),
-                MAX_PUSH_TOKEN_BYTES,
-            ));
-        }
+        let token = validate_device_token(platform, &request.token)?;
         let max_topics = self.config.max_topics_per_device.get().min(MAX_PUSH_TOPICS);
-        let topics = normalize_topics(request.topics, max_topics)?;
+        let topics = validate_topics(request.topics, max_topics)?;
         let token = token.to_owned();
         let token_fingerprint = fingerprint(token.as_bytes());
         let record = DeviceRecord {
@@ -338,11 +456,15 @@ impl PushBridge {
                 self.storage_limits.max_devices,
             ));
         }
-        if let Some(old) = old {
-            let old_path = self.device_path(&old.account_id, &token_fingerprint);
-            remove_device_file(&old_path).map_err(storage_error)?;
+        if let Err(error) = persist(&record) {
+            if error.published {
+                // The rename already replaced the sole token-keyed record. Keep the live view
+                // aligned even though the caller must retry because directory durability is
+                // uncertain.
+                self.devices.insert(token_fingerprint, record);
+            }
+            return Err(storage_error(error.source));
         }
-        self.persist_device(&record)?;
         self.devices.insert(token_fingerprint, record);
         Ok(())
     }
@@ -352,15 +474,9 @@ impl PushBridge {
         }
         let account_id = canonical_account(&request.account_id)?;
         let platform = Platform::from_label(&request.platform)?;
-        let token = request.token.trim();
-        if token.is_empty() {
-            return Err(PushError::EmptyToken);
-        }
-        if token.len() > MAX_PUSH_TOKEN_BYTES {
-            // Registration rejects such tokens, so no persisted record can match.
-            return Ok(());
-        }
+        let token = validate_device_token(platform, &request.token)?;
         let token_fingerprint = fingerprint(token.as_bytes());
+        let _mutation = self.mutation_guard.lock();
         let Some(record) = self
             .devices
             .get(&token_fingerprint)
@@ -371,45 +487,52 @@ impl PushBridge {
         if record.account_id != account_id.to_string() || record.platform != platform.label() {
             return Ok(());
         }
-        drop(record);
-        self.remove_device_by_fingerprint(&token_fingerprint)
+        self.remove_device_file_and_reconcile_memory(
+            &token_fingerprint,
+            remove_file_if_exists_with_state,
+        )
     }
     pub(crate) fn enqueue_activity(
         &self,
         account: &AccountId,
         tx_hash: &str,
         block_height: u64,
-        instruction_index: usize,
+        instruction_index: u64,
         activity_kind: &str,
         role: AccountActivityRole,
     ) -> Result<usize, PushError> {
         if !self.config.enabled {
             return Err(PushError::Disabled);
         }
-        let account_id = account.to_string();
-        let devices = self.devices_for_account(&account_id);
+        let _mutation = self.mutation_guard.lock();
+        self.enqueue_activity_locked(
+            account,
+            tx_hash,
+            block_height,
+            instruction_index,
+            activity_kind,
+            role,
+        )
+    }
+    fn enqueue_activity_locked(
+        &self,
+        account: &AccountId,
+        tx_hash: &str,
+        block_height: u64,
+        instruction_index: u64,
+        activity_kind: &str,
+        role: AccountActivityRole,
+    ) -> Result<usize, PushError> {
         let mut queued = 0usize;
-        for device in devices {
-            let payload = PushActivityPayload {
-                account_id: account_id.clone(),
-                activity_kind: activity_kind.to_string(),
-                tx_hash: tx_hash.to_string(),
-                block_height,
-                instruction_index: instruction_index as u64,
-                direction: role.as_str().to_string(),
-            };
-            let dedupe_key = delivery_dedupe_key(&payload, &device.token_fingerprint);
-            let job = DeliveryJob {
-                dedupe_key: dedupe_key.clone(),
-                account_id: account_id.clone(),
-                token_fingerprint: device.token_fingerprint.clone(),
-                payload,
-                attempts: 0,
-                next_attempt_ms: now_ms(),
-                created_at_ms: now_ms(),
-                updated_at_ms: now_ms(),
-            };
-            let _mutation = self.mutation_guard.lock();
+        for job in self.activity_jobs(
+            account,
+            tx_hash,
+            block_height,
+            instruction_index,
+            activity_kind,
+            role,
+        ) {
+            let dedupe_key = job.dedupe_key.clone();
             if self.queue.contains_key(&dedupe_key) {
                 continue;
             }
@@ -425,6 +548,43 @@ impl PushBridge {
             queued += 1;
         }
         Ok(queued)
+    }
+    fn activity_jobs(
+        &self,
+        account: &AccountId,
+        tx_hash: &str,
+        block_height: u64,
+        instruction_index: u64,
+        activity_kind: &str,
+        role: AccountActivityRole,
+    ) -> Vec<DeliveryJob> {
+        let account_id = account.to_string();
+        self.devices_for_account(&account_id)
+            .into_iter()
+            .map(|device| {
+                let payload = PushActivityPayload {
+                    account_id: account_id.clone(),
+                    activity_kind: activity_kind.to_string(),
+                    tx_hash: tx_hash.to_string(),
+                    block_height,
+                    instruction_index,
+                    direction: role.as_str().to_string(),
+                };
+                let dedupe_key = delivery_dedupe_key(&payload, &device.token_fingerprint);
+                let now = now_ms();
+                DeliveryJob {
+                    dedupe_key,
+                    account_id: account_id.clone(),
+                    token_fingerprint: device.token_fingerprint,
+                    target_platform: device.platform,
+                    payload,
+                    attempts: 0,
+                    next_attempt_ms: now,
+                    created_at_ms: now,
+                    updated_at_ms: now,
+                }
+            })
+            .collect()
     }
     pub async fn dispatch_due_once(&self) {
         if !self.config.enabled {
@@ -445,35 +605,136 @@ impl PushBridge {
             self.dispatch_job(job).await;
         }
     }
-    pub fn start_event_worker(&self, kura: Arc<Kura>, events: EventsSender) {
+    pub(crate) fn start_event_worker(
+        &self,
+        kura: Arc<Kura>,
+        events: EventsSender,
+        shutdown_signal: ShutdownSignal,
+    ) -> Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
         if !self.config.enabled {
-            return;
+            return None;
         }
+        // Subscribe before spawning so the caller cannot observe a startup
+        // window in which committed events have no receiver.
+        let mut receiver = events.subscribe();
         let bridge = self.clone();
-        tokio::spawn(async move {
-            let mut receiver = events.subscribe();
+        Some(tokio::spawn(async move {
+            if shutdown_signal.is_sent() {
+                return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+            }
+            match replay_with_queue_drain(
+                &bridge,
+                &kura,
+                PushReplayTarget::Authoritative,
+                &shutdown_signal,
+            )
+            .await
+            {
+                Ok(PushReplayOutcome::Complete) => {}
+                Ok(PushReplayOutcome::StoppedByShutdown) => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
+                Err(error) => {
+                    iroha_logger::error!(
+                        ?error,
+                        "push bridge could not replay its durable Kura backlog"
+                    );
+                    return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                }
+            }
+            if shutdown_signal.is_sent() {
+                return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+            }
             let mut tick = tokio::time::interval(DISPATCH_TICK);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
+            'worker: loop {
                 tokio::select! {
+                    () = shutdown_signal.receive() => {
+                        break 'worker crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    },
                     event = receiver.recv() => match event {
                         Ok(event) => {
-                            if let Some(height) = committed_block_height(&event) {
-                                bridge.enqueue_committed_block(&kura, height);
-                                bridge.dispatch_due_once().await;
+                            if let Some(height) = applied_block_heights(&event).last().copied() {
+                                match replay_with_queue_drain(
+                                    &bridge,
+                                    &kura,
+                                    PushReplayTarget::Height(height),
+                                    &shutdown_signal,
+                                )
+                                .await
+                                {
+                                    Ok(PushReplayOutcome::Complete) => {}
+                                    Ok(PushReplayOutcome::StoppedByShutdown) => {
+                                        break 'worker crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                                    }
+                                    Err(error) => {
+                                        iroha_logger::error!(
+                                            ?error,
+                                            height,
+                                            "push bridge could not durably reconcile an applied block"
+                                        );
+                                        break 'worker crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                                    }
+                                }
+                                tokio::select! {
+                                    () = shutdown_signal.receive() => {
+                                        break 'worker crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                                    },
+                                    () = bridge.dispatch_due_once() => {}
+                                }
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            iroha_logger::warn!(skipped, "push bridge skipped lagged events");
+                            iroha_logger::warn!(
+                                skipped,
+                                "push bridge event subscription lagged; reconciling from durable Kura"
+                            );
+                            match replay_with_queue_drain(
+                                &bridge,
+                                &kura,
+                                PushReplayTarget::Authoritative,
+                                &shutdown_signal,
+                            )
+                            .await
+                            {
+                                Ok(PushReplayOutcome::Complete) => {}
+                                Ok(PushReplayOutcome::StoppedByShutdown) => {
+                                    break 'worker crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                                }
+                                Err(error) => {
+                                    iroha_logger::error!(
+                                        ?error,
+                                        "push bridge could not reconcile a lagged event subscription"
+                                    );
+                                    break 'worker crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                                }
+                            }
+                            tokio::select! {
+                                () = shutdown_signal.receive() => {
+                                    break 'worker crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                                },
+                                () = bridge.dispatch_due_once() => {}
+                            }
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break 'worker if shutdown_signal.is_sent() {
+                                crate::ToriiCriticalWorkerExit::StoppedByShutdown
+                            } else {
+                                crate::ToriiCriticalWorkerExit::UnexpectedExit
+                            };
+                        },
                     },
                     _ = tick.tick() => {
-                        bridge.dispatch_due_once().await;
+                        tokio::select! {
+                            () = shutdown_signal.receive() => {
+                                break 'worker crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                            },
+                            () = bridge.dispatch_due_once() => {}
+                        }
                     }
                 }
             }
-        });
+        }))
     }
     pub fn device_count(&self) -> usize {
         self.devices.len()
@@ -491,17 +752,124 @@ impl PushBridge {
     pub(crate) fn registered_device(&self, token: &str) -> Option<RegisteredDevice> {
         self.registered_device_by_token(token)
     }
-    fn enqueue_committed_block(&self, kura: &Kura, height: u64) {
-        let Some(height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
-            return;
-        };
-        let Some(block) = kura.get_block(height) else {
-            return;
-        };
-        self.enqueue_block_activities(&block);
+    fn reconcile_to_authoritative_height(&self, kura: &Kura) -> Result<(), PushReplayError> {
+        let authoritative_height = exact_durable_kura_height(kura)?;
+        self.reconcile_through_known_authoritative_height(
+            kura,
+            authoritative_height,
+            authoritative_height,
+        )
     }
-    fn enqueue_block_activities(&self, block: &SignedBlock) {
+    fn reconcile_through_height(&self, kura: &Kura, height: u64) -> Result<(), PushReplayError> {
+        let authoritative_height = exact_durable_kura_height(kura)?;
+        if height > authoritative_height {
+            return Err(PushError::Storage(format!(
+                "observed applied block height {height} exceeds Kura's authoritative durable height {authoritative_height}"
+            ))
+            .into());
+        }
+        self.reconcile_through_known_authoritative_height(kura, height, authoritative_height)
+    }
+    fn reconcile_through_known_authoritative_height(
+        &self,
+        kura: &Kura,
+        target_height: u64,
+        authoritative_height: u64,
+    ) -> Result<(), PushReplayError> {
+        self.validate_applied_block_cursor_against_kura(kura, authoritative_height)?;
+        let current_height = self.applied_block_cursor.lock().height;
+        if current_height >= target_height {
+            return Ok(());
+        }
+        let first_height = current_height.checked_add(1).ok_or_else(|| {
+            PushReplayError::Fatal(PushError::Storage(
+                "push applied-block cursor height overflowed".to_owned(),
+            ))
+        })?;
+        for next_height in first_height..=target_height {
+            self.enqueue_committed_block(kura, next_height)?;
+        }
+        Ok(())
+    }
+    fn validate_applied_block_cursor_against_kura(
+        &self,
+        kura: &Kura,
+        authoritative_height: u64,
+    ) -> Result<(), PushError> {
+        let cursor = self.applied_block_cursor.lock().clone();
+        cursor.validate().map_err(storage_error)?;
+        if cursor.height > authoritative_height {
+            return Err(PushError::Storage(format!(
+                "push applied-block cursor height {} exceeds Kura's authoritative durable height {authoritative_height}",
+                cursor.height
+            )));
+        }
+        if cursor.height == 0 {
+            return Ok(());
+        }
+        let block = kura_block_at_height(kura, cursor.height)?;
+        if block.header().height().get() != cursor.height {
+            return Err(PushError::Storage(format!(
+                "Kura returned block height {} for push cursor height {}",
+                block.header().height(),
+                cursor.height
+            )));
+        }
+        if Some(block.hash()) != cursor.block_hash {
+            return Err(PushError::Storage(format!(
+                "push applied-block cursor hash does not match Kura at height {}",
+                cursor.height
+            )));
+        }
+        Ok(())
+    }
+    fn enqueue_committed_block(&self, kura: &Kura, height: u64) -> Result<(), PushReplayError> {
+        let block = kura_block_at_height(kura, height)?;
+        if block.header().height().get() != height {
+            return Err(PushError::Storage(format!(
+                "Kura returned block height {} while push reconciliation requested {height}",
+                block.header().height()
+            ))
+            .into());
+        }
+        if !block.has_results() {
+            return Err(PushError::Storage(format!(
+                "authoritative Kura block {height} has no execution results"
+            ))
+            .into());
+        }
+        let _mutation = self.mutation_guard.lock();
+        let mut cursor = self.applied_block_cursor.lock();
+        let expected_height = cursor.height.checked_add(1).ok_or_else(|| {
+            PushReplayError::Fatal(PushError::Storage(
+                "push applied-block cursor height overflowed".to_owned(),
+            ))
+        })?;
+        if height != expected_height {
+            return Err(PushError::Storage(format!(
+                "push block reconciliation expected height {expected_height}, received {height}"
+            ))
+            .into());
+        }
+        if block.header().prev_block_hash().as_ref() != cursor.block_hash.as_ref() {
+            return Err(PushError::Storage(format!(
+                "push block at height {height} does not extend the durable applied-block cursor"
+            ))
+            .into());
+        }
+        self.enqueue_block_activities_locked(&block)?;
+        let next_cursor = AppliedBlockCursor {
+            version: APPLIED_BLOCK_CURSOR_VERSION,
+            height,
+            block_hash: Some(block.hash()),
+        };
+        self.persist_applied_block_cursor(&next_cursor)?;
+        *cursor = next_cursor;
+        Ok(())
+    }
+    fn enqueue_block_activities_locked(&self, block: &SignedBlock) -> Result<(), PushReplayError> {
         let block_height = block.header().height().get();
+        let mut jobs = BTreeMap::<String, DeliveryJob>::new();
         for (entrypoint_hash, tx, result) in external_signed_transaction_results(block) {
             if result.is_err() {
                 continue;
@@ -510,10 +878,15 @@ impl PushBridge {
             for (instruction_index, instruction) in
                 tx.instructions().explicit_instructions().enumerate()
             {
+                let instruction_index = u64::try_from(instruction_index).map_err(|_| {
+                    PushReplayError::Fatal(PushError::Storage(
+                        "block instruction index exceeds the push payload range".to_owned(),
+                    ))
+                })?;
                 let activity_kind = crate::explorer::instruction_kind(instruction).as_str();
                 for activity in crate::account_activity::instruction_account_activities(instruction)
                 {
-                    if let Err(error) = self.enqueue_activity(
+                    for job in self.activity_jobs(
                         &activity.account,
                         &tx_hash,
                         block_height,
@@ -521,11 +894,34 @@ impl PushBridge {
                         activity_kind,
                         activity.role,
                     ) {
-                        iroha_logger::warn!(?error, "failed to enqueue push activity");
+                        if !self.queue.contains_key(&job.dedupe_key) {
+                            jobs.entry(job.dedupe_key.clone()).or_insert(job);
+                        }
                     }
                 }
             }
         }
+        let queued = self.queue.len();
+        let required = jobs.len();
+        if required > self.storage_limits.max_queue_jobs {
+            return Err(PushReplayError::Fatal(PushError::Storage(format!(
+                "push block {block_height} requires {required} delivery jobs, exceeding the configured durable queue capacity {}",
+                self.storage_limits.max_queue_jobs
+            ))));
+        }
+        if required > self.storage_limits.max_queue_jobs.saturating_sub(queued) {
+            return Err(PushReplayError::Backpressure {
+                height: block_height,
+                queued,
+                required,
+                maximum: self.storage_limits.max_queue_jobs,
+            });
+        }
+        for (dedupe_key, job) in jobs {
+            self.persist_job(&job)?;
+            self.queue.insert(dedupe_key, job);
+        }
+        Ok(())
     }
     async fn dispatch_job(&self, job: DeliveryJob) {
         let Some(device) = self
@@ -536,6 +932,15 @@ impl PushBridge {
             self.remove_job(&job.dedupe_key);
             return;
         };
+        if device.account_id != job.account_id
+            || device.token_fingerprint != job.token_fingerprint
+            || device.platform != job.target_platform
+        {
+            // A token can be re-registered between enqueue and dispatch. Never deliver an old
+            // account's activity through the replacement registration.
+            self.remove_job(&job.dedupe_key);
+            return;
+        }
         let Some(platform) = Platform::from_stored(&device.platform) else {
             self.remove_job(&job.dedupe_key);
             return;
@@ -596,8 +1001,11 @@ impl PushBridge {
             );
             return;
         }
-        if let Err(error) = self.persist_job(&job) {
-            iroha_logger::warn!(?error, "failed to persist push retry");
+        if let Err(error) = self.persist_job_with_state(&job) {
+            iroha_logger::warn!(error = ?error.source, "failed to persist push retry");
+            if !error.published {
+                return;
+            }
         }
         self.queue.insert(job.dedupe_key.clone(), job);
     }
@@ -607,7 +1015,7 @@ impl PushBridge {
     fn credentials_for(&self, platform: Platform) -> Result<ProviderCredentials, PushError> {
         match platform {
             Platform::Fcm => match (
-                trim_ref(self.config.fcm_project_id.as_deref()),
+                exact_nonempty_ref(self.config.fcm_project_id.as_deref()),
                 self.config.fcm_service_account_path.as_ref(),
             ) {
                 (Some(project_id), Some(path)) => Ok(ProviderCredentials::Fcm {
@@ -621,19 +1029,19 @@ impl PushBridge {
                     .config
                     .apns_endpoint
                     .as_ref()
-                    .and_then(|s| trim_ref(Some(s)))
+                    .and_then(|url| exact_nonempty_ref(Some(url.as_str())))
                 {
                     Some(endpoint) => endpoint.to_owned(),
-                    None => match self.config.apns_environment.trim() {
+                    None => match self.config.apns_environment.as_str() {
                         "sandbox" => APNS_SANDBOX_ENDPOINT.to_string(),
                         "production" => APNS_PRODUCTION_ENDPOINT.to_string(),
                         other => return Err(PushError::InvalidEnvironment(other.to_string())),
                     },
                 };
                 match (
-                    trim_ref(self.config.apns_topic.as_deref()),
-                    trim_ref(self.config.apns_team_id.as_deref()),
-                    trim_ref(self.config.apns_key_id.as_deref()),
+                    exact_nonempty_ref(self.config.apns_topic.as_deref()),
+                    exact_nonempty_ref(self.config.apns_team_id.as_deref()),
+                    exact_nonempty_ref(self.config.apns_key_id.as_deref()),
                     self.config.apns_private_key_path.as_ref(),
                 ) {
                     (Some(topic), Some(team_id), Some(key_id), Some(path)) => {
@@ -659,210 +1067,222 @@ impl PushBridge {
             .collect()
     }
     fn remove_device_by_fingerprint(&self, token_fingerprint: &str) -> Result<(), PushError> {
+        self.remove_device_by_fingerprint_with(token_fingerprint, remove_file_if_exists_with_state)
+    }
+    fn remove_device_by_fingerprint_with(
+        &self,
+        token_fingerprint: &str,
+        remove: impl FnOnce(&Path) -> Result<(), AtomicRemovalError>,
+    ) -> Result<(), PushError> {
         let _mutation = self.mutation_guard.lock();
-        let Some((_, record)) = self.devices.remove(token_fingerprint) else {
+        let Some(record) = self
+            .devices
+            .get(token_fingerprint)
+            .map(|entry| entry.clone())
+        else {
             return Ok(());
         };
-        remove_device_file(&self.device_path(&record.account_id, token_fingerprint))
-            .map_err(storage_error)?;
-        Ok(())
+        drop(record);
+        self.remove_device_file_and_reconcile_memory(token_fingerprint, remove)
+    }
+    fn remove_device_file_and_reconcile_memory(
+        &self,
+        token_fingerprint: &str,
+        remove: impl FnOnce(&Path) -> Result<(), AtomicRemovalError>,
+    ) -> Result<(), PushError> {
+        let path = self.device_path(token_fingerprint);
+        match remove(&path) {
+            Ok(()) => {
+                self.devices.remove(token_fingerprint);
+                Ok(())
+            }
+            Err(error) => {
+                if error.target_absent {
+                    // Unlink committed before directory synchronization failed. Never keep
+                    // dispatching through a token whose sole durable record is already gone.
+                    self.devices.remove(token_fingerprint);
+                }
+                Err(storage_error(error.source))
+            }
+        }
     }
     fn remove_job(&self, dedupe_key: &str) {
         let _mutation = self.mutation_guard.lock();
-        self.queue.remove(dedupe_key);
-        if let Err(error) = remove_file_if_exists(&self.job_path(dedupe_key)) {
-            iroha_logger::warn!(?error, "failed to remove push queue file");
+        if let Err(error) = remove_file_if_exists_with_state(&self.job_path(dedupe_key)) {
+            iroha_logger::warn!(error = ?error.source, "failed to remove push queue file");
+            if !error.target_absent {
+                return;
+            }
         }
+        self.queue.remove(dedupe_key);
     }
-    fn persist_device(&self, record: &DeviceRecord) -> Result<(), PushError> {
-        validate_device_record(record, self.effective_max_topics()).map_err(storage_error)?;
-        write_json_atomic(
-            &self.device_path(&record.account_id, &record.token_fingerprint),
+    fn persist_device(&self, record: &DeviceRecord) -> Result<(), AtomicWriteError> {
+        validate_device_record(record, self.effective_max_topics())
+            .map_err(AtomicWriteError::before_publish)?;
+        write_json_atomic_with_publish_state(
+            &self.device_path(&record.token_fingerprint),
             record,
             self.storage_limits.max_device_record_bytes,
         )
-        .map_err(storage_error)
     }
     fn persist_job(&self, job: &DeliveryJob) -> Result<(), PushError> {
-        validate_delivery_job(job).map_err(storage_error)?;
-        write_json_atomic(
+        self.persist_job_with_state(job)
+            .map_err(|error| storage_error(error.source))
+    }
+    fn persist_job_with_state(&self, job: &DeliveryJob) -> Result<(), AtomicWriteError> {
+        validate_delivery_job(job).map_err(AtomicWriteError::before_publish)?;
+        write_json_atomic_with_publish_state(
             &self.job_path(&job.dedupe_key),
             job,
             self.storage_limits.max_queue_job_bytes,
         )
+    }
+    fn persist_applied_block_cursor(&self, cursor: &AppliedBlockCursor) -> Result<(), PushError> {
+        cursor.validate().map_err(storage_error)?;
+        write_json_atomic(
+            &self.applied_block_cursor_path(),
+            cursor,
+            MAX_PUSH_APPLIED_BLOCK_CURSOR_BYTES,
+        )
         .map_err(storage_error)
     }
-    fn load_from_disk(&self) {
-        self.load_devices();
-        self.load_queue();
+    fn load_from_disk(&self) -> io::Result<()> {
+        self.load_devices()?;
+        self.load_queue()
     }
-    fn load_devices(&self) {
+    fn load_devices(&self) -> io::Result<()> {
         let root = self.data_dir.join(DEVICES_DIR);
-        let accounts = match read_direct_directory(&root) {
-            Ok(accounts) => accounts,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
-            Err(error) => {
-                iroha_logger::warn!(?error, path = %root.display(), "failed to enumerate push device accounts");
-                return;
-            }
+        let files = match read_direct_directory(&root) {
+            Ok(files) => files,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
         };
-        let mut account_entries = 0_usize;
         let mut device_entries = 0_usize;
-        'accounts: for account_dir in accounts {
-            account_entries = account_entries.saturating_add(1);
-            if account_entries > self.storage_limits.max_device_account_entries {
-                iroha_logger::warn!(
-                    maximum = self.storage_limits.max_device_account_entries,
-                    "push device account directory entry limit reached"
-                );
-                break;
+        let mut temp_entries = 0_usize;
+        let mut recoverable_temps = Vec::new();
+        let mut loaded = BTreeMap::<String, DeviceRecord>::new();
+        for file in files {
+            let file = file?;
+            let path = file.path();
+            let file_type = file.file_type()?;
+            if file_type.is_symlink() || !file_type.is_file() {
+                return Err(invalid_data(format!(
+                    "push device record is not a direct regular file: {}",
+                    path.display()
+                )));
             }
-            let account_dir = match account_dir {
-                Ok(entry) => entry,
-                Err(error) => {
-                    iroha_logger::warn!(?error, path = %root.display(), "failed to inspect push device account entry");
-                    continue;
+            if is_canonical_record_temp_path(&path) {
+                temp_entries = temp_entries.saturating_add(1);
+                if temp_entries > MAX_PUSH_RECOVERABLE_TEMP_FILES {
+                    return Err(invalid_data(format!(
+                        "push device temporary record count exceeds {MAX_PUSH_RECOVERABLE_TEMP_FILES}"
+                    )));
                 }
-            };
-            let account_path = account_dir.path();
-            let account_type = match account_dir.file_type() {
-                Ok(file_type) => file_type,
-                Err(error) => {
-                    iroha_logger::warn!(?error, path = %account_path.display(), "failed to inspect push device account type");
-                    continue;
-                }
-            };
-            if account_type.is_symlink() || !account_type.is_dir() {
+                read_bounded_stable_file(&path, self.storage_limits.max_device_record_bytes)?;
+                recoverable_temps.push(path);
                 continue;
             }
-            let files = match read_direct_directory(&account_path) {
-                Ok(files) => files,
-                Err(error) => {
-                    iroha_logger::warn!(?error, path = %account_path.display(), "failed to enumerate push device files");
-                    continue;
-                }
-            };
-            for file in files {
-                device_entries = device_entries.saturating_add(1);
-                if device_entries > self.storage_limits.max_devices {
-                    iroha_logger::warn!(
-                        maximum = self.storage_limits.max_devices,
-                        "push device file entry limit reached"
-                    );
-                    break 'accounts;
-                }
-                let file = match file {
-                    Ok(entry) => entry,
-                    Err(error) => {
-                        iroha_logger::warn!(?error, path = %account_path.display(), "failed to inspect push device file entry");
-                        continue;
-                    }
-                };
-                let path = file.path();
-                let file_type = match file.file_type() {
-                    Ok(file_type) => file_type,
-                    Err(error) => {
-                        iroha_logger::warn!(?error, path = %path.display(), "failed to inspect push device file type");
-                        continue;
-                    }
-                };
-                if file_type.is_symlink() || !file_type.is_file() {
-                    continue;
-                }
-                match read_json::<DeviceRecord>(&path, self.storage_limits.max_device_record_bytes)
-                {
-                    Ok(record) => {
-                        if let Err(error) = validate_device_record(&record, MAX_PUSH_TOPICS) {
-                            iroha_logger::warn!(?error, path = %path.display(), "invalid persisted push device");
-                            continue;
-                        }
-                        if self.devices.len() >= self.storage_limits.max_devices
-                            && !self.devices.contains_key(&record.token_fingerprint)
-                        {
-                            iroha_logger::warn!(
-                                maximum = self.storage_limits.max_devices,
-                                "push device capacity reached while loading"
-                            );
-                            break 'accounts;
-                        }
-                        self.devices
-                            .insert(record.token_fingerprint.clone(), record);
-                    }
-                    Err(error) => {
-                        iroha_logger::warn!(?error, path = %path.display(), "failed to load push device")
-                    }
-                }
+            device_entries = device_entries.saturating_add(1);
+            if device_entries > self.storage_limits.max_devices {
+                return Err(invalid_data(format!(
+                    "push device record count exceeds {}",
+                    self.storage_limits.max_devices
+                )));
+            }
+            let record =
+                read_json::<DeviceRecord>(&path, self.storage_limits.max_device_record_bytes)?;
+            validate_device_record(&record, self.effective_max_topics())?;
+            let token_fingerprint = record.token_fingerprint.clone();
+            let expected_name = format!("{token_fingerprint}.json");
+            if path.file_name().and_then(|name| name.to_str()) != Some(expected_name.as_str()) {
+                return Err(invalid_data(format!(
+                    "push device record filename is not canonical: {}",
+                    path.display()
+                )));
+            }
+            if loaded.insert(token_fingerprint.clone(), record).is_some() {
+                return Err(invalid_data(format!(
+                    "duplicate persisted push token fingerprint: {token_fingerprint}"
+                )));
             }
         }
+        for path in recoverable_temps {
+            remove_recoverable_record_temp(&path, self.storage_limits.max_device_record_bytes)?;
+        }
+        for (token_fingerprint, record) in loaded {
+            self.devices.insert(token_fingerprint, record);
+        }
+        Ok(())
     }
-    fn load_queue(&self) {
+    fn load_queue(&self) -> io::Result<()> {
         let root = self.data_dir.join(QUEUE_DIR);
         let files = match read_direct_directory(&root) {
             Ok(files) => files,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
-            Err(error) => {
-                iroha_logger::warn!(?error, path = %root.display(), "failed to enumerate push queue");
-                return;
-            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
         };
         let mut queue_entries = 0_usize;
+        let mut temp_entries = 0_usize;
+        let mut recoverable_temps = Vec::new();
+        let mut loaded = BTreeMap::<String, DeliveryJob>::new();
         for file in files {
-            queue_entries = queue_entries.saturating_add(1);
-            if queue_entries > self.storage_limits.max_queue_jobs {
-                iroha_logger::warn!(
-                    maximum = self.storage_limits.max_queue_jobs,
-                    "push queue file entry limit reached"
-                );
-                break;
-            }
-            let file = match file {
-                Ok(entry) => entry,
-                Err(error) => {
-                    iroha_logger::warn!(?error, path = %root.display(), "failed to inspect push queue entry");
-                    continue;
-                }
-            };
+            let file = file?;
             let path = file.path();
-            let file_type = match file.file_type() {
-                Ok(file_type) => file_type,
-                Err(error) => {
-                    iroha_logger::warn!(?error, path = %path.display(), "failed to inspect push queue file type");
-                    continue;
-                }
-            };
+            let file_type = file.file_type()?;
             if file_type.is_symlink() || !file_type.is_file() {
+                return Err(invalid_data(format!(
+                    "push queue record is not a direct regular file: {}",
+                    path.display()
+                )));
+            }
+            if is_canonical_record_temp_path(&path) {
+                temp_entries = temp_entries.saturating_add(1);
+                if temp_entries > MAX_PUSH_RECOVERABLE_TEMP_FILES {
+                    return Err(invalid_data(format!(
+                        "push queue temporary record count exceeds {MAX_PUSH_RECOVERABLE_TEMP_FILES}"
+                    )));
+                }
+                read_bounded_stable_file(&path, self.storage_limits.max_queue_job_bytes)?;
+                recoverable_temps.push(path);
                 continue;
             }
-            match read_json::<DeliveryJob>(&path, self.storage_limits.max_queue_job_bytes) {
-                Ok(job) => {
-                    if let Err(error) = validate_delivery_job(&job) {
-                        iroha_logger::warn!(?error, path = %path.display(), "invalid persisted push queue job");
-                        continue;
-                    }
-                    if self.queue.len() >= self.storage_limits.max_queue_jobs
-                        && !self.queue.contains_key(&job.dedupe_key)
-                    {
-                        iroha_logger::warn!(
-                            maximum = self.storage_limits.max_queue_jobs,
-                            "push queue capacity reached while loading"
-                        );
-                        break;
-                    }
-                    self.queue.insert(job.dedupe_key.clone(), job);
-                }
-                Err(error) => {
-                    iroha_logger::warn!(?error, path = %path.display(), "failed to load push queue job")
-                }
+            queue_entries = queue_entries.saturating_add(1);
+            if queue_entries > self.storage_limits.max_queue_jobs {
+                return Err(invalid_data(format!(
+                    "push queue record count exceeds {}",
+                    self.storage_limits.max_queue_jobs
+                )));
+            }
+            let job = read_json::<DeliveryJob>(&path, self.storage_limits.max_queue_job_bytes)?;
+            validate_delivery_job(&job)?;
+            let expected_name = format!("{}.json", job.dedupe_key);
+            if path.file_name().and_then(|name| name.to_str()) != Some(expected_name.as_str()) {
+                return Err(invalid_data(format!(
+                    "push queue record filename is not canonical: {}",
+                    path.display()
+                )));
+            }
+            let dedupe_key = job.dedupe_key.clone();
+            if loaded.insert(dedupe_key.clone(), job).is_some() {
+                return Err(invalid_data(format!(
+                    "duplicate persisted push queue key: {dedupe_key}"
+                )));
             }
         }
+        for path in recoverable_temps {
+            remove_recoverable_record_temp(&path, self.storage_limits.max_queue_job_bytes)?;
+        }
+        for (dedupe_key, job) in loaded {
+            self.queue.insert(dedupe_key, job);
+        }
+        Ok(())
     }
     fn effective_max_topics(&self) -> usize {
         self.config.max_topics_per_device.get().min(MAX_PUSH_TOPICS)
     }
-    fn device_path(&self, account_id: &str, token_fingerprint: &str) -> PathBuf {
+    fn device_path(&self, token_fingerprint: &str) -> PathBuf {
         self.data_dir
             .join(DEVICES_DIR)
-            .join(fingerprint(account_id.as_bytes()))
             .join(format!("{token_fingerprint}.json"))
     }
     fn job_path(&self, dedupe_key: &str) -> PathBuf {
@@ -870,15 +1290,67 @@ impl PushBridge {
             .join(QUEUE_DIR)
             .join(format!("{dedupe_key}.json"))
     }
+    fn applied_block_cursor_path(&self) -> PathBuf {
+        self.data_dir.join(APPLIED_BLOCK_CURSOR_FILE)
+    }
+}
+async fn replay_with_queue_drain(
+    bridge: &PushBridge,
+    kura: &Kura,
+    target: PushReplayTarget,
+    shutdown_signal: &ShutdownSignal,
+) -> Result<PushReplayOutcome, PushError> {
+    loop {
+        let result = match target {
+            PushReplayTarget::Authoritative => bridge.reconcile_to_authoritative_height(kura),
+            PushReplayTarget::Height(height) => bridge.reconcile_through_height(kura, height),
+        };
+        match result {
+            Ok(()) => return Ok(PushReplayOutcome::Complete),
+            Err(PushReplayError::Fatal(error)) => return Err(error),
+            Err(PushReplayError::Backpressure {
+                height,
+                queued,
+                required,
+                maximum,
+            }) => {
+                iroha_logger::warn!(
+                    height,
+                    queued,
+                    required,
+                    maximum,
+                    "push Kura replay is waiting for durable queue capacity"
+                );
+                let queued_before_dispatch = bridge.queued_count();
+                tokio::select! {
+                    () = shutdown_signal.receive() => {
+                        return Ok(PushReplayOutcome::StoppedByShutdown);
+                    },
+                    () = bridge.dispatch_due_once() => {}
+                }
+                if bridge.queued_count() >= queued_before_dispatch {
+                    tokio::select! {
+                        () = shutdown_signal.receive() => {
+                            return Ok(PushReplayOutcome::StoppedByShutdown);
+                        },
+                        () = tokio::time::sleep(DISPATCH_TICK) => {}
+                    }
+                }
+            }
+        }
+    }
 }
 #[derive(
     Clone,
     Debug,
+    PartialEq,
+    Eq,
     crate::json_macros::JsonDeserialize,
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 struct DeviceRecord {
     account_id: String,
     platform: String,
@@ -895,10 +1367,12 @@ struct DeviceRecord {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 struct DeliveryJob {
     dedupe_key: String,
     account_id: String,
     token_fingerprint: String,
+    target_platform: String,
     payload: PushActivityPayload,
     attempts: u32,
     next_attempt_ms: u64,
@@ -914,8 +1388,12 @@ fn registered_device_from_record(record: &DeviceRecord) -> RegisteredDevice {
     }
 }
 fn canonical_account(account_id: &str) -> Result<AccountId, PushError> {
-    let trimmed = account_id.trim();
-    AccountId::parse_encoded(trimmed).map_err(|_| PushError::InvalidAccount(account_id.to_owned()))
+    let account = AccountId::parse_encoded(account_id)
+        .map_err(|_| PushError::InvalidAccount(account_id.to_owned()))?;
+    if account.to_string() != account_id {
+        return Err(PushError::InvalidAccount(account_id.to_owned()));
+    }
+    Ok(account)
 }
 fn validate_device_record(record: &DeviceRecord, max_topics: usize) -> io::Result<()> {
     let account = canonical_account(&record.account_id)
@@ -925,17 +1403,11 @@ fn validate_device_record(record: &DeviceRecord, max_topics: usize) -> io::Resul
             "persisted push device account id is not canonical",
         ));
     }
-    if Platform::from_stored(&record.platform).is_none() {
+    let platform = Platform::from_stored(&record.platform)
+        .ok_or_else(|| invalid_data("persisted push device has an invalid platform"))?;
+    if validate_device_token(platform, &record.token).is_err() {
         return Err(invalid_data(
-            "persisted push device has an invalid platform",
-        ));
-    }
-    if record.token.is_empty()
-        || record.token.trim() != record.token
-        || record.token.len() > MAX_PUSH_TOKEN_BYTES
-    {
-        return Err(invalid_data(
-            "persisted push device token violates the byte or whitespace bound",
+            "persisted push device token is not canonical for its platform",
         ));
     }
     if record.token_fingerprint != fingerprint(record.token.as_bytes()) {
@@ -950,9 +1422,12 @@ fn validate_device_record(record: &DeviceRecord, max_topics: usize) -> io::Resul
     }
     let mut topic_bytes = 0_usize;
     for (index, topic) in record.topics.iter().enumerate() {
-        if topic.is_empty() || topic.trim() != topic || topic.len() > MAX_PUSH_TOPIC_BYTES {
+        if topic.is_empty()
+            || topic.len() > MAX_PUSH_TOPIC_BYTES
+            || !topic.bytes().all(|byte| matches!(byte, 0x21..=0x7e))
+        {
             return Err(invalid_data(
-                "persisted push device topic violates the byte or whitespace bound",
+                "persisted push device topic is not canonical visible ASCII",
             ));
         }
         if record.topics[..index].contains(topic) {
@@ -984,6 +1459,11 @@ fn validate_delivery_job(job: &DeliveryJob) -> io::Result<()> {
             "persisted push job has an invalid token fingerprint",
         ));
     }
+    if Platform::from_stored(&job.target_platform).is_none() {
+        return Err(invalid_data(
+            "persisted push job has an invalid target platform",
+        ));
+    }
     if job.payload.activity_kind.len() > MAX_PUSH_ACTIVITY_KIND_BYTES
         || job.payload.tx_hash.len() > MAX_PUSH_TX_HASH_BYTES
         || job.payload.direction.len() > MAX_PUSH_DIRECTION_BYTES
@@ -1005,62 +1485,94 @@ fn is_lower_hex_fingerprint(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
-fn normalize_topics(
+fn is_canonical_record_temp_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".json.tmp"))
+        .is_some_and(is_lower_hex_fingerprint)
+}
+fn remove_recoverable_record_temp(path: &Path, maximum: usize) -> io::Result<()> {
+    let _bytes = read_bounded_stable_file(path, maximum)?;
+    remove_file_if_exists(path)
+}
+fn validate_device_token(platform: Platform, token: &str) -> Result<&str, PushError> {
+    if token.is_empty() {
+        return Err(PushError::EmptyToken);
+    }
+    if token.len() > MAX_PUSH_TOKEN_BYTES || !token.bytes().all(|byte| matches!(byte, 0x21..=0x7e))
+    {
+        return Err(PushError::InvalidToken);
+    }
+    if platform == Platform::Apns
+        && (token.len() != 64
+            || !token
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+    {
+        return Err(PushError::InvalidToken);
+    }
+    Ok(token)
+}
+
+fn validate_topics(
     topics: Option<Vec<String>>,
     max_topics: usize,
 ) -> Result<Vec<String>, PushError> {
-    let mut out = Vec::new();
+    let topics = topics.unwrap_or_default();
+    if topics.len() > max_topics {
+        return Err(PushError::TooManyTopics { max: max_topics });
+    }
+    let mut out = Vec::with_capacity(topics.len());
     let mut topic_bytes = 0_usize;
-    for topic in topics.unwrap_or_default() {
-        let topic = topic.trim();
-        if !topic.is_empty() && !out.iter().any(|seen| seen == topic) {
-            if out.len() >= max_topics {
-                return Err(PushError::TooManyTopics { max: max_topics });
-            }
-            if topic.len() > MAX_PUSH_TOPIC_BYTES {
-                return Err(storage_limit_error(
-                    "push topic bytes",
-                    topic.len(),
-                    MAX_PUSH_TOPIC_BYTES,
-                ));
-            }
-            topic_bytes = topic_bytes.checked_add(topic.len()).ok_or_else(|| {
-                storage_limit_error(
-                    "aggregate push topic bytes",
-                    usize::MAX,
-                    MAX_PUSH_TOPIC_BYTES_PER_DEVICE,
-                )
-            })?;
-            if topic_bytes > MAX_PUSH_TOPIC_BYTES_PER_DEVICE {
-                return Err(storage_limit_error(
-                    "aggregate push topic bytes",
-                    topic_bytes,
-                    MAX_PUSH_TOPIC_BYTES_PER_DEVICE,
-                ));
-            }
-            out.push(topic.to_owned());
+    for (index, topic) in topics.into_iter().enumerate() {
+        if topic.is_empty()
+            || topic.len() > MAX_PUSH_TOPIC_BYTES
+            || !topic.bytes().all(|byte| matches!(byte, 0x21..=0x7e))
+        {
+            return Err(PushError::InvalidTopic { index });
         }
+        if out.contains(&topic) {
+            return Err(PushError::DuplicateTopic { index });
+        }
+        topic_bytes = topic_bytes
+            .checked_add(topic.len())
+            .ok_or(PushError::TopicsTooLarge {
+                max_bytes: MAX_PUSH_TOPIC_BYTES_PER_DEVICE,
+            })?;
+        if topic_bytes > MAX_PUSH_TOPIC_BYTES_PER_DEVICE {
+            return Err(PushError::TopicsTooLarge {
+                max_bytes: MAX_PUSH_TOPIC_BYTES_PER_DEVICE,
+            });
+        }
+        out.push(topic);
     }
     Ok(out)
 }
-fn trim_ref(value: Option<&str>) -> Option<&str> {
-    value.and_then(|raw| {
-        let trimmed = raw.trim();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
+fn exact_nonempty_ref(value: Option<&str>) -> Option<&str> {
+    value.filter(|raw| !raw.is_empty() && raw.bytes().all(|byte| matches!(byte, 0x21..=0x7e)))
 }
 fn delivery_dedupe_key(payload: &PushActivityPayload, token_fingerprint: &str) -> String {
-    fingerprint(
-        format!(
-            "{}\0{}\0{}\0{}\0{}",
-            payload.account_id,
-            payload.tx_hash,
-            payload.instruction_index,
-            payload.activity_kind,
-            token_fingerprint
-        )
-        .as_bytes(),
-    )
+    let mut hasher = Sha256::new();
+    hasher.update(b"iroha.torii.push.delivery.v1");
+    let mut append = |component: &[u8]| {
+        let length = u64::try_from(component.len()).unwrap_or(u64::MAX);
+        hasher.update(length.to_be_bytes());
+        hasher.update(component);
+    };
+    append(payload.account_id.as_bytes());
+    append(payload.activity_kind.as_bytes());
+    append(payload.tx_hash.as_bytes());
+    append(&payload.block_height.to_be_bytes());
+    append(&payload.instruction_index.to_be_bytes());
+    append(payload.direction.as_bytes());
+    append(token_fingerprint.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }
 fn retry_backoff(attempts: u32) -> Duration {
     let multiplier = 1u32.checked_shl(attempts.min(10)).unwrap_or(1 << 10);
@@ -1092,31 +1604,125 @@ fn storage_limit_error(label: &str, actual: usize, maximum: usize) -> PushError 
         "{label} {actual} exceeds the push storage maximum {maximum}"
     ))
 }
+fn exact_durable_kura_height(kura: &Kura) -> Result<u64, PushError> {
+    let height = kura.exact_durable_blocks_count().map_err(|error| {
+        PushError::Storage(format!(
+            "failed to read Kura's authoritative durable height: {error}"
+        ))
+    })?;
+    u64::try_from(height).map_err(|_| {
+        PushError::Storage("Kura's authoritative durable height exceeds u64".to_owned())
+    })
+}
+fn kura_block_at_height(kura: &Kura, height: u64) -> Result<Arc<SignedBlock>, PushError> {
+    let height_usize = usize::try_from(height)
+        .map_err(|_| PushError::Storage(format!("Kura block height {height} exceeds usize")))?;
+    let height = NonZeroUsize::new(height_usize)
+        .ok_or_else(|| PushError::Storage("Kura block height must be nonzero".to_owned()))?;
+    kura.get_block(height).ok_or_else(|| {
+        PushError::Storage(format!(
+            "authoritative Kura block {} is unavailable",
+            height.get()
+        ))
+    })
+}
 fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+fn sync_directory(path: &Path) -> io::Result<()> {
+    crate::durable_fs::sync_direct_directory(path)
+}
+fn sync_directory_if_present(path: &Path) -> io::Result<()> {
+    match sync_directory(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+fn sync_parent_directory(path: &Path) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid_data("push persistence path has no parent directory"))?;
+    sync_directory(parent)
+}
+#[derive(Debug)]
+struct AtomicWriteError {
+    source: io::Error,
+    published: bool,
+}
+impl AtomicWriteError {
+    fn before_publish(source: io::Error) -> Self {
+        Self {
+            source,
+            published: false,
+        }
+    }
+    fn after_publish(source: io::Error) -> Self {
+        Self {
+            source,
+            published: true,
+        }
+    }
+}
+#[derive(Debug)]
+struct AtomicRemovalError {
+    source: io::Error,
+    target_absent: bool,
+}
+fn sync_json_publication(path: &Path) -> io::Result<()> {
+    sync_parent_directory(path)?;
+    if let Some(grandparent) = path.parent().and_then(Path::parent) {
+        sync_directory_if_present(grandparent)?;
+    }
+    Ok(())
+}
+fn write_json_atomic_with_publish_sync<T>(
+    path: &Path,
+    value: &T,
+    maximum: usize,
+    sync_publication: impl FnOnce(&Path) -> io::Result<()>,
+) -> Result<(), AtomicWriteError>
+where
+    T: norito::json::JsonSerialize + ?Sized,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(AtomicWriteError::before_publish)?;
+        let metadata = fs::symlink_metadata(parent).map_err(AtomicWriteError::before_publish)?;
+        if push_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_dir() {
+            return Err(AtomicWriteError::before_publish(invalid_data(
+                "push output parent is not a direct directory",
+            )));
+        }
+    }
+    let bytes = norito::json::to_vec(value)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+        .map_err(AtomicWriteError::before_publish)?;
+    if bytes.len() > maximum {
+        return Err(AtomicWriteError::before_publish(invalid_data(format!(
+            "push JSON has {} bytes, exceeding the maximum {maximum}",
+            bytes.len()
+        ))));
+    }
+    let tmp = path.with_extension("json.tmp");
+    write_direct_regular_file(&tmp, &bytes).map_err(AtomicWriteError::before_publish)?;
+    fs::rename(tmp, path).map_err(AtomicWriteError::before_publish)?;
+    sync_publication(path).map_err(AtomicWriteError::after_publish)
+}
+fn write_json_atomic_with_publish_state<T>(
+    path: &Path,
+    value: &T,
+    maximum: usize,
+) -> Result<(), AtomicWriteError>
+where
+    T: norito::json::JsonSerialize + ?Sized,
+{
+    write_json_atomic_with_publish_sync(path, value, maximum, sync_json_publication)
 }
 fn write_json_atomic<T>(path: &Path, value: &T, maximum: usize) -> io::Result<()>
 where
     T: norito::json::JsonSerialize + ?Sized,
 {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-        let metadata = fs::symlink_metadata(parent)?;
-        if push_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_dir() {
-            return Err(invalid_data("push output parent is not a direct directory"));
-        }
-    }
-    let bytes = norito::json::to_vec(value)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-    if bytes.len() > maximum {
-        return Err(invalid_data(format!(
-            "push JSON has {} bytes, exceeding the maximum {maximum}",
-            bytes.len()
-        )));
-    }
-    let tmp = path.with_extension("json.tmp");
-    write_direct_regular_file(&tmp, &bytes)?;
-    fs::rename(tmp, path)
+    write_json_atomic_with_publish_state(path, value, maximum).map_err(|error| error.source)
 }
 fn read_json<T>(path: &Path, maximum: usize) -> io::Result<T>
 where
@@ -1125,6 +1731,123 @@ where
     let bytes = read_bounded_stable_file(path, maximum)?;
     norito::json::from_slice(&bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+}
+fn load_or_initialize_applied_block_cursor(data_dir: &Path) -> io::Result<AppliedBlockCursor> {
+    let _initialization = PUSH_INITIALIZATION_GUARD.lock();
+    let parent = data_dir
+        .parent()
+        .ok_or_else(|| invalid_data("push persistence root has no parent directory"))?;
+    fs::create_dir_all(parent)?;
+    let parent_metadata = fs::symlink_metadata(parent)?;
+    if push_metadata_is_symlink_or_reparse(&parent_metadata) || !parent_metadata.is_dir() {
+        return Err(invalid_data(
+            "push persistence parent is not a direct directory",
+        ));
+    }
+    let prepared_dir = parent.join(PUSH_INITIALIZATION_DIR);
+    match fs::symlink_metadata(data_dir) {
+        Ok(metadata) => {
+            if push_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_dir() {
+                return Err(invalid_data(
+                    "push persistence root is not a direct directory",
+                ));
+            }
+            match fs::symlink_metadata(&prepared_dir) {
+                Ok(_) => {
+                    return Err(invalid_data(
+                        "push persistence root conflicts with an unfinished initialization directory",
+                    ));
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+            let cursor_path = data_dir.join(APPLIED_BLOCK_CURSOR_FILE);
+            let cursor =
+                read_json::<AppliedBlockCursor>(&cursor_path, MAX_PUSH_APPLIED_BLOCK_CURSOR_BYTES)?;
+            cursor.validate()?;
+            let cursor_tmp_path = cursor_path.with_extension("json.tmp");
+            match fs::symlink_metadata(&cursor_tmp_path) {
+                Ok(_) => remove_recoverable_record_temp(
+                    &cursor_tmp_path,
+                    MAX_PUSH_APPLIED_BLOCK_CURSOR_BYTES,
+                )?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+            return Ok(cursor);
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+
+    match fs::symlink_metadata(&prepared_dir) {
+        Ok(metadata) => {
+            if push_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_dir() {
+                return Err(invalid_data(
+                    "push initialization path is not a direct directory",
+                ));
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir(&prepared_dir)?;
+            sync_directory(parent)?;
+        }
+        Err(error) => return Err(error),
+    }
+
+    let cursor_path = prepared_dir.join(APPLIED_BLOCK_CURSOR_FILE);
+    let cursor_tmp_path = cursor_path.with_extension("json.tmp");
+    let mut cursor_present = false;
+    let mut tmp_present = false;
+    for entry in read_direct_directory(&prepared_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if push_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_file() {
+            return Err(invalid_data(format!(
+                "push initialization contains a non-regular entry: {}",
+                path.display()
+            )));
+        }
+        if path == cursor_path {
+            if cursor_present {
+                return Err(invalid_data(
+                    "push initialization contains duplicate cursor entries",
+                ));
+            }
+            cursor_present = true;
+        } else if path == cursor_tmp_path {
+            if tmp_present {
+                return Err(invalid_data(
+                    "push initialization contains duplicate temporary cursor entries",
+                ));
+            }
+            tmp_present = true;
+        } else {
+            return Err(invalid_data(format!(
+                "push initialization contains an unexpected entry: {}",
+                path.display()
+            )));
+        }
+    }
+
+    let cursor = if cursor_present {
+        let cursor =
+            read_json::<AppliedBlockCursor>(&cursor_path, MAX_PUSH_APPLIED_BLOCK_CURSOR_BYTES)?;
+        cursor.validate()?;
+        if tmp_present {
+            remove_file_if_exists(&cursor_tmp_path)?;
+        }
+        cursor
+    } else {
+        let cursor = AppliedBlockCursor::origin();
+        write_json_atomic(&cursor_path, &cursor, MAX_PUSH_APPLIED_BLOCK_CURSOR_BYTES)?;
+        cursor
+    };
+    sync_directory(&prepared_dir)?;
+    fs::rename(&prepared_dir, data_dir)?;
+    sync_directory(parent)?;
+    Ok(cursor)
 }
 fn read_direct_directory(path: &Path) -> io::Result<fs::ReadDir> {
     let metadata = fs::symlink_metadata(path)?;
@@ -1220,6 +1943,7 @@ fn write_direct_regular_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
         ));
     }
     file.write_all(bytes)?;
+    file.sync_all()?;
     let opened_after = file.metadata()?;
     let named_after = fs::symlink_metadata(path)?;
     let expected = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
@@ -1304,55 +2028,50 @@ fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bo
 fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-fn remove_file_if_exists(path: &Path) -> io::Result<()> {
+fn remove_file_if_exists_with_state(path: &Path) -> Result<(), AtomicRemovalError> {
     match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-fn remove_device_file(path: &Path) -> io::Result<()> {
-    remove_file_if_exists(path)?;
-    let Some(parent) = path.parent() else {
-        return Ok(());
-    };
-    match fs::remove_dir(parent) {
-        Ok(()) => Ok(()),
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::DirectoryNotEmpty
-            ) =>
-        {
-            Ok(())
-        }
-        Err(error) => {
-            iroha_logger::warn!(?error, path = %parent.display(), "failed to remove empty push device account directory");
-            Ok(())
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(AtomicRemovalError {
+                source,
+                target_absent: false,
+            });
         }
     }
+    let parent = path.parent().ok_or_else(|| AtomicRemovalError {
+        source: invalid_data("push persistence path has no parent directory"),
+        target_absent: true,
+    })?;
+    sync_directory_if_present(parent).map_err(|source| AtomicRemovalError {
+        source,
+        target_absent: true,
+    })
 }
-fn committed_block_height(event: &EventBox) -> Option<u64> {
+fn remove_file_if_exists(path: &Path) -> io::Result<()> {
+    remove_file_if_exists_with_state(path).map_err(|error| error.source)
+}
+fn applied_block_heights(event: &EventBox) -> BTreeSet<u64> {
+    let mut heights = BTreeSet::new();
     match event {
-        EventBox::Pipeline(PipelineEventBox::Block(block_event)) => match block_event.status() {
-            BlockStatus::Committed | BlockStatus::Applied => {
-                Some(block_event.header().height().get())
+        EventBox::Pipeline(PipelineEventBox::Block(block_event)) => {
+            if matches!(block_event.status(), BlockStatus::Applied) {
+                heights.insert(block_event.header().height().get());
             }
-            _ => None,
-        },
-        EventBox::PipelineBatch(events) => events.iter().find_map(|event| {
-            let PipelineEventBox::Block(block_event) = event else {
-                return None;
-            };
-            match block_event.status() {
-                BlockStatus::Committed | BlockStatus::Applied => {
-                    Some(block_event.header().height().get())
+        }
+        EventBox::PipelineBatch(events) => {
+            for event in events {
+                let PipelineEventBox::Block(block_event) = event else {
+                    continue;
+                };
+                if matches!(block_event.status(), BlockStatus::Applied) {
+                    heights.insert(block_event.header().height().get());
                 }
-                _ => None,
             }
-        }),
-        _ => None,
+        }
+        _ => {}
     }
+    heights
 }
 fn external_signed_transaction_results(
     block: &SignedBlock,
@@ -1464,6 +2183,7 @@ async fn send_apns_http2(
 }
 fn http_client(settings: &DispatchSettings) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(settings.connect_timeout)
         .timeout(settings.request_timeout)
         .http2_adaptive_window(true)
@@ -1736,6 +2456,12 @@ mod tests {
         net::TcpListener,
     };
     const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
+    fn fixture_account(seed: u8) -> String {
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("push fixture key derivation should succeed");
+        AccountId::new(key_pair.public_key().clone()).to_string()
+    }
     async fn raw_provider_response(response: Vec<u8>) -> reqwest::Response {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1758,6 +2484,48 @@ mod tests {
             .await
             .expect("receive provider response headers")
     }
+
+    #[tokio::test]
+    async fn push_provider_client_does_not_follow_redirects() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind redirect test listener");
+        let address = listener.local_addr().expect("redirect test address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept initial request");
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{address}/redirected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("write redirect response");
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_ok()
+        });
+        let client = http_client(&DispatchSettings {
+            connect_timeout: Duration::from_secs(1),
+            request_timeout: Duration::from_secs(1),
+        })
+        .expect("build push provider client");
+        let response = client
+            .post(format!("http://{address}/initial"))
+            .body("credential-bearing-push-body")
+            .send()
+            .await
+            .expect("receive redirect response");
+
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        assert!(
+            !server.await.expect("redirect test server"),
+            "push provider client followed a redirect"
+        );
+    }
     fn chunked_provider_response(status: &str, body_len: usize) -> Vec<u8> {
         let mut response = format!(
             "HTTP/1.1 {status}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{body_len:X}\r\n"
@@ -1779,10 +2547,531 @@ mod tests {
         PushStorageLimits {
             max_devices,
             max_queue_jobs,
-            max_device_account_entries: max_devices,
             dispatch_batch_size: max_queue_jobs,
             ..PUSH_STORAGE_LIMITS
         }
+    }
+    fn pipeline_block_event(height: u64, status: BlockStatus) -> PipelineEventBox {
+        PipelineEventBox::Block(iroha_data_model::events::pipeline::BlockEvent {
+            header: BlockHeader::new(
+                std::num::NonZeroU64::new(height).expect("nonzero block event height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ),
+            status,
+        })
+    }
+    fn applied_event(height: u64) -> EventBox {
+        EventBox::Pipeline(pipeline_block_event(height, BlockStatus::Applied))
+    }
+    fn signed_push_block(
+        height: u64,
+        previous: Option<&SignedBlock>,
+        transactions: Vec<SignedTransaction>,
+    ) -> Arc<SignedBlock> {
+        let signer = iroha_crypto::KeyPair::try_from_seed(
+            vec![u8::try_from(height).unwrap_or(0xE7); 32],
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("derive push block fixture key");
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(height).expect("push block fixture height is nonzero"),
+            previous.map(SignedBlock::hash),
+            None,
+            None,
+            height,
+            0,
+        );
+        let signature =
+            iroha_crypto::SignatureOf::try_from_hash(signer.private_key(), header.hash())
+                .expect("sign provisional push block fixture header");
+        let entrypoint_hashes = transactions
+            .iter()
+            .map(SignedTransaction::hash_as_entrypoint)
+            .collect::<Vec<_>>();
+        let results = entrypoint_hashes
+            .iter()
+            .map(|_| iroha_data_model::transaction::TransactionResultInner::Ok(Vec::new()))
+            .collect();
+        let mut block = SignedBlock::presigned(
+            iroha_data_model::block::BlockSignature::new(0, signature),
+            header,
+            transactions,
+        );
+        block
+            .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
+            .expect("push block fixture results align with entrypoints");
+        let final_signature =
+            iroha_crypto::SignatureOf::try_from_hash(signer.private_key(), block.header().hash())
+                .expect("sign finalized push block fixture header");
+        block
+            .replace_signatures(
+                [iroha_data_model::block::BlockSignature::new(
+                    0,
+                    final_signature,
+                )]
+                .into_iter()
+                .collect(),
+            )
+            .expect("replace provisional push block fixture signature");
+        Arc::new(block)
+    }
+    fn activity_transaction(account: &AccountId) -> SignedTransaction {
+        use iroha_data_model::prelude::{Account, Register, TransactionBuilder};
+
+        let signer =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xC3; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("derive push activity fixture key");
+        let authority = AccountId::new(signer.public_key().clone());
+        TransactionBuilder::new(
+            crate::test_utils::signed_query_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Register::account(Account::new(account.clone()))])
+        .sign(signer.private_key())
+    }
+    fn write_origin_cursor(base: &Path) {
+        write_json_atomic(
+            &base.join(PUSH_DIR).join(APPLIED_BLOCK_CURSOR_FILE),
+            &AppliedBlockCursor::origin(),
+            MAX_PUSH_APPLIED_BLOCK_CURSOR_BYTES,
+        )
+        .expect("write origin push cursor fixture");
+    }
+    fn json_with_top_level_unknown<T>(value: &T) -> Vec<u8>
+    where
+        T: norito::json::JsonSerialize + ?Sized,
+    {
+        let mut bytes = norito::json::to_vec(value).expect("serialize strict push fixture");
+        assert_eq!(bytes.pop(), Some(b'}'), "push fixture must be an object");
+        bytes.extend_from_slice(b",\"unexpected\":true}");
+        bytes
+    }
+    fn job_json_with_nested_payload_unknown(job: &DeliveryJob) -> Vec<u8> {
+        let mut json = String::from_utf8(
+            norito::json::to_vec(job).expect("serialize strict push job fixture"),
+        )
+        .expect("push job JSON is UTF-8");
+        let marker = "\"direction\":\"incoming\"";
+        let insertion = json
+            .find(marker)
+            .map(|offset| offset + marker.len())
+            .expect("push job fixture contains its nested direction field");
+        json.insert_str(insertion, ",\"unexpected\":true");
+        json.into_bytes()
+    }
+    fn write_raw_push_fixture(path: &Path, bytes: &[u8]) {
+        fs::create_dir_all(path.parent().expect("raw push fixture parent"))
+            .expect("create raw push fixture parent");
+        write_direct_regular_file(path, bytes).expect("write raw push fixture");
+    }
+    async fn wait_for_cursor(bridge: &PushBridge, expected_height: u64) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if bridge.applied_block_cursor.lock().height == expected_height {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("push cursor must reach the expected height");
+    }
+    #[test]
+    fn applied_block_heights_include_every_unique_applied_event() {
+        let event = EventBox::PipelineBatch(vec![
+            pipeline_block_event(1, BlockStatus::Committed),
+            pipeline_block_event(2, BlockStatus::Applied),
+            pipeline_block_event(3, BlockStatus::Applied),
+            pipeline_block_event(2, BlockStatus::Applied),
+        ]);
+        assert_eq!(applied_block_heights(&event), BTreeSet::from([2, 3]));
+    }
+    #[tokio::test]
+    async fn event_worker_reconciles_broadcast_lag_and_stays_supervised() {
+        let temp = tempfile::tempdir().expect("push tempdir");
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .expect("valid empty push store");
+        let (events, _) = tokio::sync::broadcast::channel(1);
+        let shutdown = ShutdownSignal::new();
+        let worker = bridge
+            .start_event_worker(
+                Kura::blank_kura_for_testing(),
+                events.clone(),
+                shutdown.clone(),
+            )
+            .expect("enabled push worker");
+        events
+            .send(EventBox::PipelineBatch(Vec::new()))
+            .expect("first event");
+        events
+            .send(EventBox::PipelineBatch(Vec::new()))
+            .expect("second event");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !worker.is_finished(),
+            "Kura reconciliation must keep a lagged worker alive"
+        );
+        shutdown.send();
+        let exit = tokio::time::timeout(Duration::from_secs(1), worker)
+            .await
+            .expect("worker must stop after shutdown")
+            .expect("worker join");
+        assert_eq!(exit, crate::ToriiCriticalWorkerExit::StoppedByShutdown);
+    }
+    #[test]
+    fn first_run_cursor_initialization_recovers_its_prepared_directory() {
+        let temp = tempfile::tempdir().expect("push tempdir");
+        fs::create_dir(temp.path().join(PUSH_INITIALIZATION_DIR))
+            .expect("create interrupted push initialization fixture");
+
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .expect("prepared first-run initialization must be recoverable");
+
+        assert_eq!(
+            *bridge.applied_block_cursor.lock(),
+            AppliedBlockCursor::origin()
+        );
+        assert!(bridge.applied_block_cursor_path().is_file());
+        assert!(!temp.path().join(PUSH_INITIALIZATION_DIR).exists());
+    }
+    #[test]
+    fn existing_push_store_without_cursor_is_a_hard_cut_error() {
+        let temp = tempfile::tempdir().expect("push tempdir");
+        fs::create_dir(temp.path().join(PUSH_DIR)).expect("create legacy push root");
+
+        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .err()
+            .expect("legacy push root without cursor must fail closed");
+
+        assert!(matches!(error, PushError::Storage(_)));
+    }
+    #[test]
+    fn startup_removes_bounded_queue_writer_temp_after_crash() {
+        let temp = tempfile::tempdir().expect("push tempdir");
+        write_origin_cursor(temp.path());
+        let path = temp.path().join(PUSH_DIR).join(QUEUE_DIR).join(format!(
+            "{}.json.tmp",
+            fingerprint(b"interrupted-queue-job")
+        ));
+        fs::create_dir_all(path.parent().expect("queue temp parent"))
+            .expect("create queue temp parent");
+        write_direct_regular_file(&path, b"{\"partial\":")
+            .expect("write interrupted queue publication");
+
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .expect("exact queue writer temp must be recoverable");
+
+        assert_eq!(bridge.queued_count(), 0);
+        assert!(!path.exists());
+    }
+    #[test]
+    fn startup_removes_bounded_device_writer_temp_after_crash() {
+        let temp = tempfile::tempdir().expect("push tempdir");
+        write_origin_cursor(temp.path());
+        let path = temp
+            .path()
+            .join(PUSH_DIR)
+            .join(DEVICES_DIR)
+            .join(format!("{}.json.tmp", fingerprint(b"interrupted-device")));
+        fs::create_dir_all(path.parent().expect("device temp parent"))
+            .expect("create device temp parent");
+        write_direct_regular_file(&path, b"{\"partial\":")
+            .expect("write interrupted device publication");
+
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .expect("exact device writer temp must be recoverable");
+
+        assert_eq!(bridge.device_count(), 0);
+        assert!(!path.exists());
+    }
+    #[test]
+    fn startup_recovers_device_temp_at_persisted_device_limit() {
+        let temp = tempfile::tempdir().expect("push tempdir");
+        let limits = test_storage_limits(1, 1);
+        let bridge = PushBridge::with_dispatcher_and_limits_in(
+            test_bridge_config(),
+            Arc::new(RealPushDispatcher),
+            limits,
+            temp.path().to_path_buf(),
+        )
+        .expect("initialize bounded push store");
+        bridge
+            .register_device(register_request("persisted-device"))
+            .expect("persist one live device");
+        drop(bridge);
+
+        let path = temp
+            .path()
+            .join(PUSH_DIR)
+            .join(DEVICES_DIR)
+            .join(format!("{}.json.tmp", fingerprint(b"interrupted-device")));
+        write_direct_regular_file(&path, b"{\"partial\":")
+            .expect("write interrupted device publication");
+
+        let reopened = PushBridge::with_dispatcher_and_limits_in(
+            test_bridge_config(),
+            Arc::new(RealPushDispatcher),
+            limits,
+            temp.path().to_path_buf(),
+        )
+        .expect("recover temp outside the persisted device limit");
+
+        assert_eq!(reopened.device_count(), 1);
+        assert!(!path.exists());
+    }
+    #[test]
+    fn startup_rejects_multiple_queue_temps_before_removing_either() {
+        let temp = tempfile::tempdir().expect("push tempdir");
+        write_origin_cursor(temp.path());
+        let queue_dir = temp.path().join(PUSH_DIR).join(QUEUE_DIR);
+        fs::create_dir_all(&queue_dir).expect("create queue temp parent");
+        let first = queue_dir.join(format!("{}.json.tmp", fingerprint(b"first-temp")));
+        let second = queue_dir.join(format!("{}.json.tmp", fingerprint(b"second-temp")));
+        write_direct_regular_file(&first, b"{\"partial\":").expect("write first queue temp");
+        write_direct_regular_file(&second, b"{\"partial\":").expect("write second queue temp");
+
+        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .err()
+            .expect("multiple queue temps must fail closed");
+
+        assert!(matches!(error, PushError::Storage(_)));
+        assert!(first.exists());
+        assert!(second.exists());
+    }
+    #[test]
+    fn startup_rejects_unknown_device_record_field() {
+        let temp = tempfile::tempdir().expect("push tempdir");
+        write_origin_cursor(temp.path());
+        let token = "strict-device-token";
+        let token_fingerprint = fingerprint(token.as_bytes());
+        let record = DeviceRecord {
+            account_id: TEST_ACCOUNT_I105.to_owned(),
+            platform: Platform::Fcm.label().to_owned(),
+            token: token.to_owned(),
+            token_fingerprint: token_fingerprint.clone(),
+            topics: Vec::new(),
+            updated_at_ms: 0,
+        };
+        let path = temp
+            .path()
+            .join(PUSH_DIR)
+            .join(DEVICES_DIR)
+            .join(format!("{token_fingerprint}.json"));
+        write_raw_push_fixture(&path, &json_with_top_level_unknown(&record));
+
+        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .err()
+            .expect("unknown device record fields must fail startup");
+
+        assert!(matches!(error, PushError::Storage(_)));
+    }
+    #[test]
+    fn startup_rejects_unknown_delivery_job_field() {
+        let temp = tempfile::tempdir().expect("push tempdir");
+        write_origin_cursor(temp.path());
+        let job = test_job(92);
+        let path = temp
+            .path()
+            .join(PUSH_DIR)
+            .join(QUEUE_DIR)
+            .join(format!("{}.json", job.dedupe_key));
+        write_raw_push_fixture(&path, &json_with_top_level_unknown(&job));
+
+        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .err()
+            .expect("unknown delivery job fields must fail startup");
+
+        assert!(matches!(error, PushError::Storage(_)));
+    }
+    #[test]
+    fn startup_rejects_unknown_nested_push_payload_field() {
+        let temp = tempfile::tempdir().expect("push tempdir");
+        write_origin_cursor(temp.path());
+        let job = test_job(93);
+        let path = temp
+            .path()
+            .join(PUSH_DIR)
+            .join(QUEUE_DIR)
+            .join(format!("{}.json", job.dedupe_key));
+        write_raw_push_fixture(&path, &job_json_with_nested_payload_unknown(&job));
+
+        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .err()
+            .expect("unknown nested push payload fields must fail startup");
+
+        assert!(matches!(error, PushError::Storage(_)));
+    }
+    #[tokio::test]
+    async fn event_worker_replays_durable_kura_backlog_before_serving_events() {
+        let kura = Kura::blank_kura_for_testing();
+        let first = signed_push_block(1, None, Vec::new());
+        let second = signed_push_block(2, Some(first.as_ref()), Vec::new());
+        kura.store_block(Arc::clone(&first))
+            .expect("store first push replay block");
+        kura.store_block(Arc::clone(&second))
+            .expect("store second push replay block");
+        let temp = tempfile::tempdir().expect("push tempdir");
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .expect("valid empty push store");
+        let (events, _) = tokio::sync::broadcast::channel(4);
+        let shutdown = ShutdownSignal::new();
+        let worker = bridge
+            .start_event_worker(Arc::clone(&kura), events, shutdown.clone())
+            .expect("enabled push worker");
+
+        wait_for_cursor(&bridge, 2).await;
+        let persisted = read_json::<AppliedBlockCursor>(
+            &bridge.applied_block_cursor_path(),
+            MAX_PUSH_APPLIED_BLOCK_CURSOR_BYTES,
+        )
+        .expect("read replayed push cursor");
+        assert_eq!(persisted.height, 2);
+        assert_eq!(persisted.block_hash, Some(second.hash()));
+
+        shutdown.send();
+        assert_eq!(
+            worker.await.expect("push replay worker joins"),
+            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+        );
+    }
+    #[tokio::test]
+    async fn observed_applied_height_gap_is_replayed_from_kura() {
+        let kura = Kura::blank_kura_for_testing();
+        let first = signed_push_block(1, None, Vec::new());
+        kura.store_block(Arc::clone(&first))
+            .expect("store first push gap block");
+        let temp = tempfile::tempdir().expect("push tempdir");
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .expect("valid empty push store");
+        let (events, _) = tokio::sync::broadcast::channel(4);
+        let shutdown = ShutdownSignal::new();
+        let worker = bridge
+            .start_event_worker(Arc::clone(&kura), events.clone(), shutdown.clone())
+            .expect("enabled push worker");
+        wait_for_cursor(&bridge, 1).await;
+
+        let second = signed_push_block(2, Some(first.as_ref()), Vec::new());
+        let third = signed_push_block(3, Some(second.as_ref()), Vec::new());
+        kura.store_block(Arc::clone(&second))
+            .expect("store skipped push gap block");
+        kura.store_block(Arc::clone(&third))
+            .expect("store observed push gap block");
+        events
+            .send(applied_event(3))
+            .expect("send height-three event");
+
+        wait_for_cursor(&bridge, 3).await;
+        assert_eq!(
+            bridge.applied_block_cursor.lock().block_hash,
+            Some(third.hash())
+        );
+        shutdown.send();
+        assert_eq!(
+            worker.await.expect("push gap worker joins"),
+            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+        );
+    }
+    #[tokio::test]
+    async fn full_durable_queue_is_drained_before_replay_retries() {
+        let kura = Kura::blank_kura_for_testing();
+        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
+        let block = signed_push_block(1, None, vec![activity_transaction(&account)]);
+        kura.store_block(Arc::clone(&block))
+            .expect("store push activity block");
+        let temp = tempfile::tempdir().expect("push tempdir");
+        let dispatcher = Arc::new(MockDispatcher::new(vec![DispatchOutcome::Sent]));
+        let bridge = PushBridge::with_dispatcher_and_limits_in(
+            test_bridge_config(),
+            dispatcher,
+            test_storage_limits(1, 1),
+            temp.path().to_path_buf(),
+        )
+        .expect("valid bounded push store");
+        bridge
+            .register_device(register_request("activity-token"))
+            .expect("register push activity target");
+        let stale = test_job(91);
+        bridge
+            .persist_job(&stale)
+            .expect("persist full queue fixture");
+        bridge.queue.insert(stale.dedupe_key.clone(), stale);
+
+        assert!(matches!(
+            bridge.reconcile_to_authoritative_height(&kura),
+            Err(PushReplayError::Backpressure { height: 1, .. })
+        ));
+        assert_eq!(bridge.applied_block_cursor.lock().height, 0);
+        assert_eq!(bridge.queued_count(), 1);
+
+        let (events, _) = tokio::sync::broadcast::channel(4);
+        let shutdown = ShutdownSignal::new();
+        let worker = bridge
+            .start_event_worker(Arc::clone(&kura), events, shutdown.clone())
+            .expect("enabled push worker");
+        wait_for_cursor(&bridge, 1).await;
+        shutdown.send();
+        assert_eq!(
+            worker.await.expect("backpressured push worker joins"),
+            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+        );
+    }
+    #[test]
+    fn single_block_larger_than_queue_capacity_fails_explicitly() {
+        let kura = Kura::blank_kura_for_testing();
+        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
+        let block = signed_push_block(1, None, vec![activity_transaction(&account)]);
+        kura.store_block(block).expect("store push activity block");
+        let temp = tempfile::tempdir().expect("push tempdir");
+        let bridge = PushBridge::with_dispatcher_and_limits_in(
+            test_bridge_config(),
+            Arc::new(RealPushDispatcher),
+            test_storage_limits(2, 1),
+            temp.path().to_path_buf(),
+        )
+        .expect("valid bounded push store");
+        bridge
+            .register_device(register_request("first-activity-token"))
+            .expect("register first activity target");
+        bridge
+            .register_device(register_request("second-activity-token"))
+            .expect("register second activity target");
+
+        let error = bridge
+            .reconcile_to_authoritative_height(&kura)
+            .expect_err("one block cannot exceed the durable queue geometry");
+
+        assert!(matches!(
+            error,
+            PushReplayError::Fatal(PushError::Storage(_))
+        ));
+        assert_eq!(bridge.applied_block_cursor.lock().height, 0);
+        assert_eq!(bridge.queued_count(), 0);
+    }
+    #[test]
+    fn cursor_does_not_advance_when_block_jobs_cannot_be_persisted() {
+        let kura = Kura::blank_kura_for_testing();
+        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
+        let block = signed_push_block(1, None, vec![activity_transaction(&account)]);
+        kura.store_block(block).expect("store push activity block");
+        let temp = tempfile::tempdir().expect("push tempdir");
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .expect("valid empty push store");
+        bridge
+            .register_device(register_request("blocked-queue-token"))
+            .expect("register push activity target");
+        fs::write(bridge.data_dir.join(QUEUE_DIR), b"not a directory")
+            .expect("block push queue directory creation");
+
+        assert!(matches!(
+            bridge.reconcile_to_authoritative_height(&kura),
+            Err(PushReplayError::Fatal(PushError::Storage(_)))
+        ));
+        assert_eq!(bridge.applied_block_cursor.lock().height, 0);
     }
     fn register_request(token: &str) -> RegisterDeviceRequest {
         RegisterDeviceRequest {
@@ -1806,12 +3095,31 @@ mod tests {
             dedupe_key: delivery_dedupe_key(&payload, &token_fingerprint),
             account_id: TEST_ACCOUNT_I105.to_string(),
             token_fingerprint,
+            target_platform: Platform::Fcm.label().to_string(),
             payload,
             attempts: 0,
             next_attempt_ms: 0,
             created_at_ms: 0,
             updated_at_ms: 0,
         }
+    }
+    #[test]
+    fn delivery_dedupe_key_covers_height_and_direction() {
+        let job = test_job(1);
+        let baseline = delivery_dedupe_key(&job.payload, &job.token_fingerprint);
+        let mut changed_height = job.payload.clone();
+        changed_height.block_height = changed_height.block_height.saturating_add(1);
+        let mut changed_direction = job.payload.clone();
+        changed_direction.direction = "outgoing".to_owned();
+
+        assert_ne!(
+            baseline,
+            delivery_dedupe_key(&changed_height, &job.token_fingerprint)
+        );
+        assert_ne!(
+            baseline,
+            delivery_dedupe_key(&changed_direction, &job.token_fingerprint)
+        );
     }
     #[test]
     fn encode_jwt_claims_builds_verifiable_compact_token() {
@@ -1977,9 +3285,10 @@ mod tests {
         assert_eq!(bridge.device_count(), 1);
     }
     #[test]
-    fn startup_queue_enumeration_stops_at_hard_candidate_count() {
+    fn startup_rejects_queue_beyond_hard_candidate_count() {
         let temp = tempfile::tempdir().expect("tempdir");
         let _guard = OverrideGuard::new(temp.path());
+        write_origin_cursor(temp.path());
         let queue_root = temp.path().join(PUSH_DIR).join(QUEUE_DIR);
         for index in 0..3 {
             let job = test_job(index);
@@ -1990,12 +3299,15 @@ mod tests {
             )
             .expect("write queue fixture");
         }
-        let bridge = PushBridge::with_dispatcher_and_limits(
+        let error = PushBridge::with_dispatcher_and_limits_in(
             test_bridge_config(),
             Arc::new(RealPushDispatcher),
             test_storage_limits(1, 2),
-        );
-        assert_eq!(bridge.queued_count(), 2);
+            temp.path().to_path_buf(),
+        )
+        .err()
+        .expect("oversized durable queue must fail startup");
+        assert!(matches!(error, PushError::Storage(_)));
     }
     #[tokio::test]
     async fn due_queue_dispatch_collects_only_one_bounded_batch() {
@@ -2098,6 +3410,95 @@ mod tests {
             .expect_err("too many topics");
         assert!(matches!(err, PushError::TooManyTopics { max: 2 }));
     }
+
+    #[test]
+    fn push_request_identifiers_require_exact_canonical_spelling() {
+        assert_eq!(
+            Platform::from_label("FCM").expect("canonical FCM"),
+            Platform::Fcm
+        );
+        assert_eq!(
+            Platform::from_label("APNS").expect("canonical APNS"),
+            Platform::Apns
+        );
+        for alias in ["fcm", " FCM", "FCM ", "Apns"] {
+            assert!(matches!(
+                Platform::from_label(alias),
+                Err(PushError::InvalidPlatform(value)) if value == alias
+            ));
+        }
+
+        assert!(canonical_account(TEST_ACCOUNT_I105).is_ok());
+        for alias in [
+            format!(" {TEST_ACCOUNT_I105}"),
+            format!("{TEST_ACCOUNT_I105} "),
+        ] {
+            assert!(matches!(
+                canonical_account(&alias),
+                Err(PushError::InvalidAccount(value)) if value == alias
+            ));
+        }
+
+        assert_eq!(exact_nonempty_ref(Some("project-id")), Some("project-id"));
+        for invalid in [
+            None,
+            Some(""),
+            Some(" project"),
+            Some("project "),
+            Some("pro ject"),
+        ] {
+            assert!(exact_nonempty_ref(invalid).is_none());
+        }
+    }
+
+    #[test]
+    fn push_device_tokens_are_exact_and_platform_specific() {
+        assert_eq!(
+            validate_device_token(Platform::Fcm, "opaque:fcm-token_1")
+                .expect("canonical FCM token"),
+            "opaque:fcm-token_1"
+        );
+        let apns = "ab".repeat(32);
+        assert_eq!(
+            validate_device_token(Platform::Apns, &apns).expect("canonical APNS token"),
+            apns
+        );
+        for invalid in [" token", "token ", "tok en", "tökën"] {
+            assert!(matches!(
+                validate_device_token(Platform::Fcm, invalid),
+                Err(PushError::InvalidToken)
+            ));
+        }
+        for invalid in [
+            "ab".repeat(31),
+            "AB".repeat(32),
+            format!("{}g", "ab".repeat(31)),
+        ] {
+            assert!(matches!(
+                validate_device_token(Platform::Apns, &invalid),
+                Err(PushError::InvalidToken)
+            ));
+        }
+    }
+
+    #[test]
+    fn push_topics_reject_empty_whitespace_and_duplicate_aliases() {
+        assert_eq!(
+            validate_topics(Some(vec!["incoming".into(), "settled".into()]), 2)
+                .expect("canonical topics"),
+            vec!["incoming", "settled"]
+        );
+        for invalid in ["", " incoming", "incoming ", "in coming", "töpic"] {
+            assert!(matches!(
+                validate_topics(Some(vec![invalid.to_owned()]), 1),
+                Err(PushError::InvalidTopic { index: 0 })
+            ));
+        }
+        assert!(matches!(
+            validate_topics(Some(vec!["incoming".into(), "incoming".into()]), 2),
+            Err(PushError::DuplicateTopic { index: 1 })
+        ));
+    }
     #[test]
     fn fcm_response_classification_covers_provider_outcomes() {
         assert_eq!(
@@ -2168,6 +3569,223 @@ mod tests {
             .registered_device("token-123")
             .expect("device loaded by fingerprint");
         assert_eq!(device.account_id, TEST_ACCOUNT_I105);
+    }
+    #[test]
+    fn replacement_persistence_failure_preserves_old_registration() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(temp.path());
+        let bridge = PushBridge::new(test_bridge_config());
+        let token = "replacement-token";
+        bridge
+            .register_device(RegisterDeviceRequest {
+                account_id: TEST_ACCOUNT_I105.to_string(),
+                platform: "FCM".to_string(),
+                token: token.to_string(),
+                topics: None,
+            })
+            .expect("register original device");
+        let old_path = bridge.device_path(&fingerprint(token.as_bytes()));
+        assert!(old_path.is_file());
+
+        let replacement_account = fixture_account(0xA7);
+        let blocked_temp = old_path.with_extension("json.tmp");
+        fs::create_dir(&blocked_temp).expect("block replacement temporary file");
+        let error = bridge
+            .register_device(RegisterDeviceRequest {
+                account_id: replacement_account,
+                platform: "FCM".to_string(),
+                token: token.to_string(),
+                topics: None,
+            })
+            .expect_err("replacement publication must fail");
+        assert!(matches!(error, PushError::Storage(_)));
+        assert!(old_path.is_file());
+        assert_eq!(
+            bridge
+                .registered_device(token)
+                .expect("original registration remains in memory")
+                .account_id,
+            TEST_ACCOUNT_I105
+        );
+        assert_eq!(
+            {
+                fs::remove_dir(&blocked_temp).expect("remove injected blocker");
+                PushBridge::new(test_bridge_config())
+            }
+            .registered_device(token)
+            .expect("original registration remains durable")
+            .account_id,
+            TEST_ACCOUNT_I105
+        );
+    }
+    #[test]
+    fn replacement_post_publish_sync_failure_keeps_memory_aligned() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(temp.path());
+        let bridge = PushBridge::new(test_bridge_config());
+        let token = "replacement-sync-token";
+        bridge
+            .register_device(register_request(token))
+            .expect("register original device");
+        let replacement_account = fixture_account(0xA8);
+
+        let error = bridge
+            .register_device_with(
+                RegisterDeviceRequest {
+                    account_id: replacement_account.clone(),
+                    platform: "FCM".to_owned(),
+                    token: token.to_owned(),
+                    topics: None,
+                },
+                |record| {
+                    write_json_atomic_with_publish_sync(
+                        &bridge.device_path(&record.token_fingerprint),
+                        record,
+                        bridge.storage_limits.max_device_record_bytes,
+                        |_| {
+                            Err(io::Error::other(
+                                "injected directory synchronization failure",
+                            ))
+                        },
+                    )
+                },
+            )
+            .expect_err("post-publication sync failure must be reported");
+
+        assert!(matches!(error, PushError::Storage(_)));
+        assert_eq!(
+            bridge
+                .registered_device(token)
+                .expect("published registration remains live")
+                .account_id,
+            replacement_account
+        );
+        assert_eq!(
+            PushBridge::new(test_bridge_config())
+                .registered_device(token)
+                .expect("published registration remains readable")
+                .account_id,
+            replacement_account
+        );
+    }
+    #[test]
+    fn account_replacement_uses_one_token_keyed_record() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(temp.path());
+        let bridge = PushBridge::new(test_bridge_config());
+        let token = "single-record-replacement-token";
+        bridge
+            .register_device(register_request(token))
+            .expect("register original device");
+        let replacement_account = fixture_account(0xA9);
+
+        bridge
+            .register_device(RegisterDeviceRequest {
+                account_id: replacement_account.clone(),
+                platform: "FCM".to_owned(),
+                token: token.to_owned(),
+                topics: None,
+            })
+            .expect("replace token owner atomically");
+
+        let device_dir = bridge.data_dir.join(DEVICES_DIR);
+        assert_eq!(
+            read_direct_directory(&device_dir)
+                .expect("read flat device directory")
+                .count(),
+            1
+        );
+        assert_eq!(
+            PushBridge::new(test_bridge_config())
+                .registered_device(token)
+                .expect("replacement survives restart")
+                .account_id,
+            replacement_account
+        );
+    }
+    #[test]
+    fn device_removal_failure_retains_memory_registration() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(temp.path());
+        let bridge = PushBridge::new(test_bridge_config());
+        let token = "token-delete-failure";
+        bridge
+            .register_device(register_request(token))
+            .expect("register device");
+        let token_fingerprint = fingerprint(token.as_bytes());
+
+        let error = bridge
+            .remove_device_by_fingerprint_with(&token_fingerprint, |_| {
+                Err(AtomicRemovalError {
+                    source: io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "injected deletion failure",
+                    ),
+                    target_absent: false,
+                })
+            })
+            .expect_err("failed durable deletion must be reported");
+        assert!(matches!(error, PushError::Storage(_)));
+        assert!(bridge.registered_device(token).is_some());
+    }
+    #[test]
+    fn device_post_unlink_sync_failure_removes_memory_registration() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(temp.path());
+        let bridge = PushBridge::new(test_bridge_config());
+        let token = "token-post-unlink-failure";
+        bridge
+            .register_device(register_request(token))
+            .expect("register device");
+        let token_fingerprint = fingerprint(token.as_bytes());
+
+        let error = bridge
+            .remove_device_by_fingerprint_with(&token_fingerprint, |path| {
+                fs::remove_file(path).map_err(|source| AtomicRemovalError {
+                    source,
+                    target_absent: false,
+                })?;
+                Err(AtomicRemovalError {
+                    source: io::Error::other(
+                        "injected post-unlink directory synchronization failure",
+                    ),
+                    target_absent: true,
+                })
+            })
+            .expect_err("post-unlink sync failure must be reported");
+
+        assert!(matches!(error, PushError::Storage(_)));
+        assert!(bridge.registered_device(token).is_none());
+    }
+    #[test]
+    fn startup_rejects_nested_legacy_device_layout() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(temp.path());
+        write_origin_cursor(temp.path());
+        let token = "legacy-nested-token";
+        let token_fingerprint = fingerprint(token.as_bytes());
+        let root = temp.path().join(PUSH_DIR).join(DEVICES_DIR);
+        let record = DeviceRecord {
+            account_id: TEST_ACCOUNT_I105.to_owned(),
+            platform: Platform::Fcm.label().to_owned(),
+            token: token.to_owned(),
+            token_fingerprint: token_fingerprint.clone(),
+            topics: Vec::new(),
+            updated_at_ms: 0,
+        };
+        write_json_atomic(
+            &root
+                .join(fingerprint(TEST_ACCOUNT_I105.as_bytes()))
+                .join(format!("{token_fingerprint}.json")),
+            &record,
+            MAX_PUSH_DEVICE_RECORD_BYTES,
+        )
+        .expect("write nested legacy device fixture");
+
+        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .err()
+            .expect("nested legacy layout must fail startup");
+        assert!(matches!(error, PushError::Storage(_)));
     }
     #[test]
     fn unregister_removes_device() {
@@ -2241,6 +3859,49 @@ mod tests {
         bridge.dispatch_due_once().await;
         assert_eq!(bridge.queued_count(), 0);
         assert_eq!(dispatcher.calls.lock().unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn re_registered_token_cannot_receive_stale_account_activity() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(temp.path());
+        let dispatcher = Arc::new(MockDispatcher::new(vec![DispatchOutcome::Sent]));
+        let bridge = PushBridge::with_dispatcher(test_bridge_config(), dispatcher.clone());
+        let token = "reassigned-token";
+        bridge
+            .register_device(register_request(token))
+            .expect("register original account");
+        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("account");
+        bridge
+            .enqueue_activity(
+                &account,
+                "tx-before-reassignment",
+                7,
+                0,
+                "Transfer",
+                AccountActivityRole::Incoming,
+            )
+            .expect("enqueue original account activity");
+        let job_path = bridge
+            .queue
+            .iter()
+            .next()
+            .map(|job| bridge.job_path(&job.dedupe_key))
+            .expect("queued job path");
+        assert!(job_path.is_file());
+
+        bridge
+            .register_device(RegisterDeviceRequest {
+                account_id: fixture_account(0xC9),
+                platform: "FCM".to_string(),
+                token: token.to_string(),
+                topics: None,
+            })
+            .expect("reassign token");
+        bridge.dispatch_due_once().await;
+
+        assert!(dispatcher.calls.lock().unwrap().is_empty());
+        assert_eq!(bridge.queued_count(), 0);
+        assert!(!job_path.exists(), "stale job must be durably discarded");
     }
     #[tokio::test]
     async fn retryable_failure_reschedules_job() {

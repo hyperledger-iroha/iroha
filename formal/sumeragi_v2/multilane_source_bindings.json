@@ -8113,7 +8113,7 @@
             "if ready_to_finish && !finalization_ready {",
             "if finalization_ready && !rollover_ready {",
             "let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval)",
-            "service_historical_recovery_tick(&mut lane_work)?",
+            "service_historical_recovery_tick(&mut lane_work, services)?",
             "schedule_autonomous_new_view_timeouts",
             "schedule_retransmission",
             "deadline_after(now, retransmit_interval)",
@@ -8126,7 +8126,7 @@
           "symbol": "run_pending_active_height",
           "required_tokens": [
             "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval)",
-            "service_historical_recovery_tick(lane_work)?",
+            "service_historical_recovery_tick(lane_work, services)?",
             "schedule_autonomous_new_view_timeouts",
             "schedule_retransmission",
             "deadline_after(now, retransmit_interval)",
@@ -8138,7 +8138,9 @@
           "kind": "fn",
           "symbol": "service_historical_recovery_tick",
           "required_tokens": [
-            "service_next_historical_recovery()",
+            "has_pending_historical_recovery()",
+            "services.current_archive_targets()",
+            "service_next_historical_recovery_with_archive_targets(&current_archive_targets)",
             "map_err(V2RunnerError::from)"
           ]
         },
@@ -9981,7 +9983,7 @@
           "symbol": "run_lifecycle_active_height",
           "required_tokens": [
             "let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval)",
-            "service_historical_recovery_tick(&mut lane_work)?",
+            "service_historical_recovery_tick(&mut lane_work, services)?",
             "lane_work.schedule_autonomous_new_view_timeouts(",
             "lane_work.schedule_retransmission()?",
             "next_lane_retransmit = deadline_after(now, retransmit_interval)",
@@ -9994,7 +9996,7 @@
           "symbol": "run_pending_active_height",
           "required_tokens": [
             "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval)",
-            "service_historical_recovery_tick(lane_work)?",
+            "service_historical_recovery_tick(lane_work, services)?",
             "lane_work.schedule_autonomous_new_view_timeouts(",
             "lane_work.schedule_retransmission()?",
             "next_lane_retransmit = deadline_after(now, retransmit_interval)",
@@ -11314,7 +11316,7 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
           "kind": "method",
-          "symbol": "V2LaneWorkAdapter::service_next_historical_recovery_at",
+          "symbol": "V2LaneWorkAdapter::service_next_historical_recovery_at_with_archive_targets",
           "required_tokens": [
             "persist_historical_recovery_session",
             "historical_recovery_diagnostics.complete(identity)",
@@ -11342,8 +11344,11 @@
             "after_retained_attempt",
             "historical_recovery_retry_floor",
             "historical_recovery_retry_ceiling",
-            "if retained",
-            ".cadence = next_cadence"
+            "let mut scheduled_destinations = BTreeSet::new()",
+            "if !self.push_effect(",
+            "scheduled_destinations.insert(peer)",
+            "if !scheduled_destinations.is_empty()",
+            "owner.cadence = next_cadence"
           ]
         },
         {
@@ -11364,7 +11369,9 @@
           "kind": "fn",
           "symbol": "service_historical_recovery_tick",
           "required_tokens": [
-            "service_next_historical_recovery()",
+            "has_pending_historical_recovery()",
+            "services.current_archive_targets()",
+            "service_next_historical_recovery_with_archive_targets(&current_archive_targets)",
             "map_err(V2RunnerError::from)"
           ]
         },

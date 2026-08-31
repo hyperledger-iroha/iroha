@@ -90,6 +90,16 @@ release qualified.
    retains its one candidate until a later generation supersedes it or final
    exhaustion rejects the attempt. Eligibility therefore cannot be withdrawn
    after request intent but before retry, draw, or roster sealing.
+   The complete citizen registry is limited to 65,536 entries and each canonical
+   candidate-snapshot payload to 8 MiB. Crossing either limit fails the
+   transaction; snapshots are never truncated or sampled, and restore enforces
+   the same bounds before rebuilding derived Parliament indexes.
+   Compact casting-snapshot selection is likewise derived, not discovered by
+   scanning historical evidence. A snapshot-skipped ballot index retains only
+   the active hidden-ballot `Registration`, `SurvivorFreeze`, or
+   `TimedCommitment` row and its exact half-open phase window. Replacement,
+   terminalization, and restore update that row from validated attempt state;
+   an in-window row without its exact timed-OVN evidence fails closed.
 5. For a nonbinding body, `EndorsePublicFinding` lets each nonexcluded seated
    authority endorse exactly one root of the public evidence, deliberation, and
    dissent record. Core automatically finalizes only when one identical root
@@ -103,23 +113,25 @@ release qualified.
    narrowly approved result requires one, must use the mandatory private
    zero-knowledge timed-OVN ballot. A public finding is not a formal ballot and
    cannot replace a required private jury result. Hidden-ballot bodies and their
-   eligible candidate snapshots require at least two members. Before a narrow
+   eligible candidate snapshots require at least three members, the canonical
+   V1 exact-tally anonymity floor. Before a narrow
    Policy result is committed, Core removes every sealed Policy Jury member from
-   the current eligible-citizen snapshot. Fewer than two remaining candidates
+   the current eligible-citizen snapshot. Fewer than three remaining candidates
    terminalize the verified opening as
    `ConfirmationJuryCapacityUnavailable`; the Policy binding and unfillable
    Confirmation requirement are not committed. At the proposal-wide redraw
-   ceiling, at least two candidates instead terminalize the same verified
+   ceiling, at least three candidates instead terminalize the same verified
    opening as `RandomnessRedrawBudgetExhausted` before committing either the
    Policy binding or a Confirmation draw. Otherwise, that same finalization
    transaction freezes and registers the exact disjoint snapshot, configured
-   target, current request height, and deterministic future pulse slot. The sequence-zero request height must equal the Policy result height,
-   and restore rejects a missing or differently timed initial request.
+   target, current request height, and deterministic future pulse slot. The
+   sequence-zero request height must equal the Policy result height, and restore
+   rejects a missing or differently timed initial request.
    Eligibility cannot race a separate initial Confirmation request. If
-   later invitation responses leave only one accepted hidden-ballot seat, Core
-   records an objective insufficient-roster election failure and follows the
-   bounded fresh-sortition retry path rather than sealing a cryptographically
-   unusable body.
+   later invitation responses leave fewer than three accepted hidden-ballot
+   seats, Core records an objective insufficient-roster election failure and
+   follows the bounded fresh-sortition retry path rather than sealing a
+   cryptographically unusable body.
    After each endorsement, Core derives `eligible = original roster -
    authenticated absences` and `remaining = eligible - immutable
    endorsements`. If the strongest existing root plus every remaining seat is
@@ -143,7 +155,12 @@ release qualified.
    the ordered registration corpus, survivor subset, and roots from those
    accepted records; a manager cannot submit replacement registration corpora
    or survivor subsets. The survivor set is immutable before ballots are
-   accepted. `FreezeTimedOvnCorpus` is a permissionless exact-next append. Core
+   accepted. A freeze with fewer than three survivors is rejected atomically;
+   no survivor, ballot, opening, or exact tally is persisted, and the ordinary
+   permissionless survivor-deadline transition then records deterministic
+   `NoResult` with the existing retry semantics. The complete accepted corpus
+   and every public tally are independently required to meet the same floor.
+   `FreezeTimedOvnCorpus` is a permissionless exact-next append. Core
    derives the committed survivor offset and checks the active ballot, exact
    phase and containing-height window, body and predecessor bindings, nonempty
    chunk width, canonical record widths, capacity, and every one-hot proof
@@ -258,7 +275,9 @@ Parliament.
 unlinkable. V1 publishes the exact Aye/Nay/Abstain counts and the accepted
 corpus size, while the per-ballot participant hash is deterministically derived
 from the public account and ballot attempt. Small panels and auxiliary knowledge
-can therefore reveal individual choices. Until a separately reviewed proof
+can therefore reveal individual choices. The V1 floor of three eliminates the
+reachable two-survivor exact-tally disclosure, but is not a general anonymity
+proof. Until a separately reviewed proof
 reveals only quorum, outcome, and the narrow-result predicate, release material
 must describe V1 as ballot-value confidentiality with an exact public tally and
 linkable participation, not as anonymous voting. Winner-only and cast-or-audit
@@ -270,7 +289,7 @@ with a proof on every non-key-unique partial. V1 fixes `n = 3f + 1`, threshold
 `f + 1`, and at most `f` distinct signing-share exposures over an unrefreshed
 key session. It has no proactive refresh; a cumulative exposure beyond that
 budget requires a fresh DKG and purpose-distinct session. Zeroizing Rust buffers
-are defense in depth, not a compiler, OS, HSM, or hardware erasure guarantee.
+are defense in depth, not a compiler, OS, or hardware erasure guarantee.
 The cited Das--Ren result is in the random-oracle model under DDH and co-CDH;
 code conformance and replay tests are not a proof that an implementation meets
 that theorem.
@@ -543,8 +562,11 @@ project the canonical outer carrier.
   partial request, independently verifying multi-session custody/coordinator,
   canonical combine, ordinary `FinalizeOpenedBallot` submission tooling, and
   the bounded public broker projection/projected-signer validation boundary
-  against a genuine authenticated broker/HSM provider. The public projection is
-  not evidence of committed-state origin. Qualify the implemented consensus
+  against a qualified deployment-selected signer through the authenticated
+  external broker. Provider implementation details are outside the protocol and
+  are not compatibility modes. No provider permits a
+  plaintext ballot or manual-release fallback. The public projection is not
+  evidence of committed-state origin. Qualify the implemented consensus
   active-session cutover, immutable per-session ordered-roster persistence, and
   the custody rule that forbids retirement while a session remains selectable
   or any committed ballot deadline references it. Startup now scans the active
@@ -553,12 +575,12 @@ project the canonical outer carrier.
   return an exact non-signing key-session/transcript/seat capability
   attestation. The external broker path requalifies around that lookup and
   poisons substituted results. This is point-in-time readiness evidence, not a
-  proof of future availability, HSM provenance, or erasure. Demonstrate the
-  complete behavior with daemon-scoped broker admission,
-  old-share retention/zeroization,
+  proof of future availability or secure erasure. Demonstrate the complete
+  behavior with the selected provider, including daemon-scoped broker admission
+  when broker mode is used, old-share retention/zeroization,
   restart recovery, peer authentication/rate limits, and threshold collection
   on at least four peers. The source seam is not yet an operationally automatic
-  release service and does not prove secure erasure or HSM provisioning.
+  release service and does not prove secure erasure.
 - Qualify the Core-authorized pre-seal timed-OVN casting context and its
   four-mebibyte, header-framed canonical Norito archive. The archive validator
   replays the public TLE transcript, exact timed-OVN session, registration

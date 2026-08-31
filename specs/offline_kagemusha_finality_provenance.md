@@ -11,26 +11,42 @@ For a top-up operation `operation_id`, execution records the dedicated witness
 leaf
 
 ```text
-key   = 0xD1 || operation_id
+key   = 0xD2 || operation_id
 value = anchor_digest
-leaf  = H(0x00 || H(key) || H(value))
+leaf  = H(0x00 || H(0xD2 || operation_id) || H(anchor_digest))
 ```
 
-Kagemusha leaves are removed from the ordinary write set and sorted by
-`operation_id` into a canonical balanced block-local commitment tree. For a
-block containing at least one Kagemusha top-up, execution commits
+Kagemusha leaves are removed from the ordinary write set and sorted by the
+unsigned byte order of `operation_id` into a canonical balanced block-local
+commitment tree. Duplicate operation ids are invalid before ordinary
+last-write-wins canonicalization. The tree pads on the right to the next power
+of two with
+
+```text
+empty = H("iroha:kagemusha:v2:topup-empty")
+node(level, left, right) = H(
+    "iroha:kagemusha:v2:topup-node" || 0x00 ||
+    LE16(level) || left || right
+)
+```
+
+where the leaf level is `level = 0`. For a block containing at least one
+Kagemusha top-up, execution commits
 
 ```text
 post_state_root = H(
     "iroha:kagemusha:v2:post-state-root" || 0 ||
-    u32(anchor_count) || ordinary_writes_root || topup_anchor_root
+    LE32(anchor_count) || ordinary_writes_root || topup_anchor_root
 )
 ```
 
+Every `H` is the canonical Iroha Blake2b-256 hash with its marker bit set.
+
 Blocks without a Kagemusha top-up retain the ordinary execution root. This
-separation is consensus-critical: a proof carries one ordinary-root sibling
-and `ceil(log2(anchor_count))` anchor siblings, so unrelated writes cannot make
-an offline payment unbounded. The anchor binds the chain, payer, exact scaled
+separation is consensus-critical: the signed execution commitment carries the
+ordinary-write root while the inclusion proof carries exactly
+`ceil(log2(anchor_count))` anchor siblings, so unrelated writes cannot make an
+offline payment unbounded. The anchor binds the network, payer, exact scaled
 amount, confidential roots, note commitment/nullifier, active transfer
 verifier, artifact generation, operation id, finalized height, and transaction
 hash.
@@ -38,7 +54,7 @@ hash.
 The proof package contains:
 
 - every non-roster field of the live Sumeragi-v2 `HeightContext`, including
-  chain id, epoch data, parent Commit QC, DA layout, leader seed, and the typed
+  network id, epoch data, parent Commit QC, DA layout, leader seed, and the typed
   context id;
 - the exact live Sumeragi-v2 Commit `QuorumCertificate`, including its subject,
   execution commitment, signer indexes, and aggregate signature; and
@@ -56,12 +72,13 @@ The peer payload already carries the compact `(operation_id, anchor_digest)`
 reference. The initial recursive proof binds that digest to the complete anchor
 and first note, so repeating the full anchor in every later hop is unnecessary.
 
-Anchor siblings are encoded from leaf to root. The leaf index must be in range,
-the sibling count must equal the depth derived from the committed leaf count,
-and odd levels use the protocol's fixed empty-node hash. Duplicate operation
-ids, alternate leaf ordering, extra siblings, and non-canonical tree shapes are
-rejected. Consensus enforces a maximum top-up count per block derived from the
-peer-envelope proof budget.
+Anchor siblings are encoded from leaf to root. The leaf index must be in range
+and the sibling count must equal the depth derived from the committed leaf
+count. A non-power-of-two tree pads the unused leaves to the next power of two
+with the protocol's fixed empty-leaf hash, then hashes every level normally.
+Duplicate operation ids, alternate leaf ordering, extra siblings, and
+non-canonical tree shapes are rejected. Consensus enforces a maximum top-up
+count per block derived from the peer-envelope proof budget.
 
 ## Trust and rotation
 

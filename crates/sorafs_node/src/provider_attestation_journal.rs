@@ -192,7 +192,7 @@ pub enum MusubiProviderAttestationSignerErrorV1 {
 /// The trait intentionally has no transaction payload, signed transaction,
 /// queue, or registry-submission surface.
 pub trait MusubiProviderAttestationSignerV1: Send + Sync + 'static {
-    /// Return the stable credential-free HSM/KMS adapter identity.
+    /// Return the stable credential-free signing-adapter identity.
     ///
     /// This getter must be a bounded, non-blocking local snapshot.
     fn runtime_handle(&self) -> &str;
@@ -202,7 +202,7 @@ pub trait MusubiProviderAttestationSignerV1: Send + Sync + 'static {
     fn authority(&self) -> &AccountId;
     /// Return the deployment-qualified, payload-free adapter binding.
     ///
-    /// This getter must be a bounded, non-blocking local snapshot; remote HSM
+    /// This getter must be a bounded, non-blocking local snapshot; any remote or blocking provider
     /// readiness belongs in the timed approval future.
     fn qualification(
         &self,
@@ -4056,7 +4056,7 @@ fn checkpoint_future_reserve_bytes(
         })
 }
 // The daemon leaves the sealed two-slot file adapter inactive until qualified
-// HSM signer, combined time/head/blob durability, and coordinator-inventory
+// signer, combined time/head/blob durability, and coordinator-inventory
 // bindings are configured. A receipt remains an acknowledgement record, not
 // independently authenticated evidence.
 #[cfg(test)]

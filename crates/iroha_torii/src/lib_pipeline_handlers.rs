@@ -56,7 +56,7 @@ async fn handler_post_transactions_batch(
     headers: axum::http::HeaderMap,
     crate::utils::extractors::NoritoBytes(body): crate::utils::extractors::NoritoBytes,
 ) -> Result<Response, Error> {
-    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     validate_transaction_batch_body_size(&body, app.transaction_batch_max_bytes)?;
     let compute_permit =
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
@@ -1259,22 +1259,81 @@ fn certified_merge_pipeline_transactions(
         )
         .collect())
 }
-fn pipeline_status_from_state(
-    app: &AppState,
+#[derive(Clone, Debug)]
+enum CanonicalTransactionOutcome {
+    Applied {
+        height: NonZeroU64,
+        settled_at: SystemTime,
+    },
+    Rejected {
+        height: NonZeroU64,
+        reason: TransactionRejectionReason,
+    },
+}
+impl CanonicalTransactionOutcome {
+    fn into_pipeline_status_entry(self) -> PipelineStatusEntry {
+        match self {
+            Self::Applied { height, .. } => {
+                PipelineStatusEntry::fresh(PipelineStatusKind::Applied, Some(height), None)
+            }
+            Self::Rejected { height, reason } => PipelineStatusEntry::fresh(
+                PipelineStatusKind::Rejected,
+                Some(height),
+                Some(pipeline_rejection_summary(&reason)),
+            ),
+        }
+    }
+}
+fn canonical_transaction_outcome(
+    state: &CoreState,
+    kura: &Kura,
     hash: &HashOf<SignedTransaction>,
-) -> Result<Option<PipelineStatusEntry>, Error> {
+) -> Result<Option<CanonicalTransactionOutcome>, Error> {
     let entrypoint_hash = iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone());
-    let Some(height) = app.state.committed_entrypoint_height(&entrypoint_hash) else {
+    let state_view = state.view();
+    let Some(height) = state_view.transactions.get(&entrypoint_hash) else {
         return Ok(None);
     };
     let height_u64 = u64::try_from(height.get())
         .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
     let height_nz = NonZeroU64::new(height_u64)
         .ok_or_else(|| pipeline_status_projection_error("committed height is zero"))?;
-    let block = app.kura.get_block(height).ok_or_else(|| {
+    let expected_hash = state_view
+        .block_hashes()
+        .get(height.get().saturating_sub(1))
+        .copied()
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "transaction {hash} is indexed beyond the committed block-hash journal at height {}",
+                height.get()
+            ))
+        })?;
+    let block = kura.get_block(height).ok_or_else(|| {
         pipeline_status_projection_error(format!("canonical block {} is unavailable", height.get()))
     })?;
     let block_ref = block.as_ref();
+    if block_ref.header().height() != height_nz {
+        return Err(pipeline_status_projection_error(format!(
+            "Kura returned block height {} for indexed height {}",
+            block_ref.header().height(),
+            height.get()
+        )));
+    }
+    if block_ref.hash() != expected_hash {
+        return Err(pipeline_status_projection_error(format!(
+            "Kura block hash at height {} does not match the committed State journal",
+            height.get()
+        )));
+    }
+    let settled_at = UNIX_EPOCH
+        .checked_add(block_ref.header().creation_time())
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "block {} creation time exceeds SystemTime",
+                height.get()
+            ))
+        })?;
+    let mut direct_result = None;
     for (index, entrypoint, result) in block_ref.entrypoint_results() {
         if index >= block_ref.external_entrypoint_count() {
             break;
@@ -1282,18 +1341,24 @@ fn pipeline_status_from_state(
         if !transaction_entrypoint_matches_indexed_identity(&entrypoint, &entrypoint_hash) {
             continue;
         }
-        let (kind, rejection) = match &result.0 {
-            Ok(_) => (PipelineStatusKind::Applied, None),
-            Err(reason) => (
-                PipelineStatusKind::Rejected,
-                Some(pipeline_rejection_summary(reason)),
-            ),
-        };
-        return Ok(Some(PipelineStatusEntry::fresh(
-            kind,
-            Some(height_nz),
-            rejection,
-        )));
+        if direct_result.replace(result).is_some() {
+            return Err(pipeline_status_projection_error(format!(
+                "transaction {hash} occurs more than once in canonical block {}",
+                height.get()
+            )));
+        }
+    }
+    if let Some(result) = direct_result {
+        return Ok(Some(match &result.0 {
+            Ok(_) => CanonicalTransactionOutcome::Applied {
+                height: height_nz,
+                settled_at,
+            },
+            Err(reason) => CanonicalTransactionOutcome::Rejected {
+                height: height_nz,
+                reason: reason.clone(),
+            },
+        }));
     }
     let reference = block_ref
         .execution_context()
@@ -1304,8 +1369,7 @@ fn pipeline_status_from_state(
                 height.get()
             ))
         })?;
-    let entry = app
-        .kura
+    let entry = kura
         .get_merge_entry_by_carrier_height(height)
         .map_err(pipeline_status_projection_error)?
         .ok_or_else(|| {
@@ -1315,40 +1379,46 @@ fn pipeline_status_from_state(
             ))
         })?;
     let transactions = certified_merge_pipeline_transactions(block_ref.hash(), reference, &entry)?;
-    let transaction = transactions
-        .iter()
-        .find(|(_, _, transaction)| {
-            transaction_entrypoint_matches_indexed_identity(
-                transaction.entrypoint(),
-                &entrypoint_hash,
-            )
-        })
-        .map(|(_, _, transaction)| transaction)
-        .ok_or_else(|| {
+    let mut matches = transactions.iter().filter(|(_, _, transaction)| {
+        transaction_entrypoint_matches_indexed_identity(transaction.entrypoint(), &entrypoint_hash)
+    });
+    let transaction = matches.next().map(|(_, _, transaction)| transaction).ok_or_else(|| {
             pipeline_status_projection_error(format!(
                 "transaction {hash} is indexed at merge carrier {} but its authenticated transcript does not contain it",
                 height.get()
             ))
         })?;
-    let (kind, rejection) = match &transaction.result().0 {
-        Ok(_) => (PipelineStatusKind::Applied, None),
-        Err(reason) => (
-            PipelineStatusKind::Rejected,
-            Some(pipeline_rejection_summary(reason)),
-        ),
-    };
-    Ok(Some(PipelineStatusEntry::fresh(
-        kind,
-        Some(height_nz),
-        rejection,
-    )))
+    if matches.next().is_some() {
+        return Err(pipeline_status_projection_error(format!(
+            "transaction {hash} occurs more than once in merge carrier {}",
+            height.get()
+        )));
+    }
+    Ok(Some(match &transaction.result().0 {
+        Ok(_) => CanonicalTransactionOutcome::Applied {
+            height: height_nz,
+            settled_at,
+        },
+        Err(reason) => CanonicalTransactionOutcome::Rejected {
+            height: height_nz,
+            reason: reason.clone(),
+        },
+    }))
+}
+fn pipeline_status_from_state(
+    state: &CoreState,
+    kura: &Kura,
+    hash: &HashOf<SignedTransaction>,
+) -> Result<Option<PipelineStatusEntry>, Error> {
+    canonical_transaction_outcome(state, kura, hash)
+        .map(|outcome| outcome.map(CanonicalTransactionOutcome::into_pipeline_status_entry))
 }
 fn pipeline_status_terminal_or_state_entry(
     app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
 ) -> Result<Option<(PipelineStatusEntry, &'static str)>, Error> {
     app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
-    if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash)? {
+    if let Some(entry) = pipeline_status_from_state(&app.state, &app.kura, hash)? {
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
         return Ok(Some((entry, "state")));
@@ -1851,10 +1921,7 @@ async fn handler_trigger_completions(
             code: "trigger_completion_worker_failed",
             message: error.to_string(),
         })?;
-    Ok(crate::utils::respond_with_format(
-        result?,
-        format,
-    ))
+    Ok(crate::utils::respond_with_format(result?, format))
 }
 async fn handler_policy(
     State(app): State<SharedAppState>,

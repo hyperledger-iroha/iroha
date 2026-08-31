@@ -39,7 +39,7 @@ fn ensure_quota_config() {
 async fn attachments_list_filters_and_count() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     ensure_quota_config();
-    iroha_torii::zk_attachments::init_persistence();
+    iroha_torii::zk_attachments::init_persistence().expect("attachment persistence preflight");
     let tenant = iroha_torii::zk_attachments::AttachmentTenant::anonymous();
     let app = Router::new()
         .route(

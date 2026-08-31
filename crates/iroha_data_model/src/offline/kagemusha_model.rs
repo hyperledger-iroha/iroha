@@ -369,12 +369,15 @@ mod model {
         /// Last height governed by the current frozen epoch snapshot.
         pub epoch_end_height: u64,
         /// Complete next-epoch transition on an epoch-boundary height.
+        #[norito(required)]
         pub next_epoch_snapshot: Option<FinalizedNextEpochSnapshot>,
         /// Consensus mode governing the frozen roster.
         pub mode: ConsensusMode,
         /// Parent Commit certificate, absent at genesis or an audited snapshot boundary.
+        #[norito(required)]
         pub parent_commit_qc: Option<QuorumCertificate>,
         /// Audited snapshot anchor when no parent `CommitQC` exists.
+        #[norito(required)]
         pub snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
         /// Frozen Nexus/AMX context commitment.
         pub nexus_amx_context_hash: Hash,
@@ -1613,6 +1616,7 @@ mod model {
         /// Transition-bound conflict claims.
         pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
         /// Binding-only semantic transition under the sole ABI-21 wire layout.
+        #[norito(required)]
         pub transition: Option<KagemushaRecursiveSpendTransitionV4>,
         /// Authenticated V4 proving-artifact release.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
@@ -1757,6 +1761,7 @@ mod model {
         /// Recipient-owned output note.
         pub recipient_output: KagemushaSpendableNoteDescriptorV2,
         /// Sender-owned remainder, if any.
+        #[norito(required)]
         pub change_output: Option<KagemushaSpendableNoteDescriptorV2>,
         /// Digest of the receiver's nonce-bound payment request.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1795,8 +1800,10 @@ mod model {
         /// Exact credited amount at the authoritative scale.
         pub public_amount: KagemushaScaledAmountV2,
         /// Proof-bound change descriptor.
+        #[norito(required)]
         pub change_output: Option<KagemushaSpendableNoteDescriptorV2>,
         /// Authenticated V4 output release, present exactly with change.
+        #[norito(required)]
         pub change_artifact_binding: Option<KagemushaRecursiveSpendArtifactBindingV4>,
         /// Canonical unshield-v3 public words.
         pub unshield_public_inputs: KagemushaUnshieldPublicInputsBindingV2,
@@ -1877,10 +1884,13 @@ mod model {
         /// Complete offline-verifiable provenance for the recipient branch.
         pub recipient_topup_provenance: KagemushaRecursiveSpendTopUpProvenanceV4,
         /// Sender-owned remainder, present only for a partial transfer.
+        #[norito(required)]
         pub change_bundle: Option<KagemushaRecursiveSpendBundleV4>,
         /// Proof-bound membership state for sender change.
+        #[norito(required)]
         pub change_membership_witness: Option<KagemushaNoteMembershipWitnessV2>,
         /// Complete provenance for sender change, present exactly with change.
+        #[norito(required)]
         pub change_topup_provenance: Option<KagemushaRecursiveSpendTopUpProvenanceV4>,
     }
     /// Recipient-only ABI-21 peer payload emitted from a local split result.
@@ -1990,8 +2000,10 @@ mod model {
         /// Active V4 recursive circuit id.
         pub verifier_circuit_id: String,
         /// Inclusive verifier activation height.
+        #[norito(required)]
         pub verifier_activation_height: Option<u64>,
         /// Exclusive verifier withdrawal height.
+        #[norito(required)]
         pub verifier_withdraw_height: Option<u64>,
         /// Height used for activation-window verification.
         pub verified_at_block_height: u64,
@@ -2049,6 +2061,7 @@ mod model {
         /// Canonical public V4 redemption intent.
         pub redemption: KagemushaRecursiveSpendRedemptionIntentV4,
         /// All-or-none proof-bound V4 change child.
+        #[norito(required)]
         pub offline_change: Option<KagemushaRecursiveSpendRedeemChangeBranchV4>,
         /// Signed proof-evaluation snapshot, bounded by the eventual execution height.
         pub block_height: u64,
@@ -2067,10 +2080,13 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub authorization_digest: [u8; 32],
         /// Independently spendable proof-bound change.
+        #[norito(required)]
         pub offline_change_bundle: Option<KagemushaRecursiveSpendBundleV4>,
         /// Membership state for proof-bound change.
+        #[norito(required)]
         pub offline_change_membership_witness: Option<KagemushaNoteMembershipWitnessV2>,
         /// Complete inherited origin provenance for proof-bound change.
+        #[norito(required)]
         pub offline_change_topup_provenance: Option<KagemushaRecursiveSpendTopUpProvenanceV4>,
         /// Stable operation identifier.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -2095,6 +2111,7 @@ mod model {
         /// Canonical public V4 redemption intent.
         pub redemption: KagemushaRecursiveSpendRedemptionIntentV4,
         /// All-or-none proof-bound V4 change child.
+        #[norito(required)]
         pub offline_change: Option<KagemushaRecursiveSpendRedeemChangeBranchV4>,
         /// Signed proof-evaluation snapshot; chain execution also checks the current window.
         pub block_height: u64,
@@ -2114,10 +2131,13 @@ mod model {
         /// Canonical `KagemushaRecursiveSpendRedeemRequestV4` archive.
         pub redeem_request_archive: Vec<u8>,
         /// Proof-bound offline change branch.
+        #[norito(required)]
         pub offline_change_bundle: Option<KagemushaRecursiveSpendBundleV4>,
         /// Membership state for proof-bound change.
+        #[norito(required)]
         pub offline_change_membership_witness: Option<KagemushaNoteMembershipWitnessV2>,
         /// Complete inherited origin provenance for proof-bound change.
+        #[norito(required)]
         pub offline_change_topup_provenance: Option<KagemushaRecursiveSpendTopUpProvenanceV4>,
         /// Stable operation identifier.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]

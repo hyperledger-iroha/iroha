@@ -13173,6 +13173,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(acceptedRedeem, try reference(.redeem))
         let operationStatus = try await client.getKagemushaOperationStatus(
             operationId: operationId,
+            expectedKind: .topUp,
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         )
         XCTAssertEqual(
@@ -13209,6 +13210,7 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("missing operation status must return typed HTTP failure")
@@ -13444,6 +13446,7 @@ final class ToriiClientTests: XCTestCase {
         await assertToriiInvalidPayload(contains: "declares more than") {
             _ = try await self.makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
         }
@@ -13459,6 +13462,7 @@ final class ToriiClientTests: XCTestCase {
         await assertToriiInvalidPayload(contains: "response exceeded") {
             _ = try await self.makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
         }
@@ -13474,6 +13478,7 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("exact-limit non-Norito bytes must reach the codec")
@@ -13495,6 +13500,7 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("oversized 404 must fail before absence classification")
@@ -13665,7 +13671,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineStatusRejectsWrongResourceIdentityAndMediaType() async throws {
+    func testOfflineStatusRejectsWrongResourceIdentityKindAndMediaType() async throws {
         let operationId = String(repeating: "11", count: 32)
         let otherOperationId = String(repeating: "33", count: 32)
         let pendingStatus = try XCTUnwrap(Data(hexString:
@@ -13684,11 +13690,23 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: otherOperationId,
+                expectedKind: .topUp,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("expected operation identity mismatch to fail")
         } catch {
-            XCTAssertTrue(String(describing: error).contains("operation_id does not match"))
+            XCTAssertTrue(String(describing: error).contains("identity or kind"))
+        }
+
+        do {
+            _ = try await makeClient().getKagemushaOperationStatus(
+                operationId: operationId,
+                expectedKind: .redeem,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
+            XCTFail("expected operation kind mismatch to fail")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("identity or kind"))
         }
 
         for headers in [
@@ -13707,6 +13725,7 @@ final class ToriiClientTests: XCTestCase {
             do {
                 _ = try await makeClient().getKagemushaOperationStatus(
                     operationId: operationId,
+                    expectedKind: .topUp,
                     chainDiscriminant: SccpV1.tairaI105DiscriminantV1
                 )
                 XCTFail("expected invalid operation media type to fail")
@@ -22000,6 +22019,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = self.bodyJSON(from: request)
+            XCTAssertEqual(body["proposal_operator"] as? String, self.authority)
             XCTAssertEqual(body["contract_alias"] as? String, "demo::universal")
             XCTAssertEqual(body["code_hash"] as? String, codeHash.hexLowercased())
             XCTAssertEqual(body["abi_hash"] as? String, abiHash.hexLowercased())
@@ -22019,7 +22039,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, payload)
         }
 
-        let request = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
+        let request = ToriiGovernanceDeployContractProposalRequest(proposalOperator: authority,
+                                                                   contractAlias: "demo::universal",
                                                                    codeHash: codeHash,
                                                                    abiHash: abiHash,
                                                                    manifestProvenance: .init(
@@ -22042,8 +22063,47 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
+    func testGovernanceDeployContractProposalRejectsMismatchedOperatorBeforeTransport() throws {
+        let expectation = expectation(description: "operator mismatch")
+        var transportCalled = false
+        StubURLProtocol.handler = { request in
+            transportCalled = true
+            throw NSError(
+                domain: "unexpected governance transport",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: request.url?.absoluteString ?? ""]
+            )
+        }
+        let otherOperator = try Keypair(privateKeyBytes: Data(repeating: 0x42, count: 32))
+            .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
+        let request = ToriiGovernanceDeployContractProposalRequest(
+            proposalOperator: otherOperator,
+            contractAlias: "demo::universal",
+            codeHash: Data(repeating: 0x44, count: 32),
+            abiHash: Data(repeating: 0x55, count: 32)
+        )
+
+        makeClient().submitGovernanceDeployContractProposal(
+            request,
+            canonicalAuth: canonicalReadAuth
+        ) { result in
+            guard case .failure(let error) = result,
+                  let clientError = error as? ToriiClientError,
+                  case .invalidPayload(let message) = clientError else {
+                XCTFail("expected operator mismatch, got \(result)")
+                expectation.fulfill()
+                return
+            }
+            XCTAssertTrue(message.contains("proposal_operator must equal"))
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+        XCTAssertFalse(transportCalled)
+    }
+
     func testGovernanceDeployContractProposalRejectsAmbiguousTarget() throws {
         let request = ToriiGovernanceDeployContractProposalRequest(
+            proposalOperator: authority,
             contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             contractAlias: "demo::universal",
             codeHash: Data(repeating: 0x44, count: 32),
@@ -22060,6 +22120,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testGovernanceDeployContractProposalRejectsNonV1AbiVersion() {
         for abiVersion: UInt16 in [0, 2, .max] {
             let request = ToriiGovernanceDeployContractProposalRequest(
+                proposalOperator: authority,
                 contractAlias: "demo::universal",
                 codeHash: Data(repeating: 0x44, count: 32),
                 abiHash: Data(repeating: 0x55, count: 32),
@@ -22077,6 +22138,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testGovernanceDeployContractProposalRejectsWrongHashLengths() {
         for length in [0, 31, 33] {
             let request = ToriiGovernanceDeployContractProposalRequest(
+                proposalOperator: authority,
                 contractAlias: "demo::universal",
                 codeHash: Data(repeating: 0x44, count: length),
                 abiHash: Data(repeating: 0x55, count: 32)
@@ -22133,7 +22195,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let payload = """
-            {"found":true,"proposal":{"proposer":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","kind":{"kind":"DeployContract","payload":{"contract_address":"\(contractAddress)","code_hash":"\(codeHash.hexLowercased())","abi_hash":"\(abiHash.hexLowercased())","abi_version":1,"manifest_provenance":{"signer":"ed25519:public","signature":"ed25519:signature"}}},"created_height":42,"status":"Enacted"}}
+            {"found":true,"proposal":{"proposer":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","kind":{"kind":"DeployContract","payload":{"proposal_operator":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","contract_address":"\(contractAddress)","code_hash":"\(codeHash.hexLowercased())","abi_hash":"\(abiHash.hexLowercased())","abi_version":1,"manifest_provenance":{"signer":"ed25519:public","signature":"ed25519:signature"}}},"created_height":42,"status":"Enacted"}}
             """.data(using: .utf8)!
             return (response, payload)
         }
@@ -22147,6 +22209,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                     return XCTFail("expected deploy contract kind")
                 }
                 XCTAssertEqual(payload.contractAddress, contractAddress)
+                XCTAssertEqual(payload.proposalOperator, response.proposal?.proposer)
                 XCTAssertEqual(payload.codeHash, codeHash)
                 XCTAssertEqual(payload.abiHash, abiHash)
                 XCTAssertEqual(payload.abiVersion, 1)

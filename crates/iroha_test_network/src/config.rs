@@ -23,7 +23,6 @@ use iroha_data_model::{
     account::{Account, AccountId},
     asset::{AssetDefinitionId, definition::AssetDefinition, id::AssetId},
     block::consensus_v2::ConsensusMode as WireConsensusMode,
-    consensus::HsmBinding,
     da::commitment::DaProofPolicyBundle,
     domain::{Domain, DomainId},
     hijiri::HijiriParametersV1,
@@ -840,21 +839,14 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
                 (entry.peer.public_key().clone(), pop)
             })
             .collect();
-        // Expand the topology into HSM-bound peer registrations here instead of
+        // Expand the topology into proof-bearing peer registrations here instead of
         // `GenesisBuilder::set_topology`, which emits plain registrations.
         builder = builder.next_transaction();
         for peer_id in &topology_vec {
             let pop_bytes = pop_map
                 .remove(peer_id.public_key())
                 .unwrap_or_else(|| panic!("missing BLS PoP for peer {}", peer_id.public_key()));
-            // Bind consensus keys to a softkey provider so genesis passes the HSM policy gate.
-            let hsm_binding = HsmBinding {
-                provider: "softkey".to_owned(),
-                key_label: peer_id.public_key().to_string(),
-                slot: None,
-            };
-            let register =
-                RegisterPeerWithPop::new(peer_id.clone(), pop_bytes).with_hsm(hsm_binding);
+            let register = RegisterPeerWithPop::new(peer_id.clone(), pop_bytes);
             let instruction = InstructionBox::from(register);
             builder = builder.append_instruction(instruction);
         }
@@ -1365,9 +1357,7 @@ mod tests {
     use super::*;
     use iroha_core::state::StateReadOnly;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        asset::AssetDefinition, domain::Domain, parameter::system::SumeragiParameters,
-    };
+    use iroha_data_model::{asset::AssetDefinition, domain::Domain};
     use norito::codec::Decode;
     #[test]
     fn base_config_enables_confidential_verification() {
@@ -1693,10 +1683,6 @@ mod tests {
     #[test]
     fn populate_genesis_results_executes_without_fallback() {
         init_instruction_registry();
-        assert!(
-            !SumeragiParameters::default().key_require_hsm,
-            "defaults no longer require HSM bindings; test peers rely on softkey bindings only when enabled explicitly"
-        );
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
         let topology = [peer_id.clone()]
@@ -1724,7 +1710,7 @@ mod tests {
         .expect("genesis pre-execution should succeed");
         assert!(
             executed.results().all(|result| result.as_ref().is_ok()),
-            "pre-executed genesis should not carry errors when HSM bindings are optional"
+            "pre-executed genesis should not carry errors for valid proof-bearing peers"
         );
     }
     #[test]
@@ -2088,7 +2074,6 @@ mod tests {
         );
         let block = genesis(Vec::new(), topology, vec![entry]);
         let mut register_pop = 0;
-        let mut hsm_bound = 0;
         for tx in block.0.external_transactions() {
             match tx.instructions() {
                 Executable::Instructions(isi) => {
@@ -2097,9 +2082,6 @@ mod tests {
                             instr.as_any().downcast_ref::<RegisterBox>()
                         {
                             register_pop += 1;
-                            if isi.hsm.is_some() {
-                                hsm_bound += 1;
-                            }
                         }
                     }
                 }
@@ -2112,10 +2094,6 @@ mod tests {
         assert_eq!(
             register_pop, 1,
             "exactly one RegisterPeerWithPop instruction expected"
-        );
-        assert_eq!(
-            hsm_bound, register_pop,
-            "consensus peers in genesis must carry softkey HSM bindings"
         );
     }
     #[test]

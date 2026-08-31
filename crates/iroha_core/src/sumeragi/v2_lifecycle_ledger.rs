@@ -69,7 +69,7 @@ use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode, DecodeAll, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
 };
@@ -2507,9 +2507,56 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
         Ok(token)
     }
 }
+/// One consuming payload-store target for CompleteTip predecessor authentication.
+pub(in crate::sumeragi) enum CompleteTipPayloadStoreOpenTargetV1<'a> {
+    /// Materialize the exact context directory from the live Kura owner.
+    Kura {
+        /// Live Kura instance that authenticated CompleteTip.
+        kura: &'a crate::kura::Kura,
+        /// Recovery-minted ownership of the exact predecessor payload directory.
+        authority: crate::kura::KuraV2CertifiedServePayloadDirectoryAuthority,
+    },
+    /// Raw-root fixture retained only for closed lifecycle tests.
+    #[cfg(test)]
+    FixtureRoot,
+}
+impl CompleteTipPayloadStoreOpenTargetV1<'_> {
+    fn authorizes(
+        &self,
+        complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+    ) -> bool {
+        match self {
+            Self::Kura { kura, .. } => complete_tip.authorizes_predecessor_kura(kura),
+            #[cfg(test)]
+            Self::FixtureRoot => true,
+        }
+    }
+
+    fn open(
+        self,
+        _predecessor_root: &Path,
+        context: &wire::HeightContext,
+    ) -> Result<
+        (
+            CertifiedServePayloadStoreV1,
+            crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadRecoveryCut,
+        ),
+        CertifiedServePayloadStoreError,
+    > {
+        match self {
+            Self::Kura { kura, authority } => {
+                CertifiedServePayloadStoreV1::open_with_kura_authority(kura, authority, context)
+            }
+            #[cfg(test)]
+            Self::FixtureRoot => CertifiedServePayloadStoreV1::open(_predecessor_root, context),
+        }
+    }
+}
+
 /// Consume CompleteTip while opening and authenticating every predecessor disk owner.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(
+    payload_store_target: CompleteTipPayloadStoreOpenTargetV1<'_>,
     predecessor_root: &Path,
     successor_root: &Path,
     successor_context: LifecycleContext,
@@ -2519,20 +2566,26 @@ pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(
     local_signer: &KeyPair,
     complete_tip: crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
 ) -> Result<AuthenticatedCompleteTipPredecessorStorageV1, CompleteTipPredecessorStorageErrorV1> {
-    if !complete_tip.authorizes_predecessor_storage_inputs(
-        predecessor_root,
-        successor_root,
-        successor_context,
-        body_store_root,
-        &verified_predecessor,
-        &signature_policy,
-    ) {
+    if !payload_store_target.authorizes(&complete_tip)
+        || !complete_tip.authorizes_predecessor_storage_inputs(
+            predecessor_root,
+            successor_root,
+            successor_context,
+            body_store_root,
+            &verified_predecessor,
+            &signature_policy,
+        )
+    {
         return Err(LifecycleLedgerError::InvalidLedger(
             "CompleteTip predecessor storage inputs changed after Kura authentication".to_owned(),
         )
         .into());
     }
     let context = projection::lifecycle_context(verified_predecessor.context());
+    let (payload_store, recovered) =
+        payload_store_target.open(predecessor_root, verified_predecessor.context())?;
+    let serve_payloads =
+        recovered.authenticate_for_complete_tip_retirement(&verified_predecessor, local_signer)?;
     let (ledger_store, opened_ledger) = LifecycleLedgerStoreV1::open(predecessor_root, context)?;
     let present_frame = ledger_store.authenticate_present_frame(&opened_ledger)?;
     let (ledger, repaired_live_apply, predecessor_evidence) =
@@ -2551,10 +2604,6 @@ pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(
         complete_tip,
         predecessor_evidence,
     )?;
-    let (payload_store, recovered) =
-        CertifiedServePayloadStoreV1::open(predecessor_root, verified_predecessor.context())?;
-    let serve_payloads =
-        recovered.authenticate_for_complete_tip_retirement(&verified_predecessor, local_signer)?;
     let retained_serve_payloads =
         super::open::authenticate_complete_tip_serve_census(&terminal.ledger, &serve_payloads)?;
     let cut = AuthenticatedCompleteTipPredecessorStorageV1 {

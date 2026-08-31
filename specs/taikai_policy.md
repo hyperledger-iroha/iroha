@@ -25,8 +25,8 @@ remains the canonical reference for the shipped policy/crypto behaviour.
    `crates/sorafs_manifest/src/gateway.rs` with licensing, moderation, and
    metrics directives so governance can express per-event constraints without
    bespoke configuration.
-2. **Content Encryption Key (CEK) rotation backed by KMS** — Tie the Norito
-   streaming hierarchy (GCK → CEK) to managed keys, rotation policies, and
+2. **Content Encryption Key (CEK) rotation through qualified key custody** — Tie the Norito
+   streaming hierarchy (GCK → CEK) to deployment-selected keys, rotation policies, and
    observability so relays can prove that encryption state tracks governance
    policy.
 3. **Replication Proof Token (RPT) attestation workflow** — Produce a canonical
@@ -82,7 +82,7 @@ refuse the request and emit `SorafsGarPolicyDetail::GatewayComplianceDenied`.
 3. **Default:** Remove v1-only fixtures; reject records lacking licensing data.
    Target date: Q1 2027 per SN13-E.
 
-## CEK Rotation & Managed KMS
+## CEK Rotation & Qualified Key Custody
 
 Norito streaming (§12 of `norito_streaming.md`) defines the cryptographic
 hierarchy: viewers receive Group Content Keys (GCKs) via `ContentKeyUpdate`
@@ -93,19 +93,21 @@ controls around that flow.
 
 | Layer | Material | Storage | Rotation trigger |
 |-------|----------|---------|------------------|
-| Root KMS key | `taikai/<event>/root` (Ed25519 + HKDF salt) | CloudHSM / NitroKMS / SoftHSM (test) | Annual, or on compromise. |
-| GCK wrap key | `taikai/<event>/<stream>/gck_wrap` | KMS symmetric key (AES-256-GCM) | Every 15 minutes of media or membership change. |
+| Root custody key | `taikai/<event>/root` (Ed25519 + HKDF salt) | Qualified deployment-selected provider | Annual, or on compromise. |
+| GCK wrap key | `taikai/<event>/<stream>/gck_wrap` | Qualified AES-256-GCM key-wrapper provider | Every 15 minutes of media or membership change. |
 | CEK | Derived via `HKDF-Expand(GCK, rend_id || segment_seq)` | Memory only | Every segment. |
 
 The ingest pipeline records the active key IDs inside
 `TaikaiSegmentEnvelopeV1::metadata` so data availability proofs can assert the
-exact KMS lineage without revealing secrets.
+exact custody-provider lineage without revealing secrets.
 
 ### Automation & CLI
 
 - New command: `iroha app taikai cek-rotate --event-id <event> --stream-id <stream> \
   --effective-segment <seq> --kms-profile <profile>` which:
-  1. Requests a fresh GCK wrap key from the configured KMS profile.
+  1. Requests a fresh GCK wrap key from the configured provider profile. The
+     stable `--kms-profile` flag name is compatibility vocabulary, not a hardware
+     or managed-KMS requirement.
   2. Emits a Norito `CekRotationReceiptV1` containing the old/new key labels
      and a non-zero HKDF salt.
   3. Stores the receipt under
@@ -118,7 +120,7 @@ exact KMS lineage without revealing secrets.
 
 ### Observability & alerts
 
-- Grafana board `taikai_encryption_health.json` plots rotation cadence, KMS
+- Grafana board `taikai_encryption_health.json` plots rotation cadence, provider
   latency, and CEK derivation errors.
 - Alert rule: if no rotation occurs for >20 minutes during an active broadcast
   raise `taikai_cek_rotation_stalled`.

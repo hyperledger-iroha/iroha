@@ -685,7 +685,7 @@ pub struct ModerationOrchestratorConfigV1 {
     pub checkpoint_max_bytes: u64,
     /// Maximum canonical notification archive artifact bytes.
     pub panel_notification_archive_max_bytes: u64,
-    /// Governed identity of the injected HSM transaction signer.
+    /// Governed identity of the injected transaction signer.
     pub transaction_signer_handle: String,
     /// Independently governed signer adapter and public-policy qualification.
     pub expected_transaction_signer_qualification: ModerationRuntimeProviderQualificationV1,
@@ -872,7 +872,7 @@ impl ModerationOrchestratorConfigV1 {
         Ok(())
     }
 }
-/// Canonical request forwarded to the runtime-only HSM transaction service.
+/// Canonical request forwarded to the runtime-only transaction-signing service.
 #[derive(Debug, Clone)]
 pub struct ModerationTransactionRequestV1 {
     /// Exact genesis-derived network identity signed into the transaction.
@@ -1060,7 +1060,7 @@ pub struct ModerationTransactionReceiptV1 {
     /// Finalized height observed by the submitter while admitting the request.
     pub observed_finalized_height: u64,
 }
-/// Fixed failure classes; arbitrary HSM/provider diagnostics are never persisted.
+/// Fixed failure classes; arbitrary signing-provider diagnostics are never persisted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationSubmissionFailureV1 {
     /// The submitter did not submit and may be retried safely.
@@ -1106,7 +1106,7 @@ pub enum ModerationSubmissionLookupV1 {
     /// Backend state is inconclusive; retrying would be unsafe.
     Unknown,
 }
-/// Runtime-only HSM and strict transaction-ingress interface.
+/// Runtime-only signing and strict transaction-ingress interface.
 pub trait ModerationTransactionSubmitterV1: Send + Sync {
     /// Return the exact external signer provider qualified by this submitter.
     fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1;
@@ -1932,7 +1932,7 @@ pub enum ModerationPanelNotificationFinalizeOutcomeV1 {
 pub struct ModerationOrchestratorDepsV1 {
     /// Deployment-owned sealed, predecessor-bound monotonic checkpoint authority.
     pub checkpoint_store: Arc<dyn ModerationCheckpointStoreV1>,
-    /// HSM transaction submitter.
+    /// Qualified runtime transaction submitter.
     pub submitter: Arc<dyn ModerationTransactionSubmitterV1>,
     /// Finalized ledger snapshot reader.
     pub snapshot_reader: Arc<dyn ModerationFinalizedSnapshotReaderV1>,
@@ -2984,7 +2984,7 @@ impl ModerationOrchestratorV1 {
                 }
             }
         };
-        // All HSM, ingress, lookup, and terminal-sink calls happen after the
+        // All signing-provider, ingress, lookup, and terminal-sink calls happen after the
         // snapshot/action mutation lock has been released.
         self.drive_external_work()?;
         let state = self.lock_state()?;
@@ -3602,9 +3602,11 @@ impl ModerationOrchestratorV1 {
     /// Prepare an exact current-checkpoint authorization statement for one
     /// unresolved durable dead letter.
     ///
-    /// The returned statement is unsigned. An independently administered HSM holding the configured
-    /// checkpoint-attestor key must sign [`ModerationDeadLetterResolutionV1::signing_message`]
-    /// before [`Self::apply_dead_letter_resolution`] accepts it.
+    /// The returned statement is unsigned. An independently administered qualified provider holding
+    /// the configured checkpoint-attestor key must sign
+    /// [`ModerationDeadLetterResolutionV1::signing_message`] before
+    /// [`Self::apply_dead_letter_resolution`] accepts it. The provider may be software, remote, or
+    /// hardware backed, but its private material must remain outside persisted state.
     ///
     /// # Errors
     ///

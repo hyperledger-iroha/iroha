@@ -1217,6 +1217,7 @@ mod tests {
 
     fn proposal() -> ProposalKind {
         ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: account(0x10),
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse::<ContractAddress>()
                 .expect("parse Parliament instruction fixture contract address"),

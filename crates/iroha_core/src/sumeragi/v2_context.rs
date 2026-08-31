@@ -1495,7 +1495,6 @@ mod tests {
                     ),
                     activation_height: if index == 1 { SUCCESSOR_HEIGHT } else { 0 },
                     expiry_height: (expire_first && index == 0).then_some(SUCCESSOR_HEIGHT),
-                    hsm: None,
                     replaces: None,
                     status: if index == 1 {
                         ConsensusKeyStatus::Pending

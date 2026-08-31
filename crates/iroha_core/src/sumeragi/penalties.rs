@@ -125,13 +125,9 @@ impl<'a> PenaltyApplier<'a> {
             if record.penalty_applied || record.penalty_cancelled {
                 continue;
             }
-            if record
-                .consensus_admitted_at_height
-                .is_none_or(|height| height >= current_height)
-            {
-                // Node-local observations and evidence admitted by the block
-                // currently under construction can never drive deterministic
-                // penalty attachments.
+            if record.recorded_at_height >= current_height {
+                // Evidence admitted by the block currently under construction
+                // can never drive its own deterministic penalty attachment.
                 continue;
             }
             if !consensus_penalty_is_due(record.recorded_at_height, slashing_delay, current_height)
@@ -147,25 +143,17 @@ impl<'a> PenaltyApplier<'a> {
         let validator_map = self.build_validator_locator_map();
         let mut actions = Vec::new();
         for (key, record) in pending {
-            let Some(context) = height_context_for_evidence(
-                self.state,
-                &record.evidence,
-                record.recorded_at_height,
-            )?
-            else {
-                continue;
-            };
+            // Admission already validated and anchored this immutable context.
+            // Re-reading mutable local Kura files here would make block
+            // construction depend on node-local I/O after consensus admission.
+            let context = &record.evidence.equivocation.context;
             let roster = context
                 .roster
                 .iter()
                 .map(|validator| validator.validator.clone())
                 .collect::<Vec<_>>();
-            let offenders = offender_indices(&record.evidence, record.recorded_at_height, &context);
-            if offenders.is_empty() {
-                continue;
-            }
+            let offenders = offender_indices(&record.evidence, record.recorded_at_height, context);
             let slash_id = Hash::new(key.clone());
-            let mut slashes = 0_u64;
             for signer in offenders {
                 let Some((peer_id, locator)) =
                     self.locate_validator_in_roster_cached(signer, &roster, &validator_map)
@@ -191,16 +179,16 @@ impl<'a> PenaltyApplier<'a> {
                         amount,
                     },
                 ));
-                slashes = slashes.saturating_add(1);
             }
-            if slashes > 0 {
-                actions.push(NposPenaltyAction::MarkConsensusEvidenceApplied(
-                    NposMarkConsensusEvidenceAppliedAction {
-                        evidence_key: key,
-                        height: current_height,
-                    },
-                ));
-            }
+            // A removed, inactive, or zero-stake offender is still terminal:
+            // retaining an unslashable record forever would exhaust the
+            // bounded committed evidence table and suppress future proofs.
+            actions.push(NposPenaltyAction::MarkConsensusEvidenceApplied(
+                NposMarkConsensusEvidenceAppliedAction {
+                    evidence_key: key,
+                    height: current_height,
+                },
+            ));
         }
         Ok(actions)
     }
@@ -280,15 +268,40 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
             .verify_and_advance_global_beacon_pulse(&session, pulse, expected_anchor)
             .wrap_err("failed to persist finalized global beacon pulse")?;
     }
+    let evidence_horizon = tx
+        .world
+        .sumeragi_npos_parameters()
+        .map(|params| params.evidence_horizon_blocks());
+    let committed_evidence = tx
+        .world
+        .consensus_evidence
+        .iter()
+        .map(|(key, record)| (key.clone(), record.clone()))
+        .collect::<Vec<_>>();
+    for key in super::evidence::v2_committed_evidence_prune_keys(
+        &committed_evidence,
+        current_height,
+        evidence_horizon,
+        effects.v2_evidence_admissions.len(),
+    ) {
+        tx.world.consensus_evidence.remove(key);
+    }
+    if tx
+        .world
+        .consensus_evidence
+        .iter()
+        .count()
+        .saturating_add(effects.v2_evidence_admissions.len())
+        > super::evidence::MAX_V2_COMMITTED_EVIDENCE_RECORDS
+    {
+        return Err(eyre!(
+            "bounded Sumeragi v2 evidence table has no reclaimable capacity"
+        ));
+    }
     for admission in &effects.v2_evidence_admissions {
         let evidence = super::evidence::canonical_v2_evidence(admission);
         let key = super::evidence::v2_evidence_admission_key(admission);
-        if tx
-            .world
-            .consensus_evidence
-            .get(&key)
-            .is_some_and(|record| record.consensus_admitted_at_height.is_some())
-        {
+        if tx.world.consensus_evidence.get(&key).is_some() {
             return Err(eyre::eyre!(
                 "Sumeragi v2 evidence was already admitted by a committed block"
             ));
@@ -304,7 +317,6 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
                 penalty_cancelled: false,
                 penalty_cancelled_at_height: None,
                 penalty_applied_at_height: None,
-                consensus_admitted_at_height: Some(current_height),
             },
         );
     }
@@ -342,45 +354,6 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
         }
     }
     Ok(outcome)
-}
-fn height_context_for_evidence(
-    state: &State,
-    evidence: &Evidence,
-    recorded_at_height: u64,
-) -> Result<Option<HeightContext>> {
-    let height = evidence_context_height(evidence, recorded_at_height);
-    if height == 0 || height > recorded_at_height {
-        return Ok(None);
-    }
-    let artifact = state
-        .kura()
-        .v2_finality_artifact(height)
-        .wrap_err_with(|| {
-            format!("failed to read Sumeragi v2 finality artifact at height {height}")
-        })?;
-    let Some(artifact) = artifact else {
-        return Err(eyre!(
-            "missing canonical Sumeragi v2 finality artifact at evidence height {height}"
-        ));
-    };
-    if &artifact.height_context.network_id != state.network_id_ref() {
-        return Err(eyre!(
-            "Sumeragi v2 finality artifact at evidence height {height} belongs to another chain"
-        ));
-    }
-    if !evidence_matches_height_context(evidence, recorded_at_height, &artifact.height_context) {
-        return Ok(None);
-    }
-    Ok(Some(artifact.height_context))
-}
-fn evidence_matches_height_context(
-    evidence: &Evidence,
-    recorded_at_height: u64,
-    context: &HeightContext,
-) -> bool {
-    evidence_context_height(evidence, recorded_at_height) == context.height
-        && &evidence.equivocation.context == context
-        && super::evidence::validate_v2_equivocation(&evidence.equivocation).is_ok()
 }
 fn canonical_indices(
     indices: impl IntoIterator<Item = ValidatorIndex>,
@@ -733,7 +706,6 @@ mod tests {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
-            consensus_admitted_at_height: Some(recorded_at_height),
         };
         let mut block = state.world.consensus_evidence.block();
         block.insert(key.clone(), record);
@@ -783,53 +755,17 @@ mod tests {
         assert!(!consensus_penalty_is_due(u64::MAX - 1, 2, u64::MAX));
     }
     #[test]
-    fn canonical_artifact_context_is_the_only_roster_authority() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        let context = install_height_one_artifact(&state, &frozen_roster);
-        let mutable_fallback = PeerId::new(checked_keypair().public_key().clone());
-        set_commit_topology(&state, vec![mutable_fallback.clone()]);
-        let evidence = phase_vote_evidence(&context, 1, 99);
-        let resolved = height_context_for_evidence(&state, &evidence, 1)
-            .expect("Kura lookup succeeds")
-            .expect("canonical artifact exists");
-        assert_eq!(resolved, context);
-        assert_eq!(
-            resolved
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<Vec<_>>(),
-            frozen_roster
-        );
-        assert!(
-            resolved
-                .roster
-                .iter()
-                .all(|entry| entry.validator != mutable_fallback)
-        );
-        assert_eq!(offender_indices(&evidence, 1, &resolved), vec![1]);
-    }
-    #[test]
-    fn missing_artifact_fails_closed_without_mutable_topology_fallback() {
+    fn admitted_self_contained_evidence_does_not_require_a_kura_reread() {
         let state = fresh_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        set_commit_topology(&state, frozen_roster.clone());
         let context = height_one_context(
             *state.network_id_ref(),
             &frozen_roster,
             test_block_hash(0x81),
         );
         let evidence = phase_vote_evidence(&context, 1, 0);
-        let error = height_context_for_evidence(&state, &evidence, 1)
-            .expect_err("missing canonical provenance must stop derivation");
-        assert!(
-            error
-                .to_string()
-                .contains("missing canonical Sumeragi v2 finality artifact")
-        );
-        insert_evidence(&state, evidence, 1);
+        let key = insert_evidence(&state, evidence, 1);
         let applier = PenaltyApplier::new(
             &state,
             #[cfg(feature = "telemetry")]
@@ -837,58 +773,15 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         );
-        assert!(
-            applier.derive_npos_consensus_effects(2).is_err(),
-            "a validator missing canonical evidence provenance must not derive a block"
-        );
-    }
-    #[test]
-    fn future_dated_evidence_is_rejected_before_history_lookup() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        let mut context = height_one_context(
-            *state.network_id_ref(),
-            &frozen_roster,
-            test_block_hash(0x82),
-        );
-        context.height = 2;
-        context.epoch_end_height = 2;
-        let evidence = phase_vote_evidence(&context, 0, 0);
-        assert!(
-            height_context_for_evidence(&state, &evidence, 1)
-                .expect("future evidence rejection is deterministic")
-                .is_none()
-        );
-    }
-    #[test]
-    fn artifact_from_another_chain_fails_closed() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        let context = install_height_one_artifact_with_network(
-            &state,
-            &frozen_roster,
-            crate::sumeragi::synthetic_network_id("wrong-genesis"),
-        );
-        let error = height_context_for_evidence(&state, &phase_vote_evidence(&context, 0, 0), 1)
-            .expect_err("cross-chain provenance must never authorize a slash");
-        assert!(error.to_string().contains("belongs to another chain"));
-    }
-    #[test]
-    fn corrupt_finality_artifact_propagates_a_fail_closed_error() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        let context = install_height_one_artifact(&state, &frozen_roster);
-        state
-            .kura()
-            .overwrite_v2_finality_bytes_for_tests(1, b"not a Norito finality artifact")
-            .expect("corrupt test artifact");
-        let error = height_context_for_evidence(&state, &phase_vote_evidence(&context, 0, 0), 1)
-            .expect_err("corrupt canonical provenance must stop derivation");
-        assert!(
-            error
-                .to_string()
-                .contains("failed to read Sumeragi v2 finality artifact at height 1")
-        );
+        let actions = applier
+            .derive_npos_consensus_effects(2)
+            .expect("admitted proof is self-contained")
+            .penalty_actions;
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            NposPenaltyAction::MarkConsensusEvidenceApplied(mark)
+                if mark.evidence_key == key && mark.height == 2
+        )));
     }
     #[test]
     fn signer_indices_are_canonical_and_do_not_rotate_with_view() {
@@ -991,12 +884,12 @@ mod tests {
             "a non-owner compatibility projection must not receive a consensus slash action"
         );
         assert!(
-            !actions.iter().any(|action| matches!(
+            actions.iter().any(|action| matches!(
                 action,
                 NposPenaltyAction::MarkConsensusEvidenceApplied(mark)
                     if mark.evidence_key == key
             )),
-            "unresolved evidence must remain pending instead of being marked applied"
+            "an unslashable offence must still reach a terminal state"
         );
     }
 }

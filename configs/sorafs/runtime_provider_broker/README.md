@@ -2,8 +2,9 @@
 
 These assets supervise an operator-supplied V1 runtime-provider broker. The
 repository supplies the authenticated client/server protocol and the
-credential-free process shell; it does not supply a concrete HSM, KMS,
-WebAuthn, immutable-query, sealed-store, archive, or network backend registry.
+credential-free process shell; it does not supply a concrete signing backend,
+credential store, WebAuthn service, immutable query, sealed store, archive, or
+network backend registry.
 The installed executable must statically link a reviewed deployment-owned
 implementation of RuntimeProviderBrokerBackendRegistryV1.
 
@@ -74,7 +75,7 @@ type renames cannot silently change the operator contract.
 A previously resolved threshold-signer proxy reconnects and retries the whole
 operation exactly once when the broker transport or live threshold-backend
 qualification reports unavailability, so a supervised broker restart or
-transient HSM outage does not permanently strand the validator. Rejected or
+transient signer outage does not permanently strand the validator. Rejected or
 drifted qualification remains a permanent stale-provider failure. The proxy
 never replays protocol errors, binding mismatches, stale observations, provider
 rejections, conflicts, or ambiguous outcomes.

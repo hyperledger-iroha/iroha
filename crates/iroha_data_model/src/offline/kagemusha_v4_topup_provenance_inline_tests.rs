@@ -15,9 +15,14 @@ mod kagemusha_v4_topup_provenance_tests {
         statement: KagemushaRecursiveSpendPublicStatementV4,
         provenance: KagemushaRecursiveSpendTopUpProvenanceV4,
     }
-    fn execution_commitment(seed: u8) -> ExecutionCommitment {
+    fn execution_commitment(
+        seed: u8,
+        operation_id: [u8; 32],
+        anchor_digest: [u8; 32],
+    ) -> ExecutionCommitment {
         let ordinary_writes_root = Hash::new([seed, 3]);
-        let topup_anchor_root = Hash::new([seed, 4]);
+        let topup_anchor_root = kagemusha_topup_anchor_leaf_hash_v2(operation_id, anchor_digest)
+            .expect("test top-up leaf");
         let executed_block_wire = [seed, 5];
         ExecutionCommitment::new_without_merge_carrier(
             Hash::new([seed, 1]),
@@ -72,7 +77,11 @@ mod kagemusha_v4_topup_provenance_tests {
             shield_verifier_commitment: [seed.wrapping_add(6); 32],
             artifact_binding: binding.clone(),
             finalized_height: 42,
-            finalized_tx_hash: [seed.wrapping_add(7); 32],
+            finalized_tx_hash: {
+                let mut bytes = [seed.wrapping_add(7); 32];
+                bytes[Hash::LENGTH - 1] |= 1;
+                bytes
+            },
             anchor_digest: [0; 32],
         }
         .finalize_digest()
@@ -122,7 +131,11 @@ mod kagemusha_v4_topup_provenance_tests {
                 block_hash: HashOf::from_untyped_unchecked(Hash::new([seed, 9])),
                 payload_hash: Hash::new([seed, 10]),
             },
-            execution_commitment: execution_commitment(seed),
+            execution_commitment: execution_commitment(
+                seed,
+                anchor.topup_operation_id,
+                anchor.anchor_digest,
+            ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![seed; 96],
         };
@@ -325,7 +338,26 @@ mod kagemusha_v4_topup_provenance_tests {
         assert!(matches!(
             substituted_proof.validate_terminal_binding(anchor, [0x15; 32], [0x17; 32], 42),
             Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "topup_finality.terminal_binding"
+                field: "topup_finality.anchor_path.inclusion"
+            })
+        ));
+
+        let mut invalid_inclusion = proof.clone();
+        let commitment = &mut invalid_inclusion.commit_qc.certificate.execution_commitment;
+        let wrong_root = Hash::new(b"wrong top-up anchor root");
+        commitment.topup_anchor_root = Some(wrong_root);
+        commitment.post_state_root = ExecutionCommitment::topup_post_state_root(
+            commitment.topup_anchor_count,
+            commitment.ordinary_writes_root,
+            wrong_root,
+        );
+        invalid_inclusion
+            .validate_structure()
+            .expect("wrong Merkle root remains structurally well-formed");
+        assert!(matches!(
+            invalid_inclusion.validate_terminal_binding(anchor, [0x15; 32], [0x17; 32], 42),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.anchor_path.inclusion"
             })
         ));
     }
@@ -339,6 +371,21 @@ mod kagemusha_v4_topup_provenance_tests {
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
             "topup-shield-v2",
         );
+        anchor.anchor_digest = [0; 32];
+        assert!(matches!(
+            anchor.finalize_digest(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_anchor.v4"
+            })
+        ));
+    }
+    #[test]
+    fn topup_anchor_rejects_an_unmarked_finalized_transaction_hash() {
+        let fixture = fixture_with_seeds(&[0x12]);
+        let mut anchor = fixture.provenance.topup_finality_evidence[0]
+            .topup_anchor
+            .clone();
+        anchor.finalized_tx_hash[Hash::LENGTH - 1] &= !1;
         anchor.anchor_digest = [0; 32];
         assert!(matches!(
             anchor.finalize_digest(),

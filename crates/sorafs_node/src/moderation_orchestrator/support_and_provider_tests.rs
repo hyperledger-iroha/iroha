@@ -25,7 +25,6 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
-use iroha_primitives::numeric::Quantity;
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU32,
@@ -1183,7 +1182,7 @@ fn policy(revision: u64) -> ModerationLedgerPolicyV1 {
                     .expect("governance domain"),
                 "xor".parse().expect("governance asset name"),
             ),
-        challenge_bond_amount: Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1),
+        challenge_bond_amount: MODERATION_CHALLENGE_BOND_AMOUNT_V1.into(),
         challenge_escrow_account: account(90),
         challenge_slash_receiver_account: account(91),
         challenge_rejected_slash_bps: MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
@@ -1347,7 +1346,7 @@ fn awaiting_acceptance_snapshot(
     let appeal = ModerationAppealRecordV1 {
         intake,
         intake_digest,
-        policy: active_policy,
+        policy: active_policy.clone(),
         pop_snapshot,
         pop_snapshot_digest,
         status: ModerationAppealStatusV1::AwaitingAcceptance,
@@ -1476,7 +1475,7 @@ fn activated_case_snapshot(
             reveal_deadline_unix_ms: intake.reveal_deadline_unix_ms,
             policy_digest: intake.policy_digest,
         },
-        policy: appeal.policy,
+        policy: appeal.policy.clone(),
         status: ModerationCaseStatusV1::Open,
         opened_at_unix_ms: 31,
         opened_by: governance.clone(),

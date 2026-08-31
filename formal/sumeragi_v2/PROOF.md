@@ -1551,7 +1551,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable regression evidence, not independent
 proof of the promoted obligations.
 
-The current pre-network release inventory names 864 tests across 44 Rust
+The current pre-network release inventory names 867 tests across 44 Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1678,8 +1678,9 @@ retired rows already represented by their stricter replacements, exact-renamed
 four surviving tests, and replaced one retired combined daemon check with its
 two real block/lane checks, yielding the 862-test checkpoint. The eligible-only
 sealed Ready-Proposal-Sign preemption regression yielded the 863-test
-checkpoint; retaining the exact failed-pre-handshake dial backoff owner yields
-the current 864-test,
+checkpoint; retaining the exact failed-pre-handshake dial backoff owner yielded
+the 864-test checkpoint. The two sealed Certified-Serve storage regressions and
+the CompleteTip payload-before-ledger-repair regression yield the current 867-test,
 44-module inventory. The complete source-sealed
 pre-network corridor
 contains 85 legs. Six source-
@@ -1751,7 +1752,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df`.
+`49312043ca34bd4a1857ef64d21bd858c4f9af1e4f39d02e5338e57bc6494a8a`.
 The separate source-sealed G-UNIT inventory contains 522 focused tests,
 including 316 core and 143 queue-journal `iroha_core` tests. Its 523-line
 canonical TSV has SHA-256

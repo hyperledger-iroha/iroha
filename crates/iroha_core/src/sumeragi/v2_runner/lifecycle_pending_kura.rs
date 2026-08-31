@@ -447,7 +447,6 @@ fn run_pending_active_height(
     context_store: &crate::sumeragi::v2_context_store::V2ContextStore,
     state: &Arc<State>,
     kura: &Arc<Kura>,
-    common_config: &iroha_config::parameters::actual::Common,
     receiver: &Arc<FairV2Ingress>,
     lane_relay_rx: &std::sync::mpsc::Receiver<crate::sumeragi::LaneRelayMessage>,
     wake_rx: &std::sync::mpsc::Receiver<()>,
@@ -475,6 +474,18 @@ fn run_pending_active_height(
             return Ok(None);
         }
         liveness_watchdog.poll(Instant::now());
+        activated.with_runner_runtime(
+            &mut active_runner,
+            |_executor, services, _lane_work| -> Result<_, V2RunnerError> {
+                let _ = settle_historical_body_serve_completion(
+                    receiver,
+                    block_sync_server,
+                    services,
+                    output_guard.as_ref(),
+                )?;
+                Ok(())
+            },
+        )?;
         if let Err(error) =
             activated.settle_certified_serve_completion_for_no_clock_recovery(&mut active_runner)
         {
@@ -555,9 +566,7 @@ fn run_pending_active_height(
                     services,
                     lane_work,
                     executor.current_tag().view(),
-                    output_guard.as_ref(),
                     kura.as_ref(),
-                    &common_config.key_pair,
                     block_sync_server,
                     DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
                 )?;
@@ -596,7 +605,9 @@ fn run_pending_active_height(
                 return Err(error);
             }
         };
-        let ready = ready_to_finish && !terminal_exact_output_pending;
+        let ready = ready_to_finish
+            && !terminal_exact_output_pending
+            && !block_sync_server.has_pending_historical_body_serve();
         if let Some(claimed) = producer_turn {
             let attempted =
                 claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner));
@@ -656,15 +667,19 @@ fn run_pending_active_height(
             liveness_watchdog.poll(Instant::now());
             let (drained_terminal_ingress, drained_terminal_relay) = activated
                 .with_runner_runtime(&mut active_runner, |executor, services, lane_work| {
+                    let _ = settle_historical_body_serve_completion(
+                        receiver,
+                        block_sync_server,
+                        services,
+                        output_guard.as_ref(),
+                    )?;
                     let drained = drain_decided_lane_recovery_ingress(
                         receiver,
                         executor,
                         services,
                         lane_work,
                         executor.current_tag().view(),
-                        output_guard.as_ref(),
                         kura.as_ref(),
-                        &common_config.key_pair,
                         block_sync_server,
                         DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
                     )?;
@@ -684,6 +699,10 @@ fn run_pending_active_height(
                     control_queue_capacity,
                 )?;
             if terminal_exact_output_pending {
+                let _ = wake_rx.recv_timeout(IDLE_POLL);
+                continue;
+            }
+            if block_sync_server.has_pending_historical_body_serve() {
                 let _ = wake_rx.recv_timeout(IDLE_POLL);
                 continue;
             }
@@ -917,9 +936,13 @@ pub(super) fn run_pending_kura_lifecycle_height(
         local_validator_index(&context, &local_peer, config.role)?
     };
     if block_sync_server.is_none() {
-        block_sync_server = Some(V2BlockSyncServer::new(
+        let limits = HistoricalBodyServeLimits::first_release(certified_request_capacity)?;
+        block_sync_server = Some(V2BlockSyncServer::new_with_historical_body_service(
             context.network_id,
             certified_request_capacity,
+            Arc::clone(&kura),
+            common_config.key_pair.clone(),
+            limits,
         )?);
     }
     let consensus_key_hash: [u8; 32] =
@@ -1173,7 +1196,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
         &context_store,
         &state,
         &kura,
-        &common_config,
         &block_rx,
         &lane_relay_rx,
         &wake_rx,

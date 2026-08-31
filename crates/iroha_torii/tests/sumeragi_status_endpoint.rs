@@ -108,8 +108,11 @@ fn build_status_router() -> axum::Router {
         OnlinePeersProvider::new(peers_rx),
         None,
         telemetry,
-    );
-    torii.api_router_for_tests()
+    )
+    .expect("valid Torii Sumeragi-status fixture");
+    torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes")
 }
 async fn status_response(accept: &str) -> axum::response::Response {
     build_status_router()

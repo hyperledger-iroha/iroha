@@ -16,6 +16,7 @@ pub struct OfflineAndroidAttestationStatusSnapshotV1 {
     /// Upstream HTTP `Date` value in Unix milliseconds.
     pub response_date_ms: u64,
     /// Optional upstream HTTP `Last-Modified` value in Unix milliseconds.
+    #[norito(required)]
     pub last_modified_ms: Option<u64>,
     /// Upstream `Cache-Control: max-age` lifetime in seconds.
     pub cache_max_age_seconds: u32,
@@ -45,6 +46,7 @@ pub struct OfflineDeviceAttestationPolicy {
     /// Accepted Android `KeyMint` app identities.
     pub android_apps: Vec<OfflineAndroidAppAttestationPolicy>,
     /// Governed Android Key Attestation status-list snapshot.
+    #[norito(required)]
     pub android_status_snapshot: Option<OfflineAndroidAttestationStatusSnapshotV1>,
     /// Explicitly enables iOS registration and online assertions when a matching
     /// entry exists in `ios_apps`.
@@ -69,8 +71,10 @@ pub struct OfflineDeviceAttestationTrustedRoot {
     /// Root certificate DER bytes.
     pub der: Vec<u8>,
     /// Optional governance activation time in Unix milliseconds.
+    #[norito(required)]
     pub not_before_ms: Option<u64>,
     /// Optional governance expiry time in Unix milliseconds.
+    #[norito(required)]
     pub not_after_ms: Option<u64>,
 }
 
@@ -177,5 +181,32 @@ mod device_attestation_policy_tests {
             .insert("retired_status".to_owned(), norito::json::Value::Null);
         norito::json::from_value::<OfflineAndroidAttestationStatusSnapshotV1>(value)
             .expect_err("device-attestation policy records must reject unknown members");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn optional_policy_members_require_an_explicit_json_value() {
+        let mut absent = snapshot();
+        absent.last_modified_ms = None;
+        let canonical = norito::json::to_value(&absent).expect("encode snapshot JSON");
+        assert_eq!(
+            canonical
+                .as_object()
+                .and_then(|object| object.get("last_modified_ms")),
+            Some(&norito::json::Value::Null)
+        );
+
+        let mut missing = canonical;
+        missing
+            .as_object_mut()
+            .expect("snapshot JSON object")
+            .remove("last_modified_ms");
+        let error = norito::json::from_value::<OfflineAndroidAttestationStatusSnapshotV1>(missing)
+            .expect_err("an omitted optional protocol member is not canonical JSON");
+        assert!(
+            error
+                .to_string()
+                .contains("missing field `last_modified_ms`")
+        );
     }
 }

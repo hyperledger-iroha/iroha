@@ -1335,31 +1335,6 @@ pub mod isi {
                 }
             }
         }
-        if sumeragi.key_require_hsm && record.hsm.is_none() {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "HSM binding required for consensus key".into(),
-                ),
-            ));
-        }
-        let mut allowed_hsm_providers: Vec<String> = sumeragi.key_allowed_hsm_providers.clone();
-        allowed_hsm_providers.sort();
-        allowed_hsm_providers.dedup();
-        if let Some(hsm) = &record.hsm {
-            if !sumeragi
-                .key_allowed_hsm_providers
-                .iter()
-                .any(|provider| provider == &hsm.provider)
-            {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "HSM provider {} is not allowed; allowed providers: {}",
-                        hsm.provider,
-                        render_list(&allowed_hsm_providers)
-                    )),
-                ));
-            }
-        }
         if matches!(record.status, ConsensusKeyStatus::Disabled) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -2905,6 +2880,7 @@ pub mod isi {
             }
             let h_now = state_transaction._curr_block.height().get();
             let payload = DeployContractProposal {
+                proposal_operator: authority.clone(),
                 contract_address: contract_address.clone(),
                 code_hash: self.code_hash,
                 abi_hash: self.abi_hash,
@@ -2919,7 +2895,8 @@ pub mod isi {
                         "governance proposal id collision".into(),
                     ));
                 };
-                if existing_payload.contract_address != payload.contract_address
+                if existing_payload.proposal_operator != payload.proposal_operator
+                    || existing_payload.contract_address != payload.contract_address
                     || existing_payload.code_hash != payload.code_hash
                     || existing_payload.abi_hash != payload.abi_hash
                     || existing_payload.abi_version != payload.abi_version
@@ -3012,6 +2989,11 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let payload = self.proposal;
+            if payload.proposal_operator != *authority {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "contract lifecycle proposal operator must equal transaction authority".into(),
+                ));
+            }
             if payload.expected_revision == 0 {
                 return Err(invalid_governance_parameter(
                     "contract lifecycle expected_revision must be non-zero",
@@ -3338,6 +3320,7 @@ pub mod isi {
             ensure_runtime_upgrade_no_overlap(&self.manifest, state_transaction)?;
             let h_now = state_transaction._curr_block.height().get();
             let payload = RuntimeUpgradeProposal {
+                proposal_operator: authority.clone(),
                 manifest: self.manifest.clone(),
             };
             let kind = ProposalKind::RuntimeUpgrade(payload.clone());
@@ -3348,7 +3331,9 @@ pub mod isi {
                         "governance proposal id collision".into(),
                     ));
                 };
-                if existing_payload.manifest != payload.manifest {
+                if existing_payload.proposal_operator != payload.proposal_operator
+                    || existing_payload.manifest != payload.manifest
+                {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "governance proposal id collision".into(),
                     ));
@@ -3628,20 +3613,6 @@ pub mod isi {
         }
         Ok(registry)
     }
-    fn validation_fee_proposal_operator(kind: &ProposalKind) -> Option<&AccountId> {
-        match kind {
-            ProposalKind::ValidationFeePolicy(payload) => Some(&payload.proposal_operator),
-            ProposalKind::ValidationFeePayoutLifecycle(payload) => Some(&payload.proposal_operator),
-            ProposalKind::DeployContract(_)
-            | ProposalKind::ContractLifecycleGovernance(_)
-            | ProposalKind::ContractEmergencyHold(_)
-            | ProposalKind::RuntimeUpgrade(_)
-            | ProposalKind::SccpRouteGovernance(_)
-            | ProposalKind::SorafsProviderGovernance(_)
-            | ProposalKind::GlobalDataTriggerPermissionGovernance(_)
-            | ProposalKind::MusubiRegistryGovernance(_) => None,
-        }
-    }
     fn standalone_governance_state_contains_proposal_id_v1(
         proposal_id: [u8; 32],
         state_transaction: &StateTransaction<'_, '_>,
@@ -3684,7 +3655,9 @@ pub mod isi {
             || proposal
                 .first_release_exact_json_u64_invariant_error()
                 .is_some()
-            || validation_fee_proposal_operator(&proposal.kind)
+            || proposal
+                .kind
+                .proposal_operator_v1()
                 .is_some_and(|operator| operator != &proposal.proposer)
             || has_standalone_state
         {
@@ -4183,7 +4156,7 @@ pub mod isi {
                 st.domain_tag.clone()
             };
             // Early referendum existence/window checks (Zk)
-            {
+            let referendum = {
                 let rid = self.election_id.clone();
                 let now_h = state_transaction._curr_block.height().get();
                 let Some(rr) = state_transaction
@@ -4243,7 +4216,8 @@ pub mod isi {
                         "referendum has not passed the Parliament gate".into(),
                     ));
                 }
-            }
+                rr
+            };
             let lock_hint_present =
                 lock_owner.is_some() || lock_amount.is_some() || lock_duration.is_some();
             if lock_hint_present {
@@ -4274,6 +4248,31 @@ pub mod isi {
                     "lock hints required for governance bond".into(),
                 ));
             }
+            let lock_expiry = if let Some(duration_blocks) = lock_duration {
+                let expiry_height = state_transaction
+                    ._curr_block
+                    .height()
+                    .get()
+                    .checked_add(duration_blocks)
+                    .ok_or_else(|| Error::from(MathError::Overflow))?;
+                if expiry_height < referendum.h_end {
+                    state_transaction.world.emit_events(Some(
+                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                referendum_id: self.election_id.clone(),
+                                reason: "ballot lock expires before the referendum end height"
+                                    .into(),
+                            },
+                        ),
+                    ));
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "ballot lock must remain active through the referendum end height".into(),
+                    ));
+                }
+                Some(expiry_height)
+            } else {
+                None
+            };
             // 3) Verify the proof against the resolved VK (ZK1/H2* envelope dispatch)
             let vk_id = st
                 .vk_ballot
@@ -4628,8 +4627,11 @@ pub mod isi {
                         ));
                     }
                     let rid = self.election_id.clone();
-                    let now_h = state_transaction._curr_block.height().get();
-                    let new_expiry = now_h.saturating_add(duration_blocks);
+                    let new_expiry = lock_expiry.ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "complete lock hints must have a validated expiry height".into(),
+                        )
+                    })?;
                     let mut locks = state_transaction
                         .world
                         .governance_locks
@@ -4768,7 +4770,9 @@ pub mod isi {
             )
             .into());
         }
-        if validation_fee_proposal_operator(&proposal.kind)
+        if proposal
+            .kind
+            .proposal_operator_v1()
             .is_some_and(|operator| operator != &proposal.proposer)
         {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -5312,12 +5316,19 @@ pub mod isi {
                 "validation-fee proposal id differs from its exact typed fingerprint".into(),
             ));
         }
-        let proposal_operator =
-            validation_fee_proposal_operator(&proposal.kind).ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "validation-fee authorization received a non-validation-fee proposal".into(),
-                )
-            })?;
+        if !matches!(
+            &proposal.kind,
+            ProposalKind::ValidationFeePolicy(_) | ProposalKind::ValidationFeePayoutLifecycle(_)
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee authorization received a non-validation-fee proposal".into(),
+            ));
+        }
+        let proposal_operator = proposal.kind.proposal_operator_v1().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal is missing its bound operator".into(),
+            )
+        })?;
         if proposal_operator != &proposal.proposer {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee proposal operator differs from the retained governance proposer"
@@ -8370,23 +8381,25 @@ pub mod isi {
         match &proposal.kind {
             ProposalKind::DeployContract(payload) => apply_deploy_contract_governance_effect(
                 payload,
-                &proposal.proposer,
+                &payload.proposal_operator,
                 certificate,
                 state_transaction,
             ),
             ProposalKind::ContractLifecycleGovernance(payload) => {
                 apply_contract_lifecycle_governance_effect(
                     payload,
-                    &proposal.proposer,
+                    &payload.proposal_operator,
                     state_transaction,
                 )
             }
             ProposalKind::ContractEmergencyHold(payload) => {
                 apply_contract_emergency_hold_effect(payload, certificate, state_transaction)
             }
-            ProposalKind::RuntimeUpgrade(payload) => {
-                enact_runtime_upgrade_proposal(state_transaction, payload, &proposal.proposer)
-            }
+            ProposalKind::RuntimeUpgrade(payload) => enact_runtime_upgrade_proposal(
+                state_transaction,
+                payload,
+                &payload.proposal_operator,
+            ),
             ProposalKind::SccpRouteGovernance(payload) => {
                 if payload.anchor.network_id != state_transaction.network_id {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -9080,9 +9093,12 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<SortitionRequestV1, Error> {
         let governance_attempt_id = attempt.attempt().id;
-        if candidates.len() < 2 {
+        if !crate::governance::parliament::hidden_ballot_population_meets_anonymity_floor_v1(
+            candidates.len(),
+        ) {
             return Err(InstructionExecutionError::InvariantViolation(
-                "atomic Confirmation Jury sortition requires at least two candidates".into(),
+                "atomic Confirmation Jury sortition requires the V1 hidden-ballot anonymity floor"
+                    .into(),
             )
             .into());
         }
@@ -9435,7 +9451,10 @@ pub mod isi {
                                     == ParliamentDecisionModeV1::HiddenBindingBallot
                         })
                     });
-                    if expected_candidates.len() < 2 && hidden_body_requested {
+                    if !crate::governance::parliament::hidden_ballot_population_meets_anonymity_floor_v1(
+                        expected_candidates.len(),
+                    ) && hidden_body_requested
+                    {
                         attempt
                             .record_hidden_sortition_capacity_failure_batch(
                                 governance_attempt_id,
@@ -10183,14 +10202,6 @@ pub mod isi {
                     },
                 ),
             ));
-            #[cfg(feature = "telemetry")]
-            {
-                let citizens_total = u64::try_from(state_transaction.world.citizens.iter().count())
-                    .unwrap_or(u64::MAX);
-                state_transaction
-                    .telemetry
-                    .record_citizens_total(citizens_total);
-            }
             Ok(())
         }
     }
@@ -10198,15 +10209,15 @@ pub mod isi {
         owner: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        // Only canonical attempt-local reducer state may retain a citizen's bond.
         if state_transaction
             .world
-            .parliament_attempts
-            .iter()
-            .any(|(_, attempt)| attempt.retains_citizenship_bond(owner))
+            .parliament_member_reference_counts
+            .get(owner)
+            .copied()
+            .is_some_and(crate::state::ParliamentMemberReferenceCountsV1::retains_citizenship_bond)
         {
             return Err(InstructionExecutionError::InvariantViolation(
-                "citizenship bond cannot be released while retained by an active Parliament attempt"
+                "citizenship bond cannot be released while retained by an active or certified Parliament attempt"
                     .into(),
             ));
         }
@@ -10279,14 +10290,6 @@ pub mod isi {
                     },
                 ),
             ));
-            #[cfg(feature = "telemetry")]
-            {
-                let citizens_total = u64::try_from(state_transaction.world.citizens.iter().count())
-                    .unwrap_or(u64::MAX);
-                state_transaction
-                    .telemetry
-                    .record_citizens_total(citizens_total);
-            }
             Ok(())
         }
     }
@@ -11364,15 +11367,8 @@ pub mod isi {
                     }
                     let retain_through = state_transaction
                         .world
-                        .tle_key_session_retention_deadline_v1(key_session_id)
-                        .map_err(|_| {
-                            threshold_key_lifecycle_error_v1(
-                                "Parliament TLE retirement state is invalid",
-                            )
-                        })?;
-                    if retain_through
-                        .is_some_and(|deadline| deadline == u64::MAX || current_height < deadline)
-                    {
+                        .tle_key_session_retention_deadline_v1(key_session_id);
+                    if retain_through.is_some_and(|deadline| current_height <= deadline) {
                         return Err(threshold_key_lifecycle_error_v1(
                             "Parliament TLE key session is retained by a committed ballot deadline",
                         )
@@ -12436,10 +12432,6 @@ pub mod isi {
                 validated.source_finality.height
             )));
         }
-        let replay_accumulator_id = iroha_data_model::bridge::SccpReplayAccumulatorIdV1 {
-            route_key: route.route_key.clone(),
-            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
-        };
         let replay_domain = iroha_data_model::bridge::SccpReplayDomainV1 {
             source_network: decoded.source.lane.source,
             target_network: decoded.source.lane.target,
@@ -12448,6 +12440,16 @@ pub mod isi {
             route_configuration_hash: route.route_configuration_hash,
             actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
         };
+        let replay_accumulator_id =
+            iroha_data_model::bridge::SccpReplayAccumulatorIdV1::from_domain(
+                route.route_key.clone(),
+                &replay_domain,
+            )
+            .map_err(|_| {
+                invalid_bridge_proof(
+                    "SCCP replay accumulator identity differs from the authenticated route domain",
+                )
+            })?;
         let canonical_payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&decoded.payload)
             .map_err(|_| {
                 invalid_bridge_proof(
@@ -14863,10 +14865,6 @@ pub mod isi {
                     )),
                 ));
             }
-            let replay_accumulator_id = iroha_data_model::bridge::SccpReplayAccumulatorIdV1 {
-                route_key: settlement.route_key.clone(),
-                boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
-            };
             let replay_domain = iroha_data_model::bridge::SccpReplayDomainV1 {
                 source_network: validated.context.lane.source,
                 target_network: validated.context.lane.target,
@@ -14875,6 +14873,17 @@ pub mod isi {
                 route_configuration_hash: settlement.route_configuration_hash,
                 actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
             };
+            let replay_accumulator_id =
+                iroha_data_model::bridge::SccpReplayAccumulatorIdV1::from_domain(
+                    settlement.route_key.clone(),
+                    &replay_domain,
+                )
+                .map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "SCCP replay accumulator identity differs from the settled route domain"
+                            .into(),
+                    )
+                })?;
             let replay_record = iroha_data_model::bridge::SccpReplayRecordV1 {
                 operation: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
                 replay_id: key.message_id,
@@ -16765,10 +16774,6 @@ pub mod isi {
                     Some(PeerKeyPolicyRejectReason::ExpiryBeforeActivation)
                 } else if msg.contains("algorithm") && msg.contains("not allowed") {
                     Some(PeerKeyPolicyRejectReason::DisallowedAlgorithm)
-                } else if msg.contains("HSM binding required") {
-                    Some(PeerKeyPolicyRejectReason::MissingHsm)
-                } else if msg.contains("HSM provider") {
-                    Some(PeerKeyPolicyRejectReason::DisallowedProvider)
                 } else if msg.contains("identifier collision") {
                     Some(PeerKeyPolicyRejectReason::IdentifierCollision)
                 } else {
@@ -16871,20 +16876,6 @@ pub mod isi {
             } else {
                 ConsensusKeyStatus::Active
             };
-            let hsm_binding = match (self.hsm.clone(), sumeragi_params.key_require_hsm) {
-                (Some(binding), _) => Some(binding),
-                (None, true) => {
-                    crate::sumeragi::status::record_peer_key_policy_reject(
-                        PeerKeyPolicyRejectReason::MissingHsm,
-                    );
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "HSM binding required for consensus key".into(),
-                        ),
-                    ));
-                }
-                (None, false) => None,
-            };
             let key_label = peer_id.public_key().to_string();
             let candidate_id = derive_validator_key_id(peer_id.public_key());
             if let Some(conflict) = consensus_key_ids_for_public_key(world, &key_label)
@@ -16918,7 +16909,6 @@ pub mod isi {
                 pop: Some(self.pop.clone()),
                 activation_height,
                 expiry_height: self.expiry_at,
-                hsm: hsm_binding,
                 replaces: None,
                 status,
             };
@@ -17009,7 +16999,6 @@ pub mod isi {
                 pop: existing_pop,
                 activation_height: block_height,
                 expiry_height: Some(block_height),
-                hsm: None,
                 replaces: None,
                 status: ConsensusKeyStatus::Disabled,
             };
@@ -20716,7 +20705,6 @@ pub mod isi {
     mod tests {
         use super::{
             TonBreakerPriorTransitionV1, canonical_parliament_eligible_candidates_with_limits_v1,
-            ensure_citizenship_bond_releasable,
             ensure_parliament_citizen_registry_capacity_with_limit_v1,
             ton_breaker_anchor_matches_current_governance_v1,
             ton_breaker_disabled_latch_transition_v1, ton_breaker_observation_allows_outbound_v1,
@@ -20754,10 +20742,7 @@ pub mod isi {
                 SccpReplayAccumulatorIdV1, SccpReplayForestV1,
             },
             confidential::ConfidentialStatus,
-            consensus::{
-                ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
-                HsmBinding,
-            },
+            consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
             events::data::{DataEvent, governance::GovernanceEvent, prelude::BridgeEvent},
             governance::types::{
                 BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
@@ -21253,6 +21238,41 @@ pub mod isi {
         }
 
         #[test]
+        fn contract_lifecycle_proposal_rejects_mismatched_bound_operator() {
+            let state = blank_test_state();
+            let header = first_test_block_header();
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let proposal = gov::ProposeContractLifecycleGovernance {
+                proposal: ContractLifecycleGovernanceProposalV1 {
+                    proposal_operator: BOB_ID.clone(),
+                    contract_address:
+                        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                            .parse()
+                            .expect("contract address"),
+                    expected_revision: 1,
+                    action: ContractLifecycleGovernanceActionV1::CancelOwnershipOffer,
+                },
+            };
+
+            let error = proposal
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("transaction authority cannot forge the bound proposal operator");
+            assert!(
+                format!("{error:?}").contains("operator must equal transaction authority"),
+                "unexpected operator-mismatch error: {error:?}"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .governance_proposals
+                    .iter()
+                    .next()
+                    .is_none()
+            );
+        }
+
+        #[test]
         fn parliament_attempt_creation_defends_retry_and_exact_json_bounds() {
             let state = blank_test_state();
             let header = first_test_block_header();
@@ -21265,6 +21285,7 @@ pub mod isi {
 
             let canonical = ProposalKind::DeployContract(
                 iroha_data_model::governance::types::DeployContractProposal {
+                    proposal_operator: ALICE_ID.clone(),
                     contract_address:
                         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                             .parse()
@@ -21329,6 +21350,7 @@ pub mod isi {
             let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
             let hostile = ProposalKind::RuntimeUpgrade(
                 iroha_data_model::governance::types::RuntimeUpgradeProposal {
+                    proposal_operator: ALICE_ID.clone(),
                     manifest: iroha_data_model::runtime::RuntimeUpgradeManifest {
                         name: "hostile".to_owned(),
                         description: "inexact height".to_owned(),
@@ -22110,6 +22132,7 @@ pub mod isi {
         fn parliament_permissionless_progress_proposal() -> ProposalKind {
             ProposalKind::DeployContract(
                 iroha_data_model::governance::types::DeployContractProposal {
+                    proposal_operator: ALICE_ID.clone(),
                     contract_address:
                         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                             .parse()
@@ -23489,6 +23512,7 @@ pub mod isi {
                     &mut seed,
                     ProposalKind::ContractLifecycleGovernance(
                         ContractLifecycleGovernanceProposalV1 {
+                            proposal_operator: ALICE_ID.clone(),
                             contract_address: contract_address.clone(),
                             expected_revision: 1,
                             action: ContractLifecycleGovernanceActionV1::OfferOwnership(
@@ -23671,6 +23695,7 @@ pub mod isi {
                     &mut seed,
                     ProposalKind::ContractLifecycleGovernance(
                         ContractLifecycleGovernanceProposalV1 {
+                            proposal_operator: ALICE_ID.clone(),
                             contract_address: contract_address.clone(),
                             expected_revision: 3,
                             action: ContractLifecycleGovernanceActionV1::AcceptParliamentOwnership,
@@ -23779,6 +23804,7 @@ pub mod isi {
                     &mut seed,
                     ProposalKind::ContractLifecycleGovernance(
                         ContractLifecycleGovernanceProposalV1 {
+                            proposal_operator: ALICE_ID.clone(),
                             contract_address: contract_address.clone(),
                             expected_revision: 2,
                             action: ContractLifecycleGovernanceActionV1::Deactivate(
@@ -24104,6 +24130,7 @@ pub mod isi {
                     &mut seed,
                     ProposalKind::ContractLifecycleGovernance(
                         ContractLifecycleGovernanceProposalV1 {
+                            proposal_operator: ALICE_ID.clone(),
                             contract_address: contract_address.clone(),
                             expected_revision: 2,
                             action: ContractLifecycleGovernanceActionV1::CompleteEmergencyHoldRetrospective(
@@ -24642,19 +24669,6 @@ pub mod isi {
                 stx.apply();
                 params
             }};
-            (require_hsm $state_block:ident) => {{
-                let mut stx = $state_block.transaction();
-                grant_alice_typed_permission(
-                    &mut stx,
-                    CanManageConsensusKeys,
-                    "grant manage consensus keys",
-                );
-                let params = stx.world.parameters.get_mut();
-                params.sumeragi.key_require_hsm = true;
-                let params = stx.world.parameters.get().sumeragi.clone();
-                stx.apply();
-                params
-            }};
         }
         macro_rules! second_height_transaction {
             ($state:ident, $block:ident, $state_transaction:ident) => {
@@ -24685,7 +24699,6 @@ pub mod isi {
                     pop: None,
                     activation_height: $stx.block_height(),
                     expiry_height: None,
-                    hsm: None,
                     replaces: None,
                     status: ConsensusKeyStatus::Active,
                 };
@@ -24772,10 +24785,10 @@ pub mod isi {
             consensus_keys::ApplyThresholdKeyLifecycleCertificateV1 { certificate }
         }
 
-        world_test!(threshold_key_lifecycle_qc_rotates_tle_atomically_rejects_replay_and_blocks_premature_retirement {
+        world_test!(threshold_key_lifecycle_qc_rotates_tle_atomically_rejects_replay_and_blocks_retirement_at_inclusive_deadline {
             let state = blank_test_state();
             let header = BlockHeader::new(
-                NonZeroU64::new(40).expect("nonzero lifecycle height"),
+                NonZeroU64::new(62).expect("nonzero lifecycle height"),
                 None,
                 None,
                 None,
@@ -24901,7 +24914,7 @@ pub mod isi {
                 Vec::new(),
             )
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("a committed future ballot deadline must block TLE retirement");
+            .expect_err("the inclusive committed ballot deadline must block TLE retirement");
             assert!(format!("{retire_b:?}").contains("retained by a committed ballot deadline"));
             assert_eq!(state_transaction.world.active_tle_key_session(), Some(key_b_id));
         });
@@ -26110,6 +26123,43 @@ pub mod isi {
                 route_id: b"taira_eth_xor".to_vec(),
             })
         }
+        fn sccp_replay_accumulator_id_for_route_key_for_test(
+            route_key: iroha_data_model::bridge::SccpRouteKeyV1,
+            route_configuration_hash: [u8; 32],
+            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1,
+        ) -> SccpReplayAccumulatorIdV1 {
+            use iroha_data_model::bridge::SccpReplayBoundaryV1::{
+                SoraInboundRelease, SoraOutboundLock,
+            };
+
+            let (source_network, target_network) = match boundary {
+                SoraOutboundLock => (route_key.lane_id.target, route_key.lane_id.source),
+                SoraInboundRelease => (route_key.lane_id.source, route_key.lane_id.target),
+                _ => panic!("test helper only constructs SORA replay boundaries"),
+            };
+            let domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+                source_network,
+                target_network,
+                boundary,
+                route_revision: route_key.revision,
+                route_configuration_hash,
+                actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
+            };
+            SccpReplayAccumulatorIdV1::from_domain(route_key, &domain)
+                .expect("test route and replay domain match")
+        }
+        fn sccp_replay_accumulator_id_for_test(
+            route: &iroha_data_model::bridge::SccpGovernedRouteV1,
+            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1,
+        ) -> SccpReplayAccumulatorIdV1 {
+            sccp_replay_accumulator_id_for_route_key_for_test(
+                route.key(),
+                route
+                    .route_configuration_hash()
+                    .expect("test route configuration hashes"),
+                boundary,
+            )
+        }
         world_test!(sccp_taira_recipient_requires_exact_single_ed25519_i105 {
             let taira = ALICE_ID
                 .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
@@ -26691,6 +26741,7 @@ pub mod isi {
                 manifest_provenance: None,
             };
             let kind = ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: ALICE_ID.clone(),
                 contract_address: contract_address.clone(),
                 code_hash: proposal.code_hash,
                 abi_hash: proposal.abi_hash,
@@ -26809,6 +26860,7 @@ pub mod isi {
             second_height_transaction!(state, block, state_transaction);
             state_transaction.gov.citizenship_bond_amount = Quantity::zero();
             let kind = ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: ALICE_ID.clone(),
                 contract_address:
                     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                         .parse()
@@ -26967,6 +27019,152 @@ pub mod isi {
             }
             .expect_execute_err(&ALICE_ID, &mut state_transaction, "a ballot grant for another election must not authorize this ballot");
             assert_err!(format!("{error:?}"), "exact CanSubmitGovernanceBallot target", "unexpected ballot target-scope rejection: {error:?}");
+        });
+        world_test!(direct_zk_ballot_lock_must_cover_the_inclusive_referendum_window {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            state_transaction.gov.min_bond_amount = Quantity::zero();
+            let referendum_id = "election-1".to_owned();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: referendum_id.clone(),
+                })]),
+            );
+            state_transaction.world.elections.insert(
+                referendum_id.clone(),
+                crate::state::ElectionState {
+                    options: 3,
+                    ..Default::default()
+                },
+            );
+            let referendum = crate::state::GovernanceReferendumRecord {
+                h_start: 1,
+                h_end: 4,
+                status: crate::state::GovernanceReferendumStatus::Open,
+                mode: crate::state::GovernanceReferendumMode::Zk,
+            };
+            state_transaction
+                .world
+                .governance_referenda
+                .insert(referendum_id.clone(), referendum);
+            state_transaction.world.take_external_events();
+
+            let error = gov::CastZkBallot {
+                election_id: referendum_id.clone(),
+                proof_b64: "AA==".to_owned(),
+                public_inputs_json: format!(
+                    r#"{{"owner":"{}","amount":"0","duration_blocks":1}}"#,
+                    &*ALICE_ID,
+                ),
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut state_transaction,
+                "a ZK ballot lock ending before h_end must reject",
+            );
+
+            assert_err!(
+                format!("{error:?}"),
+                "must remain active through the referendum end height"
+            );
+            assert_eq!(
+                state_transaction
+                    .world
+                    .governance_referenda
+                    .get(&referendum_id),
+                Some(&referendum),
+                "window rejection must not alter the referendum"
+            );
+            let election = state_transaction
+                .world
+                .elections
+                .get(&referendum_id)
+                .expect("the election remains present");
+            assert!(election.ballot_nullifiers.is_empty());
+            assert!(election.ciphertexts.is_empty());
+            assert!(
+                state_transaction
+                    .world
+                    .governance_locks
+                    .get(&referendum_id)
+                    .is_none(),
+                "window rejection must not create a governance lock"
+            );
+        });
+        world_test!(direct_zk_ballot_lock_expiry_overflow_rejects_before_state_mutation {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            state_transaction.gov.min_bond_amount = Quantity::zero();
+            let referendum_id = "election-1".to_owned();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: referendum_id.clone(),
+                })]),
+            );
+            state_transaction.world.elections.insert(
+                referendum_id.clone(),
+                crate::state::ElectionState {
+                    options: 3,
+                    ..Default::default()
+                },
+            );
+            let referendum = crate::state::GovernanceReferendumRecord {
+                h_start: 1,
+                h_end: u64::MAX,
+                status: crate::state::GovernanceReferendumStatus::Open,
+                mode: crate::state::GovernanceReferendumMode::Zk,
+            };
+            state_transaction
+                .world
+                .governance_referenda
+                .insert(referendum_id.clone(), referendum);
+            state_transaction.world.take_external_events();
+
+            let error = gov::CastZkBallot {
+                election_id: referendum_id.clone(),
+                proof_b64: "AA==".to_owned(),
+                public_inputs_json: format!(
+                    r#"{{"owner":"{}","amount":"0","duration_blocks":{}}}"#,
+                    &*ALICE_ID,
+                    u64::MAX,
+                ),
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut state_transaction,
+                "overflowing ZK ballot lock arithmetic must reject",
+            );
+
+            assert_err!(format!("{error:?}"), "Overflow");
+            assert_eq!(
+                state_transaction
+                    .world
+                    .governance_referenda
+                    .get(&referendum_id),
+                Some(&referendum),
+                "overflow rejection must not alter the referendum"
+            );
+            let election = state_transaction
+                .world
+                .elections
+                .get(&referendum_id)
+                .expect("the election remains present");
+            assert!(election.ballot_nullifiers.is_empty());
+            assert!(election.ciphertexts.is_empty());
+            assert!(
+                state_transaction
+                    .world
+                    .governance_locks
+                    .get(&referendum_id)
+                    .is_none(),
+                "overflow rejection must not create a governance lock"
+            );
+            assert!(
+                state_transaction.world.take_external_events().is_empty(),
+                "checked arithmetic rejection must not emit acceptance or lock events"
+            );
         });
         world_test!(direct_zk_ballot_cannot_open_a_proposed_referendum {
             second_height_transaction!(state, block, state_transaction);
@@ -28519,7 +28717,8 @@ pub mod isi {
                     .checked_add(&locked_amount)
                     .expect("custody addition")
             );
-            let route_key = stx.sccp_registry.lanes()[0].routes[0].key();
+            let route = &stx.sccp_registry.lanes()[0].routes[0];
+            let route_key = route.key();
             assert_eq!(
                 stx.world
                     .sccp_route_liabilities
@@ -29443,6 +29642,7 @@ seiyaku GovernanceLifecycle {
             let code_hash_bytes: [u8; 32] = code_hash.into();
             let abi_hash_bytes: [u8; 32] = abi_hash.into();
             DeployContractProposal {
+                proposal_operator: authority.clone(),
                 contract_address: ContractAddress::derive(
                     &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                         .parse()
@@ -31824,7 +32024,6 @@ seiyaku GovernanceLifecycle {
                 ),
                 activation_height: 0,
                 expiry_height: None,
-                hsm: None,
                 replaces: None,
                 status: ConsensusKeyStatus::Active,
             };
@@ -33125,6 +33324,7 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "register account in cleanup domain");
             let proposal_id = [0xB7; 32];
             let kind = ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: account_id.clone(),
                 contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                     .parse()
                     .expect("contract address"),
@@ -34023,10 +34223,10 @@ seiyaku GovernanceLifecycle {
                 before.receipt_markers.len() + 1
             );
             assert_contains!(after .receipt_markers, &bridge_proof_hash_for_test(&proof));
-            let replay_accumulator_id = SccpReplayAccumulatorIdV1 {
-                route_key,
-                boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
-            };
+            let replay_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &stx.sccp_registry.lanes()[0].routes[0],
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
             assert_eq!(
                 after
                     .replay_forests
@@ -34286,10 +34486,10 @@ seiyaku GovernanceLifecycle {
                     .checked_add(&released)
                     .expect("recipient addition")
             );
-            let replay_accumulator_id = SccpReplayAccumulatorIdV1 {
-                route_key: stx.sccp_registry.lanes()[0].routes[0].key(),
-                boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
-            };
+            let replay_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &stx.sccp_registry.lanes()[0].routes[0],
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
             assert_eq!(
                 stx.world
                     .sccp_replay_forests
@@ -34706,10 +34906,10 @@ seiyaku GovernanceLifecycle {
             seed_sccp_test_tx_call_hash(&mut stx, 0x94);
             native_submit_bridge_proof_for_test(proof)
                 .expect_execute(&ALICE_ID, &mut stx, "valid native Ethereum proof must submit");
-            let replay_accumulator_id = SccpReplayAccumulatorIdV1 {
-                route_key: stx.sccp_registry.lanes()[0].routes[0].key(),
-                boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
-            };
+            let replay_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &stx.sccp_registry.lanes()[0].routes[0],
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
             let forest = stx
                 .world
                 .sccp_replay_forests
@@ -34805,10 +35005,10 @@ seiyaku GovernanceLifecycle {
             );
             assert!(stx.bridge_receipt_proofs_available_in_tx.is_empty());
             assert!(stx.world.internal_event_buf.is_empty());
-            let replay_accumulator_id = SccpReplayAccumulatorIdV1 {
-                route_key: stx.sccp_registry.lanes()[0].routes[0].key(),
-                boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
-            };
+            let replay_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &stx.sccp_registry.lanes()[0].routes[0],
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
             assert_eq!(
                 stx.world
                     .sccp_replay_forests
@@ -34829,14 +35029,15 @@ seiyaku GovernanceLifecycle {
                 Quantity::from(100_u64),
             );
             seed_sccp_test_tx_call_hash(&mut stx, 0x96);
-            let native_route_key = stx.sccp_registry.lanes()[0].routes[0].key();
-            let mut other_route_key = native_route_key.clone();
-            other_route_key.lane_id.source =
-                iroha_data_model::bridge::SccpNetworkV1::BscMainnet;
-            let other_accumulator_id = SccpReplayAccumulatorIdV1 {
-                route_key: other_route_key,
-                boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
-            };
+            let native_route = stx.sccp_registry.lanes()[0].routes[0].clone();
+            let other_route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+                iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
+                iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
+            );
+            let other_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &other_route,
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
             let mut other_forest = SccpReplayForestV1::default();
             other_forest.nonempty_shard_roots.insert(0xB1, [0xB2; 32]);
             other_forest.leaf_count = 1;
@@ -34846,10 +35047,10 @@ seiyaku GovernanceLifecycle {
                 .insert(other_accumulator_id.clone(), other_forest.clone());
             native_submit_bridge_proof_for_test(proof)
                 .expect_execute(&ALICE_ID, &mut stx, "same message id on a different exact lane must not collide");
-            let native_accumulator_id = SccpReplayAccumulatorIdV1 {
-                route_key: native_route_key,
-                boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
-            };
+            let native_accumulator_id = sccp_replay_accumulator_id_for_test(
+                &native_route,
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
             assert_ne!(native_accumulator_id, other_accumulator_id);
             assert_eq!(stx.world.sccp_replay_forests.len(), 2);
             assert_eq!(
@@ -34871,11 +35072,12 @@ seiyaku GovernanceLifecycle {
             let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(197, 7),
             );
-            let route_key = registry.lanes()[0].routes[0].key();
-            let replay_accumulator_id = SccpReplayAccumulatorIdV1 {
-                route_key: route_key.clone(),
-                boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
-            };
+            let route = &registry.lanes()[0].routes[0];
+            let route_key = route.key();
+            let replay_accumulator_id = sccp_replay_accumulator_id_for_test(
+                route,
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            );
             {
                 let mut abandoned = state_block.transaction();
                 let _ = configure_native_sccp_settlement_for_test(
@@ -35295,14 +35497,14 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
                 iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
             );
-            let ethereum_id = SccpReplayAccumulatorIdV1 {
-                route_key: ethereum_route.key(),
-                boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
-            };
-            let bsc_id = SccpReplayAccumulatorIdV1 {
-                route_key: bsc_route.key(),
-                boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
-            };
+            let ethereum_id = sccp_replay_accumulator_id_for_test(
+                &ethereum_route,
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+            );
+            let bsc_id = sccp_replay_accumulator_id_for_test(
+                &bsc_route,
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+            );
             let mut ethereum_forest = SccpReplayForestV1::default();
             ethereum_forest
                 .nonempty_shard_roots
@@ -36345,26 +36547,12 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             let params = stx.world.parameters.get().clone();
-            let require_hsm = params.sumeragi.key_require_hsm;
-            let allowed_hsm_providers = params.sumeragi.key_allowed_hsm_providers.clone();
             let activation_lead_blocks = params.sumeragi.key_activation_lead_blocks;
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
-            let mut isi =
+            let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
-            if require_hsm {
-                let provider = allowed_hsm_providers
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "softkey".to_string());
-                let binding = iroha_data_model::consensus::HsmBinding {
-                    provider,
-                    key_label: peer_id.public_key().to_string(),
-                    slot: Some(1),
-                };
-                isi = isi.with_hsm(binding);
-            }
             isi.expect_execute(&ALICE_ID, &mut stx, "register peer with policy enforcement");
             let pk_label = peer_id.public_key().to_string();
             let ids = stx
@@ -36389,17 +36577,6 @@ seiyaku GovernanceLifecycle {
                 ConsensusKeyStatus::Pending,
                 "lead-time activation should mark the key pending"
             );
-            if require_hsm {
-                assert!(
-                    record.hsm.is_some(),
-                    "HSM binding must be populated when key_require_hsm is enabled"
-                );
-            } else {
-                assert!(
-                    record.hsm.is_none(),
-                    "HSM binding must be empty when key_require_hsm is disabled"
-                );
-            }
         });
         world_test!(register_peer_rejects_id_collision {
             let mut state = blank_state();
@@ -36421,7 +36598,6 @@ seiyaku GovernanceLifecycle {
                 pop: Some(other_pop),
                 activation_height: stx.block_height(),
                 expiry_height: None,
-                hsm: None,
                 replaces: None,
                 status: ConsensusKeyStatus::Active,
             };
@@ -36499,60 +36675,6 @@ seiyaku GovernanceLifecycle {
             let msg = smart_contract_instruction_error_message(err);
             assert_contains!(msg, "signature_batch_max_bls", "unexpected error message: {msg}");
         });
-        world_test!(register_peer_requires_hsm_binding_when_policy_enabled {
-            let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
-            let mut state = blank_state();
-            let mut pipeline = state.view().pipeline().clone();
-            pipeline.signature_batch_max_bls = 4;
-            state.set_pipeline(pipeline);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            {
-                let mut stx = state_block.transaction();
-                let params = stx.world.parameters.get_mut();
-                params.sumeragi.key_require_hsm = true;
-                params.sumeragi.key_allowed_hsm_providers = vec!["softkey".into()];
-                stx.apply();
-            }
-            crate::sumeragi::status::reset_peer_key_policy_counters_for_tests();
-            let bls_missing = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id_missing = crate::PeerId::new(bls_missing.public_key().clone());
-            {
-                let mut stx = state_block.transaction();
-                let pop_missing =
-                    iroha_crypto::bls_normal_pop_prove(bls_missing.private_key()).expect("pop");
-                let isi_missing = iroha_data_model::isi::register::RegisterPeerWithPop::new(
-                    peer_id_missing.clone(),
-                    pop_missing,
-                );
-                let err = isi_missing
-                    .expect_execute_err(&ALICE_ID, &mut stx, "missing HSM binding must be rejected");
-                let msg = smart_contract_instruction_error_message(err);
-                assert_contains!(msg, "HSM binding required", "unexpected error: {msg}");
-                assert!(stx.world.peers().iter().all(|p| p != &peer_id_missing));
-                assert_eq!(
-                    crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests(),
-                    (1, Some("missing_hsm"))
-                );
-            }
-            let bls_bound = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id_bound = crate::PeerId::new(bls_bound.public_key().clone());
-            let mut stx = state_block.transaction();
-            let pop_bound =
-                iroha_crypto::bls_normal_pop_prove(bls_bound.private_key()).expect("pop");
-            let binding = iroha_data_model::consensus::HsmBinding {
-                provider: "softkey".into(),
-                key_label: peer_id_bound.public_key().to_string(),
-                slot: Some(1),
-            };
-            let isi = iroha_data_model::isi::register::RegisterPeerWithPop::new(
-                peer_id_bound.clone(),
-                pop_bound,
-            )
-            .with_hsm(binding);
-            isi.expect_execute(&ALICE_ID, &mut stx, "HSM-bound peer registration should succeed");
-            assert!(stx.world.peers().iter().any(|p| p == &peer_id_bound));
-        });
         world_test!(register_peer_rejects_activation_before_lead_time {
             let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
             let mut state = blank_state();
@@ -36606,7 +36728,6 @@ seiyaku GovernanceLifecycle {
                     pop: Some(pop.clone()),
                     activation_height: stx.block_height(),
                     expiry_height: None,
-                    hsm: None,
                     replaces: None,
                     status: ConsensusKeyStatus::Active,
                 };
@@ -37613,18 +37734,12 @@ seiyaku GovernanceLifecycle {
             let pk = kp.public_key().clone();
             let pop =
                 iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
-            let hsm = HsmBinding {
-                provider: "pkcs11".to_string(),
-                key_label: "validator/0".to_string(),
-                slot: Some(1),
-            };
             let make_record = |activation_height: u64| ConsensusKeyRecord {
                 id: id.clone(),
                 public_key: pk.clone(),
                 pop: Some(pop.clone()),
                 activation_height,
                 expiry_height: None,
-                hsm: Some(hsm.clone()),
                 replaces: None,
                 status: ConsensusKeyStatus::Pending,
             };
@@ -37672,40 +37787,6 @@ seiyaku GovernanceLifecycle {
                 );
             }
         });
-        world_test!(register_consensus_key_requires_hsm_when_configured {
-            let state = blank_state();
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let params = consensus_test_parameters!(require_hsm state_block);
-            let mut stx = state_block.transaction();
-            let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let pop =
-                iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
-            let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm");
-            let record = ConsensusKeyRecord {
-                id: id.clone(),
-                public_key: kp.public_key().clone(),
-                pop: Some(pop),
-                activation_height: stx
-                    .block_height()
-                    .saturating_add(params.key_activation_lead_blocks),
-                expiry_height: None,
-                hsm: None,
-                replaces: None,
-                status: ConsensusKeyStatus::Pending,
-            };
-            let exec = Executor::default();
-            let instr: InstructionBox = consensus_keys::RegisterConsensusKey {
-                id: id.clone(),
-                record,
-            }
-            .into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                .expect_err("HSM-required policy must reject missing binding");
-            let msg = smart_contract_error_message(err);
-            assert_contains!(msg, "HSM binding required", "unexpected msg: {msg}");
-        });
         world_test!(register_consensus_key_rejects_disallowed_algorithm {
             let state = blank_state();
             let block = new_dummy_block();
@@ -37722,11 +37803,6 @@ seiyaku GovernanceLifecycle {
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
                 expiry_height: None,
-                hsm: Some(HsmBinding {
-                    provider: "pkcs11".into(),
-                    key_label: "validator/ed25519".into(),
-                    slot: None,
-                }),
                 replaces: None,
                 status: ConsensusKeyStatus::Pending,
             };
@@ -37763,11 +37839,6 @@ seiyaku GovernanceLifecycle {
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
                 expiry_height: None,
-                hsm: Some(HsmBinding {
-                    provider: "pkcs11".into(),
-                    key_label: "validator/history".into(),
-                    slot: None,
-                }),
                 replaces: None,
                 status: ConsensusKeyStatus::Pending,
             };
@@ -37786,11 +37857,9 @@ seiyaku GovernanceLifecycle {
             );
         });
         #[test]
-        #[allow(clippy::too_many_lines)]
-        fn register_consensus_key_respects_config_allowlist_and_hsm_flag() {
+        fn register_consensus_key_respects_algorithm_allowlist() {
             let mut state = blank_state();
             let sumeragi_cfg = SumeragiPolicyConfig {
-                key_require_hsm: false,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -37798,14 +37867,13 @@ seiyaku GovernanceLifecycle {
                 key_expiry_grace_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
                 key_allowed_algorithms: [Algorithm::BlsNormal].into_iter().collect(),
-                key_allowed_hsm_providers: ["softkey".to_owned()].into_iter().collect(),
             };
             state.set_sumeragi_parameters(sumeragi_cfg.clone());
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let params = consensus_test_parameters!(state_block);
             let exec = Executor::default();
-            // BLS is allowed and does not require an HSM binding once the config is applied.
+            // BLS is admitted by the configured algorithm allowlist.
             {
                 let mut stx = state_block.transaction();
                 let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -37820,7 +37888,6 @@ seiyaku GovernanceLifecycle {
                         .block_height()
                         .saturating_add(params.key_activation_lead_blocks),
                     expiry_height: None,
-                    hsm: None,
                     replaces: None,
                     status: ConsensusKeyStatus::Pending,
                 };
@@ -37830,7 +37897,7 @@ seiyaku GovernanceLifecycle {
                 }
                 .into();
                 exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect("bls consensus key should be accepted without HSM");
+                    .expect("BLS consensus key should be accepted");
             }
             // Ed25519 is filtered out by the config allowlist.
             {
@@ -37846,11 +37913,6 @@ seiyaku GovernanceLifecycle {
                         .block_height()
                         .saturating_add(params.key_activation_lead_blocks),
                     expiry_height: None,
-                    hsm: Some(HsmBinding {
-                        provider: "softkey".into(),
-                        key_label: "validator/bls".into(),
-                        slot: None,
-                    }),
                     replaces: None,
                     status: ConsensusKeyStatus::Pending,
                 };
@@ -37868,200 +37930,11 @@ seiyaku GovernanceLifecycle {
                     "consensus key algorithm ed25519 is not allowed; allowed: [bls_normal]"
                 );
             }
-            // Provider outside the allowlist is rejected even when the algorithm is permitted.
-            {
-                let mut stx = state_block.transaction();
-                let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-                let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
-                    .expect("pop for validator");
-                let id =
-                    ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-provider-reject");
-                let record = ConsensusKeyRecord {
-                    id: id.clone(),
-                    public_key: kp.public_key().clone(),
-                    pop: Some(pop),
-                    activation_height: stx
-                        .block_height()
-                        .saturating_add(params.key_activation_lead_blocks),
-                    expiry_height: None,
-                    hsm: Some(HsmBinding {
-                        provider: "pkcs11".into(),
-                        key_label: "validator/provider".into(),
-                        slot: None,
-                    }),
-                    replaces: None,
-                    status: ConsensusKeyStatus::Pending,
-                };
-                let instr: InstructionBox = consensus_keys::RegisterConsensusKey {
-                    id: id.clone(),
-                    record,
-                }
-                .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("provider not on allowlist must be rejected");
-                let msg = smart_contract_error_message(err);
-                assert_eq!(
-                    msg,
-                    "HSM provider pkcs11 is not allowed; allowed providers: [softkey]"
-                );
-            }
-        }
-        world_test!(rotate_consensus_key_requires_hsm_when_configured {
-            let state = blank_state();
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let params = consensus_test_parameters!(require_hsm state_block);
-            let mut stx = state_block.transaction();
-            let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let pop_a =
-                iroha_crypto::bls_normal_pop_prove(kp_a.private_key()).expect("pop for validator");
-            let id_a = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-required");
-            let record_a = ConsensusKeyRecord {
-                id: id_a.clone(),
-                public_key: kp_a.public_key().clone(),
-                pop: Some(pop_a),
-                activation_height: stx
-                    .block_height()
-                    .saturating_add(params.key_activation_lead_blocks),
-                expiry_height: None,
-                hsm: Some(HsmBinding {
-                    provider: "pkcs11".into(),
-                    key_label: "validator/a".into(),
-                    slot: Some(0),
-                }),
-                replaces: None,
-                status: ConsensusKeyStatus::Pending,
-            };
-            let exec = Executor::default();
-            let instr_a: InstructionBox = consensus_keys::RegisterConsensusKey {
-                id: id_a.clone(),
-                record: record_a,
-            }
-            .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr_a)
-                .expect("register initial consensus key");
-            stx.apply();
-            let mut stx = state_block.transaction();
-            let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let pop_b =
-                iroha_crypto::bls_normal_pop_prove(kp_b.private_key()).expect("pop for validator");
-            let id_b = ConsensusKeyId::new(
-                ConsensusKeyRole::Validator,
-                "validator-hsm-missing-rotation",
-            );
-            let record_b = ConsensusKeyRecord {
-                id: id_b.clone(),
-                public_key: kp_b.public_key().clone(),
-                pop: Some(pop_b),
-                activation_height: stx
-                    .block_height()
-                    .saturating_add(params.key_activation_lead_blocks + 1),
-                expiry_height: None,
-                hsm: None,
-                replaces: Some(id_a.clone()),
-                status: ConsensusKeyStatus::Pending,
-            };
-            let instr_b: InstructionBox = consensus_keys::RotateConsensusKey {
-                id: id_b.clone(),
-                record: record_b,
-            }
-            .into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr_b)
-                .expect_err("rotation without HSM must be rejected when required");
-            let msg = smart_contract_error_message(err);
-            assert_contains!(msg, "HSM binding required", "unexpected error: {msg}");
-        });
-        #[test]
-        #[allow(clippy::too_many_lines)]
-        fn rotate_consensus_key_allows_missing_hsm_when_optional() {
-            let mut state = blank_state();
-            let sumeragi_cfg = SumeragiPolicyConfig {
-                key_require_hsm: false,
-                key_activation_lead_blocks:
-                    iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
-                key_overlap_grace_blocks:
-                    iroha_config::parameters::defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
-                key_expiry_grace_blocks:
-                    iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
-                key_allowed_algorithms: [Algorithm::BlsNormal].into_iter().collect(),
-                key_allowed_hsm_providers: ["pkcs11".to_owned()].into_iter().collect(),
-            };
-            state.set_sumeragi_parameters(sumeragi_cfg.clone());
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let params = consensus_test_parameters!(state_block);
-            let mut stx = state_block.transaction();
-            let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let pop_a =
-                iroha_crypto::bls_normal_pop_prove(kp_a.private_key()).expect("pop for validator");
-            let id_a = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-optional-a");
-            let record_a = ConsensusKeyRecord {
-                id: id_a.clone(),
-                public_key: kp_a.public_key().clone(),
-                pop: Some(pop_a),
-                activation_height: stx
-                    .block_height()
-                    .saturating_add(params.key_activation_lead_blocks),
-                expiry_height: None,
-                hsm: None,
-                replaces: None,
-                status: ConsensusKeyStatus::Pending,
-            };
-            let exec = Executor::default();
-            let instr_a: InstructionBox = consensus_keys::RegisterConsensusKey {
-                id: id_a.clone(),
-                record: record_a.clone(),
-            }
-            .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr_a)
-                .expect("register initial key without HSM when optional");
-            stx.apply();
-            let mut stx = state_block.transaction();
-            let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let pop_b =
-                iroha_crypto::bls_normal_pop_prove(kp_b.private_key()).expect("pop for validator");
-            let id_b = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-optional-b");
-            let record_b = ConsensusKeyRecord {
-                id: id_b.clone(),
-                public_key: kp_b.public_key().clone(),
-                pop: Some(pop_b),
-                activation_height: stx
-                    .block_height()
-                    .saturating_add(params.key_activation_lead_blocks + 2),
-                expiry_height: None,
-                hsm: None,
-                replaces: Some(id_a.clone()),
-                status: ConsensusKeyStatus::Pending,
-            };
-            let instr_b: InstructionBox = consensus_keys::RotateConsensusKey {
-                id: id_b.clone(),
-                record: record_b.clone(),
-            }
-            .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr_b)
-                .expect("rotation without HSM should succeed when optional");
-            let prev = stx
-                .world
-                .consensus_keys
-                .get(&id_a)
-                .expect("previous key stored");
-            let next = stx
-                .world
-                .consensus_keys
-                .get(&id_b)
-                .expect("rotated key stored");
-            assert_eq!(prev.status, ConsensusKeyStatus::Retiring);
-            assert_eq!(next.status, ConsensusKeyStatus::Pending);
-            assert!(next.hsm.is_none());
         }
         #[test]
-        #[allow(clippy::too_many_lines)]
-        fn register_consensus_key_rejects_empty_allowlists() {
+        fn register_consensus_key_rejects_empty_algorithm_allowlist() {
             let mut state = blank_state();
-            let mut sumeragi_cfg = SumeragiPolicyConfig {
-                key_require_hsm: true,
+            state.set_sumeragi_parameters(SumeragiPolicyConfig {
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -38069,165 +37942,44 @@ seiyaku GovernanceLifecycle {
                 key_expiry_grace_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
                 key_allowed_algorithms: BTreeSet::new(),
-                key_allowed_hsm_providers: BTreeSet::new(),
+            });
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let params = {
+                let mut stx = state_block.transaction();
+                grant_alice_typed_permission(
+                    &mut stx,
+                    CanManageConsensusKeys,
+                    "grant manage consensus keys",
+                );
+                let params = stx.world.parameters.get().sumeragi.clone();
+                stx.apply();
+                params
             };
-            state.set_sumeragi_parameters(sumeragi_cfg.clone());
-            let exec = Executor::default();
-            // Empty algorithm allowlist rejects any registration.
-            {
-                let block = new_dummy_block();
-                let mut state_block = state.block(block.as_ref().header());
-                let params = {
-                    let mut stx = state_block.transaction();
-                    grant_alice_typed_permission(
-                        &mut stx,
-                        CanManageConsensusKeys,
-                        "grant manage consensus keys",
-                    );
-                    let params = stx.world.parameters.get().sumeragi.clone();
-                    stx.apply();
-                    params
-                };
-                let mut stx = state_block.transaction();
-                let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-                let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
-                    .expect("pop for validator");
-                let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-empty-algos");
-                let record = ConsensusKeyRecord {
-                    id: id.clone(),
-                    public_key: kp.public_key().clone(),
-                    pop: Some(pop),
-                    activation_height: stx
-                        .block_height()
-                        .saturating_add(params.key_activation_lead_blocks),
-                    expiry_height: None,
-                    hsm: Some(HsmBinding {
-                        provider: "softkey".into(),
-                        key_label: "validator/empty".into(),
-                        slot: None,
-                    }),
-                    replaces: None,
-                    status: ConsensusKeyStatus::Pending,
-                };
-                let instr: InstructionBox = consensus_keys::RegisterConsensusKey {
-                    id: id.clone(),
-                    record,
-                }
-                .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("empty algorithm allowlist must reject");
-                let msg = smart_contract_error_message(err);
-                assert_eq!(
-                    msg,
-                    "consensus key algorithm bls_normal is not allowed; allowed: []"
-                );
-            }
-            // Empty provider allowlist rejects bindings even when the algorithm is permitted.
-            {
-                sumeragi_cfg.key_allowed_algorithms =
-                    [Algorithm::Ed25519].into_iter().collect::<BTreeSet<_>>();
-                sumeragi_cfg.key_allowed_hsm_providers.clear();
-                state.set_sumeragi_parameters(sumeragi_cfg.clone());
-                let block = new_dummy_block();
-                let mut state_block = state.block(block.as_ref().header());
-                let params = {
-                    let mut stx = state_block.transaction();
-                    grant_alice_typed_permission(
-                        &mut stx,
-                        CanManageConsensusKeys,
-                        "grant manage consensus keys",
-                    );
-                    let params = stx.world.parameters.get().sumeragi.clone();
-                    stx.apply();
-                    params
-                };
-                let mut stx = state_block.transaction();
-                let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
-                let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-empty-hsm");
-                let record = ConsensusKeyRecord {
-                    id: id.clone(),
-                    public_key: kp.public_key().clone(),
-                    pop: None,
-                    activation_height: stx
-                        .block_height()
-                        .saturating_add(params.key_activation_lead_blocks),
-                    expiry_height: None,
-                    hsm: Some(HsmBinding {
-                        provider: "softkey".into(),
-                        key_label: "validator/empty-hsm".into(),
-                        slot: None,
-                    }),
-                    replaces: None,
-                    status: ConsensusKeyStatus::Pending,
-                };
-                let instr: InstructionBox = consensus_keys::RegisterConsensusKey {
-                    id: id.clone(),
-                    record,
-                }
-                .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("empty provider allowlist must reject");
-                let msg = smart_contract_error_message(err);
-                assert_eq!(
-                    msg,
-                    "HSM provider softkey is not allowed; allowed providers: []"
-                );
-            }
-            // Optional HSM policy still enforces the provider allowlist when a binding is supplied.
-            {
-                sumeragi_cfg.key_require_hsm = false;
-                sumeragi_cfg.key_allowed_algorithms =
-                    [Algorithm::Ed25519].into_iter().collect::<BTreeSet<_>>();
-                sumeragi_cfg.key_allowed_hsm_providers.clear();
-                state.set_sumeragi_parameters(sumeragi_cfg.clone());
-                let block = new_dummy_block();
-                let mut state_block = state.block(block.as_ref().header());
-                let params = {
-                    let mut stx = state_block.transaction();
-                    grant_alice_typed_permission(
-                        &mut stx,
-                        CanManageConsensusKeys,
-                        "grant manage consensus keys",
-                    );
-                    let params = stx.world.parameters.get().sumeragi.clone();
-                    stx.apply();
-                    params
-                };
-                let mut stx = state_block.transaction();
-                let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
-                let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-optional-hsm");
-                let record = ConsensusKeyRecord {
-                    id: id.clone(),
-                    public_key: kp.public_key().clone(),
-                    pop: None,
-                    activation_height: stx
-                        .block_height()
-                        .saturating_add(params.key_activation_lead_blocks),
-                    expiry_height: None,
-                    hsm: Some(HsmBinding {
-                        provider: "softkey".into(),
-                        key_label: "validator/optional".into(),
-                        slot: None,
-                    }),
-                    replaces: None,
-                    status: ConsensusKeyStatus::Pending,
-                };
-                let instr: InstructionBox = consensus_keys::RegisterConsensusKey {
-                    id: id.clone(),
-                    record,
-                }
-                .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("provided binding must honor allowlist even when optional");
-                let msg = smart_contract_error_message(err);
-                assert_eq!(
-                    msg,
-                    "HSM provider softkey is not allowed; allowed providers: []"
-                );
-            }
+            let mut stx = state_block.transaction();
+            let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let pop =
+                iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
+            let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-empty-algos");
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: kp.public_key().clone(),
+                pop: Some(pop),
+                activation_height: stx
+                    .block_height()
+                    .saturating_add(params.key_activation_lead_blocks),
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Pending,
+            };
+            let instr: InstructionBox = consensus_keys::RegisterConsensusKey { id, record }.into();
+            let err = Executor::default()
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .expect_err("empty algorithm allowlist must reject");
+            assert_eq!(
+                smart_contract_error_message(err),
+                "consensus key algorithm bls_normal is not allowed; allowed: []"
+            );
         }
         world_test!(rotate_consensus_key_marks_previous_retiring {
             let state = blank_state();
@@ -38247,11 +37999,6 @@ seiyaku GovernanceLifecycle {
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
                 expiry_height: None,
-                hsm: Some(HsmBinding {
-                    provider: "pkcs11".into(),
-                    key_label: "validator/0".into(),
-                    slot: None,
-                }),
                 replaces: None,
                 status: ConsensusKeyStatus::Pending,
             };
@@ -38277,11 +38024,6 @@ seiyaku GovernanceLifecycle {
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks + 1),
                 expiry_height: None,
-                hsm: Some(HsmBinding {
-                    provider: "pkcs11".into(),
-                    key_label: "validator/1".into(),
-                    slot: Some(2),
-                }),
                 replaces: Some(id_a.clone()),
                 status: ConsensusKeyStatus::Pending,
             };
@@ -39619,7 +39361,6 @@ seiyaku GovernanceLifecycle {
                     pop: None,
                     activation_height: 0,
                     expiry_height: None,
-                    hsm: None,
                     replaces: None,
                     status: ConsensusKeyStatus::Active,
                 };

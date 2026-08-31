@@ -27,15 +27,13 @@ fn request(uri: Uri, headers: HeaderMap) -> Request<Body> {
 }
 #[tokio::test]
 async fn kaigi_relay_diagnostics_reject_legacy_or_precomputed_auth_headers() {
+    const LEGACY_API_TOKEN: &str = "legacy-kaigi-token-00000000000000";
     let harness = NoritoRpcHarness::new(|cfg| {
         cfg.torii.require_api_token = true;
-        cfg.torii.api_tokens = vec!["legacy-kaigi-token".to_owned()];
+        cfg.torii.api_tokens = vec![LEGACY_API_TOKEN.to_owned()].into();
     });
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-api-token",
-        HeaderValue::from_static("legacy-kaigi-token"),
-    );
+    headers.insert("x-api-token", HeaderValue::from_static(LEGACY_API_TOKEN));
     headers.insert(
         "x-iroha-operator-nonce",
         HeaderValue::from_static("precomputed"),

@@ -289,6 +289,40 @@ const JS_MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 pub fn connect_norito_bridge_abi_version() -> u32 {
     PRIVACY_BRIDGE_ABI_VERSION_V1
 }
+/// Fail-closed validation for the exact Kagemusha operation-status JSON
+/// returned by Torii.
+///
+/// Applied top-ups recompute the complete V4 anchor digest and authenticate its
+/// balanced Merkle path and execution commitment. Commit-QC signature
+/// verification remains a separate release-pinned finality-verifier step.
+#[napi(js_name = "kagemushaOfflineOperationStatusJsonValidateV1")]
+pub fn kagemusha_offline_operation_status_json_validate_v1(
+    status_json: Uint8Array,
+) -> napi::Result<()> {
+    use iroha::client::{OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES, OfflineOperationStatus};
+
+    let bytes = status_json.as_ref();
+    if bytes.is_empty() || bytes.len() > OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "Kagemusha operation-status JSON must contain 1..={OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES} bytes"
+            ),
+        ));
+    }
+    let status = json::from_slice::<OfflineOperationStatus>(bytes).map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid Kagemusha operation-status JSON: {error}"),
+        )
+    })?;
+    status.validate_structure().map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid Kagemusha operation status: {error}"),
+        )
+    })
+}
 fn validation_fee_fixed_hash(value: &Uint8Array, label: &str) -> napi::Result<[u8; 32]> {
     let bytes: [u8; 32] = value.as_ref().try_into().map_err(|_| {
         napi::Error::new(
@@ -7084,14 +7118,12 @@ fn validation_fee_proposal_operator(value: &str) -> napi::Result<AccountId> {
             "proposal operator must be one canonical domainless AccountId",
         ));
     }
-    let account = AccountId::parse_encoded(value)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|error| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("invalid proposal operator: {error}"),
-            )
-        })?;
+    let account = AccountId::parse_encoded(value).map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid proposal operator: {error}"),
+        )
+    })?;
     if account.to_string() != value {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -12161,6 +12193,28 @@ mod tests {
     }
     fn test_network_id_bytes(label: &[u8]) -> Uint8Array {
         Uint8Array::from(test_network_id(label).as_bytes().to_vec())
+    }
+    #[test]
+    fn kagemusha_status_json_napi_boundary_validates_exact_structure() {
+        let operation_id = "11".repeat(32);
+        let transaction_hash = format!("{}25", "22".repeat(31));
+        let pending = format!(
+            r#"{{"state":"pending","value":{{"operation_id":"{operation_id}","kind":{{"kind":"top_up","value":null}},"transaction_hash":"{transaction_hash}","submitted_at_ms":1}}}}"#
+        );
+        kagemusha_offline_operation_status_json_validate_v1(Uint8Array::from(pending.into_bytes()))
+            .expect("canonical Pending status");
+
+        for invalid in [
+            br#"{}"#.as_slice(),
+            br#"{"state":"pending","value":{"operation_id":"00"}}"#.as_slice(),
+        ] {
+            assert!(
+                kagemusha_offline_operation_status_json_validate_v1(Uint8Array::from(
+                    invalid.to_vec()
+                ))
+                .is_err()
+            );
+        }
     }
     #[test]
     fn hijiri_quote_napi_codec_encodes_and_rejects_malformed_response() {

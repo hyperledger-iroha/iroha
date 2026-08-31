@@ -189,14 +189,8 @@
           "key_allowed_algorithms": [
             "bls_normal"
           ],
-          "key_allowed_hsm_providers": [
-            "pkcs11",
-            "yubihsm",
-            "softkey"
-          ],
           "key_expiry_grace_blocks": 0,
           "key_overlap_grace_blocks": 8,
-          "key_require_hsm": false,
           "max_clock_drift_ms": 1000},
         "transaction": {
           "ivm_bytecode_size": 4194304,

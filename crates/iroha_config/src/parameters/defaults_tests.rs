@@ -1,5 +1,5 @@
 //! Tests for the built-in parameter defaults.
-use super::{governance, network, nexus::fees, oracle, pipeline, queue, torii};
+use super::{governance, network, nexus::fees, norito, oracle, pipeline, queue, torii};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
 #[test]
@@ -41,6 +41,19 @@ fn soracloud_public_runtime_defaults_are_non_zero() {
     );
     assert_eq!(torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN, Some(16));
     assert_eq!(torii::SORACLOUD_MUTATION_MAX_INFLIGHT.get(), 64);
+}
+
+#[test]
+fn sccp_replay_archive_limits_bound_in_memory_decoding() {
+    use torii::sccp_replay_archive as replay;
+
+    assert_eq!(replay::MAX_RESPONSE_BYTES.get(), 64 * 1024 * 1024);
+    assert_eq!(replay::MAX_SNAPSHOT_BYTES.get(), 32 * 1024 * 1024);
+    assert_eq!(replay::MAX_SNAPSHOT_LEAVES, 256 * 1024);
+    assert_eq!(replay::MAX_RESPONSE_BYTES_HARD, 256 * 1024 * 1024);
+    assert_eq!(replay::MAX_SNAPSHOT_BYTES_HARD, 128 * 1024 * 1024);
+    assert_eq!(replay::MAX_SNAPSHOT_LEAVES_HARD, 1024 * 1024);
+    assert!(replay::MAX_SNAPSHOT_BYTES_HARD <= norito::MAX_ARCHIVE_LEN);
 }
 #[test]
 fn queue_defaults_allow_two_times_legacy_soak_capacity() {

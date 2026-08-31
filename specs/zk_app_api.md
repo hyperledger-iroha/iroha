@@ -297,8 +297,8 @@ zk_ivm_prove_job_max_entries_per_owner = 32 # per-account retained job cap
 zk_ivm_prove_job_max_retained_bytes_per_owner = 33_554_432 # per-account cap (32 MiB)
 
 # (optional) app API tokens and rate limits
-require_api_token = false
-api_tokens = ["example-token-value"]
+require_api_token = true
+api_tokens = ["example-token-value-at-least-32-bytes"]
 # Proof endpoint guardrails
 proof_rate_per_minute = 120           # steady-state tokens/min (None to disable rate limiting)
 proof_burst = 60                      # burst tokens per endpoint key

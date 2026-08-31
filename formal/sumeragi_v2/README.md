@@ -1692,7 +1692,9 @@ exact-renamed four surviving tests, and replaced one retired combined daemon
 check with its two real block/lane checks, producing the 862-test checkpoint.
 The eligible-only sealed Ready-Proposal-Sign preemption regression produced the
 863-test checkpoint; retaining the exact failed-pre-handshake dial backoff
-owner brings the current inventory to 864 tests across 44 modules.
+owner brought the inventory to 864 tests across 44 modules. The two sealed
+Certified-Serve storage regressions and the CompleteTip payload-before-ledger
+repair regression bring the current inventory to 867 tests across 44 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 85 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor. The
@@ -1770,7 +1772,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df`.
+`49312043ca34bd4a1857ef64d21bd858c4f9af1e4f39d02e5338e57bc6494a8a`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1966,7 +1968,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 85 pre-network legs and the exact
-864-test inventory, the pinned harness lock and resolved toolchain, the formal
+867-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer. The protected archived validator first publishes a no-clobber

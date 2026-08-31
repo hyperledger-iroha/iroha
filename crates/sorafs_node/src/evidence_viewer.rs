@@ -499,7 +499,7 @@ pub trait EvidenceViewerGrantBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     fn revoke(&self, token_digest: [u8; 32]) -> Result<(), EvidenceViewerExternalErrorV1>;
 }
 include!("evidence_viewer/receipt_signing.rs");
-/// Runtime-only erasure/KMS boundary.
+/// Runtime-only authenticated erasure boundary.
 pub trait EvidenceViewerErasureBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     /// Irreversibly erase or cryptographically destroy one exact object.
     ///
@@ -1781,9 +1781,9 @@ struct IdempotencyRecordV1 {
 }
 /// Durable write-ahead intent for one irreversible erasure.
 ///
-/// The intent is committed before crossing the KMS/object-store boundary and is retained until the
-/// signed receipt and terminal erasure record are durably committed. This makes crash recovery an
-/// exact idempotent replay instead of a second irreversible operation.
+/// The intent is committed before crossing the key-provider/object-store boundary and is retained
+/// until the signed receipt and terminal erasure record are durably committed. This makes crash
+/// recovery an exact idempotent replay instead of a second irreversible operation.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerErasureIntentV1 {
     operation_id: [u8; 32],
@@ -7550,7 +7550,7 @@ mod tests {
                 .build();
             let key_wrapper: Arc<dyn ModerationQuarantineKeyWrapper> =
                 Arc::new(TestQuarantineKeyWrapper {
-                    key_id: "kms:test/evidence-quarantine".to_owned(),
+                    key_id: "software://sorafs/moderation/evidence-quarantine".to_owned(),
                     key: [0xD1; 32],
                 });
             let node = NodeHandle::try_new_with_quarantine_key_wrapper(storage_config, key_wrapper)

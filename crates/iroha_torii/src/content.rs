@@ -86,7 +86,7 @@ pub async fn handle_get_content(
             &headers,
             Some(remote.ip()),
             bundle_hex.as_str(),
-            app.require_api_token,
+            app.authenticated_api_token_principal(&headers),
         );
         if !limits::allow_conditionally(&app.rate_limiter, &key, true).await {
             outcome_hint = Some("rate_limited");
@@ -286,9 +286,9 @@ fn content_rate_key(
     headers: &HeaderMap,
     remote: Option<std::net::IpAddr>,
     hint: &str,
-    require_api_token: bool,
+    authenticated_api_token: Option<limits::ApiTokenPrincipal>,
 ) -> String {
-    limits::key_from_headers(headers, remote, Some(hint), require_api_token)
+    limits::key_from_headers(headers, remote, Some(hint), authenticated_api_token)
 }
 fn enforce_pow(
     pow: &iroha_config::parameters::actual::ContentPow,
@@ -1133,13 +1133,14 @@ mod tests {
     fn rate_key_uses_headers_and_remote() {
         let mut headers = HeaderMap::new();
         headers.insert("x-api-token", HeaderValue::from_static("token-1"));
-        let key = content_rate_key(&headers, None, "bundle", true);
-        assert_eq!(key, "token-1");
+        let principal = limits::ApiTokenPrincipal::from_token("token-1");
+        let key = content_rate_key(&headers, None, "bundle", Some(principal));
+        assert_eq!(key, principal.rate_limit_key());
         let key = content_rate_key(
             &HeaderMap::new(),
             Some("127.0.0.1".parse().unwrap()),
             "bundle",
-            false,
+            None,
         );
         assert_eq!(key, "127.0.0.1");
     }

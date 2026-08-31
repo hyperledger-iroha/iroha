@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Hyperledger.Iroha.Norito;
@@ -29,13 +30,14 @@ public sealed class ToriiKagemushaTopUpRequestV4
 {
     private readonly byte[] norito;
 
-    public ToriiKagemushaTopUpRequestV4(string operationId, ReadOnlySpan<byte> norito)
+    public ToriiKagemushaTopUpRequestV4(ReadOnlySpan<byte> norito)
     {
-        OperationId = ToriiKagemushaTransport.RequireOperationId(operationId, nameof(operationId));
-        this.norito = ToriiKagemushaTransport.RequireNoritoArchive(
+        (this.norito, OperationId) = ToriiKagemushaTransport.RequireNoritoRequestArchive(
             norito,
             ToriiKagemushaTransport.MaxTopUpNoritoRequestBytes,
             ToriiKagemushaTransport.TopUpRequestSchemaName,
+            fieldCount: 8,
+            operationIdFieldIndex: 6,
             nameof(norito));
     }
 
@@ -53,13 +55,14 @@ public sealed class ToriiKagemushaRedeemRequestV4
 {
     private readonly byte[] norito;
 
-    public ToriiKagemushaRedeemRequestV4(string operationId, ReadOnlySpan<byte> norito)
+    public ToriiKagemushaRedeemRequestV4(ReadOnlySpan<byte> norito)
     {
-        OperationId = ToriiKagemushaTransport.RequireOperationId(operationId, nameof(operationId));
-        this.norito = ToriiKagemushaTransport.RequireNoritoArchive(
+        (this.norito, OperationId) = ToriiKagemushaTransport.RequireNoritoRequestArchive(
             norito,
             ToriiKagemushaTransport.MaxRedeemNoritoRequestBytes,
             ToriiKagemushaTransport.RedeemRequestSchemaName,
+            fieldCount: 10,
+            operationIdFieldIndex: 8,
             nameof(norito));
     }
 
@@ -98,20 +101,25 @@ public sealed record class ToriiKagemushaOperationReference
 
     public required string StatusUri { get; init; }
 
-    public ulong SubmittedAtMilliseconds { get; init; }
+    public required ulong SubmittedAtMilliseconds { get; init; }
 }
 
 /// <summary>
 /// Terminal top-up projection. Anchor and finality proof remain typed JSON
 /// documents because this SDK intentionally does not ship a native prover.
 /// </summary>
+/// <remarks>
+/// Operation-status decoding validates their portable structure and mutual
+/// bindings, but does not authenticate the embedded Commit-QC signature.
+/// Consumers must verify that signature against a separately trusted,
+/// release-pinned validator roster before treating this evidence as consensus
+/// finality.
+/// </remarks>
 public sealed record class ToriiKagemushaTopUpResultV4
 {
     public required string TransactionHash { get; init; }
 
     public ulong FinalizedBlockHeight { get; init; }
-
-    public ulong ServerTimeMilliseconds { get; init; }
 
     public required JsonElement Anchor { get; init; }
 
@@ -126,8 +134,6 @@ public sealed record class ToriiKagemushaRedeemResultV4
     public required string TransactionHash { get; init; }
 
     public ulong FinalizedBlockHeight { get; init; }
-
-    public ulong ServerTimeMilliseconds { get; init; }
 }
 
 /// <summary>
@@ -151,10 +157,15 @@ public sealed record class ToriiKagemushaOperationStatus
 
     public required ToriiKagemushaOperationState State { get; init; }
 
-    public ToriiKagemushaOperationKind? Kind { get; init; }
+    public required ToriiKagemushaOperationKind Kind { get; init; }
 
-    public string? TransactionHash { get; init; }
+    public required string TransactionHash { get; init; }
 
+    /// <summary>
+    /// The active submission time carried only by Pending responses. It repeats while their
+    /// transaction hash is unchanged and may replace both values for a newer exact retry
+    /// attempt. Applied and Rejected responses omit this field.
+    /// </summary>
     public ulong? SubmittedAtMilliseconds { get; init; }
 
     public ToriiKagemushaTopUpResultV4? TopUpResult { get; init; }
@@ -169,13 +180,16 @@ internal static class ToriiKagemushaTransport
     internal const int BridgeAbiVersion = 23;
     internal const int ManifestVersion = 4;
     internal const int MaxHops = 8;
-    internal const int MaxJsonResponseBytes = 256 * 1024;
+    internal const int MaxReadinessJsonResponseBytes = 4 * 1024;
+    internal const int MaxOperationReferenceJsonResponseBytes = 4 * 1024;
+    internal const int MaxOperationStatusJsonResponseBytes = 16 * 1024 * 1024;
     internal const int MaxTopUpNoritoRequestBytes = 512 * 1024;
     internal const int MaxRedeemNoritoRequestBytes = 48 * 1024 * 1024;
     internal const string TopUpRequestSchemaName = "iroha.torii.v1.offline.top_up.request";
     internal const string RedeemRequestSchemaName = "iroha.torii.v1.offline.redeem.request";
 
     private const int RequiredHeaderPaddingBytes = 8;
+    private const ushort RequestWireVersion = 4;
 
     internal static string RequireOperationId(string? value, string parameterName)
     {
@@ -192,10 +206,12 @@ internal static class ToriiKagemushaTransport
         return value;
     }
 
-    internal static byte[] RequireNoritoArchive(
+    internal static (byte[] Archive, string OperationId) RequireNoritoRequestArchive(
         ReadOnlySpan<byte> value,
         int maximumBytes,
         string expectedSchemaName,
+        int fieldCount,
+        int operationIdFieldIndex,
         string parameterName)
     {
         if (value.Length < NoritoHeader.EncodedLength || value.Length > maximumBytes)
@@ -227,6 +243,39 @@ internal static class ToriiKagemushaTransport
                 parameterName);
         }
 
-        return value.ToArray();
+        if (fieldCount <= 0 || operationIdFieldIndex < 0 || operationIdFieldIndex >= fieldCount)
+        {
+            throw new InvalidOperationException("Kagemusha request field layout is invalid.");
+        }
+
+        var reader = new CanonicalNoritoReader(payload, "Kagemusha V4 request", parameterName);
+        ReadOnlySpan<byte> operationId = default;
+        for (var index = 0; index < fieldCount; index++)
+        {
+            var field = reader.ReadField($"field[{index}]");
+            if (index == 0)
+            {
+                if (field.Length != sizeof(ushort)
+                    || BinaryPrimitives.ReadUInt16LittleEndian(field) != RequestWireVersion)
+                {
+                    throw new ArgumentException(
+                        "Kagemusha request must use first-release wire version 4.",
+                        parameterName);
+                }
+            }
+            if (index == operationIdFieldIndex)
+            {
+                operationId = field;
+            }
+        }
+        reader.RequireEnd();
+        if (operationId.Length != 32 || operationId.IndexOfAnyExcept((byte)0) < 0)
+        {
+            throw new ArgumentException(
+                "Kagemusha request operation id must be a non-zero 32-byte value.",
+                parameterName);
+        }
+
+        return (value.ToArray(), Convert.ToHexString(operationId).ToLowerInvariant());
     }
 }

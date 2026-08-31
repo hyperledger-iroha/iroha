@@ -1,8 +1,10 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Hyperledger.Iroha.Norito;
 
 namespace Hyperledger.Iroha.Torii;
 
@@ -26,6 +28,7 @@ public sealed partial class ToriiClient
         using var document = await ReadKagemushaJsonAsync(
             response,
             "Offline capability response",
+            ToriiKagemushaTransport.MaxReadinessJsonResponseBytes,
             cancellationToken);
         return ParseOfflineCapability(document.RootElement);
     }
@@ -56,11 +59,32 @@ public sealed partial class ToriiClient
             cancellationToken);
     }
 
-    public async Task<ToriiKagemushaOperationStatus> GetKagemushaOperationStatusAsync(
-        string operationId,
+    /// <summary>
+    /// Polls one accepted operation identity and validates the returned
+    /// result's continuity. Exact retries and a foreign-authority global Applied
+    /// winner may advance the transaction hash. After Pending advances its hash
+    /// and timestamp, callers must use that returned pair in the reference for
+    /// the next poll. Applied top-ups additionally authenticate their balanced-
+    /// Merkle path and combined post-state root against the embedded
+    /// execution commitment. The embedded Commit-QC signature still requires
+    /// verification against a separately trusted validator roster before the
+    /// proof can establish offline consensus finality.
+    /// </summary>
+    public Task<ToriiKagemushaOperationStatus> GetKagemushaOperationStatusAsync(
+        ToriiKagemushaOperationReference reference,
+        CancellationToken cancellationToken = default) =>
+        GetKagemushaOperationStatusAsync(
+            reference,
+            NativeKagemushaOperationStatusValidator.Instance,
+            cancellationToken);
+
+    internal async Task<ToriiKagemushaOperationStatus> GetKagemushaOperationStatusAsync(
+        ToriiKagemushaOperationReference reference,
+        IKagemushaOperationStatusValidator statusValidator,
         CancellationToken cancellationToken = default)
     {
-        var canonicalId = ToriiKagemushaTransport.RequireOperationId(operationId, nameof(operationId));
+        ArgumentNullException.ThrowIfNull(statusValidator);
+        var canonicalId = RequirePollableKagemushaOperationReference(reference);
         using var response = await SendAsync(
             HttpMethod.Get,
             $"/v1/offline/operations/{canonicalId}",
@@ -71,8 +95,10 @@ public sealed partial class ToriiClient
         using var document = await ReadKagemushaJsonAsync(
             response,
             "Kagemusha operation status response",
-            cancellationToken);
-        return ParseKagemushaOperationStatus(document.RootElement, canonicalId);
+            ToriiKagemushaTransport.MaxOperationStatusJsonResponseBytes,
+            cancellationToken,
+            statusValidator);
+        return ParseKagemushaOperationStatus(document.RootElement, reference);
     }
 
     private async Task<ToriiKagemushaOperationReference> SubmitKagemushaV4Async(
@@ -105,6 +131,7 @@ public sealed partial class ToriiClient
         using var document = await ReadKagemushaJsonAsync(
             response,
             "Kagemusha operation reference response",
+            ToriiKagemushaTransport.MaxOperationReferenceJsonResponseBytes,
             cancellationToken);
         var location = response.Headers.Location?.OriginalString;
         return ParseKagemushaOperationReference(
@@ -117,7 +144,9 @@ public sealed partial class ToriiClient
     private static async Task<JsonDocument> ReadKagemushaJsonAsync(
         HttpResponseMessage response,
         string context,
-        CancellationToken cancellationToken)
+        int maximumBytes,
+        CancellationToken cancellationToken,
+        IKagemushaOperationStatusValidator? statusValidator = null)
     {
         if (!string.Equals(
                 response.Content.Headers.ContentType?.MediaType,
@@ -130,7 +159,9 @@ public sealed partial class ToriiClient
         var body = await ReadBoundedKagemushaJsonBodyAsync(
             response.Content,
             context,
+            maximumBytes,
             cancellationToken);
+        statusValidator?.Validate(body);
         await using var stream = new MemoryStream(body, writable: false);
         return await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
             stream,
@@ -153,13 +184,14 @@ public sealed partial class ToriiClient
     private static async Task<byte[]> ReadBoundedKagemushaJsonBodyAsync(
         HttpContent content,
         string context,
+        int maximumBytes,
         CancellationToken cancellationToken)
     {
         var declaredLength = content.Headers.ContentLength;
-        if (declaredLength is > ToriiKagemushaTransport.MaxJsonResponseBytes)
+        if (declaredLength.HasValue && declaredLength.Value > maximumBytes)
         {
             throw new InvalidDataException(
-                $"{context} exceeds the {ToriiKagemushaTransport.MaxJsonResponseBytes}-byte limit.");
+                $"{context} exceeds the {maximumBytes}-byte limit.");
         }
 
         await using var input = await content.ReadAsStreamAsync(cancellationToken);
@@ -174,10 +206,10 @@ public sealed partial class ToriiClient
             {
                 break;
             }
-            if (output.Length > ToriiKagemushaTransport.MaxJsonResponseBytes - read)
+            if (output.Length > maximumBytes - read)
             {
                 throw new InvalidDataException(
-                    $"{context} exceeds the {ToriiKagemushaTransport.MaxJsonResponseBytes}-byte limit.");
+                    $"{context} exceeds the {maximumBytes}-byte limit.");
             }
             await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
         }
@@ -262,7 +294,7 @@ public sealed partial class ToriiClient
 
     private static ToriiKagemushaOperationStatus ParseKagemushaOperationStatus(
         JsonElement root,
-        string expectedOperationId)
+        ToriiKagemushaOperationReference expectedReference)
     {
         RequireExactFields(root, "Kagemusha operation status", "state", "value");
         var stateText = RequireJsonString(root.GetProperty("state"), "state");
@@ -272,18 +304,32 @@ public sealed partial class ToriiClient
             throw new JsonException("Kagemusha operation status value must be an object.");
         }
         var operationId = RequireJsonOperationId(value.GetProperty("operation_id"), "value.operation_id");
-        if (!string.Equals(operationId, expectedOperationId, StringComparison.Ordinal))
+        if (!string.Equals(operationId, expectedReference.OperationId, StringComparison.Ordinal))
         {
             throw new JsonException("Kagemusha operation status does not match the requested operation id.");
         }
 
-        return stateText switch
+        var status = stateText switch
         {
             "pending" => ParsePendingStatus(value, operationId),
             "applied" => ParseAppliedStatus(value, operationId),
             "rejected" => ParseRejectedStatus(value, operationId),
             _ => throw new JsonException("Kagemusha operation state must be pending, applied, or rejected."),
         };
+
+        if (status.Kind != expectedReference.Kind
+            || status.State == ToriiKagemushaOperationState.Pending
+                && string.Equals(
+                    status.TransactionHash,
+                    expectedReference.TransactionHash,
+                    StringComparison.Ordinal)
+                && status.SubmittedAtMilliseconds != expectedReference.SubmittedAtMilliseconds)
+        {
+            throw new JsonException(
+                "Kagemusha operation status does not match the accepted operation reference.");
+        }
+
+        return status;
     }
 
     private static ToriiKagemushaOperationStatus ParsePendingStatus(JsonElement value, string operationId)
@@ -318,18 +364,19 @@ public sealed partial class ToriiClient
                 result,
                 "Kagemusha redeem result",
                 "transaction_hash",
-                "finalized_block_height",
-                "server_time_ms");
+                "finalized_block_height");
             return new ToriiKagemushaOperationStatus
             {
                 OperationId = operationId,
                 State = ToriiKagemushaOperationState.Applied,
                 Kind = ToriiKagemushaOperationKind.Redeem,
+                TransactionHash = RequireJsonHash(
+                    result.GetProperty("transaction_hash"),
+                    "result.transaction_hash"),
                 RedeemResult = new ToriiKagemushaRedeemResultV4
                 {
                     TransactionHash = RequireJsonHash(result.GetProperty("transaction_hash"), "result.transaction_hash"),
                     FinalizedBlockHeight = RequireJsonPositiveUInt64(result.GetProperty("finalized_block_height"), "result.finalized_block_height"),
-                    ServerTimeMilliseconds = RequireJsonPositiveUInt64(result.GetProperty("server_time_ms"), "result.server_time_ms"),
                 },
             };
         }
@@ -343,9 +390,14 @@ public sealed partial class ToriiClient
             "Kagemusha top-up result",
             "transaction_hash",
             "finalized_block_height",
-            "server_time_ms",
             "anchor",
             "finality_proof");
+        var transactionHash = RequireJsonHash(
+            result.GetProperty("transaction_hash"),
+            "result.transaction_hash");
+        var finalizedBlockHeight = RequireJsonPositiveUInt64(
+            result.GetProperty("finalized_block_height"),
+            "result.finalized_block_height");
         var anchor = RequireJsonObject(result.GetProperty("anchor"), "result.anchor");
         if (RequireJsonUInt64(
                 RequireJsonProperty(anchor, "version", "result.anchor"),
@@ -363,7 +415,7 @@ public sealed partial class ToriiClient
         {
             throw new JsonException("Kagemusha top-up artifact binding must use V4.");
         }
-        RequireJsonFixedBytes32MatchesOperationId(
+        var anchorOperationId = RequireJsonFixedBytes32MatchesOperationId(
             RequireJsonProperty(anchor, "topup_operation_id", "result.anchor"),
             operationId,
             "result.anchor.topup_operation_id");
@@ -375,12 +427,13 @@ public sealed partial class ToriiClient
                 RequireJsonProperty(finalityProof, "version", "result.finality_proof"),
                 "result.finality_proof.version") != 1)
         {
-            throw new JsonException("Kagemusha top-up finality proof must use V1.");
+            throw new JsonException(
+                "KagemushaTopUpFinalityProofV2 must use numeric wire version 1.");
         }
         var finalityAnchor = RequireJsonObject(
             RequireJsonProperty(finalityProof, "anchor", "result.finality_proof"),
             "result.finality_proof.anchor");
-        RequireJsonFixedBytes32MatchesOperationId(
+        var finalityOperationId = RequireJsonFixedBytes32MatchesOperationId(
             RequireJsonProperty(
                 finalityAnchor,
                 "topup_operation_id",
@@ -388,16 +441,28 @@ public sealed partial class ToriiClient
             operationId,
             "result.finality_proof.anchor.topup_operation_id");
 
+        // This authenticates the anchor path and combined state root against
+        // the execution commitment embedded in the response. It deliberately
+        // does not claim that the Commit-QC signature is authentic: that
+        // requires a separately trusted validator roster.
+        ValidateKagemushaTopUpExecutionCommitment(
+            anchor,
+            finalityProof,
+            anchorOperationId,
+            finalityOperationId,
+            transactionHash,
+            finalizedBlockHeight);
+
         return new ToriiKagemushaOperationStatus
         {
             OperationId = operationId,
             State = ToriiKagemushaOperationState.Applied,
             Kind = ToriiKagemushaOperationKind.TopUp,
+            TransactionHash = transactionHash,
             TopUpResult = new ToriiKagemushaTopUpResultV4
             {
-                TransactionHash = RequireJsonHash(result.GetProperty("transaction_hash"), "result.transaction_hash"),
-                FinalizedBlockHeight = RequireJsonPositiveUInt64(result.GetProperty("finalized_block_height"), "result.finalized_block_height"),
-                ServerTimeMilliseconds = RequireJsonPositiveUInt64(result.GetProperty("server_time_ms"), "result.server_time_ms"),
+                TransactionHash = transactionHash,
+                FinalizedBlockHeight = finalizedBlockHeight,
                 Anchor = anchor.Clone(),
                 FinalityProof = finalityProof.Clone(),
             },
@@ -477,6 +542,40 @@ public sealed partial class ToriiClient
         return ToriiKagemushaOperationState.Pending;
     }
 
+    private static string RequirePollableKagemushaOperationReference(
+        ToriiKagemushaOperationReference reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        var operationId = ToriiKagemushaTransport.RequireOperationId(
+            reference.OperationId,
+            nameof(reference));
+        var expectedStatusUri = $"/v1/offline/operations/{operationId}";
+        if (reference.Kind is not (ToriiKagemushaOperationKind.TopUp
+                or ToriiKagemushaOperationKind.Redeem)
+            || reference.State != ToriiKagemushaOperationState.Pending
+            || reference.SubmittedAtMilliseconds == 0
+            || !string.Equals(reference.StatusUri, expectedStatusUri, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Kagemusha operation reference must be the exact pending reference returned by Torii.",
+                nameof(reference));
+        }
+
+        var transactionHash = reference.TransactionHash;
+        if (transactionHash is null
+            || transactionHash.Length != 64
+            || transactionHash.Any(static character =>
+                character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))
+            || "13579bdf".IndexOf(transactionHash[^1]) < 0)
+        {
+            throw new ArgumentException(
+                "Kagemusha operation reference must contain an exact canonical marker-bearing Iroha transaction hash.",
+                nameof(reference));
+        }
+
+        return operationId;
+    }
+
     private static void RequireExactFields(JsonElement element, string context, params string[] expected)
     {
         if (element.ValueKind != JsonValueKind.Object)
@@ -524,6 +623,15 @@ public sealed partial class ToriiClient
         return value;
     }
 
+    private static uint RequireJsonUInt32(JsonElement element, string context)
+    {
+        if (element.ValueKind != JsonValueKind.Number || !element.TryGetUInt32(out var value))
+        {
+            throw new JsonException($"{context} must be an unsigned 32-bit integer.");
+        }
+        return value;
+    }
+
     private static ulong RequireJsonPositiveUInt64(JsonElement element, string context)
     {
         var value = RequireJsonUInt64(element, context);
@@ -547,16 +655,29 @@ public sealed partial class ToriiClient
         return property;
     }
 
-    private static void RequireJsonFixedBytes32MatchesOperationId(
+    private static byte[] RequireJsonFixedBytes32MatchesOperationId(
         JsonElement element,
         string operationId,
         string context)
+    {
+        var bytes = RequireJsonFixedBytes32(element, context);
+        var expected = Convert.FromHexString(operationId);
+        if (!bytes.AsSpan().SequenceEqual(expected))
+        {
+            throw new JsonException($"{context} does not match the requested operation id.");
+        }
+
+        return bytes;
+    }
+
+    private static byte[] RequireJsonFixedBytes32(JsonElement element, string context)
     {
         if (element.ValueKind != JsonValueKind.Array || element.GetArrayLength() != 32)
         {
             throw new JsonException($"{context} must be an array of 32 bytes.");
         }
 
+        var bytes = new byte[32];
         var index = 0;
         foreach (var item in element.EnumerateArray())
         {
@@ -564,16 +685,286 @@ public sealed partial class ToriiClient
             {
                 throw new JsonException($"{context} must be an array of 32 bytes.");
             }
-            var expected = byte.Parse(
-                operationId.AsSpan(index * 2, 2),
-                NumberStyles.AllowHexSpecifier,
-                CultureInfo.InvariantCulture);
-            if (value != expected)
-            {
-                throw new JsonException($"{context} does not match the requested operation id.");
-            }
+            bytes[index] = (byte)value;
             index++;
         }
+        return bytes;
+    }
+
+    private static void ValidateKagemushaTopUpExecutionCommitment(
+        JsonElement anchor,
+        JsonElement finalityProof,
+        byte[] anchorOperationId,
+        byte[] finalityOperationId,
+        string transactionHash,
+        ulong finalizedBlockHeight)
+    {
+        const string proofContext = "result.finality_proof";
+        var anchorDigest = RequireJsonFixedBytes32(
+            RequireJsonProperty(anchor, "anchor_digest", "result.anchor"),
+            "result.anchor.anchor_digest");
+        var finalityAnchor = RequireJsonObject(
+            RequireJsonProperty(finalityProof, "anchor", proofContext),
+            $"{proofContext}.anchor");
+        var finalityAnchorDigest = RequireJsonFixedBytes32(
+            RequireJsonProperty(finalityAnchor, "anchor_digest", $"{proofContext}.anchor"),
+            $"{proofContext}.anchor.anchor_digest");
+        if (!anchorOperationId.AsSpan().SequenceEqual(finalityOperationId)
+            || !anchorDigest.AsSpan().SequenceEqual(finalityAnchorDigest)
+            || anchorDigest.AsSpan().IndexOfAnyExcept((byte)0) < 0)
+        {
+            throw new JsonException(
+                "Kagemusha top-up finality proof anchor does not match the finalized anchor.");
+        }
+
+        var anchorTransactionHash = RequireJsonFixedBytes32(
+            RequireJsonProperty(anchor, "finalized_tx_hash", "result.anchor"),
+            "result.anchor.finalized_tx_hash");
+        var anchorFinalizedHeight = RequireJsonPositiveUInt64(
+            RequireJsonProperty(anchor, "finalized_height", "result.anchor"),
+            "result.anchor.finalized_height");
+        var anchorNetworkId = RequireJsonIrohaHash(
+            RequireJsonProperty(anchor, "network_id", "result.anchor"),
+            "result.anchor.network_id");
+        if (!anchorTransactionHash.AsSpan().SequenceEqual(Convert.FromHexString(transactionHash))
+            || anchorFinalizedHeight != finalizedBlockHeight)
+        {
+            throw new JsonException(
+                "Kagemusha top-up terminal transaction or height does not match the finalized anchor.");
+        }
+
+        var anchorPath = RequireJsonObject(
+            RequireJsonProperty(finalityProof, "anchor_path", proofContext),
+            $"{proofContext}.anchor_path");
+        RequireExactFields(
+            anchorPath,
+            "Kagemusha top-up finality anchor path",
+            "leaf_index",
+            "leaf_count",
+            "siblings");
+        var leafIndex = RequireJsonUInt32(
+            anchorPath.GetProperty("leaf_index"),
+            $"{proofContext}.anchor_path.leaf_index");
+        var leafCount = RequireJsonUInt32(
+            anchorPath.GetProperty("leaf_count"),
+            $"{proofContext}.anchor_path.leaf_count");
+        if (leafCount is 0 or > 16 || leafIndex >= leafCount)
+        {
+            throw new JsonException(
+                "Kagemusha top-up finality anchor path has an invalid leaf index or count.");
+        }
+
+        var siblingsElement = anchorPath.GetProperty("siblings");
+        if (siblingsElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new JsonException(
+                $"{proofContext}.anchor_path.siblings must be an array.");
+        }
+        var expectedDepth = 0;
+        for (var width = 1U; width < leafCount; width <<= 1)
+        {
+            expectedDepth++;
+        }
+        if (siblingsElement.GetArrayLength() != expectedDepth || expectedDepth > 4)
+        {
+            throw new JsonException(
+                $"{proofContext}.anchor_path.siblings must contain the canonical {expectedDepth}-level path.");
+        }
+
+        var siblings = new byte[expectedDepth][];
+        var siblingIndex = 0;
+        foreach (var siblingElement in siblingsElement.EnumerateArray())
+        {
+            var sibling = RequireJsonFixedBytes32(
+                siblingElement,
+                $"{proofContext}.anchor_path.siblings[{siblingIndex}]");
+            if ((sibling[^1] & 1) == 0)
+            {
+                throw new JsonException(
+                    $"{proofContext}.anchor_path.siblings[{siblingIndex}] must set the Iroha hash marker bit.");
+            }
+            siblings[siblingIndex++] = sibling;
+        }
+
+        var commitQc = RequireJsonObject(
+            RequireJsonProperty(finalityProof, "commit_qc", proofContext),
+            $"{proofContext}.commit_qc");
+        var heightContext = RequireJsonObject(
+            RequireJsonProperty(commitQc, "height_context", $"{proofContext}.commit_qc"),
+            $"{proofContext}.commit_qc.height_context");
+        var contextHeight = RequireJsonPositiveUInt64(
+            RequireJsonProperty(
+                heightContext,
+                "height",
+                $"{proofContext}.commit_qc.height_context"),
+            $"{proofContext}.commit_qc.height_context.height");
+        var contextNetworkId = RequireJsonIrohaHash(
+            RequireJsonProperty(
+                heightContext,
+                "network_id",
+                $"{proofContext}.commit_qc.height_context"),
+            $"{proofContext}.commit_qc.height_context.network_id");
+        if (contextHeight != finalizedBlockHeight
+            || !contextNetworkId.AsSpan().SequenceEqual(anchorNetworkId))
+        {
+            throw new JsonException(
+                "Kagemusha top-up Commit-QC height context does not match the finalized anchor.");
+        }
+        var certificate = RequireJsonObject(
+            RequireJsonProperty(commitQc, "certificate", $"{proofContext}.commit_qc"),
+            $"{proofContext}.commit_qc.certificate");
+        var executionCommitment = RequireJsonObject(
+            RequireJsonProperty(
+                certificate,
+                "execution_commitment",
+                $"{proofContext}.commit_qc.certificate"),
+            $"{proofContext}.commit_qc.certificate.execution_commitment");
+        var commitmentContext =
+            $"{proofContext}.commit_qc.certificate.execution_commitment";
+        var committedLeafCount = RequireJsonUInt32(
+            RequireJsonProperty(executionCommitment, "topup_anchor_count", commitmentContext),
+            $"{commitmentContext}.topup_anchor_count");
+        if (committedLeafCount != leafCount)
+        {
+            throw new JsonException(
+                "Kagemusha top-up finality anchor path leaf count does not match the execution commitment.");
+        }
+
+        var committedTopUpRoot = RequireJsonIrohaHash(
+            RequireJsonProperty(executionCommitment, "topup_anchor_root", commitmentContext),
+            $"{commitmentContext}.topup_anchor_root");
+        var current = ComputeKagemushaTopUpLeafHash(finalityOperationId, finalityAnchorDigest);
+        var index = leafIndex;
+        for (var level = 0; level < siblings.Length; level++)
+        {
+            var sibling = siblings[level];
+            current = (index & 1) == 0
+                ? ComputeKagemushaTopUpNodeHash((ushort)level, current, sibling)
+                : ComputeKagemushaTopUpNodeHash((ushort)level, sibling, current);
+            index >>= 1;
+        }
+        if (!current.AsSpan().SequenceEqual(committedTopUpRoot))
+        {
+            throw new JsonException(
+                "Kagemusha top-up finality anchor path does not authenticate the anchor against the embedded execution commitment.");
+        }
+
+        var ordinaryWritesRoot = RequireJsonIrohaHash(
+            RequireJsonProperty(executionCommitment, "ordinary_writes_root", commitmentContext),
+            $"{commitmentContext}.ordinary_writes_root");
+        var committedPostStateRoot = RequireJsonIrohaHash(
+            RequireJsonProperty(executionCommitment, "post_state_root", commitmentContext),
+            $"{commitmentContext}.post_state_root");
+        var expectedPostStateRoot = ComputeKagemushaTopUpPostStateRoot(
+            leafCount,
+            ordinaryWritesRoot,
+            committedTopUpRoot);
+        if (!expectedPostStateRoot.AsSpan().SequenceEqual(committedPostStateRoot))
+        {
+            throw new JsonException(
+                "Kagemusha top-up execution commitment post-state root does not authenticate the top-up projection.");
+        }
+    }
+
+    private static byte[] ComputeKagemushaTopUpLeafHash(
+        ReadOnlySpan<byte> operationId,
+        ReadOnlySpan<byte> anchorDigest)
+    {
+        var key = new byte[1 + IrohaHash.Length];
+        key[0] = 0xd2;
+        operationId.CopyTo(key.AsSpan(1));
+        var keyHash = IrohaHash.Hash(key);
+        var valueHash = IrohaHash.Hash(anchorDigest);
+        var preimage = new byte[1 + 2 * IrohaHash.Length];
+        preimage[0] = 0;
+        keyHash.CopyTo(preimage.AsSpan(1));
+        valueHash.CopyTo(preimage.AsSpan(1 + IrohaHash.Length));
+        return IrohaHash.Hash(preimage);
+    }
+
+    private static byte[] ComputeKagemushaTopUpNodeHash(
+        ushort level,
+        ReadOnlySpan<byte> left,
+        ReadOnlySpan<byte> right)
+    {
+        ReadOnlySpan<byte> domain = "iroha:kagemusha:v2:topup-node"u8;
+        var preimage = new byte[domain.Length + 1 + sizeof(ushort) + 2 * IrohaHash.Length];
+        domain.CopyTo(preimage);
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            preimage.AsSpan(domain.Length + 1, sizeof(ushort)),
+            level);
+        left.CopyTo(preimage.AsSpan(domain.Length + 1 + sizeof(ushort)));
+        right.CopyTo(
+            preimage.AsSpan(domain.Length + 1 + sizeof(ushort) + IrohaHash.Length));
+        return IrohaHash.Hash(preimage);
+    }
+
+    private static byte[] ComputeKagemushaTopUpPostStateRoot(
+        uint topUpCount,
+        ReadOnlySpan<byte> ordinaryWritesRoot,
+        ReadOnlySpan<byte> topUpRoot)
+    {
+        ReadOnlySpan<byte> domain = "iroha:kagemusha:v2:post-state-root"u8;
+        var preimage = new byte[domain.Length + 1 + sizeof(uint) + 2 * IrohaHash.Length];
+        domain.CopyTo(preimage);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            preimage.AsSpan(domain.Length + 1, sizeof(uint)),
+            topUpCount);
+        ordinaryWritesRoot.CopyTo(preimage.AsSpan(domain.Length + 1 + sizeof(uint)));
+        topUpRoot.CopyTo(
+            preimage.AsSpan(domain.Length + 1 + sizeof(uint) + IrohaHash.Length));
+        return IrohaHash.Hash(preimage);
+    }
+
+    private static byte[] RequireJsonIrohaHash(JsonElement element, string context)
+    {
+        var value = RequireJsonString(element, context);
+        if (value.Length != 74
+            || !value.StartsWith("hash:", StringComparison.Ordinal)
+            || value[69] != '#')
+        {
+            throw new JsonException(
+                $"{context} must be a canonical checksummed Norito hash literal.");
+        }
+
+        var body = value.AsSpan(5, 64);
+        var checksum = value.AsSpan(70, 4);
+        if (body.IndexOfAnyExcept("0123456789ABCDEF".AsSpan()) >= 0
+            || checksum.IndexOfAnyExcept("0123456789ABCDEF".AsSpan()) >= 0
+            || !ushort.TryParse(
+                checksum,
+                NumberStyles.HexNumber,
+                CultureInfo.InvariantCulture,
+                out var supplied)
+            || supplied != ComputeKagemushaCrc16(
+                Encoding.ASCII.GetBytes(value.AsSpan(0, 69).ToString())))
+        {
+            throw new JsonException(
+                $"{context} has a malformed or invalid Norito hash checksum.");
+        }
+
+        var bytes = Convert.FromHexString(body);
+        if ((bytes[^1] & 1) == 0)
+        {
+            throw new JsonException($"{context} must set the Iroha hash marker bit.");
+        }
+        return bytes;
+    }
+
+    private static ushort ComputeKagemushaCrc16(ReadOnlySpan<byte> bytes)
+    {
+        var crc = 0xffff;
+        foreach (var item in bytes)
+        {
+            crc ^= item << 8;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                crc = (crc & 0x8000) != 0
+                    ? ((crc << 1) ^ 0x1021) & 0xffff
+                    : (crc << 1) & 0xffff;
+            }
+        }
+        return (ushort)crc;
     }
 
     private static string RequireJsonErrorCode(JsonElement element, string context)

@@ -447,6 +447,21 @@ mod tests {
         changed.gov.plain_voting_enabled = !changed.gov.plain_voting_enabled;
         assert_changed("governance execution policy", changed);
         let mut changed = baseline.clone();
+        changed.gov.max_active_referenda =
+            NonZeroU32::new(changed.gov.max_active_referenda.get().saturating_add(1))
+                .expect("incremented referendum cap remains nonzero");
+        assert_changed("active-referendum cardinality policy", changed);
+        let mut changed = baseline.clone();
+        changed.gov.max_lock_owners_per_referendum = NonZeroU32::new(
+            changed
+                .gov
+                .max_lock_owners_per_referendum
+                .get()
+                .saturating_add(1),
+        )
+        .expect("incremented lock-owner cap remains nonzero");
+        assert_changed("per-referendum lock-owner cardinality policy", changed);
+        let mut changed = baseline.clone();
         changed.gov.parliament_sortition_pulse_delay_blocks = changed
             .gov
             .parliament_sortition_pulse_delay_blocks
@@ -1226,17 +1241,8 @@ mod tests {
         assert_config_change!("key expiry", |config: &mut Sumeragi| {
             config.keys.expiry_grace_blocks += 1;
         });
-        assert_config_change!("HSM requirement", |config: &mut Sumeragi| {
-            config.keys.require_hsm = true;
-        });
         assert_config_change!("key algorithms", |config: &mut Sumeragi| {
             config.keys.allowed_algorithms.insert(Algorithm::Ed25519);
-        });
-        assert_config_change!("HSM providers", |config: &mut Sumeragi| {
-            config
-                .keys
-                .allowed_hsm_providers
-                .insert("test-hsm".to_owned());
         });
         assert_ne!(
             baseline,
@@ -1349,13 +1355,6 @@ mod tests {
         let mut config = default_v2_sumeragi();
         config.keys.allowed_algorithms.clear();
         assert_error(&config, SumeragiV2ConfigError::MissingBlsNormal);
-        let mut config = default_v2_sumeragi();
-        config.keys.require_hsm = true;
-        config.keys.allowed_hsm_providers.clear();
-        assert_error(&config, SumeragiV2ConfigError::MissingHsmProvider);
-        let mut config = default_v2_sumeragi();
-        config.keys.allowed_hsm_providers.insert("   ".to_owned());
-        assert_error(&config, SumeragiV2ConfigError::EmptyHsmProvider);
     }
     #[test]
     fn sumeragi_v2_config_rejects_merge_runtime_limit_boundaries() {

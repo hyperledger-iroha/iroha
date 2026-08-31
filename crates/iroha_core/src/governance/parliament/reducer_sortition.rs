@@ -111,7 +111,7 @@ impl ParliamentAttemptStateV1 {
         Ok(())
     }
 
-    /// Record an objective empty or singleton electorate before a hidden-body
+    /// Record an objective sub-anonymity-floor electorate before a hidden-body
     /// future-pulse request can be created.
     ///
     /// The manager-submitted batch remains the request intent and must retain
@@ -123,7 +123,7 @@ impl ParliamentAttemptStateV1 {
     /// # Errors
     /// Returns an error unless the batch is the exact initial generation or one
     /// exact hidden-body retry, the live snapshot is canonically ordered and has
-    /// fewer than two members, and every non-candidate request binding is valid.
+    /// fewer than the V1 anonymity floor, and every non-candidate request binding is valid.
     pub fn record_hidden_sortition_capacity_failure_batch(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
@@ -131,7 +131,7 @@ impl ParliamentAttemptStateV1 {
         candidate_snapshot: Vec<AccountId>,
     ) -> Result<(), ParliamentReducerErrorV1> {
         self.validate_sortition_registration_batch_v1(governance_attempt_id, &registrations)?;
-        if candidate_snapshot.len() >= 2
+        if hidden_ballot_population_meets_anonymity_floor_v1(candidate_snapshot.len())
             || !candidate_snapshot_fits_resource_bounds_v1(&candidate_snapshot)
             || !candidate_snapshot.windows(2).all(|pair| pair[0] < pair[1])
             || !registrations.iter().any(|entry| {
@@ -178,7 +178,7 @@ impl ParliamentAttemptStateV1 {
         }
         let candidate_count = u32::try_from(candidate_snapshot.len())
             .map_err(|_| ParliamentReducerErrorV1::InvalidCandidateSnapshot)?;
-        if candidate_count >= 2
+        if candidate_count >= MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
             || !candidate_snapshot_fits_resource_bounds_v1(&candidate_snapshot)
             || !candidate_snapshot.windows(2).all(|pair| pair[0] < pair[1])
             || request_intent.governance_attempt_id != governance_attempt_id
@@ -221,7 +221,7 @@ impl ParliamentAttemptStateV1 {
         if request_intent.target_seats == 0
             || request_intent.target_seats > MAX_PARLIAMENT_BODY_TARGET_SEATS_V1
             || (requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot
-                && request_intent.target_seats < 2)
+                && request_intent.target_seats < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
         {
             return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
         }
@@ -435,14 +435,14 @@ impl ParliamentAttemptStateV1 {
             return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
         }
         if requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot
-            && request.target_seats < 2
+            && request.target_seats < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
         {
             return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
         }
         if candidate_snapshot.is_empty()
             || !candidate_snapshot_fits_resource_bounds_v1(&candidate_snapshot)
             || (requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot
-                && candidate_snapshot.len() < 2)
+                && !hidden_ballot_population_meets_anonymity_floor_v1(candidate_snapshot.len()))
             || !candidate_snapshot.windows(2).all(|pair| pair[0] < pair[1])
             || u32::try_from(candidate_snapshot.len()).ok() != Some(request.candidate_count)
             || request.candidate_root
@@ -1052,7 +1052,7 @@ impl ParliamentAttemptStateV1 {
         let failure_kind = if accepted_roster.is_empty() {
             ParliamentElectionFailureKindV1::EmptyAcceptedRoster
         } else if requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot
-            && accepted_roster.len() < 2
+            && !hidden_ballot_population_meets_anonymity_floor_v1(accepted_roster.len())
         {
             ParliamentElectionFailureKindV1::InsufficientHiddenBallotRoster
         } else {
@@ -1075,7 +1075,7 @@ impl ParliamentAttemptStateV1 {
 
     /// Seal a canonical roster into a new body instance.
     ///
-    /// Hidden-ballot rosters require at least two seats. Confirmation members
+    /// Hidden-ballot rosters require the V1 anonymity floor. Confirmation members
     /// must also be disjoint from the completed Policy Jury.
     /// The sealed seat count becomes the immutable quorum denominator; later
     /// absence never changes it.
@@ -1116,7 +1116,7 @@ impl ParliamentAttemptStateV1 {
         if assignment_count == 0
             || assignment_count > request.target_seats
             || (requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot
-                && assignment_count < 2)
+                && assignment_count < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
         {
             return Err(ParliamentReducerErrorV1::InvalidRoster);
         }

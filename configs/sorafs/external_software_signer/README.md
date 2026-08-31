@@ -1,8 +1,8 @@
 # SoraFS external software signer V1
 
 This package runs one isolated signing role per Unix service identity. It is
-software-key-qualified: it does not emit or imply an HSM attestation. The
-public provider boundary remains compatible with a later HSM implementation.
+software-key-qualified. Iroha exposes no hardware-specific signer mode; the
+public provider boundary remains process- and backend-neutral.
 
 Private keys exist only inside a mode-0700 state directory as a
 ChaCha20-Poly1305 envelope and, while serving, as runtime memory. The 32-byte
@@ -245,9 +245,8 @@ live provenance sequence and head before promotion tooling accepts them.
 
 Rotation writes a new binding rather than replacing the reviewed predecessor.
 Promotion and qualification tooling should consume that successor only after
-independent review. A future HSM migration requires a new backend deployment,
-new qualification evidence, and new promotion signatures; these artifacts
-must continue to be described as software-key-qualified.
+independent review. These artifacts remain software-key-qualified and carry no
+hardware-specific backend claim.
 
 ## Windows exclusion
 

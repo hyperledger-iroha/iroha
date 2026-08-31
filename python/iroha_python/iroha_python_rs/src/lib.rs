@@ -87,8 +87,8 @@ use iroha_data_model::{
     musubi::ArchiveId,
     name::Name,
     nexus::{
-        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, FeeSponsorProgram,
-        FeeSponsorProgramId, FeeSponsorProgramRevision, LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneId,
+        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId,
+        FeeSponsorProgramRevision, LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneId,
         LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1, LanePrivacyProof,
         LaneRelayEnvelope, compute_settlement_hash,
     },
@@ -14902,9 +14902,8 @@ fn private_settlement_auditor_signing_key_v1(literal: &str) -> PyResult<PublicKe
             "atomic private settlement response is invalid",
         ));
     }
-    let key = PublicKey::from_str(literal).map_err(|_| {
-        PyValueError::new_err("atomic private settlement response is invalid")
-    })?;
+    let key = PublicKey::from_str(literal)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
     if key.to_string() != literal {
         return Err(PyValueError::new_err(
             "atomic private settlement response is invalid",
@@ -14935,16 +14934,10 @@ fn private_settlement_verify_committee_proof_response_v1_py(
     )?;
     let expected_network = private_settlement_expected_network_id_v1(expected_network_id)?;
     let requested = private_settlement_requested_payload_digest_v1(requested_payload_digest)?;
-    let response: PrivateSettlementCommitteeProofResponseV1 =
-        json::from_slice(response_json).map_err(|_| {
-            PyValueError::new_err("atomic private settlement response is invalid")
-        })?;
-    validate_private_settlement_committee_proof_response_v1(
-        &expected_network,
-        requested,
-        &response,
-    )
-    .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))
+    let response: PrivateSettlementCommitteeProofResponseV1 = json::from_slice(response_json)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    validate_private_settlement_committee_proof_response_v1(&expected_network, requested, &response)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))
 }
 
 #[pyfunction]

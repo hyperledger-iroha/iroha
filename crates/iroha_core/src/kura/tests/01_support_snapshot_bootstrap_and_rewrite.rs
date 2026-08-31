@@ -59,17 +59,17 @@ use iroha_data_model::{
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     domain::{Domain, DomainId},
-    isi::{InstructionBox, Log, Upgrade},
+    isi::{InstructionBox, Log, Upgrade, offline::TopUpKagemushaRecursiveV4},
     merge::MergeQuorumCertificate,
     nexus::{
         DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile,
         LaneVisibility,
     },
     offline::{
-        KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KagemushaRecursiveSpendArtifactBindingV4,
-        KagemushaRecursiveSpendTopUpRequestV4, KagemushaRequestAuthorizationV2,
-        KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-        KagemushaTopUpShieldEvidenceV2,
+        KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2,
+        KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendTopUpRequestV4,
+        KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
+        KagemushaSpendableNoteDescriptorV2, KagemushaTopUpShieldEvidenceV2,
     },
     peer::PeerId,
     prelude::{Executor, IvmBytecode},
@@ -438,7 +438,7 @@ fn offline_top_up_entrypoint_for_index_with_outer_authority_and_admission_intent
         atomic_units: 7,
         scale: 0,
     };
-    let request = KagemushaRecursiveSpendTopUpRequestV4 {
+    let mut request = KagemushaRecursiveSpendTopUpRequestV4 {
         version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
         asset: AssetId::new(definition.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone()),
         amount,
@@ -478,10 +478,10 @@ fn offline_top_up_entrypoint_for_index_with_outer_authority_and_admission_intent
             asset_definition_id: definition,
             operation_id: authorization_operation_id,
             issued_at_ms: 1,
-            expires_at_ms: u64::MAX,
+            expires_at_ms: 1_u64.saturating_add(KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2),
             nonce: [0x33; 32],
             payload_digest: [0x34; 32],
-            registration_hash: [0x35; 32],
+            registration_hash: Hash::new([0x35; 32]).into(),
             hardware_assertion:
                 iroha_data_model::offline::KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
                     iroha_data_model::offline::KagemushaAndroidKeyMintHardwareAssertionV1 {
@@ -494,22 +494,22 @@ fn offline_top_up_entrypoint_for_index_with_outer_authority_and_admission_intent
                 ),
         },
     };
+    if let Ok(payload_digest) = request.unsigned_payload_digest() {
+        request.authorization.payload_digest = payload_digest;
+    }
     let outer_authority_id = AccountId::new(outer_authority.public_key().clone());
     let transaction = TransactionBuilder::new(
         network_id,
         outer_authority_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_executable(Executable::Batch(
-        vec![
-            iroha_data_model::transaction::ExecutableBatchItem::Instruction(InstructionBox::from(
-                TopUpKagemushaRecursiveV4::new(request),
-            )),
-        ]
-        .into(),
-    ))
-    .with_admission_intent(admission_intent)
-    .sign(outer_authority.private_key());
+    );
+    let operation = InstructionBox::from(TopUpKagemushaRecursiveV4::new(request));
+    let transaction = transaction
+        .with_executable(Executable::Batch(
+            vec![iroha_data_model::transaction::ExecutableBatchItem::Instruction(operation)].into(),
+        ))
+        .with_admission_intent(admission_intent)
+        .sign(outer_authority.private_key());
     TransactionEntrypoint::External(transaction)
 }
 fn merge_entry_with_indexed_entrypoint(entrypoint: TransactionEntrypoint) -> MergeLedgerEntry {
@@ -3284,4 +3284,84 @@ fn instance_identity_names_only_the_exact_live_kura() {
         assert!(opened.is_dir());
         assert!(super::Kura::sidecar_metadata_same_object(&opened, &linked));
     }
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[test]
+fn certified_serve_payload_directory_authority_is_kura_context_and_inode_bound() {
+    let first = Kura::blank_kura_for_testing();
+    let second = Kura::blank_kura_for_testing();
+    let block = store_dummy_block_arcs(first.as_ref(), 1)
+        .pop()
+        .expect("stored genesis-height block");
+    let context = v2_finality_artifact_for_block(block.as_ref()).height_context;
+    let expected_path = first
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(context.id().0.as_ref()))
+        .join("certified-serve-payload-v1");
+
+    let authority = first
+        .mint_v2_certified_serve_payload_directory_authority(&context)
+        .expect("mint descriptor-relative Certified-Serve payload authority");
+    assert!(authority.matches_kura(first.as_ref()));
+    assert!(!authority.matches_kura(second.as_ref()));
+    assert!(authority.matches_context(&context));
+    assert_eq!(authority.directory.expected_path, expected_path);
+
+    let mut other_context = context.clone();
+    other_context.height = other_context.height.saturating_add(1);
+    assert!(!authority.matches_context(&other_context));
+    assert!(
+        first
+            .mint_v2_certified_serve_payload_directory_authority(&context)
+            .expect("mint authority for foreign-Kura rejection")
+            .into_opened_directory_for(second.as_ref(), &context)
+            .is_none()
+    );
+    assert!(
+        first
+            .mint_v2_certified_serve_payload_directory_authority(&context)
+            .expect("mint authority for foreign-context rejection")
+            .into_opened_directory_for(first.as_ref(), &other_context)
+            .is_none()
+    );
+
+    let (opened_path, mint_time_canonical_path, opened_directory) = authority
+        .into_opened_directory_for(first.as_ref(), &context)
+        .expect("consume exact live Kura and context authority");
+    assert_eq!(opened_path, expected_path);
+    assert_eq!(
+        mint_time_canonical_path,
+        fs::canonicalize(&expected_path).expect("canonical payload path")
+    );
+    let opened = opened_directory
+        .metadata()
+        .expect("opened payload directory");
+    let linked = fs::symlink_metadata(&expected_path).expect("linked payload directory");
+    assert!(opened.is_dir());
+    assert!(Kura::sidecar_metadata_same_object(&opened, &linked));
+
+    let replacement_authority = first
+        .mint_v2_certified_serve_payload_directory_authority(&context)
+        .expect("mint authority before directory replacement");
+    let detached_path = expected_path
+        .parent()
+        .expect("payload directory has context parent")
+        .join("certified-serve-payload-v1-detached");
+    fs::rename(&expected_path, &detached_path).expect("detach authenticated payload directory");
+    fs::create_dir(&expected_path).expect("replace payload directory path");
+    let sentinel_path = expected_path.join("replacement-sentinel");
+    fs::write(&sentinel_path, b"replacement").expect("write replacement sentinel");
+
+    assert!(
+        replacement_authority
+            .into_opened_directory_for(first.as_ref(), &context)
+            .is_none(),
+        "authority must reject a linked-path inode replacement after mint"
+    );
+    assert_eq!(
+        fs::read(&sentinel_path).expect("read replacement sentinel"),
+        b"replacement"
+    );
 }

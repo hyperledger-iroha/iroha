@@ -17,7 +17,7 @@ The model covers these consensus bindings:
   complete failed initial generation, freezes a fresh snapshot, uses the exact
   next sequence no earlier than the failure height, and the final permitted
   sequence rejects the governance attempt. For a hidden body, an empty or
-  singleton live electorate instead records typed `NoRoster` capacity evidence
+  live electorate below three instead records typed `NoRoster` capacity evidence
   at the request height without revealing or consuming a pulse. A capacity
   retry must use the exact next generation in a later block, and exhaustion of
   that same bounded sequence rejects the attempt. Independently of each nested
@@ -79,16 +79,16 @@ The model covers these consensus bindings:
   failure of either the final permitted ballot sequence or the final shared
   proposal redraw rejects the governance attempt instead of leaving an
   unretryable active attempt;
-- a narrow approved Policy tally with zero or one fresh candidate outside the
+- a narrow approved Policy tally with fewer than three fresh candidates outside the
   sealed Policy Jury becomes terminal `NoResult` in the same transition: the
   Policy binding, Confirmation requirement, and Confirmation request all
-  remain uncommitted. With at least two fresh candidates, the same transition
+  remain uncommitted. With at least three fresh candidates, the same transition
   commits the Policy binding and Confirmation requirement together with the
   sequence-zero Confirmation request, whose request height equals the Policy
   result height and whose pulse is strictly future, but only while one shared
   redraw unit remains. Exhaustion instead atomically records terminal
   `NoResult` and leaves all three bindings uncommitted. The finite model uses
-  the value `2` as the equivalence class for “two or more” candidates;
+  the value `3` as the equivalence class for “three or more” candidates;
 - Core automatically constructs a certificate only from an approved aggregate
   result and fixes `enact_at_height = certified_at_height +
   min_enactment_delay` in the native execution boundary; and
@@ -133,11 +133,13 @@ abstract resource reservations include one symmetric conflict pair and an exact
 capacity of two. A shared redraw ceiling of two is explored from both the first
 attempt's zero prefix and abstract successor-attempt prefixes; the latter model
 whether the inherited proposal history has consumed zero or one unit before
-the successor's initial draw. It is
+the successor's initial draw. `AttemptPrefixFrame` keeps those inherited
+coordinates immutable within each finite trace; successor attempts are the
+separate bounded `Init` alternatives, not an in-trace reset. It is
 intentionally large enough to explore self-absence, early impossible-root
 rejection, conflicting and quorum-matching endorsements, post-deadline
 non-response rejection, successful and unavailable sortition pulses, fresh
-sortition retries, empty and singleton hidden-electorate capacity failures,
+sortition retries, sub-three hidden-electorate capacity failures,
 exhausted sortition rejection, both terminal and successful atomic
 Policy-to-Confirmation capacity branches, private deadline/release failure,
 exhausted ballot retry rejection, stale-head supersession, and rollback-isolated
@@ -173,7 +175,7 @@ The source contract is deliberately structural. It detects accidental removal
 of the code-side guards represented by the model and separately pins the
 authority-bound registration/dropout and reducer-derived registration/survivor
 boundaries, authority-bound absence and public-finding endorsements. The model
-contract also fails if empty/singleton hidden-electorate evidence starts
+contract also fails if sub-three hidden-electorate evidence starts
 consuming a pulse, or if a narrow Policy result can commit only part of its
 Confirmation handoff. It pins the proposal-wide redraw ceiling, exact successor
 prefix lineage, the derived sortition/ballot accounting, and the separate
@@ -198,6 +200,8 @@ qualification of mandatory finalized-pulse production and consensus-enforced
 global-beacon and TLE key-rotation paths. The repository-wide gate inventory in
 the [SORA Parliament hardening roadmap](../../roadmap.md#sora-parliament-hardening)
 additionally requires focused and four-peer execution evidence, a genuine
-authenticated broker/HSM share provider, and independent review of the timed-OVN
-publication manifest. Zeroizing software buffers are not secure-erasure or
-hardware-custody evidence.
+authenticated deployment-selected share provider, and independent review of the
+timed-OVN publication manifest. Qualified software custody or an authenticated
+external broker satisfies this provider boundary; hardware custody remains an
+optional deployment choice. Zeroizing software buffers alone are not
+secure-erasure evidence.

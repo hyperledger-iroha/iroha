@@ -5,7 +5,9 @@ async fn connect_ws_handshake_fails_when_disabled() {
     // Build disabled config and Torii router
     let cfg = minimal_actual_config(false);
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     // Serve
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,

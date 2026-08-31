@@ -271,7 +271,6 @@ fn install_fixture_validator_authority(
             pop: Some(pop.clone()),
             activation_height: 0,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };

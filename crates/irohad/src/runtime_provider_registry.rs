@@ -154,7 +154,7 @@ pub enum IrohaRuntimeProviderSlotV1 {
     BootleLanternIssuanceProviderRegistry = 55,
     /// Rollback-resistant monotonic clock seal for Musubi provider attestations.
     MusubiProviderAttestationClockSeal = 56,
-    /// Approval-only HSM/KMS or threshold signer for Musubi provider attestations.
+    /// Approval-only external or threshold signer for Musubi provider attestations.
     MusubiProviderAttestationApprovalSigner = 57,
     /// Authenticated coordinator inventory for Musubi provider attestations.
     MusubiProviderAttestationAuthenticatedInventory = 58,

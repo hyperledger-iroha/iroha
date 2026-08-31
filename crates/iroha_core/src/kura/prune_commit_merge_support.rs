@@ -258,7 +258,6 @@ impl BlockData {
 }
 type BlockHeightIndex = HashMap<HashOf<BlockHeader>, NonZeroUsize>;
 type TransactionEntrypointHeights = BTreeMap<HashOf<TransactionEntrypoint>, BTreeSet<NonZeroUsize>>;
-type OfflineOperationHeights = BTreeMap<(AccountId, [u8; 32]), BTreeSet<NonZeroUsize>>;
 type TransactionAuthorityHeights = BTreeMap<AccountId, BTreeSet<NonZeroUsize>>;
 type TransactionTimestampHeights = BTreeMap<u64, BTreeSet<NonZeroUsize>>;
 type TransactionResultStatusHeights = BTreeMap<bool, BTreeSet<NonZeroUsize>>;
@@ -666,7 +665,6 @@ type KaigiSignalCandidatesByCall = BTreeMap<KaigiId, KaigiSignalCandidatesByHeig
 #[derive(Debug, Default)]
 struct TransactionEntrypointHeightInventory {
     entrypoint_hashes: BTreeSet<HashOf<TransactionEntrypoint>>,
-    offline_operation_ids: BTreeSet<(AccountId, [u8; 32])>,
     authorities: BTreeSet<AccountId>,
     timestamps_ms: BTreeSet<u64>,
     result_statuses: BTreeSet<bool>,
@@ -692,7 +690,6 @@ struct TransactionEntrypointIndex {
     incomplete_merge_heights: BTreeSet<NonZeroUsize>,
     incomplete_kaigi_signal_heights: BTreeSet<NonZeroUsize>,
     heights_by_entrypoint: TransactionEntrypointHeights,
-    heights_by_offline_operation_id: OfflineOperationHeights,
     heights_by_authority: TransactionAuthorityHeights,
     heights_by_timestamp_ms: TransactionTimestampHeights,
     heights_by_result_status: TransactionResultStatusHeights,
@@ -707,7 +704,6 @@ impl TransactionEntrypointIndex {
             incomplete_merge_heights: BTreeSet::new(),
             incomplete_kaigi_signal_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
-            heights_by_offline_operation_id: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),

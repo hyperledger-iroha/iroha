@@ -1198,6 +1198,8 @@ base_bridge_symbols = (
 )
 c_symbols = (
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
+    "connect_norito_kagemusha_offline_operation_status_validate_v1",
+    "connect_norito_kagemusha_offline_operation_status_json_validate_v1",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
@@ -1330,7 +1332,7 @@ def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
 actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
 if actual_kagemusha_symbols != c_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 48-symbol Kagemusha C inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered 50-symbol Kagemusha C inventory mismatch "
         f"(found {len(actual_kagemusha_symbols)})"
     )
 

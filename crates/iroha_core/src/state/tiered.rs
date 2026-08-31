@@ -3720,6 +3720,7 @@ mod measured_bytes_impls {
     impl MeasuredBytes for DeployContractProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<DeployContractProposal>();
+            total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
             total = total.saturating_add(self.contract_address.measured_bytes_extra());
             total = total.saturating_add(self.code_hash.measured_bytes_extra());
             total = total.saturating_add(self.abi_hash.measured_bytes_extra());
@@ -3731,6 +3732,7 @@ mod measured_bytes_impls {
     impl MeasuredBytes for RuntimeUpgradeProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RuntimeUpgradeProposal>();
+            total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
             total = total.saturating_add(self.manifest.measured_bytes_extra());
             total
         }
@@ -5433,10 +5435,18 @@ mod tests {
             iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
             iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
         );
-        let id = SccpReplayAccumulatorIdV1 {
-            route_key: route.key(),
+        let domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+            source_network: route.lane_id.source,
+            target_network: route.lane_id.target,
             boundary: SccpReplayBoundaryV1::SoraInboundRelease,
+            route_revision: route.revision,
+            route_configuration_hash: route
+                .route_configuration_hash()
+                .expect("replay route configuration hashes"),
+            actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
         };
+        let id = SccpReplayAccumulatorIdV1::from_domain(route.key(), &domain)
+            .expect("replay accumulator fixture matches its route");
         let mut forest = SccpReplayForestV1::default();
         forest.nonempty_shard_roots.insert(0xA6, [0x5B; 32]);
         forest.leaf_count = 1;

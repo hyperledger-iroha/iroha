@@ -148,6 +148,7 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "sc/",
     "da_ingest_quota_v1/",
     "faucet_claim_consumed_v1/",
+    crate::kagemusha_operation::KAGEMUSHA_OPERATION_OUTCOME_STATE_PREFIX_V4,
     "merge_execution_batch_applied_",
     "merge_execution_lane_applied_",
     "merge_lane_frontier_v1_",
@@ -5976,6 +5977,22 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Ok(request);
         }
         let map = value.as_object().ok_or(ivm::VMError::DecodeError)?;
+        if map.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "peer"
+                    | "peer_id"
+                    | "peerId"
+                    | "public_key"
+                    | "publicKey"
+                    | "key"
+                    | "pop"
+                    | "activation_at"
+                    | "expiry_at"
+            )
+        }) {
+            return Err(ivm::VMError::DecodeError);
+        }
         let peer_value = map
             .get("peer")
             .or_else(|| map.get("peer_id"))
@@ -5995,10 +6012,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         if let Some(value) = map.get("expiry_at") {
             request.expiry_at =
-                Some(json::from_value(value.clone()).map_err(|_| ivm::VMError::DecodeError)?);
-        }
-        if let Some(value) = map.get("hsm") {
-            request.hsm =
                 Some(json::from_value(value.clone()).map_err(|_| ivm::VMError::DecodeError)?);
         }
         Ok(request)
@@ -16098,7 +16111,7 @@ seiyaku PrivilegedBinding {
                 norito::json::Value::from(0xCD_u64),
             ]),
         );
-        let json = Json::from(&norito::json::Value::Object(request_map));
+        let json = Json::from(&norito::json::Value::Object(request_map.clone()));
         let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
         vm.set_register(10, ptr);
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_PEER, &mut vm);
@@ -16106,6 +16119,15 @@ seiyaku PrivilegedBinding {
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
+        request_map.insert("unknown".to_owned(), norito::json::Value::Null);
+        let json = Json::from(&norito::json::Value::Object(request_map));
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
+        vm.set_register(10, ptr);
+        assert_eq!(
+            host.syscall(ivm::syscalls::SYSCALL_REGISTER_PEER, &mut vm),
+            Err(ivm::VMError::DecodeError)
+        );
+        assert_eq!(host.queued.len(), 1);
     }
     #[test]
     fn unregister_peer_syscall_queues_instruction() {
@@ -24464,6 +24486,8 @@ seiyaku DurableOwner {
             "da_ingest_quota_v1/authority/deadbeef",
             "faucet_claim_consumed_v1",
             "faucet_claim_consumed_v1/deadbeef",
+            "kagemusha_operation_outcome_v4",
+            "kagemusha_operation_outcome_v4_deadbeef_cafebabe",
             "merge_execution_batch_applied_1_deadbeef",
             "merge_execution_lane_applied_1_2_3_deadbeef",
             "merge_lane_frontier_v1",
@@ -24515,6 +24539,7 @@ seiyaku DurableOwner {
             "queue_plan_pending_route_member_v1x",
             "queue_plan_pending_signed_alias_member_v1x",
             "queue_plan_signed_alias_terminal_v1x",
+            "kagemusha_operation_outcome_v4x",
             "offline_device_attestation_policyx",
             "kagemushax",
             "pkdeploy_verified_lane_relayx",

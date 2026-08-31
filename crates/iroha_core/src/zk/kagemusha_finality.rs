@@ -10,8 +10,7 @@
 //! authenticates the exact
 //! [`Vote::signature_preimage`]; no retired consensus vote format is accepted.
 use crate::sumeragi::smt::{
-    KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KagemushaTopUpMerkleProof, KvPair,
-    build_kagemusha_topup_block_commitment, verify_kagemusha_topup_write_inclusion,
+    KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KvPair, build_kagemusha_topup_block_commitment,
 };
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
@@ -137,9 +136,6 @@ pub enum KagemushaTopUpFinalityVerifyError {
     /// The QC-authenticated next-epoch roster contains an invalid PoP.
     #[error("invalid Kagemusha top-up finality next-epoch proof of possession")]
     InvalidNextEpochCryptography,
-    /// A raw Iroha Merkle hash does not carry the canonical marker bit.
-    #[error("non-canonical Kagemusha top-up finality Merkle hash")]
-    NonCanonicalHash,
     /// The exact top-up anchor is not included in the QC-authenticated execution commitment.
     #[error("invalid Kagemusha top-up anchor inclusion proof")]
     InvalidAnchorInclusion,
@@ -342,7 +338,9 @@ impl KagemushaTopUpFinalityVerifier {
             .commit_qc
             .validate_for_roster_window(window)
             .map_err(|_| KagemushaTopUpFinalityVerifyError::RosterContextMismatch)?;
-        verify_anchor_inclusion(proof)?;
+        proof
+            .validate_anchor_inclusion()
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidAnchorInclusion)?;
         self.validate_roster_cryptography(roster_artifact, roster_reference.sha256)?;
         verify_commit_aggregate(proof, window)?;
         if let Some(snapshot) = &complete_context.next_epoch_snapshot {
@@ -498,43 +496,6 @@ fn verify_commit_aggregate(
         &pops,
     )
     .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidAggregateSignature)
-}
-fn verify_anchor_inclusion(
-    proof: &KagemushaTopUpFinalityProofV2,
-) -> Result<(), KagemushaTopUpFinalityVerifyError> {
-    let mut key = Vec::with_capacity(33);
-    key.push(KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
-    key.extend_from_slice(&proof.anchor.topup_operation_id);
-    let leaf = KvPair::new(key, proof.anchor.anchor_digest);
-    let path = KagemushaTopUpMerkleProof {
-        leaf_index: proof.anchor_path.leaf_index,
-        leaf_count: proof.anchor_path.leaf_count,
-        siblings: proof
-            .anchor_path
-            .siblings
-            .iter()
-            .copied()
-            .map(canonical_hash)
-            .collect::<Result<Vec<_>, _>>()?,
-    };
-    let commitment = proof.commit_qc.certificate.execution_commitment;
-    if !verify_kagemusha_topup_write_inclusion(
-        &leaf,
-        &path,
-        commitment.ordinary_writes_root,
-        commitment.post_state_root,
-    ) {
-        return Err(KagemushaTopUpFinalityVerifyError::InvalidAnchorInclusion);
-    }
-    Ok(())
-}
-fn canonical_hash(bytes: [u8; Hash::LENGTH]) -> Result<Hash, KagemushaTopUpFinalityVerifyError> {
-    // `Hash::prehashed` sets this marker bit. Reject first so attacker input is
-    // never normalized into a different Merkle-authenticated value.
-    if bytes[Hash::LENGTH - 1] & 1 == 0 {
-        return Err(KagemushaTopUpFinalityVerifyError::NonCanonicalHash);
-    }
-    Ok(Hash::prehashed(bytes))
 }
 #[cfg(test)]
 mod tests {
@@ -1462,7 +1423,7 @@ mod tests {
                     fixture.manifest_digest,
                 )
                 .unwrap_err(),
-            KagemushaTopUpFinalityVerifyError::InvalidAnchorInclusion
+            KagemushaTopUpFinalityVerifyError::InvalidStructure
         );
     }
     #[test]
@@ -1623,7 +1584,7 @@ mod tests {
         );
     }
     #[test]
-    fn noncanonical_merkle_hash_is_distinct_from_a_canonical_wrong_path() {
+    fn malformed_or_wrong_merkle_paths_fail_as_invalid_inclusions() {
         let verifier = KagemushaTopUpFinalityVerifier::new();
         let fixture = fixture();
         let mut noncanonical = fixture.proof.clone();
@@ -1639,7 +1600,7 @@ mod tests {
                     fixture.manifest_digest,
                 )
                 .unwrap_err(),
-            KagemushaTopUpFinalityVerifyError::NonCanonicalHash
+            KagemushaTopUpFinalityVerifyError::InvalidAnchorInclusion
         );
         let mut canonical_wrong = fixture.proof.clone();
         canonical_wrong.anchor_path.siblings[0][0] ^= 1;

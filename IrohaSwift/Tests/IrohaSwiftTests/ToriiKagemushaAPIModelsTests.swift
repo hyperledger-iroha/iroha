@@ -92,11 +92,13 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     func testPendingOperationStatusMatchesRustNoritoGoldenVector() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustPendingStatusArchiveHex))
 
+        let status = try KagemushaOperationCodec.decodeStatus(
+            archive,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+        XCTAssertEqual(status.kind, .topUp)
         XCTAssertEqual(
-            try KagemushaOperationCodec.decodeStatus(
-                archive,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            ),
+            status,
             .pending(try .init(
                 operationId: Self.operationId,
                 kind: .topUp,
@@ -106,14 +108,52 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
     }
 
+    func testNativeWholeStatusValidatorRejectsZeroSubmittedTime() throws {
+        #if canImport(Darwin)
+        try requireNativeTestCapability(
+            KagemushaRecursiveSpend.hasRequiredNativeSymbols,
+            "whole-status validation bridge is not linked in this test host"
+        )
+        let valid = try XCTUnwrap(Data(hexString: Self.rustPendingStatusArchiveHex))
+        XCTAssertEqual(
+            try NoritoNativeBridge.shared
+                .kagemushaOfflineOperationStatusValidateV1(statusArchive: valid),
+            true
+        )
+
+        var zeroTime = CompactNoritoWriter()
+        zeroTime.writeUInt64LE(0)
+        var status = CompactNoritoWriter()
+        status.writeUInt32LE(0)
+        status.writeField(CompactNorito.encodeString(Self.operationId))
+        status.writeField(CompactNorito.encodeUInt32(0))
+        status.writeField(CompactNorito.encodeString(Self.transactionHash))
+        status.writeField(zeroTime.data)
+        let invalid = noritoEncode(
+            typeName: "iroha_torii_shared::offline_api::OfflineOperationStatus",
+            payload: status.data,
+            flags: NoritoHeader.compactLen,
+            payloadAlignment: 16
+        )
+        XCTAssertThrowsError(
+            try NoritoNativeBridge.shared
+                .kagemushaOfflineOperationStatusValidateV1(statusArchive: invalid)
+        ) { error in
+            XCTAssertEqual(error as? NativeBridgeError, .kagemushaProve)
+        }
+        #endif
+    }
+
     func testRejectedOperationStatusMatchesRustNoritoGoldenVector() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustRejectedStatusArchiveHex))
 
+        let status = try KagemushaOperationCodec.decodeStatus(
+            archive,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+        XCTAssertEqual(status.kind, .redeem)
         XCTAssertEqual(
-            try KagemushaOperationCodec.decodeStatus(
-                archive,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            ),
+            status,
             .rejected(try .init(
                 operationId: Self.operationId,
                 kind: .redeem,
@@ -142,17 +182,18 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     func testAppliedRedeemStatusMatchesRustNoritoGoldenVector() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustAppliedRedeemStatusArchiveHex))
 
+        let status = try KagemushaOperationCodec.decodeStatus(
+            archive,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+        XCTAssertEqual(status.kind, .redeem)
         XCTAssertEqual(
-            try KagemushaOperationCodec.decodeStatus(
-                archive,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            ),
+            status,
             .applied(try .init(
                 operationId: Self.operationId,
                 result: .redeem(try KagemushaRedeemResult(
                     transactionHash: Self.transactionHash,
-                    finalizedBlockHeight: UInt64.max,
-                    serverTimeMs: 42
+                    finalizedBlockHeight: UInt64.max
                 ))
             ))
         )
@@ -333,7 +374,6 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let result = try KagemushaTopUpResult(
             transactionHash: String(repeating: "d7", count: 32),
             finalizedBlockHeight: 1,
-            serverTimeMs: 8,
             anchor: anchor,
             finalityProof: finalityProof
         )
@@ -353,14 +393,12 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         XCTAssertThrowsError(try KagemushaTopUpResult(
             transactionHash: Self.transactionHash,
             finalizedBlockHeight: 1,
-            serverTimeMs: 8,
             anchor: anchor,
             finalityProof: finalityProof
         ))
         XCTAssertThrowsError(try KagemushaTopUpResult(
             transactionHash: String(repeating: "d7", count: 32),
             finalizedBlockHeight: 7,
-            serverTimeMs: 8,
             anchor: anchor,
             finalityProof: finalityProof
         ))
@@ -480,8 +518,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
         XCTAssertThrowsError(try KagemushaRedeemResult(
             transactionHash: "not-a-hash",
-            finalizedBlockHeight: 1,
-            serverTimeMs: 2
+            finalizedBlockHeight: 1
         )) { error in
             XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
         }
@@ -493,26 +530,25 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let finalityProof = try KagemushaTopUpFinalityProofArchive(
             noritoArchive: canonicalTopUpFinalityProofArchive()
         )
-        for (finalizedBlockHeight, serverTimeMs, field) in [
-            (UInt64(0), UInt64(1), "finalized_block_height"),
-            (UInt64(1), UInt64(0), "server_time_ms"),
-        ] {
-            XCTAssertThrowsError(try KagemushaTopUpResult(
-                transactionHash: Self.transactionHash,
-                finalizedBlockHeight: finalizedBlockHeight,
-                serverTimeMs: serverTimeMs,
-                anchor: anchor,
-                finalityProof: finalityProof
-            )) { error in
-                XCTAssertEqual(error as? KagemushaOperationError, .invalidField(field))
-            }
-            XCTAssertThrowsError(try KagemushaRedeemResult(
-                transactionHash: Self.transactionHash,
-                finalizedBlockHeight: finalizedBlockHeight,
-                serverTimeMs: serverTimeMs
-            )) { error in
-                XCTAssertEqual(error as? KagemushaOperationError, .invalidField(field))
-            }
+        XCTAssertThrowsError(try KagemushaTopUpResult(
+            transactionHash: Self.transactionHash,
+            finalizedBlockHeight: 0,
+            anchor: anchor,
+            finalityProof: finalityProof
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidField("finalized_block_height")
+            )
+        }
+        XCTAssertThrowsError(try KagemushaRedeemResult(
+            transactionHash: Self.transactionHash,
+            finalizedBlockHeight: 0
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidField("finalized_block_height")
+            )
         }
 
         let valid = try KagemushaOperationStatus.Pending(
@@ -1066,5 +1102,5 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     private static let rustRejectedStatusArchiveHex =
         "4e5254300000fb04214104df1bdcd39249bddd4db23a00b600000000000000fc930af6e00cccbe020000000000000000020000004140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310401000000414032323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323233281b1a6f66666c696e655f6f7065726174696f6e5f72656a6563746564090872656a65637465640100"
     private static let rustAppliedRedeemStatusArchiveHex =
-        "4e5254300000fb04214104df1bdcd39249bddd4db23a00a000000000000000de04d0410e29d19e0200000000000000000100000041403131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313159010000005441403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323308ffffffffffffffff082a00000000000000"
+        "4e5254300000fb04214104df1bdcd39249bddd4db23a009700000000000000ab260b446c2573b20200000000000000000100000041403131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313159010000005441403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323308ffffffffffffffff"
 }

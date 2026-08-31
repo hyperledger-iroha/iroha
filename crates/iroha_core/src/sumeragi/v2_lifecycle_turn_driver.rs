@@ -101,10 +101,7 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
         ordinal: u128,
     },
     /// A certified newer view retired an unprotected missing-sidecar Validate row.
-    LifecycleValidateSidecarSuperseded {
-        /// Exact lifecycle ordinal terminalized by the durable cancellation.
-        ordinal: u128,
-    },
+    LifecycleValidateSidecarSuperseded,
     /// The exact retained Validate successor could not reserve worker/output capacity.
     LifecycleValidateSuccessorCapacityPending {
         /// Exact unchanged successor ordinal.
@@ -191,7 +188,7 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::LifecycleValidateDeferred
             | Self::LifecycleValidateSidecarWaiting
             | Self::LifecycleValidateSidecarWoken { .. }
-            | Self::LifecycleValidateSidecarSuperseded { .. }
+            | Self::LifecycleValidateSidecarSuperseded
             | Self::LifecycleValidateSuccessorCapacityPending { .. }
             | Self::LifecycleValidateSuccessorFencePending { .. }
             | Self::CertifiedFetchBodyPersisted
@@ -1071,9 +1068,7 @@ impl LaunchedProductionLifecycleV1 {
                     self.close_output_for_restart();
                     return ProductionLifecycleCompletionSelectionV1::RestartRequired;
                 }
-                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarSuperseded {
-                    ordinal,
-                }
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarSuperseded
             }
             LifecycleValidateSidecarDriveV1::RestartRequired(error) => {
                 iroha_logger::error!(

@@ -3,7 +3,7 @@
 //! The durable [`sorafs_node::reserve_transaction_forwarder`] is the only local delivery state.
 //! Reserve policy, provider state, movements, appeals, and transaction outcomes are read from one
 //! immutable finalized ledger view. Signing and submission are deliberately separate boundaries: an
-//! injected runtime/HSM signer sees only an exact fee-quoted payload, while only Torii's strict
+//! injected qualified runtime signer sees only an exact fee-quoted payload, while only Torii's strict
 //! durable ingress can expose the resulting signed transaction.
 
 #![cfg(feature = "app_api")]

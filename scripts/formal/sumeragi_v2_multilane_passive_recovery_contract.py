@@ -291,7 +291,7 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         AUTONOMOUS_MODULE,
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "method",
-        "V2LaneWorkAdapter::service_next_historical_recovery_at",
+        "V2LaneWorkAdapter::service_next_historical_recovery_at_with_archive_targets",
         (
             "persist_historical_recovery_session",
             "historical_recovery_diagnostics.complete(identity)",
@@ -320,8 +320,11 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
             "after_retained_attempt",
             "historical_recovery_retry_floor",
             "historical_recovery_retry_ceiling",
-            "if retained",
-            ".cadence = next_cadence",
+            "let mut scheduled_destinations = BTreeSet::new()",
+            "if !self.push_effect(",
+            "scheduled_destinations.insert(peer)",
+            "if !scheduled_destinations.is_empty()",
+            "owner.cadence = next_cadence",
         ),
     ),
     (
@@ -389,7 +392,7 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         "run_lifecycle_active_height",
         (
             "let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval)",
-            "service_historical_recovery_tick(&mut lane_work)?",
+            "service_historical_recovery_tick(&mut lane_work, services)?",
             "lane_work.schedule_autonomous_new_view_timeouts(",
             "lane_work.schedule_retransmission()?",
             "next_lane_retransmit = deadline_after(now, retransmit_interval)",
@@ -403,7 +406,7 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         "run_pending_active_height",
         (
             "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval)",
-            "service_historical_recovery_tick(lane_work)?",
+            "service_historical_recovery_tick(lane_work, services)?",
             "lane_work.schedule_autonomous_new_view_timeouts(",
             "lane_work.schedule_retransmission()?",
             "next_lane_retransmit = deadline_after(now, retransmit_interval)",
@@ -416,7 +419,9 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         "fn",
         "service_historical_recovery_tick",
         (
-            "service_next_historical_recovery()",
+            "has_pending_historical_recovery()",
+            "services.current_archive_targets()",
+            "service_next_historical_recovery_with_archive_targets(&current_archive_targets)",
             "map_err(V2RunnerError::from)",
         ),
     ),
@@ -426,7 +431,7 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "method",
-        "V2LaneWorkAdapter::service_next_historical_recovery_at",
+        "V2LaneWorkAdapter::service_next_historical_recovery_at_with_archive_targets",
         (
             "persist_historical_recovery_session(&session)",
             "historical_recovery_diagnostics.complete(identity)",
@@ -449,8 +454,11 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
             "HistoricalRecoveryRequestCadence::immediate(observation.reason, now)",
             "if !cadence.due(now)",
             ".after_retained_attempt(",
-            "if retained",
-            ".cadence = next_cadence",
+            "let mut scheduled_destinations = BTreeSet::new()",
+            "if !self.push_effect(",
+            "scheduled_destinations.insert(peer)",
+            "if !scheduled_destinations.is_empty()",
+            "owner.cadence = next_cadence",
         ),
     ),
     (
@@ -495,7 +503,7 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
             "let mut next_lane_retransmit =",
             "deadline_after(height_started_at, retransmit_interval)",
             "if now >= next_lane_retransmit",
-            "service_historical_recovery_tick(&mut lane_work)?",
+            "service_historical_recovery_tick(&mut lane_work, services)?",
             "lane_work.schedule_autonomous_new_view_timeouts(",
             "lane_work.schedule_retransmission()?",
             "next_lane_retransmit = deadline_after(now, retransmit_interval)",
@@ -508,7 +516,7 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
         (
             "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);",
             "if now >= next_lane_retransmit",
-            "service_historical_recovery_tick(lane_work)?",
+            "service_historical_recovery_tick(lane_work, services)?",
             "lane_work.schedule_autonomous_new_view_timeouts(",
             "lane_work.schedule_retransmission()?",
             "next_lane_retransmit = deadline_after(now, retransmit_interval)",
@@ -830,13 +838,13 @@ def _validate_source_relations(
         (
             "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
             "run_lifecycle_active_height",
-            "service_historical_recovery_tick(&mut lane_work)?",
+            "service_historical_recovery_tick(&mut lane_work, services)?",
             3,
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
             "run_pending_active_height",
-            "service_historical_recovery_tick(lane_work)?",
+            "service_historical_recovery_tick(lane_work, services)?",
             1,
         ),
     ):

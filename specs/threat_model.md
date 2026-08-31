@@ -137,7 +137,9 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 - Secrets scanning in CI (`scripts/inventory_serde_usage.py` pipeline reused for secret detection).
 
 **Outstanding gaps**
-- Broad HSM adoption for validator keys is incomplete (**see residual risks: Validator key HSM adoption**).
+- Validator signing-custody qualification and rotation evidence are incomplete
+  (**see residual risks: Validator signing-custody qualification**). The provider
+  implementation is deployment-owned.
 - Release-signing key separation from validator infrastructure outstanding (**see residual risks: Release-signing key separation**).
 
 ### Network and Transport
@@ -189,7 +191,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 | Torii operator auth hardening | Closed | WebAuthn/mTLS operator auth shipped with credential persistence, session tokens, and telemetry. | Torii WG | 2025-11-15 |
 | Hardware-accelerated hashing | Open | Implement multiversion hashing with deterministic fallback (`RNT-092`) | Runtime WG | 2025-12-01 |
 | ZK circuit governance | Open | Draft governance protocol and tooling (`ZK-077`) | ZK WG | 2025-11-20 |
-| Validator key HSM adoption | Open | Define policy and reference deployment (tracked via `roadmap.md` entry *Security & privacy hardening — SNNet-15H*) | Security WG | 2025-11-15 |
+| Validator signing-custody qualification | Open | Define provider-neutral authentication, non-persistence, rotation/revocation, failover/recovery, and review policy plus a reference deployment (tracked via `roadmap.md` entry *Security & privacy hardening — SNNet-15H*). | Security WG | 2025-11-15 |
 | Release-signing key separation | Open | Offline root with threshold signing (tracked via `roadmap.md` Milestone R3 release runbook) | Security WG | 2025-10-31 |
 | Membership registry reconciliation | Open | Enforce view-hash checks and halt on mismatch (`SUM-203` follow-up) | Consensus WG | 2025-10-25 |
 | Pre-auth DoS controls | Open | Connection gating and handshake caps implemented (`preauth_*` config, `torii_pre_auth_reject_total`), continue tuning via follow-up ticket | Torii WG & Core WG | 2025-10-31 |
@@ -219,7 +221,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 | Data Model WG | data-model@iroha | Pending | Confirm Norito/Kotodama coverage and fuzz corpus maintenance. |
 | ZK WG | zk@iroha | Pending | Verify circuit governance (`ZK-077`) and witness retention audit plan. |
 | Observability WG | observability@iroha | Pending | Redaction policy enforcement and tamper-evident logging roadmap. |
-| Ops | ops@iroha | Pending | HSM rollout for validators and independent host-clock monitoring. |
+| Ops | ops@iroha | Pending | Qualified validator signing custody, rotation/recovery evidence, and independent host-clock monitoring. |
 
 ## References
 

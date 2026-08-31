@@ -1427,6 +1427,7 @@
       "python/iroha_torii_client/governance_ballot_client.py",
       "python/iroha_torii_client/governance_proposals.py",
       "python/iroha_torii_client/identifier_receipts.py",
+      "python/iroha_torii_client/kagemusha_native.py",
       "python/iroha_torii_client/kaigi_relay_client.py",
       "python/iroha_torii_client/mock.py",
       "python/iroha_torii_client/native_amx.py",

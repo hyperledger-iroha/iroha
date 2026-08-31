@@ -33,7 +33,7 @@ The accepted `[sumeragi]` surface contains only:
 - `block`: finite candidate transaction/body/queue-scan bounds;
 - `queues`: bounded reducer, body, chunk, and ready-body ingress resources;
 - `limits`: finite lane, merge, recovery, and Native AMX service resources;
-- `keys`: consensus key rotation, algorithm, and HSM policy.
+- `keys`: consensus key rotation and allowed algorithms.
 
 The canonical shared runtime projection fingerprints signed mode/cadence with
 the finite limits and key policy. Validators must align that fingerprint before

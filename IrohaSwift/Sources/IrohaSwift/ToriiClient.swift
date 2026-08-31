@@ -10094,7 +10094,7 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
 /// `transactionPayload` is the canonical Norito `TransactionPayload` to pass to
 /// SDK signing abstractions that apply the Iroha prehash themselves.
 /// `signingMessage` is the already-prehashed 32-byte message intended for raw
-/// signature primitives and HSM integrations.
+/// signature primitives and other low-level signer interfaces.
 public struct ToriiVerifyingKeyTransactionDraft: Sendable, Equatable {
     public let submitted: Bool
     public let transactionPayloadB64: String
@@ -18361,6 +18361,7 @@ public struct ToriiGovernanceInstruction: Decodable, Sendable {
 }
 
 public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable {
+    public var proposalOperator: String
     public var contractAddress: String?
     public var contractAlias: String?
     public var codeHash: Data
@@ -18369,6 +18370,7 @@ public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable 
     public var manifestProvenance: ToriiContractManifestProvenance?
 
     private enum CodingKeys: String, CodingKey {
+        case proposalOperator = "proposal_operator"
         case contractAddress = "contract_address"
         case contractAlias = "contract_alias"
         case codeHash = "code_hash"
@@ -18377,12 +18379,14 @@ public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable 
         case manifestProvenance = "manifest_provenance"
     }
 
-    public init(contractAddress: String? = nil,
+    public init(proposalOperator: String,
+                contractAddress: String? = nil,
                 contractAlias: String? = nil,
                 codeHash: Data,
                 abiHash: Data,
                 abiVersion: UInt16 = 1,
                 manifestProvenance: ToriiContractManifestProvenance? = nil) {
+        self.proposalOperator = proposalOperator
         self.contractAddress = contractAddress
         self.contractAlias = contractAlias
         self.codeHash = codeHash
@@ -18392,6 +18396,13 @@ public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable 
     }
 
     public func encode(to encoder: Encoder) throws {
+        do {
+            _ = try exactCanonicalToriiAccountAddress(proposalOperator)
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "proposal_operator must be an exact canonical account identifier."
+            )
+        }
         let normalizedTarget = try normalizeToriiContractTargetSelector(
             contractAddress: contractAddress,
             contractAlias: contractAlias,
@@ -18411,6 +18422,7 @@ public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable 
             throw ToriiClientError.invalidPayload("abi_version must be exactly 1.")
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(proposalOperator, forKey: .proposalOperator)
         try container.encodeIfPresent(normalizedTarget.contractAddress, forKey: .contractAddress)
         try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
         try container.encode(codeHash.hexLowercased(), forKey: .codeHash)
@@ -18597,6 +18609,7 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
 }
 
 public struct ToriiGovernanceDeployContractKind: Decodable, Sendable, Equatable {
+    public let proposalOperator: String
     public let contractAddress: String
     public let codeHash: Data
     public let abiHash: Data
@@ -18604,6 +18617,7 @@ public struct ToriiGovernanceDeployContractKind: Decodable, Sendable, Equatable 
     public let manifestProvenance: ToriiContractManifestProvenance?
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
+        case proposalOperator = "proposal_operator"
         case contractAddress = "contract_address"
         case codeHash = "code_hash"
         case abiHash = "abi_hash"
@@ -18618,6 +18632,11 @@ public struct ToriiGovernanceDeployContractKind: Decodable, Sendable, Equatable 
             debugName: "governance deploy-contract proposal kind"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        proposalOperator = try decodeExactToriiAccountId(
+            from: container,
+            forKey: .proposalOperator,
+            debugName: "proposal_operator"
+        )
         contractAddress = try normalizeToriiContractAddressLiteral(
             try container.decode(String.self, forKey: .contractAddress),
             field: "contract_address"
@@ -22477,12 +22496,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func getKagemushaOperationStatus(
         operationId: String,
+        expectedKind: KagemushaOperationKind,
         chainDiscriminant: UInt16,
         completion: @escaping (Result<KagemushaOperationStatus, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getKagemushaOperationStatus(
                 operationId: operationId,
+                expectedKind: expectedKind,
                 chainDiscriminant: chainDiscriminant
             )
         }
@@ -25064,7 +25085,23 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ requestBody: ToriiGovernanceDeployContractProposalRequest,
         canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> ToriiGovernanceProposalResponse {
-        try await postAuthenticatedGovernanceJSON(
+        let operatorMatchesAuthority: Bool
+        do {
+            operatorMatchesAuthority = try toriiAccountIdsHaveSameIdentity(
+                requestBody.proposalOperator,
+                canonicalAuth.accountId
+            )
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "proposal_operator and canonical request account must be exact canonical account identifiers."
+            )
+        }
+        guard operatorMatchesAuthority else {
+            throw ToriiClientError.invalidPayload(
+                "proposal_operator must equal the canonical request account."
+            )
+        }
+        return try await postAuthenticatedGovernanceJSON(
             path: "/v1/gov/proposals/deploy-contract",
             body: requestBody,
             canonicalAuth: canonicalAuth,
@@ -26727,6 +26764,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func getKagemushaOperationStatus(
         operationId: String,
+        expectedKind: KagemushaOperationKind,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         let path = try KagemushaToriiAPI.operationPath(operationId)
@@ -26748,9 +26786,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             responseData,
             chainDiscriminant: chainDiscriminant
         )
-        guard status.operationId == operationId else {
+        guard status.operationId == operationId,
+              status.kind == expectedKind else {
             throw ToriiClientError.invalidPayload(
-                "Kagemusha operation status operation_id does not match the requested resource"
+                "Kagemusha operation status identity or kind does not match the requested resource"
             )
         }
         return status

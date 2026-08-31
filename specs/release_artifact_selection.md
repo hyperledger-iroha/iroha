@@ -146,5 +146,6 @@ lowercase SHA-256 fingerprint through
 require the packaged `sorafs-validate` candidate and its independently approved
 exact executable SHA-256. A verified V1 release is `software-key-qualified`.
 OIDC/cosign provenance, hosted scan results, publication receipts, and
-rollback/yank evidence remain external promotion inputs. A later HSM adapter
-requires new HSM-backed deployment evidence and promotion signatures.
+rollback/yank evidence remain external promotion inputs. Iroha exposes no
+hardware-specific signer mode; release qualification stays bound to the
+authenticated external software signer.

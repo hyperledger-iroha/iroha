@@ -241,7 +241,6 @@ mod tests {
             pop: Some(vec![0x01, 0x02]),
             activation_height: 10,
             expiry_height: Some(100),
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Pending,
         }

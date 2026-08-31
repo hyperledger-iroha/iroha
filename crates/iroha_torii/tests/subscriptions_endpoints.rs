@@ -243,9 +243,12 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         OnlinePeersProvider::new(peers_rx),
         None,
         MaybeTelemetry::disabled(),
-    );
+    )
+    .expect("valid Torii subscription fixture");
     SubscriptionHarness {
-        app: torii.api_router_for_tests(),
+        app: torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
         state,
         queue,
         charge_asset_id,

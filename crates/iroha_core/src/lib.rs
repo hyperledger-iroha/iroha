@@ -93,6 +93,8 @@ pub mod interlane;
 pub mod iso_bridge;
 /// Jurisdiction attestation/SDN enforcement helpers.
 pub mod jurisdiction;
+/// Canonical Kagemusha operation carriers and consensus-persisted outcomes.
+pub mod kagemusha_operation;
 /// Kiso: storage primitives and data layout.
 pub mod kiso;
 /// Persistent block storage (Kura) backend.

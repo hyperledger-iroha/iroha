@@ -632,11 +632,14 @@ fn kagemusha_json_requires_closed_objects_and_explicit_enum_content() {
     )
     .expect("canonical branch JSON");
     assert_eq!(branch, KagemushaRecursiveSpendBranchV2::Recipient);
-    let missing_content = norito::json::from_str::<KagemushaRecursiveSpendBranchV2>(
-        r#"{"branch":"recipient"}"#,
-    )
-    .expect_err("a unit branch must carry an explicit null content member");
-    assert!(missing_content.to_string().contains("missing field `value`"));
+    let missing_content =
+        norito::json::from_str::<KagemushaRecursiveSpendBranchV2>(r#"{"branch":"recipient"}"#)
+            .expect_err("a unit branch must carry an explicit null content member");
+    assert!(
+        missing_content
+            .to_string()
+            .contains("missing field `value`")
+    );
 
     let amount = KagemushaScaledAmountV2::new(1, SCALE).expect("canonical amount");
     let mut amount_json = norito::json::to_value(&amount).expect("encode amount JSON");

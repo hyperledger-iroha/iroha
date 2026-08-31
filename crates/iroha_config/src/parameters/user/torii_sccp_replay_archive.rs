@@ -10,13 +10,13 @@ pub struct ToriiSccpReplayArchive {
     /// Exactly three independently hosted, independently keyed replicas.
     #[config(default)]
     pub replicas: Vec<ToriiSccpReplayArchiveReplica>,
-    /// Complete response limit applied before decoding.
+    /// Complete response limit applied before buffering and decoding.
     #[config(default = "defaults::torii::sccp_replay_archive::MAX_RESPONSE_BYTES")]
     pub max_response_bytes: Bytes,
-    /// Per-snapshot encoded byte limit.
+    /// Per-snapshot encoded byte limit applied before in-memory decoding.
     #[config(default = "defaults::torii::sccp_replay_archive::MAX_SNAPSHOT_BYTES")]
     pub max_snapshot_bytes: Bytes,
-    /// Per-snapshot leaf cardinality limit.
+    /// Per-snapshot in-memory leaf cardinality limit.
     #[config(default = "defaults::torii::sccp_replay_archive::MAX_SNAPSHOT_LEAVES")]
     pub max_snapshot_leaves: usize,
     /// Maximum accumulator count in one agreed checkpoint set.
@@ -41,6 +41,18 @@ impl Default for ToriiSccpReplayArchive {
             request_timeout_ms: DurationMs(archive::REQUEST_TIMEOUT),
         }
     }
+}
+
+const SCCP_REPLAY_NORITO_ARCHIVE_LIMIT_ERROR: &str = "torii.sccp_replay_archive.max_snapshot_bytes must not exceed norito.max_archive_len when the replay archive is enabled";
+
+fn validate_sccp_replay_archive_norito_limit(
+    replay_archive: &ToriiSccpReplayArchive,
+    norito: &Norito,
+) -> core::result::Result<(), &'static str> {
+    if replay_archive.enabled && replay_archive.max_snapshot_bytes.get() > norito.max_archive_len {
+        return Err(SCCP_REPLAY_NORITO_ARCHIVE_LIMIT_ERROR);
+    }
+    Ok(())
 }
 
 /// One configured SCCP replay archive replica.

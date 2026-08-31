@@ -1,8 +1,17 @@
 use crate::{AppState, Error, SharedAppState, app_auth, routing};
 use axum::{http::HeaderMap, response::Response as AxResponse};
 use iroha_config::parameters::actual;
+use iroha_core::kagemusha_operation::{
+    KagemushaOperationExecutionPhaseV4, KagemushaOperationOutcomeRecordV4,
+    KagemushaOperationOutcomeStateV4, classify_kagemusha_operation_entrypoint_v4,
+    classify_kagemusha_operation_transaction_v4, kagemusha_operation_authority_digest_v4,
+    kagemusha_operation_finality_v4,
+    kagemusha_operation_outcome_state_key_from_authority_digest_v4, kagemusha_operation_outcome_v4,
+    signed_transaction_wire_hash_v4,
+};
+use iroha_core::queue::{PendingKagemushaOperation, PendingKagemushaOperationLookupError};
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::{Hash, HashOf, KeyPair};
+use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
@@ -12,8 +21,8 @@ use iroha_data_model::{
         offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
     },
     offline::{
-        KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2,
-        KagemushaRecursiveSpendTopUpAnchorV4,
+        KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2, KagemushaOperationCarrierV4,
+        KagemushaOperationRequestV4, KagemushaRecursiveSpendTopUpAnchorV4,
     },
     state_path::StatePath,
     transaction::{
@@ -31,7 +40,7 @@ use mv::storage::StorageReadOnly;
 use parking_lot::Mutex;
 use std::{
     collections::BTreeMap,
-    num::NonZeroUsize,
+    num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -133,18 +142,42 @@ pub(crate) async fn handle_top_up(
     })?;
     let requested = OfflineOperationRequest::TopUp(&topup_request);
     let requested_binding = OfflineOperationRequestBinding::from_request(requested)?;
-    let issuer = require_issuer(&app)?;
+    let issuer = require_configured_issuer(&app)?;
     let submission = loop {
-        if let Some(response) =
-            find_existing_offline_operation(&app, &issuer, requested, &requested_binding)?
-        {
-            return Ok(response);
+        match find_existing_offline_operation(&app, &issuer, requested, &requested_binding)? {
+            OfflineSubmissionRecovery::Existing(response) => return Ok(response),
+            OfflineSubmissionRecovery::RetryRejected { .. } | OfflineSubmissionRecovery::Absent => {
+            }
         }
-        match issuer.claim_submission(requested_binding)? {
+        let claim = match issuer.claim_submission(requested_binding) {
+            Ok(claim) => claim,
+            Err(error) => {
+                return reconcile_offline_submission_failure(
+                    &app,
+                    &issuer,
+                    requested,
+                    &requested_binding,
+                    error,
+                );
+            }
+        };
+        match claim {
             SubmissionClaim::Accepted(record) => {
                 return offline_operation_reference_for_admitted_record(&record);
             }
-            SubmissionClaim::Leader(submission) => break submission,
+            SubmissionClaim::Leader(submission) => {
+                if let Err(error) = ensure_offline_command_authority_ready(&app, &issuer) {
+                    drop(submission);
+                    return reconcile_offline_submission_failure(
+                        &app,
+                        &issuer,
+                        requested,
+                        &requested_binding,
+                        error,
+                    );
+                }
+                break submission;
+            }
             SubmissionClaim::Follower(receiver) => {
                 match wait_for_submission_outcome(receiver).await {
                     SubmissionOutcome::Accepted(record) => {
@@ -157,32 +190,66 @@ pub(crate) async fn handle_top_up(
     };
     // Retention pruning can remove an expired admitted binding after this
     // caller's first recovery pass but before it acquires the in-flight claim.
-    // Once the claim is ours, repeat the authoritative queue/Kura lookup before
+    // Once the claim is ours, repeat the consensus-outcome and typed Queue lookup before
     // signing; any earlier leader is either still represented in-flight or
     // recoverable from one of those durable transaction sources.
-    if let Some(response) =
-        find_existing_offline_operation(&app, &issuer, requested, &requested_binding)?
-    {
-        drop(submission);
-        return Ok(response);
-    }
-    preflight_kagemusha_v2_hardware_authorization(
+    let retry_nonce =
+        match find_existing_offline_operation(&app, &issuer, requested, &requested_binding)? {
+            OfflineSubmissionRecovery::Existing(response) => {
+                drop(submission);
+                return Ok(response);
+            }
+            OfflineSubmissionRecovery::RetryRejected { next_nonce } => Some(next_nonce),
+            OfflineSubmissionRecovery::Absent => None,
+        };
+    if let Err(error) = preflight_kagemusha_v2_hardware_authorization(
         &app,
         &topup_request.authorization,
         topup_request.asset.definition(),
-    )?;
-    validate_kagemusha_v4_topup_snapshot(&app, &topup_request)?;
-    let public_amount = topup_request.amount.public_quantity().map_err(|source| {
-        validation_owned(
-            "offline_top_up_invalid",
-            format!("Offline top-up amount cannot be represented exactly: {source}"),
-        )
-    })?;
+    ) {
+        return reconcile_offline_submission_failure(
+            &app,
+            &issuer,
+            requested,
+            &requested_binding,
+            error,
+        );
+    }
+    if let Err(error) = validate_kagemusha_v4_topup_snapshot(&app, &topup_request) {
+        return reconcile_offline_submission_failure(
+            &app,
+            &issuer,
+            requested,
+            &requested_binding,
+            error,
+        );
+    }
+    let public_amount = match topup_request.amount.public_quantity() {
+        Ok(amount) => amount,
+        Err(source) => {
+            return reconcile_offline_submission_failure(
+                &app,
+                &issuer,
+                requested,
+                &requested_binding,
+                validation_owned(
+                    "offline_top_up_invalid",
+                    format!("Offline top-up amount cannot be represented exactly: {source}"),
+                ),
+            );
+        }
+    };
     if public_amount > issuer.max_tx_value.clone() {
-        return Err(validation(
-            "offline_amount_exceeds_limit",
-            "Offline top-up amount exceeds issuer policy.",
-        ));
+        return reconcile_offline_submission_failure(
+            &app,
+            &issuer,
+            requested,
+            &requested_binding,
+            validation(
+                "offline_amount_exceeds_limit",
+                "Offline top-up amount exceeds issuer policy.",
+            ),
+        );
     }
     let instruction = TopUpKagemushaRecursiveV4::new(topup_request.clone());
     let mut transaction = TransactionBuilder::new(
@@ -200,7 +267,22 @@ pub(crate) async fn handle_top_up(
             .expires_at_ms
             .saturating_sub(topup_request.authorization.issued_at_ms),
     ));
-    let tx = issuer.quote_and_sign_transaction(&app, transaction, "offline_top_up_transaction")?;
+    if let Some(nonce) = retry_nonce {
+        transaction.set_nonce(nonce);
+    }
+    let tx =
+        match issuer.quote_and_sign_transaction(&app, transaction, "offline_top_up_transaction") {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                return reconcile_offline_submission_failure(
+                    &app,
+                    &issuer,
+                    requested,
+                    &requested_binding,
+                    error,
+                );
+            }
+        };
     let tx_hash = tx.hash();
     let admission = routing::handle_transaction_with_metrics(
         app.queue.clone(),
@@ -211,7 +293,7 @@ pub(crate) async fn handle_top_up(
     )
     .await;
     if let Err(error) = admission {
-        return reconcile_duplicate_queue_admission(
+        return reconcile_offline_submission_failure(
             &app,
             &issuer,
             requested,
@@ -219,8 +301,16 @@ pub(crate) async fn handle_top_up(
             error,
         );
     }
-    let record = submission.accept(tx_hash)?;
-    offline_operation_reference_for_admitted_record(&record)
+    match submission.accept(tx_hash) {
+        Ok(record) => offline_operation_reference_for_admitted_record(&record),
+        Err(error) => reconcile_offline_submission_failure(
+            &app,
+            &issuer,
+            requested,
+            &requested_binding,
+            error,
+        ),
+    }
 }
 pub(crate) async fn handle_redeem(
     app: SharedAppState,
@@ -237,18 +327,42 @@ pub(crate) async fn handle_redeem(
     })?;
     let requested = OfflineOperationRequest::Redeem(&redeem_request);
     let requested_binding = OfflineOperationRequestBinding::from_request(requested)?;
-    let issuer = require_issuer(&app)?;
+    let issuer = require_configured_issuer(&app)?;
     let submission = loop {
-        if let Some(response) =
-            find_existing_offline_operation(&app, &issuer, requested, &requested_binding)?
-        {
-            return Ok(response);
+        match find_existing_offline_operation(&app, &issuer, requested, &requested_binding)? {
+            OfflineSubmissionRecovery::Existing(response) => return Ok(response),
+            OfflineSubmissionRecovery::RetryRejected { .. } | OfflineSubmissionRecovery::Absent => {
+            }
         }
-        match issuer.claim_submission(requested_binding)? {
+        let claim = match issuer.claim_submission(requested_binding) {
+            Ok(claim) => claim,
+            Err(error) => {
+                return reconcile_offline_submission_failure(
+                    &app,
+                    &issuer,
+                    requested,
+                    &requested_binding,
+                    error,
+                );
+            }
+        };
+        match claim {
             SubmissionClaim::Accepted(record) => {
                 return offline_operation_reference_for_admitted_record(&record);
             }
-            SubmissionClaim::Leader(submission) => break submission,
+            SubmissionClaim::Leader(submission) => {
+                if let Err(error) = ensure_offline_command_authority_ready(&app, &issuer) {
+                    drop(submission);
+                    return reconcile_offline_submission_failure(
+                        &app,
+                        &issuer,
+                        requested,
+                        &requested_binding,
+                        error,
+                    );
+                }
+                break submission;
+            }
             SubmissionClaim::Follower(receiver) => {
                 match wait_for_submission_outcome(receiver).await {
                     SubmissionOutcome::Accepted(record) => {
@@ -261,29 +375,63 @@ pub(crate) async fn handle_redeem(
     };
     // See the top-up path: this second authoritative read closes the retention
     // pruning window before a replacement transaction can be signed.
-    if let Some(response) =
-        find_existing_offline_operation(&app, &issuer, requested, &requested_binding)?
-    {
-        drop(submission);
-        return Ok(response);
-    }
-    preflight_kagemusha_v2_hardware_authorization(
+    let retry_nonce =
+        match find_existing_offline_operation(&app, &issuer, requested, &requested_binding)? {
+            OfflineSubmissionRecovery::Existing(response) => {
+                drop(submission);
+                return Ok(response);
+            }
+            OfflineSubmissionRecovery::RetryRejected { next_nonce } => Some(next_nonce),
+            OfflineSubmissionRecovery::Absent => None,
+        };
+    if let Err(error) = preflight_kagemusha_v2_hardware_authorization(
         &app,
         &redeem_request.authorization,
         &redeem_request.bundle.statement.asset,
-    )?;
-    validate_kagemusha_v4_redeem_snapshot(&app, &redeem_request)?;
-    let public_amount = redeem_request.amount.public_quantity().map_err(|source| {
-        validation_owned(
-            "offline_redeem_invalid",
-            format!("Offline redemption amount cannot be represented exactly: {source}"),
-        )
-    })?;
+    ) {
+        return reconcile_offline_submission_failure(
+            &app,
+            &issuer,
+            requested,
+            &requested_binding,
+            error,
+        );
+    }
+    if let Err(error) = validate_kagemusha_v4_redeem_snapshot(&app, &redeem_request) {
+        return reconcile_offline_submission_failure(
+            &app,
+            &issuer,
+            requested,
+            &requested_binding,
+            error,
+        );
+    }
+    let public_amount = match redeem_request.amount.public_quantity() {
+        Ok(amount) => amount,
+        Err(source) => {
+            return reconcile_offline_submission_failure(
+                &app,
+                &issuer,
+                requested,
+                &requested_binding,
+                validation_owned(
+                    "offline_redeem_invalid",
+                    format!("Offline redemption amount cannot be represented exactly: {source}"),
+                ),
+            );
+        }
+    };
     if public_amount > issuer.max_tx_value.clone() {
-        return Err(validation(
-            "offline_amount_exceeds_limit",
-            "Offline redemption amount exceeds issuer policy.",
-        ));
+        return reconcile_offline_submission_failure(
+            &app,
+            &issuer,
+            requested,
+            &requested_binding,
+            validation(
+                "offline_amount_exceeds_limit",
+                "Offline redemption amount exceeds issuer policy.",
+            ),
+        );
     }
     let authorization = redeem_request.authorization.clone();
     let instruction = RedeemKagemushaRecursiveV4::new(redeem_request.clone());
@@ -299,7 +447,22 @@ pub(crate) async fn handle_redeem(
             .expires_at_ms
             .saturating_sub(authorization.issued_at_ms),
     ));
-    let tx = issuer.quote_and_sign_transaction(&app, transaction, "offline_redeem_transaction")?;
+    if let Some(nonce) = retry_nonce {
+        transaction.set_nonce(nonce);
+    }
+    let tx =
+        match issuer.quote_and_sign_transaction(&app, transaction, "offline_redeem_transaction") {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                return reconcile_offline_submission_failure(
+                    &app,
+                    &issuer,
+                    requested,
+                    &requested_binding,
+                    error,
+                );
+            }
+        };
     let tx_hash = tx.hash();
     let admission = routing::handle_transaction_with_metrics(
         app.queue.clone(),
@@ -310,7 +473,7 @@ pub(crate) async fn handle_redeem(
     )
     .await;
     if let Err(error) = admission {
-        return reconcile_duplicate_queue_admission(
+        return reconcile_offline_submission_failure(
             &app,
             &issuer,
             requested,
@@ -318,8 +481,16 @@ pub(crate) async fn handle_redeem(
             error,
         );
     }
-    let record = submission.accept(tx_hash)?;
-    offline_operation_reference_for_admitted_record(&record)
+    match submission.accept(tx_hash) {
+        Ok(record) => offline_operation_reference_for_admitted_record(&record),
+        Err(error) => reconcile_offline_submission_failure(
+            &app,
+            &issuer,
+            requested,
+            &requested_binding,
+            error,
+        ),
+    }
 }
 fn kagemusha_v4_snapshot_time_ms(state: &impl StateReadOnly) -> u64 {
     state.latest_block().map_or(0, |block| {
@@ -620,6 +791,12 @@ impl<'a> OfflineOperationRequestRef<'a> {
             Self::Redeem(request) => OfflineOperationRequest::Redeem(Box::new(request.clone())),
         }
     }
+    fn as_kagemusha_request(self) -> KagemushaOperationRequestV4<'a> {
+        match self {
+            Self::TopUp(request) => KagemushaOperationRequestV4::TopUp(request),
+            Self::Redeem(request) => KagemushaOperationRequestV4::Redeem(request),
+        }
+    }
 }
 impl OfflineOperationRequestOwned {
     fn as_ref(&self) -> OfflineOperationRequestRef<'_> {
@@ -649,24 +826,17 @@ impl OfflineOperationRequestBinding {
         Ok(Self {
             operation_id: authorization.operation_id,
             kind: request.kind(),
-            canonical_request_digest: canonical_offline_request_digest(request)?,
+            canonical_request_digest: request
+                .as_kagemusha_request()
+                .canonical_request_digest()
+                .map_err(|source| Error::SerializationFailure {
+                    context: "offline_request_binding",
+                    source: Box::new(source),
+                })?,
             submitted_at_ms: authorization.issued_at_ms,
             expires_at_ms: authorization.expires_at_ms,
         })
     }
-}
-fn canonical_offline_request_digest(
-    request: OfflineOperationRequestRef<'_>,
-) -> Result<[u8; 32], Error> {
-    let canonical = match request {
-        OfflineOperationRequest::TopUp(request) => norito::to_bytes(request),
-        OfflineOperationRequest::Redeem(request) => norito::to_bytes(request),
-    }
-    .map_err(|source| Error::SerializationFailure {
-        context: "offline_request_binding",
-        source: Box::new(source),
-    })?;
-    Ok(Hash::new(canonical).into())
 }
 fn ensure_same_offline_request_binding(
     existing: &OfflineOperationRequestBinding,
@@ -695,12 +865,21 @@ fn operation_id_conflict() -> Error {
 #[derive(Debug, Clone)]
 struct OfflineOperationRecord {
     request: OfflineOperationRequestOwned,
+    canonical_request_digest: [u8; 32],
     transaction_hash: HashOf<SignedTransaction>,
+    transaction_nonce: Option<NonZeroU32>,
     submitted_at_ms: u64,
 }
 impl OfflineOperationRecord {
-    fn binding(&self) -> Result<OfflineOperationRequestBinding, Error> {
-        OfflineOperationRequestBinding::from_request(self.request.as_ref())
+    fn binding(&self) -> OfflineOperationRequestBinding {
+        let authorization = self.request.authorization();
+        OfflineOperationRequestBinding {
+            operation_id: authorization.operation_id,
+            kind: self.request.kind(),
+            canonical_request_digest: self.canonical_request_digest,
+            submitted_at_ms: authorization.issued_at_ms,
+            expires_at_ms: authorization.expires_at_ms,
+        }
     }
 }
 #[derive(Debug, Clone)]
@@ -949,16 +1128,21 @@ fn offline_operation_is_retained(expires_at_ms: u64, now_ms: u64) -> bool {
 fn find_admitted_offline_operation(
     issuer: &OfflineCommandRuntime,
     requested_binding: &OfflineOperationRequestBinding,
+    rejected_transaction_hash: Option<&HashOf<SignedTransaction>>,
 ) -> Result<Option<AdmittedOfflineOperationRecord>, Error> {
     let mut admission = issuer.admission.lock();
     let now_ms = now_ms();
     admission.prune_expired(now_ms);
     let operation_id = requested_binding.operation_id;
-    let Some(existing) = admission.get(&operation_id) else {
+    let Some(existing) = admission.get(&operation_id).cloned() else {
         return Ok(None);
     };
     ensure_same_offline_request_binding(&existing.binding, requested_binding)?;
-    Ok(Some(existing.clone()))
+    if rejected_transaction_hash.is_some_and(|hash| hash == &existing.transaction_hash) {
+        admission.records.remove(&operation_id);
+        return Ok(None);
+    }
+    Ok(Some(existing))
 }
 fn offline_operation_status_uri(operation_id: [u8; 32]) -> String {
     format!("/v1/offline/operations/{}", hex::encode(operation_id))
@@ -1043,48 +1227,59 @@ fn offline_operation_record_in_transaction(
     if operation_id == [0; 32] || transaction.authority() != issuer_authority {
         return None;
     }
-    for instruction in transaction.instructions().explicit_instructions() {
-        let any = instruction.as_any();
-        let candidate = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV4>() {
-            Some(OfflineOperationRequest::TopUp(&top_up.request))
-        } else if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
-            Some(OfflineOperationRequest::Redeem(&redeem.request))
-        } else {
-            None
-        };
-        let Some(request) = candidate else {
-            continue;
-        };
-        let authorization = request.authorization();
-        if authorization.operation_id == operation_id {
-            return Some(OfflineOperationRecord {
-                request: request.into_owned(),
-                transaction_hash: transaction.hash(),
-                submitted_at_ms: authorization.issued_at_ms,
-            });
-        }
-    }
-    None
+    let carrier = classify_kagemusha_operation_transaction_v4(transaction)
+        .ok()
+        .flatten()?;
+    offline_operation_record_from_carrier(transaction, carrier, operation_id)
 }
-fn signed_transaction_for_entrypoint(
+fn offline_operation_record_in_entrypoint(
     entrypoint: &TransactionEntrypoint,
-) -> Option<&SignedTransaction> {
-    match entrypoint {
-        TransactionEntrypoint::External(transaction) => Some(transaction),
-        TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+    issuer_authority: &AccountId,
+    operation_id: [u8; 32],
+) -> Option<OfflineOperationRecord> {
+    if operation_id == [0; 32] {
+        return None;
     }
+    let TransactionEntrypoint::External(transaction) = entrypoint else {
+        return None;
+    };
+    if transaction.authority() != issuer_authority {
+        return None;
+    }
+    let carrier = classify_kagemusha_operation_entrypoint_v4(entrypoint)
+        .ok()
+        .flatten()?;
+    offline_operation_record_from_carrier(transaction, carrier, operation_id)
 }
-fn terminal_offline_operation_in_transaction(
+fn offline_operation_record_from_carrier(
     transaction: &SignedTransaction,
+    carrier: KagemushaOperationCarrierV4<'_>,
+    operation_id: [u8; 32],
+) -> Option<OfflineOperationRecord> {
+    if carrier.operation_id() != operation_id {
+        return None;
+    }
+    let request = match carrier.request() {
+        KagemushaOperationRequestV4::TopUp(request) => OfflineOperationRequest::TopUp(request),
+        KagemushaOperationRequestV4::Redeem(request) => OfflineOperationRequest::Redeem(request),
+    };
+    Some(OfflineOperationRecord {
+        request: request.into_owned(),
+        canonical_request_digest: carrier.canonical_request_digest(),
+        transaction_hash: transaction.hash(),
+        transaction_nonce: transaction.nonce(),
+        submitted_at_ms: request.authorization().issued_at_ms,
+    })
+}
+fn terminal_offline_operation_in_entrypoint(
+    entrypoint: &TransactionEntrypoint,
     result: &TransactionResult,
     issuer_authority: &AccountId,
     operation_id: [u8; 32],
     finalized_block_height: u64,
-    server_time_ms: u64,
 ) -> Option<(OfflineOperationRecord, KagemushaV2CommittedFinality)> {
     let record =
-        offline_operation_record_in_transaction(transaction, issuer_authority, operation_id)?;
+        offline_operation_record_in_entrypoint(entrypoint, issuer_authority, operation_id)?;
     let transaction_hash = record.transaction_hash.to_string();
     Some((
         record,
@@ -1092,7 +1287,6 @@ fn terminal_offline_operation_in_transaction(
             operation_id,
             transaction_hash,
             finalized_block_height,
-            server_time_ms,
             result
                 .0
                 .as_ref()
@@ -1101,80 +1295,320 @@ fn terminal_offline_operation_in_transaction(
         ),
     ))
 }
-fn find_pending_offline_operation_by_id(
+fn terminal_offline_operation_from_outcome_evidence(
+    outcome: &KagemushaOperationOutcomeRecordV4,
+    entrypoint: &TransactionEntrypoint,
+    result: &TransactionResult,
+    configured_issuer_authority: &AccountId,
+    operation_id: [u8; 32],
+) -> Result<(OfflineOperationRecord, KagemushaV2CommittedFinality), Error> {
+    let TransactionEntrypoint::External(transaction) = entrypoint else {
+        return Err(offline_operation_evidence_inconsistent(
+            "The terminal offline operation locator does not reference a direct external carrier.",
+        ));
+    };
+    let carrier = classify_kagemusha_operation_entrypoint_v4(entrypoint)
+        .map_err(|error| {
+            offline_operation_evidence_inconsistent(format!(
+                "The terminal offline operation carrier is invalid: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            offline_operation_evidence_inconsistent(
+                "The terminal offline operation locator does not reference a Kagemusha carrier.",
+            )
+        })?;
+    let result_matches_outcome = matches!(
+        (outcome.outcome, result.is_ok()),
+        (KagemushaOperationOutcomeStateV4::Applied, true)
+            | (KagemushaOperationOutcomeStateV4::Rejected, false)
+    );
+    let signed_transaction_wire_hash =
+        signed_transaction_wire_hash_v4(transaction).map_err(|error| {
+            offline_operation_evidence_inconsistent(format!(
+                "The terminal offline operation signed transaction is not canonical: {error}"
+            ))
+        })?;
+    let configured_issuer_authority_digest =
+        kagemusha_operation_authority_digest_v4(configured_issuer_authority).map_err(|error| {
+            offline_operation_evidence_inconsistent(format!(
+                "The configured offline operation authority is not canonical: {error}"
+            ))
+        })?;
+    let outer_authority_digest = kagemusha_operation_authority_digest_v4(transaction.authority())
+        .map_err(|error| {
+        offline_operation_evidence_inconsistent(format!(
+            "The terminal offline operation outer authority is not canonical: {error}"
+        ))
+    })?;
+    let request_authority_digest =
+        kagemusha_operation_authority_digest_v4(&carrier.request().authorization().authority)
+            .map_err(|error| {
+                offline_operation_evidence_inconsistent(format!(
+                    "The terminal offline operation request authority is not canonical: {error}"
+                ))
+            })?;
+    let foreign_rejected_attempt = outcome.outcome == KagemushaOperationOutcomeStateV4::Rejected
+        && outcome.outer_authority_digest != configured_issuer_authority_digest;
+    if outcome.operation_id != operation_id
+        || outcome.outer_authority_digest != outer_authority_digest
+        || foreign_rejected_attempt
+        || outcome.request_authority_digest != request_authority_digest
+        || outcome.kind != carrier.kind()
+        || outcome.operation_id != carrier.operation_id()
+        || outcome.canonical_request_digest != carrier.canonical_request_digest()
+        || outcome.signed_transaction_wire_hash != signed_transaction_wire_hash
+        || outcome.entrypoint_hash != entrypoint.hash()
+        || outcome.result_hash != Some(result.hash())
+        || !result_matches_outcome
+    {
+        return Err(offline_operation_evidence_inconsistent(
+            "The terminal offline operation outcome does not match its exact carrier and result evidence.",
+        ));
+    }
+    terminal_offline_operation_in_entrypoint(
+        entrypoint,
+        result,
+        transaction.authority(),
+        operation_id,
+        outcome.carrier_height,
+    )
+    .ok_or_else(|| {
+        offline_operation_evidence_inconsistent(
+            "The terminal offline operation evidence could not reconstruct its canonical request.",
+        )
+    })
+}
+fn offline_operation_record_from_pending(
+    pending: &PendingKagemushaOperation,
+    issuer_authority: &AccountId,
+    operation_id: [u8; 32],
+) -> Result<OfflineOperationRecord, Error> {
+    let transaction = pending.signed_transaction();
+    let carrier = classify_kagemusha_operation_transaction_v4(transaction)
+        .map_err(|error| {
+            offline_operation_evidence_inconsistent(format!(
+                "The pending offline operation carrier is invalid: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            offline_operation_evidence_inconsistent(
+                "The pending offline operation owner is not a Kagemusha carrier.",
+            )
+        })?;
+    let authorization = carrier.request().authorization();
+    let signed_transaction_wire_hash =
+        signed_transaction_wire_hash_v4(transaction).map_err(|error| {
+            offline_operation_evidence_inconsistent(format!(
+                "The pending offline operation signed transaction is not canonical: {error}"
+            ))
+        })?;
+    if pending.authority() != issuer_authority
+        || transaction.authority() != issuer_authority
+        || pending.operation_id() != operation_id
+        || carrier.operation_id() != operation_id
+        || pending.kind() != carrier.kind()
+        || pending.canonical_request_digest() != carrier.canonical_request_digest()
+        || pending.submitted_at_ms() != authorization.issued_at_ms
+        || pending.expires_at_ms() != authorization.expires_at_ms
+        || pending.signed_transaction_wire_hash() != signed_transaction_wire_hash
+        || pending.entrypoint_hash() != transaction.hash_as_entrypoint()
+    {
+        return Err(offline_operation_evidence_inconsistent(
+            "The pending offline operation owner does not match its exact carrier evidence.",
+        ));
+    }
+    offline_operation_record_from_carrier(transaction, carrier, operation_id).ok_or_else(|| {
+        offline_operation_evidence_inconsistent(
+            "The pending offline operation evidence could not reconstruct its canonical request.",
+        )
+    })
+}
+fn pending_offline_operation_lookup_error(error: PendingKagemushaOperationLookupError) -> Error {
+    match error {
+        PendingKagemushaOperationLookupError::Unavailable { .. }
+        | PendingKagemushaOperationLookupError::DurabilityTransition { .. } => {
+            offline_operation_pending_unavailable(
+                "Pending offline operation ownership is temporarily unavailable; retry after Queue recovery completes.",
+            )
+        }
+        PendingKagemushaOperationLookupError::Inconsistent { .. } => {
+            offline_operation_evidence_inconsistent(
+                "Pending offline operation ownership is internally inconsistent.",
+            )
+        }
+    }
+}
+enum PendingOfflineOperationResolution {
+    Pending(OfflineOperationRecord),
+    Terminal(OfflineOperationRecord, KagemushaV2CommittedFinality),
+}
+fn resolve_pending_offline_operation_by_id(
     app: &SharedAppState,
     issuer_authority: &AccountId,
     operation_id: [u8; 32],
-) -> Option<OfflineOperationRecord> {
-    let state = app.state.view();
-    for accepted in app.queue.all_transactions(&state) {
-        let Some(transaction) = accepted.external() else {
-            continue;
-        };
-        if let Some(record) =
-            offline_operation_record_in_transaction(transaction, issuer_authority, operation_id)
-        {
-            return Some(record);
+) -> Result<Option<PendingOfflineOperationResolution>, Error> {
+    let pending = {
+        let state = app.state.view();
+        app.queue
+            .pending_kagemusha_operation(&state, issuer_authority, operation_id)
+    };
+    match pending {
+        Ok(Some(pending)) => {
+            offline_operation_record_from_pending(&pending, issuer_authority, operation_id)
+                .map(PendingOfflineOperationResolution::Pending)
+                .map(Some)
+        }
+        Ok(None) => find_terminal_offline_operation_by_id(app, issuer_authority, operation_id).map(
+            |terminal| {
+                terminal.map(|(record, finality)| {
+                    PendingOfflineOperationResolution::Terminal(record, finality)
+                })
+            },
+        ),
+        Err(error @ PendingKagemushaOperationLookupError::Unavailable { .. })
+        | Err(error @ PendingKagemushaOperationLookupError::DurabilityTransition { .. }) => {
+            match find_terminal_offline_operation_by_id(app, issuer_authority, operation_id)? {
+                Some((
+                    record,
+                    finality @ KagemushaV2CommittedFinality {
+                        outcome: KagemushaV2TerminalOutcome::Applied,
+                        ..
+                    },
+                )) => Ok(Some(PendingOfflineOperationResolution::Terminal(
+                    record, finality,
+                ))),
+                Some((
+                    _,
+                    KagemushaV2CommittedFinality {
+                        outcome: KagemushaV2TerminalOutcome::Rejected(_),
+                        ..
+                    },
+                ))
+                | None => Err(pending_offline_operation_lookup_error(error)),
+            }
+        }
+        Err(error @ PendingKagemushaOperationLookupError::Inconsistent { .. }) => {
+            Err(pending_offline_operation_lookup_error(error))
         }
     }
-    None
+}
+enum OfflineSubmissionRecovery {
+    Existing(AxResponse),
+    RetryRejected { next_nonce: NonZeroU32 },
+    Absent,
+}
+fn next_rejected_attempt_nonce(rejected: &OfflineOperationRecord) -> Result<NonZeroU32, Error> {
+    let Some(nonce) = rejected.transaction_nonce else {
+        return Ok(NonZeroU32::MIN);
+    };
+    nonce
+        .get()
+        .checked_add(1)
+        .and_then(NonZeroU32::new)
+        .ok_or_else(|| Error::AppConflict {
+            code: "offline_operation_retry_exhausted",
+            message: "The rejected offline operation exhausted its deterministic transaction nonce space; submit a newly authorized operation id."
+                .to_owned(),
+        })
 }
 fn find_existing_offline_operation(
     app: &SharedAppState,
     issuer: &OfflineCommandRuntime,
     requested: OfflineOperationRequestRef<'_>,
     requested_binding: &OfflineOperationRequestBinding,
-) -> Result<Option<AxResponse>, Error> {
-    if let Some(existing) = find_admitted_offline_operation(issuer, requested_binding)? {
-        return offline_operation_reference_for_admitted_record(&existing).map(Some);
-    }
+) -> Result<OfflineSubmissionRecovery, Error> {
     let authorization = requested.authorization();
-    if let Some(existing) =
-        find_pending_offline_operation_by_id(app, &issuer.authority, authorization.operation_id)
+    let mut rejected_attempt = None;
+    if let Some((record, finality)) =
+        find_terminal_offline_operation_by_id(app, &issuer.authority, authorization.operation_id)?
     {
-        ensure_same_offline_request(&existing.request.as_ref(), &requested)?;
-        return offline_operation_reference_response(
-            authorization.operation_id,
-            existing.request.kind().into(),
-            existing.transaction_hash.to_string(),
-            existing.submitted_at_ms,
-        )
-        .map(Some);
+        ensure_same_offline_request(&record.request.as_ref(), &requested)?;
+        match finality.outcome {
+            KagemushaV2TerminalOutcome::Applied => {
+                return offline_operation_reference_response(
+                    authorization.operation_id,
+                    requested.kind().into(),
+                    finality.transaction_hash,
+                    authorization.issued_at_ms,
+                )
+                .map(OfflineSubmissionRecovery::Existing);
+            }
+            KagemushaV2TerminalOutcome::Rejected(_) => rejected_attempt = Some(record),
+        }
     }
-    let Some(finality) = find_committed_kagemusha_v4_operation(app, issuer, requested)? else {
-        return Ok(None);
-    };
-    offline_operation_reference_response(
-        authorization.operation_id,
-        requested.kind().into(),
-        finality.transaction_hash,
-        authorization.issued_at_ms,
-    )
-    .map(Some)
+    let rejected_transaction_hash = rejected_attempt
+        .as_ref()
+        .map(|record| &record.transaction_hash);
+    if let Some(existing) =
+        find_admitted_offline_operation(issuer, requested_binding, rejected_transaction_hash)?
+    {
+        return offline_operation_reference_for_admitted_record(&existing)
+            .map(OfflineSubmissionRecovery::Existing);
+    }
+    if let Some(resolution) =
+        resolve_pending_offline_operation_by_id(app, &issuer.authority, authorization.operation_id)?
+    {
+        match resolution {
+            PendingOfflineOperationResolution::Pending(existing) => {
+                ensure_same_offline_request(&existing.request.as_ref(), &requested)?;
+                if rejected_attempt
+                    .as_ref()
+                    .is_some_and(|rejected| rejected.transaction_hash == existing.transaction_hash)
+                {
+                    return Err(offline_operation_evidence_inconsistent(
+                        "A rejected offline operation is simultaneously reported as pending.",
+                    ));
+                }
+                return offline_operation_reference_response(
+                    authorization.operation_id,
+                    existing.request.kind().into(),
+                    existing.transaction_hash.to_string(),
+                    existing.submitted_at_ms,
+                )
+                .map(OfflineSubmissionRecovery::Existing);
+            }
+            PendingOfflineOperationResolution::Terminal(existing, finality) => {
+                ensure_same_offline_request(&existing.request.as_ref(), &requested)?;
+                match finality.outcome {
+                    KagemushaV2TerminalOutcome::Applied => {
+                        return offline_operation_reference_response(
+                            authorization.operation_id,
+                            existing.request.kind().into(),
+                            existing.transaction_hash.to_string(),
+                            existing.submitted_at_ms,
+                        )
+                        .map(OfflineSubmissionRecovery::Existing);
+                    }
+                    KagemushaV2TerminalOutcome::Rejected(_) => {
+                        rejected_attempt = Some(existing);
+                    }
+                }
+            }
+        }
+    }
+    match rejected_attempt {
+        Some(rejected) => Ok(OfflineSubmissionRecovery::RetryRejected {
+            next_nonce: next_rejected_attempt_nonce(&rejected)?,
+        }),
+        None => Ok(OfflineSubmissionRecovery::Absent),
+    }
 }
-fn is_duplicate_queue_admission_error(error: &Error) -> bool {
-    matches!(
-        error,
-        Error::PushIntoQueue { source, .. }
-            if matches!(
-                source.as_ref(),
-                iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue
-            )
-    )
-}
-fn reconcile_duplicate_queue_admission(
+// Every fallible boundary after the first authoritative lookup may race a
+// direct manager that commits the same exact request. Re-read global finality,
+// local admission, and typed Queue provenance before exposing that stale error.
+fn reconcile_offline_submission_failure(
     app: &SharedAppState,
     issuer: &OfflineCommandRuntime,
     requested: OfflineOperationRequestRef<'_>,
     requested_binding: &OfflineOperationRequestBinding,
-    admission_error: Error,
+    original_error: Error,
 ) -> Result<AxResponse, Error> {
-    if !is_duplicate_queue_admission_error(&admission_error) {
-        return Err(admission_error);
-    }
     match find_existing_offline_operation(app, issuer, requested, requested_binding)? {
-        Some(response) => Ok(response),
-        None => Err(admission_error),
+        OfflineSubmissionRecovery::Existing(response) => Ok(response),
+        OfflineSubmissionRecovery::RetryRejected { .. } | OfflineSubmissionRecovery::Absent => {
+            Err(original_error)
+        }
     }
 }
 fn find_terminal_offline_operation_by_id(
@@ -1182,103 +1616,226 @@ fn find_terminal_offline_operation_by_id(
     issuer_authority: &AccountId,
     operation_id: [u8; 32],
 ) -> Result<Option<(OfflineOperationRecord, KagemushaV2CommittedFinality)>, Error> {
-    let indexed_height = app
-        .kura
-        .get_earliest_block_height_by_offline_operation_id(issuer_authority, operation_id)
-        .ok_or_else(|| Error::AppServiceUnavailable {
-            code: "offline_operation_index_unavailable",
-            message: "The offline operation index is still being reconstructed.".to_owned(),
-        })?;
-    let Some(height) = indexed_height else {
-        return Ok(None);
-    };
-    let block = app
-        .kura
-        .get_block(height)
-        .ok_or_else(|| Error::AppServiceUnavailable {
-            code: "offline_operation_history_unavailable",
-            message: "The indexed offline operation block body is not locally available."
-                .to_owned(),
-        })?;
-    let block_ref = block.as_ref();
-    let finalized_block_height = u64::try_from(height.get()).unwrap_or(u64::MAX);
-    let server_time_ms =
-        u64::try_from(block_ref.header().creation_time().as_millis()).unwrap_or(u64::MAX);
-    for (_, entrypoint, result) in block_ref.entrypoint_results() {
-        let Some(transaction) = signed_transaction_for_entrypoint(&entrypoint) else {
-            continue;
-        };
-        if let Some(terminal) = terminal_offline_operation_in_transaction(
-            transaction,
-            result,
-            issuer_authority,
-            operation_id,
-            finalized_block_height,
-            server_time_ms,
-        ) {
-            return Ok(Some(terminal));
-        }
-    }
-    let merge_entry = app
-        .kura
-        .get_merge_entry_by_carrier_height(height)
-        .map_err(|error| {
+    let outcome = {
+        let world = app.state.world_view();
+        kagemusha_operation_outcome_v4(&world, issuer_authority, operation_id).map_err(|error| {
             iroha_logger::warn!(
                 ?error,
                 operation_id = %hex::encode(operation_id),
-                indexed_height = height.get(),
-                "failed to resolve indexed offline operation merge carrier"
+                "failed to load the canonical Kagemusha operation outcome"
             );
-            Error::AppServiceUnavailable {
-                code: "offline_operation_history_unavailable",
-                message: "The indexed offline operation merge entry is not locally available."
-                    .to_owned(),
-            }
+            offline_operation_evidence_inconsistent(
+                "The canonical offline operation outcome record is malformed.",
+            )
+        })?
+    };
+    reconstruct_terminal_offline_operation(app, issuer_authority, operation_id, outcome)
+}
+fn find_global_applied_offline_operation_by_id(
+    app: &SharedAppState,
+    issuer_authority: &AccountId,
+    operation_id: [u8; 32],
+) -> Result<Option<(OfflineOperationRecord, KagemushaV2CommittedFinality)>, Error> {
+    let outcome = {
+        let world = app.state.world_view();
+        kagemusha_operation_finality_v4(&world, operation_id).map_err(|error| {
+            iroha_logger::warn!(
+                ?error,
+                operation_id = %hex::encode(operation_id),
+                "failed to load the global Kagemusha operation finality"
+            );
+            offline_operation_evidence_inconsistent(
+                "The global offline operation finality record is malformed.",
+            )
+        })?
+    };
+    reconstruct_terminal_offline_operation(app, issuer_authority, operation_id, outcome)
+}
+fn reconstruct_terminal_offline_operation(
+    app: &SharedAppState,
+    issuer_authority: &AccountId,
+    operation_id: [u8; 32],
+    outcome: Option<KagemushaOperationOutcomeRecordV4>,
+) -> Result<Option<(OfflineOperationRecord, KagemushaV2CommittedFinality)>, Error> {
+    let Some(outcome) = outcome else {
+        return Ok(None);
+    };
+    let height = usize::try_from(outcome.carrier_height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .ok_or_else(|| {
+            offline_operation_evidence_inconsistent(
+                "The terminal offline operation has an invalid carrier height.",
+            )
         })?;
-    if let Some(batch) = merge_entry.and_then(|entry| entry.execution_batch) {
-        for execution in batch.lanes {
-            if execution.entrypoints.len() != execution.results.len() {
-                return Err(Error::AppServiceUnavailable {
-                    code: "offline_operation_index_inconsistent",
-                    message: "The indexed offline merge execution has misaligned results."
+    let phase_index = usize::try_from(outcome.phase_index).map_err(|_| {
+        offline_operation_evidence_inconsistent(
+            "The terminal offline operation has an invalid execution-phase index.",
+        )
+    })?;
+    match outcome.execution_phase {
+        KagemushaOperationExecutionPhaseV4::Ordinary => {
+            let block = app
+                .kura
+                .get_block(height)
+                .ok_or_else(|| Error::AppServiceUnavailable {
+                    code: "offline_operation_history_unavailable",
+                    message: "The terminal offline operation block body is not locally available."
                         .to_owned(),
-                });
+                })?;
+            if !block.has_results()
+                || block.header().height().get() != outcome.carrier_height
+                || block.entrypoints_cloned().len() != block.results().len()
+            {
+                return Err(offline_operation_evidence_inconsistent(
+                    "The terminal offline operation block has inconsistent entrypoint evidence.",
+                ));
             }
-            for (entrypoint, result) in execution.entrypoints.iter().zip(&execution.results) {
-                let Some(transaction) = signed_transaction_for_entrypoint(entrypoint) else {
-                    continue;
-                };
-                if let Some(terminal) = terminal_offline_operation_in_transaction(
-                    transaction,
-                    result,
-                    issuer_authority,
-                    operation_id,
-                    finalized_block_height,
-                    server_time_ms,
-                ) {
-                    return Ok(Some(terminal));
+            let entrypoint = block
+                .external_entrypoints_slice()
+                .get(phase_index)
+                .ok_or_else(|| {
+                    offline_operation_evidence_inconsistent(
+                        "The terminal offline operation ordinary index is out of bounds.",
+                    )
+                })?;
+            let result = block.results().nth(phase_index).ok_or_else(|| {
+                offline_operation_evidence_inconsistent(
+                    "The terminal offline operation ordinary result is missing.",
+                )
+            })?;
+            terminal_offline_operation_from_outcome_evidence(
+                &outcome,
+                entrypoint,
+                result,
+                issuer_authority,
+                operation_id,
+            )
+            .map(Some)
+        }
+        KagemushaOperationExecutionPhaseV4::Merge => {
+            let merge_entry = app
+                .kura
+                .get_merge_entry_by_carrier_height(height)
+                .map_err(|error| {
+                    iroha_logger::warn!(
+                        ?error,
+                        operation_id = %hex::encode(operation_id),
+                        carrier_height = outcome.carrier_height,
+                        "failed to resolve terminal offline operation merge evidence"
+                    );
+                    Error::AppServiceUnavailable {
+                        code: "offline_operation_history_unavailable",
+                        message:
+                            "The terminal offline operation merge entry is not locally available."
+                                .to_owned(),
+                    }
+                })?
+                .ok_or_else(|| Error::AppServiceUnavailable {
+                    code: "offline_operation_history_unavailable",
+                    message: "The terminal offline operation merge entry is not locally available."
+                        .to_owned(),
+                })?;
+            let batch = merge_entry.execution_batch.as_ref().ok_or_else(|| {
+                Error::AppServiceUnavailable {
+                    code: "offline_operation_history_unavailable",
+                    message:
+                        "The terminal offline operation merge execution batch is not available."
+                            .to_owned(),
+                }
+            })?;
+            if batch.application_block_header.height().get() != outcome.carrier_height {
+                return Err(offline_operation_evidence_inconsistent(
+                    "The terminal offline operation merge batch has the wrong carrier height.",
+                ));
+            }
+            let mut remaining = phase_index;
+            let mut evidence = None;
+            let mut entrypoint_count = 0_u64;
+            for lane in &batch.lanes {
+                if lane.entrypoints.len() != lane.results.len() {
+                    return Err(offline_operation_evidence_inconsistent(
+                        "The terminal offline operation merge execution has misaligned results.",
+                    ));
+                }
+                entrypoint_count = entrypoint_count
+                    .checked_add(u64::try_from(lane.entrypoints.len()).map_err(|_| {
+                        offline_operation_evidence_inconsistent(
+                            "The terminal offline operation merge entrypoint count overflowed.",
+                        )
+                    })?)
+                    .ok_or_else(|| {
+                        offline_operation_evidence_inconsistent(
+                            "The terminal offline operation merge entrypoint count overflowed.",
+                        )
+                    })?;
+                if evidence.is_none() {
+                    if remaining < lane.entrypoints.len() {
+                        evidence = Some((&lane.entrypoints[remaining], &lane.results[remaining]));
+                    } else {
+                        remaining -= lane.entrypoints.len();
+                    }
                 }
             }
+            if entrypoint_count != batch.entrypoint_count {
+                return Err(offline_operation_evidence_inconsistent(
+                    "The terminal offline operation merge batch has an inconsistent entrypoint count.",
+                ));
+            }
+            let (entrypoint, result) = evidence.ok_or_else(|| {
+                offline_operation_evidence_inconsistent(
+                    "The terminal offline operation merge index is out of bounds.",
+                )
+            })?;
+            terminal_offline_operation_from_outcome_evidence(
+                &outcome,
+                entrypoint,
+                result,
+                issuer_authority,
+                operation_id,
+            )
+            .map(Some)
         }
     }
-    Err(Error::AppServiceUnavailable {
-        code: "offline_operation_index_inconsistent",
-        message: "The offline operation index does not match its canonical block body.".to_owned(),
-    })
 }
-fn ensure_admitted_operation_matches_recovered_record(
+fn ensure_admitted_operation_binding_matches_recovered_record(
     admitted: &AdmittedOfflineOperationRecord,
     recovered: &OfflineOperationRecord,
 ) -> Result<(), Error> {
-    let recovered_binding = recovered.binding()?;
-    if admitted.binding != recovered_binding
-        || admitted.transaction_hash != recovered.transaction_hash
-    {
-        return Err(offline_operation_index_inconsistent(
+    let recovered_binding = recovered.binding();
+    if admitted.binding != recovered_binding {
+        return Err(offline_operation_evidence_inconsistent(
             "The authoritative offline operation differs from its admitted request binding.",
         ));
     }
     Ok(())
+}
+fn terminal_operation_supersedes_admitted_record(
+    admitted: &AdmittedOfflineOperationRecord,
+    recovered: &OfflineOperationRecord,
+    finality: &KagemushaV2CommittedFinality,
+) -> Result<bool, Error> {
+    let recovered_binding = recovered.binding();
+    if admitted.binding != recovered_binding {
+        return Err(offline_operation_evidence_inconsistent(
+            "The authoritative offline operation differs from its admitted request binding.",
+        ));
+    }
+    Ok(
+        matches!(&finality.outcome, KagemushaV2TerminalOutcome::Applied)
+            || admitted.transaction_hash == recovered.transaction_hash,
+    )
+}
+fn terminal_operation_supersedes_pending_record(
+    pending: &OfflineOperationRecord,
+    recovered: &OfflineOperationRecord,
+    finality: &KagemushaV2CommittedFinality,
+) -> Result<bool, Error> {
+    ensure_same_offline_request(&recovered.request.as_ref(), &pending.request.as_ref())?;
+    Ok(
+        matches!(&finality.outcome, KagemushaV2TerminalOutcome::Applied)
+            || pending.transaction_hash == recovered.transaction_hash,
+    )
 }
 fn pending_offline_operation_status(
     operation_id: [u8; 32],
@@ -1352,12 +1909,27 @@ fn offline_operation_status_response(
     known_pending_in_queue: bool,
 ) -> Result<AxResponse, Error> {
     let operation_id = record.request.authorization().operation_id;
+    if committed.is_none() {
+        if let Some((committed_record, finality)) =
+            find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
+        {
+            if terminal_operation_supersedes_pending_record(record, &committed_record, &finality)? {
+                return offline_operation_status_response(
+                    app,
+                    issuer,
+                    &committed_record,
+                    Some(&finality),
+                    false,
+                );
+            }
+        }
+    }
     let kind = record.request.kind();
     let operation_id_hex = hex::encode(operation_id);
-    let applied = |finalized_block_height: u64, server_time_ms: u64| {
-        if finalized_block_height == 0 || server_time_ms == 0 {
-            return Err(offline_operation_index_inconsistent(
-                "An applied offline operation requires a committed height and block timestamp.",
+    let applied = |finalized_block_height: u64| {
+        if finalized_block_height == 0 {
+            return Err(offline_operation_evidence_inconsistent(
+                "An applied offline operation requires a committed height.",
             ));
         }
         let result = match kind {
@@ -1384,7 +1956,6 @@ fn offline_operation_status_response(
                 OfflineOperationResult::TopUp(OfflineTopUpResult {
                     transaction_hash: record.transaction_hash.to_string(),
                     finalized_block_height,
-                    server_time_ms,
                     anchor,
                     finality_proof,
                 })
@@ -1393,7 +1964,6 @@ fn offline_operation_status_response(
                 OfflineOperationResult::Redeem(OfflineRedeemResult {
                     transaction_hash: record.transaction_hash.to_string(),
                     finalized_block_height,
-                    server_time_ms,
                 })
             }
         };
@@ -1405,12 +1975,25 @@ fn offline_operation_status_response(
     let rejected = |message: String| {
         rejected_offline_operation_status(operation_id, kind, &record.transaction_hash, message)
     };
+    let pending = || -> Result<OfflineOperationStatus, Error> {
+        if !known_pending_in_queue {
+            let state = app.state.view();
+            ensure_unproven_pending_window_is_live(
+                kagemusha_v4_snapshot_time_ms(&state),
+                record.request.authorization().expires_at_ms,
+            )?;
+        }
+        Ok(pending_offline_operation_status(
+            operation_id,
+            kind,
+            &record.transaction_hash,
+            record.submitted_at_ms,
+        ))
+    };
     let status = if let Some(finality) = committed {
         ensure_kagemusha_v4_terminal_finality_matches_record(record, finality)?;
         match &finality.outcome {
-            KagemushaV2TerminalOutcome::Applied => {
-                applied(finality.finalized_block_height, finality.server_time_ms)?
-            }
+            KagemushaV2TerminalOutcome::Applied => applied(finality.finalized_block_height)?,
             KagemushaV2TerminalOutcome::Rejected(message) => rejected(message.clone()),
         }
     } else if let Some((entry, _)) =
@@ -1426,14 +2009,15 @@ fn offline_operation_status_response(
         } else {
             match entry.kind {
                 crate::PipelineStatusKind::Applied => {
-                    let Some((committed_record, finality)) = find_terminal_offline_operation_by_id(
-                        app,
-                        &issuer.authority,
-                        operation_id,
-                    )?
+                    let Some((committed_record, finality)) =
+                        find_global_applied_offline_operation_by_id(
+                            app,
+                            &issuer.authority,
+                            operation_id,
+                        )?
                     else {
-                        return Err(offline_operation_index_inconsistent(
-                            "The applied offline operation is absent from the canonical operation index.",
+                        return Err(offline_operation_evidence_inconsistent(
+                            "The applied offline operation is absent from global finality state.",
                         ));
                     };
                     ensure_same_offline_request(
@@ -1456,39 +2040,23 @@ fn offline_operation_status_response(
                 ),
             }
         }
-    } else if known_pending_in_queue {
-        // The queue scan is authoritative pending provenance for this poll.
-        // Do not consult a temporarily incomplete Kura operation index and
-        // turn a known pending operation into a spurious 503 during rebuild.
-        pending_offline_operation_status(
-            operation_id,
-            kind,
-            &record.transaction_hash,
-            record.submitted_at_ms,
-        )
     } else if let Some((committed_record, finality)) =
         find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
     {
-        ensure_same_offline_request(&committed_record.request.as_ref(), &record.request.as_ref())?;
-        return offline_operation_status_response(
-            app,
-            issuer,
-            &committed_record,
-            Some(&finality),
-            false,
-        );
+        if terminal_operation_supersedes_pending_record(record, &committed_record, &finality)? {
+            return offline_operation_status_response(
+                app,
+                issuer,
+                &committed_record,
+                Some(&finality),
+                false,
+            );
+        }
+        pending()?
     } else {
-        let state = app.state.view();
-        ensure_unproven_pending_window_is_live(
-            kagemusha_v4_snapshot_time_ms(&state),
-            record.request.authorization().expires_at_ms,
-        )?;
-        pending_offline_operation_status(
-            operation_id,
-            kind,
-            &record.transaction_hash,
-            record.submitted_at_ms,
-        )
+        // The typed Queue owner is authoritative pending provenance while an
+        // older rejected attempt remains only a retry fallback.
+        pending()?
     };
     Ok(respond_with_offline_operation_status(status))
 }
@@ -1498,6 +2066,13 @@ fn admitted_offline_operation_status_response(
     admitted: &AdmittedOfflineOperationRecord,
 ) -> Result<AxResponse, Error> {
     let operation_id = admitted.binding.operation_id;
+    if let Some((record, finality)) =
+        find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
+    {
+        if terminal_operation_supersedes_admitted_record(admitted, &record, &finality)? {
+            return offline_operation_status_response(app, issuer, &record, Some(&finality), false);
+        }
+    }
     if let Some((entry, _)) = crate::pipeline_status_local_entry(app, &admitted.transaction_hash) {
         if let Some(status) = terminal_rejected_or_expired_offline_operation_status(
             &entry,
@@ -1509,14 +2084,21 @@ fn admitted_offline_operation_status_response(
         }
         match entry.kind {
             crate::PipelineStatusKind::Applied => {
-                let Some((record, finality)) =
-                    find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
+                let Some((record, finality)) = find_global_applied_offline_operation_by_id(
+                    app,
+                    &issuer.authority,
+                    operation_id,
+                )?
                 else {
-                    return Err(offline_operation_index_inconsistent(
-                        "The applied offline operation is absent from the canonical operation index.",
+                    return Err(offline_operation_evidence_inconsistent(
+                        "The applied offline operation is absent from global finality state.",
                     ));
                 };
-                ensure_admitted_operation_matches_recovered_record(admitted, &record)?;
+                if !terminal_operation_supersedes_admitted_record(admitted, &record, &finality)? {
+                    return Err(offline_operation_evidence_inconsistent(
+                        "The applied offline operation does not supersede its admitted request.",
+                    ));
+                }
                 return offline_operation_status_response(
                     app,
                     issuer,
@@ -1535,12 +2117,6 @@ fn admitted_offline_operation_status_response(
                 return Ok(respond_with_offline_operation_status(status));
             }
         }
-    }
-    if let Some((record, finality)) =
-        find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
-    {
-        ensure_admitted_operation_matches_recovered_record(admitted, &record)?;
-        return offline_operation_status_response(app, issuer, &record, Some(&finality), false);
     }
     let state = app.state.view();
     ensure_unproven_pending_window_is_live(
@@ -1562,30 +2138,56 @@ pub(crate) fn handle_operation_status(
     let operation_id = parse_operation_id(operation_id)?;
     // Polling an already-submitted operation must not depend on the authority
     // still being funded or retaining permission to sign a new command.  The
-    // configured identity is sufficient to recover queue and Kura provenance.
+    // configured identity is sufficient to recover queue and committed outcome provenance.
     let issuer = require_configured_issuer(app)?;
+    if let Some((record, finality)) =
+        find_global_applied_offline_operation_by_id(app, &issuer.authority, operation_id)?
+    {
+        return offline_operation_status_response(app, &issuer, &record, Some(&finality), false);
+    }
     let admitted = {
         let mut admission = issuer.admission.lock();
         admission.prune_expired(now_ms());
         admission.get(&operation_id).cloned()
     };
     if let Some(admitted) = admitted {
-        if let Some(pending) =
-            find_pending_offline_operation_by_id(app, &issuer.authority, operation_id)
+        if let Some(resolution) =
+            resolve_pending_offline_operation_by_id(app, &issuer.authority, operation_id)?
         {
-            ensure_admitted_operation_matches_recovered_record(&admitted, &pending)?;
-            return offline_operation_status_response(app, &issuer, &pending, None, true);
+            match resolution {
+                PendingOfflineOperationResolution::Pending(pending) => {
+                    ensure_admitted_operation_binding_matches_recovered_record(
+                        &admitted, &pending,
+                    )?;
+                    return offline_operation_status_response(app, &issuer, &pending, None, true);
+                }
+                PendingOfflineOperationResolution::Terminal(record, finality) => {
+                    if terminal_operation_supersedes_admitted_record(&admitted, &record, &finality)?
+                    {
+                        return offline_operation_status_response(
+                            app,
+                            &issuer,
+                            &record,
+                            Some(&finality),
+                            false,
+                        );
+                    }
+                }
+            }
         }
         return admitted_offline_operation_status_response(app, &issuer, &admitted);
     }
-    if let Some(record) = find_pending_offline_operation_by_id(app, &issuer.authority, operation_id)
+    if let Some(resolution) =
+        resolve_pending_offline_operation_by_id(app, &issuer.authority, operation_id)?
     {
-        return offline_operation_status_response(app, &issuer, &record, None, true);
-    }
-    if let Some((record, finality)) =
-        find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
-    {
-        return offline_operation_status_response(app, &issuer, &record, Some(&finality), false);
+        return match resolution {
+            PendingOfflineOperationResolution::Pending(record) => {
+                offline_operation_status_response(app, &issuer, &record, None, true)
+            }
+            PendingOfflineOperationResolution::Terminal(record, finality) => {
+                offline_operation_status_response(app, &issuer, &record, Some(&finality), false)
+            }
+        };
     }
     Err(Error::AppNotFound {
         code: "offline_operation_not_found",
@@ -1598,7 +2200,6 @@ struct KagemushaV2CommittedFinality {
     transaction_hash: String,
     finalized_block_height: u64,
     outcome: KagemushaV2TerminalOutcome,
-    server_time_ms: u64,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum KagemushaV2TerminalOutcome {
@@ -1609,21 +2210,13 @@ fn kagemusha_v4_applied_finality(
     operation_id: [u8; 32],
     transaction_hash: String,
     finalized_block_height: u64,
-    server_time_ms: u64,
 ) -> KagemushaV2CommittedFinality {
-    kagemusha_v4_committed_finality(
-        operation_id,
-        transaction_hash,
-        finalized_block_height,
-        server_time_ms,
-        None,
-    )
+    kagemusha_v4_committed_finality(operation_id, transaction_hash, finalized_block_height, None)
 }
 fn kagemusha_v4_committed_finality(
     operation_id: [u8; 32],
     transaction_hash: String,
     finalized_block_height: u64,
-    server_time_ms: u64,
     rejection: Option<String>,
 ) -> KagemushaV2CommittedFinality {
     KagemushaV2CommittedFinality {
@@ -1633,7 +2226,6 @@ fn kagemusha_v4_committed_finality(
         outcome: rejection.map_or(KagemushaV2TerminalOutcome::Applied, |message| {
             KagemushaV2TerminalOutcome::Rejected(canonical_offline_rejection_message(message))
         }),
-        server_time_ms,
     }
 }
 fn kagemusha_v4_rejection_detail(rejection: Option<&TransactionRejectionReason>) -> String {
@@ -1655,9 +2247,15 @@ fn canonical_offline_rejection_message(message: String) -> String {
         "The offline operation was rejected.".to_owned()
     }
 }
-fn offline_operation_index_inconsistent(message: impl Into<String>) -> Error {
+fn offline_operation_evidence_inconsistent(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
-        code: "offline_operation_index_inconsistent",
+        code: "offline_operation_evidence_inconsistent",
+        message: message.into(),
+    }
+}
+fn offline_operation_pending_unavailable(message: impl Into<String>) -> Error {
+    Error::AppServiceUnavailable {
+        code: "offline_operation_pending_unavailable",
         message: message.into(),
     }
 }
@@ -1668,7 +2266,7 @@ fn ensure_unproven_pending_window_is_live(
     if snapshot_time_ms < expires_at_ms {
         return Ok(());
     }
-    Err(offline_operation_index_inconsistent(
+    Err(offline_operation_evidence_inconsistent(
         "The accepted offline operation expired without queue, pipeline, or canonical terminal provenance.",
     ))
 }
@@ -1680,38 +2278,23 @@ fn ensure_kagemusha_v4_terminal_finality_matches_record(
         || finality.operation_id != record.request.authorization().operation_id
         || finality.transaction_hash != record.transaction_hash.to_string()
         || finality.finalized_block_height == 0
-        || finality.server_time_ms == 0
     {
-        return Err(offline_operation_index_inconsistent(
-            "The terminal offline operation identity, transaction, height, or timestamp is incomplete.",
+        return Err(offline_operation_evidence_inconsistent(
+            "The terminal offline operation identity, transaction, or height is incomplete.",
         ));
     }
     Ok(())
 }
-fn find_committed_kagemusha_v4_operation(
-    app: &SharedAppState,
-    issuer: &OfflineCommandRuntime,
-    requested: OfflineOperationRequestRef<'_>,
-) -> Result<Option<KagemushaV2CommittedFinality>, Error> {
-    let authorization = requested.authorization();
-    let Some((record, finality)) =
-        find_terminal_offline_operation_by_id(app, &issuer.authority, authorization.operation_id)?
-    else {
-        return Ok(None);
-    };
-    ensure_same_offline_request(&record.request.as_ref(), &requested)?;
-    Ok(Some(finality))
-}
 fn kagemusha_v4_anchor_state_key(operation_id: [u8; 32]) -> Result<StatePath, Error> {
     if operation_id == [0; 32] {
-        return Err(offline_operation_index_inconsistent(
+        return Err(offline_operation_evidence_inconsistent(
             "A finalized top-up anchor requires a non-zero operation id.",
         ));
     }
     format!("kagemusha_v4_topup_anchor_{}", hex::encode(operation_id))
         .parse()
         .map_err(|err| {
-            offline_operation_index_inconsistent(format!(
+            offline_operation_evidence_inconsistent(format!(
                 "Failed to derive the finalized top-up anchor key: {err}"
             ))
         })
@@ -1720,21 +2303,13 @@ fn ensure_kagemusha_v4_topup_anchor_matches_request(
     anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
     request: &OfflineTopUpRequest,
 ) -> Result<(), Error> {
-    if anchor.network_id != request.current_note.network_id
-        || anchor.payer != request.authorization.authority
-        || anchor.asset != request.asset
-        || anchor.asset_scale != request.amount.scale
-        || anchor.amount != request.amount
-        || anchor.current_note != request.current_note
-        || anchor.topup_operation_id != request.authorization.operation_id
-        || anchor.topup_operation_id != request.operation_id
-        || anchor.artifact_binding != request.artifact_binding
-    {
-        return Err(offline_operation_index_inconsistent(
-            "The finalized top-up anchor does not match the admitted signed request.",
-        ));
-    }
-    Ok(())
+    anchor
+        .validate_against_topup_request(request)
+        .map_err(|err| {
+            offline_operation_evidence_inconsistent(format!(
+                "The finalized top-up anchor does not match the admitted signed request: {err}"
+            ))
+        })
 }
 fn ensure_kagemusha_v4_anchor_finality_binding(
     anchor_operation_id: [u8; 32],
@@ -1752,7 +2327,7 @@ fn ensure_kagemusha_v4_anchor_finality_binding(
         || anchor_height != finalized_block_height
         || finalized_block_height == 0
     {
-        return Err(offline_operation_index_inconsistent(
+        return Err(offline_operation_evidence_inconsistent(
             "The top-up anchor operation, transaction, or height differs from terminal finality.",
         ));
     }
@@ -1765,28 +2340,28 @@ fn load_finalized_kagemusha_v4_anchor(
     let key = kagemusha_v4_anchor_state_key(operation_id)?;
     let world = app.state.world_view();
     let archive = world.smart_contract_state().get(&key).ok_or_else(|| {
-        offline_operation_index_inconsistent(
+        offline_operation_evidence_inconsistent(
             "The finalized top-up anchor is missing from canonical chain state.",
         )
     })?;
     let anchor: KagemushaRecursiveSpendTopUpAnchorV4 =
         norito::decode_from_bytes(archive).map_err(|err| {
-            offline_operation_index_inconsistent(format!(
+            offline_operation_evidence_inconsistent(format!(
                 "The finalized top-up anchor is invalid: {err}"
             ))
         })?;
     anchor.validate_public_binding().map_err(|err| {
-        offline_operation_index_inconsistent(format!(
+        offline_operation_evidence_inconsistent(format!(
             "The finalized top-up anchor failed validation: {err}"
         ))
     })?;
     let canonical = norito::to_bytes(&anchor).map_err(|err| {
-        offline_operation_index_inconsistent(format!(
+        offline_operation_evidence_inconsistent(format!(
             "The finalized top-up anchor could not be canonically re-encoded: {err}"
         ))
     })?;
     if anchor.topup_operation_id != operation_id || canonical.as_slice() != archive.as_slice() {
-        return Err(offline_operation_index_inconsistent(
+        return Err(offline_operation_evidence_inconsistent(
             "The finalized top-up anchor has a mismatched operation id or non-canonical encoding.",
         ));
     }
@@ -1806,7 +2381,7 @@ fn load_finalized_kagemusha_v4_topup_proof(
     let anchor_ref = anchor
         .compact_ref()
         .map_err(|_| offline_topup_finality_proof_unavailable())?;
-    if proof.anchor != anchor_ref || proof.validate_structure().is_err() {
+    if proof.anchor != anchor_ref || proof.validate_anchor_inclusion().is_err() {
         return Err(offline_topup_finality_proof_unavailable());
     }
     Ok(proof)
@@ -1828,11 +2403,6 @@ fn require_configured_issuer(app: &AppState) -> Result<Arc<OfflineCommandRuntime
     Ok(issuer)
 }
 
-fn require_issuer(app: &AppState) -> Result<Arc<OfflineCommandRuntime>, Error> {
-    let issuer = require_configured_issuer(app)?;
-    ensure_offline_command_authority_ready(app, &issuer)?;
-    Ok(issuer)
-}
 pub(crate) fn ensure_offline_command_authority_ready(
     app: &AppState,
     issuer: &OfflineCommandRuntime,
@@ -1946,8 +2516,15 @@ mod tests {
             defaults::kura,
         },
     };
-    use iroha_core::kura::Kura;
     use iroha_core::state::World;
+    use iroha_core::{
+        kagemusha_operation::{
+            KAGEMUSHA_OPERATION_OUTCOME_RECORD_VERSION_V4,
+            kagemusha_operation_finality_state_key_v4, kagemusha_operation_outcome_state_key_v4,
+        },
+        kura::Kura,
+        tx::AcceptedTransaction,
+    };
     use iroha_crypto::{Algorithm, Hash, HashOf, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, NetworkId, Registrable as _,
@@ -1970,17 +2547,19 @@ mod tests {
         nexus::{DataSpaceId, LaneId},
         offline::{
             KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2,
-            KagemushaRecursiveSpendArtifactBindingV4, KagemushaRequestAuthorizationV2,
-            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-            KagemushaTopUpShieldEvidenceV2,
+            KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2, KagemushaRecursiveSpendArtifactBindingV4,
+            KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
+            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpShieldEvidenceV2,
         },
         peer::PeerId,
         permission::{Permission, Permissions},
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-        transaction::signed::TransactionResultInner,
-        trigger::DataTriggerSequence,
+        transaction::{ExecutionStep, signed::TransactionResultInner},
+        trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
     };
+    use iroha_primitives::const_vec::ConstVec;
     use std::{
+        borrow::Cow,
         num::{NonZeroU64, NonZeroUsize},
         sync::Barrier,
         time::Duration,
@@ -2100,8 +2679,8 @@ mod tests {
         let configured = require_configured_issuer(&app)
             .expect("status lookup only requires the configured issuer identity");
         assert!(Arc::ptr_eq(&configured, &issuer));
-        let readiness_error =
-            require_issuer(&app).expect_err("fresh world has no command-authority account");
+        let readiness_error = ensure_offline_command_authority_ready(&app, &configured)
+            .expect_err("fresh world has no command-authority account");
         assert_offline_readiness_code(readiness_error, "offline_command_authority_not_ready");
     }
 
@@ -2166,7 +2745,7 @@ mod tests {
                     .saturating_add(KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2),
                 nonce: [0x63; 32],
                 payload_digest: [0x64; 32],
-                registration_hash: [0x6A; 32],
+                registration_hash: Hash::new([0x6A; 32]).into(),
                 hardware_assertion:
                     iroha_data_model::offline::KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
                         iroha_data_model::offline::KagemushaAndroidKeyMintHardwareAssertionV1 {
@@ -2178,6 +2757,10 @@ mod tests {
                     ),
             },
         };
+        let payload_digest = request
+            .unsigned_payload_digest()
+            .expect("derive exact offline top-up payload digest");
+        request.authorization.payload_digest = payload_digest;
         let signing_bytes = request
             .authorization
             .signing_bytes()
@@ -2205,6 +2788,36 @@ mod tests {
             )
             .expect("offline hardware fixture signature must bind the exact typed fields");
         request
+    }
+
+    fn finalized_topup_anchor_for_request(
+        request: &OfflineTopUpRequest,
+    ) -> KagemushaRecursiveSpendTopUpAnchorV4 {
+        KagemushaRecursiveSpendTopUpAnchorV4 {
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
+            network_id: request.current_note.network_id,
+            payer: request.authorization.authority.clone(),
+            asset: request.asset.clone(),
+            asset_scale: request.amount.scale,
+            amount: request.amount,
+            initial_root: request.shield_evidence.initial_root,
+            finalized_root: request.shield_evidence.finalized_root,
+            shield_leaf_index: request.shield_evidence.leaf_index,
+            current_note: request.current_note.clone(),
+            topup_operation_id: request.operation_id,
+            shield_verifier_id: request.shield_evidence.proof.vk_ref.clone(),
+            shield_verifier_commitment: request
+                .shield_evidence
+                .proof
+                .vk_commitment
+                .expect("fixture shield verifier commitment"),
+            artifact_binding: request.artifact_binding.clone(),
+            finalized_height: 42,
+            finalized_tx_hash: Hash::new(b"offline-topup-anchor-transaction").into(),
+            anchor_digest: [0; 32],
+        }
+        .finalize_digest()
+        .expect("finalize top-up anchor fixture")
     }
     #[test]
     fn topup_snapshot_uses_checked_incremental_tree_admission() {
@@ -2273,6 +2886,41 @@ mod tests {
         OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(request))
             .expect("canonical submission fixture binding")
     }
+    fn refresh_submission_test_authorization(request: &mut OfflineTopUpRequest) {
+        let payload_digest = request
+            .unsigned_payload_digest()
+            .expect("derive refreshed offline top-up payload digest");
+        request.authorization.payload_digest = payload_digest;
+        let signing_bytes = request
+            .authorization
+            .signing_bytes()
+            .expect("encode refreshed offline authorization signing bytes");
+        use p256::{ecdsa::signature::Signer as _, elliptic_curve::sec1::ToEncodedPoint as _};
+        let hardware_key =
+            p256::ecdsa::SigningKey::from_slice(&[1_u8; 32]).expect("fixed P-256 fixture key");
+        let hardware_signature: p256::ecdsa::Signature = hardware_key.sign(&signing_bytes);
+        let hardware_signature = hardware_signature
+            .normalize_s()
+            .unwrap_or(hardware_signature);
+        request.authorization.set_hardware_signature(
+            iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
+                hardware_signature.to_bytes().as_slice(),
+            )
+            .expect("canonical refreshed hardware fixture signature"),
+        );
+        request
+            .authorization
+            .verify_hardware_signature(
+                hardware_key
+                    .verifying_key()
+                    .to_encoded_point(false)
+                    .as_bytes(),
+            )
+            .expect("refreshed fixture signature must bind the exact typed fields");
+        request
+            .validate_public_binding()
+            .expect("refreshed fixture request must remain valid");
+    }
     fn submission_test_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32]))
     }
@@ -2292,24 +2940,40 @@ mod tests {
             transaction_hash: submission_test_hash(operation_seed),
         }
     }
-    fn submission_test_transaction(requests: Vec<OfflineTopUpRequest>) -> SignedTransaction {
-        let issuer = submission_test_issuer();
+    fn submission_test_transaction_signed_by_with_nonce(
+        requests: Vec<OfflineTopUpRequest>,
+        signer: &KeyPair,
+        nonce: Option<NonZeroU32>,
+    ) -> SignedTransaction {
         let instructions = requests
             .into_iter()
             .map(TopUpKagemushaRecursiveV4::new)
             .map(InstructionBox::from)
             .collect::<Vec<_>>();
-        let transaction = TransactionBuilder::new(
+        let mut transaction = TransactionBuilder::new(
             crate::signed_query_test_network_id(),
-            issuer.authority.clone().into(),
+            AccountId::new(signer.public_key().clone()).into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions(instructions)
-        .sign(issuer.key_pair.private_key());
+        .with_instructions(instructions);
+        if let Some(nonce) = nonce {
+            transaction.set_nonce(nonce);
+        }
+        let transaction = transaction.sign(signer.private_key());
         transaction
             .verify_signature()
             .expect("offline history fixture transaction must carry an exact valid signature");
         transaction
+    }
+    fn submission_test_transaction_signed_by(
+        requests: Vec<OfflineTopUpRequest>,
+        signer: &KeyPair,
+    ) -> SignedTransaction {
+        submission_test_transaction_signed_by_with_nonce(requests, signer, None)
+    }
+    fn submission_test_transaction(requests: Vec<OfflineTopUpRequest>) -> SignedTransaction {
+        let issuer = submission_test_issuer();
+        submission_test_transaction_signed_by(requests, &issuer.key_pair)
     }
     fn history_block_signer() -> KeyPair {
         KeyPair::try_from_seed(vec![0x53; 32], Algorithm::Ed25519)
@@ -2322,14 +2986,36 @@ mod tests {
         transactions: Vec<SignedTransaction>,
         results: Vec<TransactionResultInner>,
     ) -> SignedBlock {
+        signed_history_block_with_time_triggers(
+            height,
+            prev_block_hash,
+            creation_time_ms,
+            transactions,
+            Vec::new(),
+            results,
+        )
+    }
+    fn signed_history_block_with_time_triggers(
+        height: u64,
+        prev_block_hash: Option<HashOf<BlockHeader>>,
+        creation_time_ms: u64,
+        transactions: Vec<SignedTransaction>,
+        time_triggers: Vec<TimeTriggerEntrypoint>,
+        results: Vec<TransactionResultInner>,
+    ) -> SignedBlock {
         let entrypoint_hashes = transactions
             .iter()
             .map(SignedTransaction::hash_as_entrypoint)
+            .chain(
+                time_triggers
+                    .iter()
+                    .map(TimeTriggerEntrypoint::hash_as_entrypoint),
+            )
             .collect::<Vec<_>>();
         assert_eq!(
             entrypoint_hashes.len(),
             results.len(),
-            "every ordinary history entrypoint needs one deterministic result"
+            "every history entrypoint needs one deterministic result"
         );
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("offline history block height is non-zero"),
@@ -2345,7 +3031,7 @@ mod tests {
         let mut block =
             SignedBlock::presigned(BlockSignature::new(0, signature), header, transactions);
         block
-            .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
+            .set_transaction_results(time_triggers, &entrypoint_hashes, results)
             .expect("offline history block results must align with its signed entrypoints");
         let final_signature =
             SignatureOf::try_from_hash(signer.private_key(), block.header().hash())
@@ -2379,15 +3065,84 @@ mod tests {
             replica_advert: kura::REPLICA_ADVERT_POLICY,
         }
     }
-    fn app_with_offline_history(
+    fn terminal_outcome_fixture(
+        transaction: &SignedTransaction,
+        result: &TransactionResult,
+        carrier_height: u64,
+        execution_phase: KagemushaOperationExecutionPhaseV4,
+        phase_index: u64,
+    ) -> KagemushaOperationOutcomeRecordV4 {
+        let carrier = classify_kagemusha_operation_transaction_v4(transaction)
+            .expect("classify terminal outcome fixture")
+            .expect("terminal outcome fixture is a Kagemusha carrier");
+        KagemushaOperationOutcomeRecordV4 {
+            version: KAGEMUSHA_OPERATION_OUTCOME_RECORD_VERSION_V4,
+            operation_id: carrier.operation_id(),
+            kind: carrier.kind(),
+            request_authority_digest: kagemusha_operation_authority_digest_v4(
+                &carrier.request().authorization().authority,
+            )
+            .expect("hash terminal fixture request authority"),
+            outer_authority_digest: kagemusha_operation_authority_digest_v4(
+                transaction.authority(),
+            )
+            .expect("hash terminal fixture outer authority"),
+            canonical_request_digest: carrier.canonical_request_digest(),
+            signed_transaction_wire_hash: signed_transaction_wire_hash_v4(transaction)
+                .expect("hash terminal fixture signed wire"),
+            entrypoint_hash: transaction.hash_as_entrypoint(),
+            carrier_height,
+            execution_phase,
+            phase_index,
+            result_hash: Some(result.hash()),
+            outcome: if result.is_ok() {
+                KagemushaOperationOutcomeStateV4::Applied
+            } else {
+                KagemushaOperationOutcomeStateV4::Rejected
+            },
+        }
+    }
+    fn app_with_offline_histories(
         kura: Arc<Kura>,
         issuer: Arc<OfflineCommandRuntime>,
+        outcomes: impl IntoIterator<Item = &KagemushaOperationOutcomeRecordV4>,
     ) -> SharedAppState {
-        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let mut world = World::default();
+        for outcome in outcomes {
+            let key = match outcome.outcome {
+                KagemushaOperationOutcomeStateV4::Applied => {
+                    kagemusha_operation_finality_state_key_v4(outcome.operation_id)
+                        .expect("derive global finality fixture state key")
+                }
+                KagemushaOperationOutcomeStateV4::Rejected => {
+                    kagemusha_operation_outcome_state_key_from_authority_digest_v4(
+                        outcome.outer_authority_digest,
+                        outcome.operation_id,
+                    )
+                    .expect("derive rejected-attempt fixture state key")
+                }
+                KagemushaOperationOutcomeStateV4::Pending => {
+                    panic!("a pending outcome must not survive block finalization")
+                }
+            };
+            let payload = norito::encode_canonical(outcome)
+                .expect("encode canonical terminal outcome fixture");
+            world
+                .smart_contract_state_mut_for_testing()
+                .insert(key, payload);
+        }
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(world);
         let inner = Arc::get_mut(&mut app).expect("fresh test AppState must be uniquely owned");
         inner.kura = kura;
         inner.offline_commands = Some(issuer);
         app
+    }
+    fn app_with_offline_history(
+        kura: Arc<Kura>,
+        issuer: Arc<OfflineCommandRuntime>,
+        outcome: Option<&KagemushaOperationOutcomeRecordV4>,
+    ) -> SharedAppState {
+        app_with_offline_histories(kura, issuer, outcome)
     }
     fn assert_offline_history_error(error: Error, expected_code: &'static str) {
         match &error {
@@ -2405,6 +3160,13 @@ mod tests {
             .await
             .expect("collect offline status response body");
         norito::decode_from_bytes(&bytes).expect("decode typed Norito offline status response")
+    }
+    async fn decode_offline_operation_reference(response: AxResponse) -> OfflineOperationReference {
+        assert_eq!(response.status(), axum::http::StatusCode::ACCEPTED);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect offline operation reference body");
+        norito::decode_from_bytes(&bytes).expect("decode typed Norito offline operation reference")
     }
     fn merge_history_settlement(lane_incarnation: Hash) -> LaneBlockCommitment {
         LaneBlockCommitment {
@@ -2607,23 +3369,56 @@ mod tests {
         norito::json::from_slice(&body).expect("decode offline JSON response")
     }
     #[test]
-    fn transaction_recovery_uses_the_authorized_nonzero_id_and_exact_matching_instruction() {
+    fn transaction_recovery_requires_one_valid_direct_external_operation() {
         let issuer = submission_test_issuer();
         let first = submission_test_request(0x15);
         let second = submission_test_request(0x16);
-        let transaction = submission_test_transaction(vec![first.clone(), second.clone()]);
+        let mixed_transaction = submission_test_transaction(vec![first, second.clone()]);
+        assert!(
+            offline_operation_record_in_transaction(
+                &mixed_transaction,
+                &issuer.authority,
+                second.authorization.operation_id,
+            )
+            .is_none(),
+            "multiple native instructions are not a canonical operation carrier"
+        );
+        let transaction = submission_test_transaction(vec![second.clone()]);
         let recovered = offline_operation_record_in_transaction(
             &transaction,
             &issuer.authority,
             second.authorization.operation_id,
         )
-        .expect("matching second instruction must be recovered");
+        .expect("the exact singleton operation must be recovered");
         assert_eq!(
             recovered.request,
             OfflineOperationRequest::TopUp(&second).into_owned()
         );
         assert_eq!(recovered.transaction_hash, transaction.hash());
         assert_eq!(recovered.submitted_at_ms, second.authorization.issued_at_ms);
+        let batch_transaction = TransactionBuilder::new(
+            crate::signed_query_test_network_id(),
+            issuer.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(iroha_data_model::transaction::Executable::Batch(
+            vec![
+                iroha_data_model::transaction::ExecutableBatchItem::Instruction(
+                    InstructionBox::from(TopUpKagemushaRecursiveV4::new(second.clone())),
+                ),
+            ]
+            .into(),
+        ))
+        .sign(issuer.key_pair.private_key());
+        assert!(
+            offline_operation_record_in_transaction(
+                &batch_transaction,
+                &issuer.authority,
+                second.authorization.operation_id,
+            )
+            .is_none(),
+            "a singleton operation wrapped in an executable batch is not canonical"
+        );
         assert!(
             offline_operation_record_in_transaction(&transaction, &issuer.authority, [0x17; 32],)
                 .is_none(),
@@ -2638,15 +3433,14 @@ mod tests {
         let authorized_id = mismatched.authorization.operation_id;
         mismatched.operation_id = [0x19; 32];
         let malformed_transaction = submission_test_transaction(vec![mismatched.clone()]);
-        let recovered = offline_operation_record_in_transaction(
-            &malformed_transaction,
-            &issuer.authority,
-            authorized_id,
-        )
-        .expect("authorization remains the canonical retry identity");
-        assert_eq!(
-            recovered.request,
-            OfflineOperationRequest::TopUp(&mismatched).into_owned()
+        assert!(
+            offline_operation_record_in_transaction(
+                &malformed_transaction,
+                &issuer.authority,
+                authorized_id,
+            )
+            .is_none(),
+            "a request whose duplicated operation ids disagree is not a carrier"
         );
         assert!(
             offline_operation_record_in_transaction(
@@ -2655,7 +3449,23 @@ mod tests {
                 mismatched.operation_id,
             )
             .is_none(),
-            "a forged duplicate top-level id must not create another lookup identity"
+            "a malformed top-level id must not create another lookup identity"
+        );
+        let sealed = TransactionEntrypoint::SealedReveal(
+            iroha_data_model::transaction::signed::SealedTransactionReveal::new(
+                Hash::new(b"sealed-offline-operation-test"),
+                transaction.clone(),
+                [0xA5; 32],
+            ),
+        );
+        assert!(
+            offline_operation_record_in_entrypoint(
+                &sealed,
+                &issuer.authority,
+                second.authorization.operation_id,
+            )
+            .is_none(),
+            "sealed reveal is not an alternate operation carrier"
         );
         let unrelated = TransactionBuilder::new(
             crate::signed_query_test_network_id(),
@@ -2671,6 +3481,169 @@ mod tests {
             offline_operation_record_in_transaction(&unrelated, &issuer.authority, authorized_id,)
                 .is_none(),
             "ordinary transactions must never enter offline recovery"
+        );
+    }
+    #[test]
+    fn pending_recovery_uses_the_exact_typed_queue_owner() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x74);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request.clone()]);
+        let account = Account::new(issuer.authority.clone()).build(&issuer.authority);
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            World::with([], [account], []),
+        );
+        Arc::get_mut(&mut app)
+            .expect("fresh pending-operation AppState must be uniquely owned")
+            .offline_commands = Some(Arc::clone(&issuer));
+        app.queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone())),
+                app.state.view(),
+            )
+            .expect("canonical singleton Kagemusha carrier must enter the Queue");
+
+        let recovered =
+            match resolve_pending_offline_operation_by_id(&app, &issuer.authority, operation_id)
+                .expect("typed Queue ownership must remain coherent")
+                .expect("the exact pending operation must be indexed")
+            {
+                PendingOfflineOperationResolution::Pending(record) => record,
+                PendingOfflineOperationResolution::Terminal(_, _) => {
+                    panic!("a fresh Queue owner cannot already be terminal")
+                }
+            };
+        assert_eq!(
+            recovered.request,
+            OfflineOperationRequest::TopUp(&request).into_owned()
+        );
+        assert_eq!(
+            recovered.canonical_request_digest,
+            KagemushaOperationRequestV4::TopUp(&request)
+                .canonical_request_digest()
+                .expect("derive canonical pending request digest")
+        );
+        assert_eq!(recovered.transaction_hash, transaction.hash());
+        assert!(
+            resolve_pending_offline_operation_by_id(&app, &issuer.authority, [0x75; 32])
+                .expect("an absent exact Queue key remains a coherent lookup")
+                .is_none(),
+            "a different operation id must not be found by scanning unrelated transactions"
+        );
+    }
+    #[tokio::test]
+    async fn newer_queue_attempt_supersedes_stale_admitted_transaction_hash() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x75);
+        let operation_id = request.authorization.operation_id;
+        let stale = submission_test_transaction_signed_by_with_nonce(
+            vec![request.clone()],
+            &issuer.key_pair,
+            None,
+        );
+        let retry_nonce = NonZeroU32::new(1).expect("one is non-zero");
+        let retry = submission_test_transaction_signed_by_with_nonce(
+            vec![request.clone()],
+            &issuer.key_pair,
+            Some(retry_nonce),
+        );
+        assert_ne!(stale.hash(), retry.hash());
+
+        let account = Account::new(issuer.authority.clone()).build(&issuer.authority);
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            World::with([], [account], []),
+        );
+        Arc::get_mut(&mut app)
+            .expect("fresh pending-operation AppState must be uniquely owned")
+            .offline_commands = Some(Arc::clone(&issuer));
+        issuer
+            .admission
+            .lock()
+            .insert_reserved(AdmittedOfflineOperationRecord {
+                binding: submission_test_binding(&request),
+                transaction_hash: stale.hash(),
+            });
+        app.queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(retry.clone())),
+                app.state.view(),
+            )
+            .expect("the exact retry carrier must enter the Queue");
+
+        let status = handle_operation_status(&app, &hex::encode(operation_id))
+            .expect("authoritative Queue retry must supersede stale process-local admission");
+        assert!(matches!(
+            decode_offline_operation_status(status).await,
+            OfflineOperationStatus::Pending {
+                transaction_hash,
+                submitted_at_ms,
+                ..
+            } if transaction_hash == retry.hash().to_string()
+                && submitted_at_ms == request.authorization.issued_at_ms
+        ));
+    }
+    #[test]
+    fn pending_queue_lookup_errors_preserve_unavailable_and_inconsistent_classes() {
+        let entrypoint_hash =
+            submission_test_transaction(vec![submission_test_request(0x76)]).hash_as_entrypoint();
+        for error in [
+            PendingKagemushaOperationLookupError::Unavailable {
+                reason: "startup recovery".to_owned(),
+            },
+            PendingKagemushaOperationLookupError::DurabilityTransition { entrypoint_hash },
+        ] {
+            assert!(matches!(
+                pending_offline_operation_lookup_error(error),
+                Error::AppServiceUnavailable {
+                    code: "offline_operation_pending_unavailable",
+                    ..
+                }
+            ));
+        }
+        assert!(matches!(
+            pending_offline_operation_lookup_error(
+                PendingKagemushaOperationLookupError::Inconsistent {
+                    reason: "lost reverse owner".to_owned(),
+                }
+            ),
+            Error::AppServiceUnavailable {
+                code: "offline_operation_evidence_inconsistent",
+                ..
+            }
+        ));
+    }
+    #[test]
+    fn proved_overlay_kagemusha_operation_is_rejected_as_noncanonical() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x1E);
+        let operation_id = request.authorization.operation_id;
+        let transaction = TransactionBuilder::new(
+            crate::signed_query_test_network_id(),
+            issuer.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![0x01]),
+                overlay: vec![InstructionBox::from(TopUpKagemushaRecursiveV4::new(
+                    request,
+                ))]
+                .into(),
+                events_commitment: Hash::new(b"Kagemusha overlay events"),
+                gas_policy_commitment: Hash::new(b"Kagemusha overlay gas policy"),
+            },
+        ))
+        .sign(issuer.key_pair.private_key());
+        assert!(matches!(
+            classify_kagemusha_operation_transaction_v4(&transaction),
+            Err(
+                iroha_data_model::offline::KagemushaOperationCarrierErrorV4::NonCanonicalExecutable
+            )
+        ));
+        assert!(
+            offline_operation_record_in_transaction(&transaction, &issuer.authority, operation_id,)
+                .is_none(),
+            "a proved overlay must not create Torii recovery provenance"
         );
     }
     #[test]
@@ -2694,6 +3667,8 @@ mod tests {
                 "outer authority is not the configured Kagemusha submission authority".to_owned(),
             ),
         )));
+        let front_runner_entrypoint =
+            TransactionEntrypoint::External(front_runner_transaction.clone());
         assert!(
             offline_operation_record_in_transaction(
                 &front_runner_transaction,
@@ -2704,12 +3679,11 @@ mod tests {
             "an observed signed request wrapped by another outer authority is not an admitted operation"
         );
         assert!(
-            terminal_offline_operation_in_transaction(
-                &front_runner_transaction,
+            terminal_offline_operation_in_entrypoint(
+                &front_runner_entrypoint,
                 &rejected_result,
                 &issuer.authority,
                 operation_id,
-                1,
                 1,
             )
             .is_none(),
@@ -2732,30 +3706,28 @@ mod tests {
         let request = submission_test_request(0x1A);
         let operation_id = request.authorization.operation_id;
         let transaction = submission_test_transaction(vec![request.clone()]);
+        let entrypoint = TransactionEntrypoint::External(transaction.clone());
         let applied_result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        let (applied_record, applied) = terminal_offline_operation_in_transaction(
-            &transaction,
+        let (applied_record, applied) = terminal_offline_operation_in_entrypoint(
+            &entrypoint,
             &applied_result,
             &issuer.authority,
             operation_id,
             17,
-            23,
         )
         .expect("matching applied operation must be reconstructed");
         assert_eq!(applied_record.transaction_hash, transaction.hash());
         assert_eq!(applied.operation_id, operation_id);
         assert_eq!(applied.transaction_hash, transaction.hash().to_string());
         assert_eq!(applied.finalized_block_height, 17);
-        assert_eq!(applied.server_time_ms, 23);
         assert_eq!(applied.outcome, KagemushaV2TerminalOutcome::Applied);
         assert!(
-            terminal_offline_operation_in_transaction(
-                &transaction,
+            terminal_offline_operation_in_entrypoint(
+                &entrypoint,
                 &applied_result,
                 &issuer.authority,
                 [0x1B; 32],
                 17,
-                23,
             )
             .is_none(),
             "a transaction containing another operation must not satisfy the lookup"
@@ -2768,13 +3740,12 @@ mod tests {
             .as_ref()
             .expect_err("fixture is rejected")
             .to_string();
-        let (_, rejected) = terminal_offline_operation_in_transaction(
-            &transaction,
+        let (_, rejected) = terminal_offline_operation_in_entrypoint(
+            &entrypoint,
             &rejected_result,
             &issuer.authority,
             operation_id,
             19,
-            29,
         )
         .expect("matching rejected operation must be reconstructed");
         assert_eq!(
@@ -2782,7 +3753,562 @@ mod tests {
             KagemushaV2TerminalOutcome::Rejected(expected_rejection)
         );
         assert_eq!(rejected.finalized_block_height, 19);
-        assert_eq!(rejected.server_time_ms, 29);
+    }
+    #[test]
+    fn terminal_outcome_evidence_binds_every_persisted_identity_and_hash() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x7F);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request]);
+        let entrypoint = TransactionEntrypoint::External(transaction.clone());
+        let result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::TooComplex,
+        )));
+        let outcome = terminal_outcome_fixture(
+            &transaction,
+            &result,
+            9,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            0,
+        );
+        terminal_offline_operation_from_outcome_evidence(
+            &outcome,
+            &entrypoint,
+            &result,
+            &issuer.authority,
+            operation_id,
+        )
+        .expect("exact terminal outcome evidence must be accepted");
+
+        let foreign_key = KeyPair::try_from_seed(vec![0x7E; 32], Algorithm::Ed25519)
+            .expect("derive foreign outcome authority");
+        let foreign_authority = AccountId::new(foreign_key.public_key().clone());
+        let mut mutations = Vec::new();
+        let mut candidate = outcome.clone();
+        candidate.outer_authority_digest =
+            kagemusha_operation_authority_digest_v4(&foreign_authority)
+                .expect("hash foreign outer authority");
+        mutations.push(("outer authority", candidate));
+        let mut candidate = outcome.clone();
+        candidate.request_authority_digest =
+            kagemusha_operation_authority_digest_v4(&foreign_authority)
+                .expect("hash foreign request authority");
+        mutations.push(("request authority", candidate));
+        let mut candidate = outcome.clone();
+        candidate.operation_id = [0x7D; 32];
+        mutations.push(("operation id", candidate));
+        let mut candidate = outcome.clone();
+        candidate.kind = match outcome.kind {
+            iroha_data_model::offline::KagemushaOperationKindV4::TopUp => {
+                iroha_data_model::offline::KagemushaOperationKindV4::Redeem
+            }
+            iroha_data_model::offline::KagemushaOperationKindV4::Redeem => {
+                iroha_data_model::offline::KagemushaOperationKindV4::TopUp
+            }
+        };
+        mutations.push(("operation kind", candidate));
+        let mut candidate = outcome.clone();
+        candidate.canonical_request_digest = [0x7C; 32];
+        mutations.push(("canonical request digest", candidate));
+        let mut candidate = outcome.clone();
+        candidate.signed_transaction_wire_hash = [0x7B; 32];
+        mutations.push(("signed transaction wire hash", candidate));
+        let mut candidate = outcome.clone();
+        candidate.entrypoint_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"foreign terminal entrypoint"));
+        mutations.push(("entrypoint hash", candidate));
+        let mut candidate = outcome.clone();
+        candidate.result_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"foreign terminal result",
+        )));
+        mutations.push(("result hash", candidate));
+        let mut candidate = outcome;
+        candidate.outcome = KagemushaOperationOutcomeStateV4::Applied;
+        mutations.push(("terminal outcome", candidate));
+
+        for (field, candidate) in mutations {
+            assert!(
+                terminal_offline_operation_from_outcome_evidence(
+                    &candidate,
+                    &entrypoint,
+                    &result,
+                    &issuer.authority,
+                    operation_id,
+                )
+                .is_err(),
+                "mismatched {field} must fail closed"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn submission_failure_reconciliation_returns_exact_committed_reference() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x8C);
+        let operation_id = request.authorization.operation_id;
+        let foreign_signer = KeyPair::try_from_seed(vec![0x8D; 32], Algorithm::Ed25519)
+            .expect("derive authorized foreign manager fixture key");
+        let transaction =
+            submission_test_transaction_signed_by(vec![request.clone()], &foreign_signer);
+        let transaction_hash = transaction.hash();
+        let applied_result = TransactionResult::new(Ok(DataTriggerSequence::default()));
+        let outcome = terminal_outcome_fixture(
+            &transaction,
+            &applied_result,
+            1,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            0,
+        );
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(signed_history_block(
+            1,
+            None,
+            request.authorization.issued_at_ms,
+            vec![transaction],
+            vec![applied_result.0],
+        ))
+        .expect("store globally applied reconciliation fixture");
+        let app = app_with_offline_history(kura, Arc::clone(&issuer), Some(&outcome));
+        let requested_binding = submission_test_binding(&request);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "idempotency-key",
+            axum::http::HeaderValue::from_str(&hex::encode(operation_id))
+                .expect("canonical operation id header"),
+        );
+        let replay = handle_top_up(Arc::clone(&app), &headers, request.clone())
+            .await
+            .expect("an exact committed retry must not require current issuer write readiness");
+        assert_eq!(
+            decode_offline_operation_reference(replay)
+                .await
+                .transaction_hash,
+            transaction_hash.to_string()
+        );
+
+        for stale_error in [
+            validation(
+                "offline_hardware_authorization_invalid",
+                "stale preflight failure",
+            ),
+            validation("offline_asset_not_found", "stale snapshot failure"),
+        ] {
+            let response = reconcile_offline_submission_failure(
+                &app,
+                &issuer,
+                OfflineOperationRequest::TopUp(&request),
+                &requested_binding,
+                stale_error,
+            )
+            .expect("canonical finality must supersede a stale local validation failure");
+            let reference = decode_offline_operation_reference(response).await;
+            assert_eq!(reference.operation_id, hex::encode(operation_id));
+            assert_eq!(reference.kind, OfflineOperationKind::TopUp);
+            assert_eq!(reference.transaction_hash, transaction_hash.to_string());
+        }
+
+        let lost_leader = claim_test_leader(&issuer, &request);
+        issuer.admission.lock().in_flight.remove(&operation_id);
+        let acceptance_error = lost_leader
+            .accept(submission_test_hash(0x8C))
+            .expect_err("a leader without its reservation must fail local acceptance");
+        let response = reconcile_offline_submission_failure(
+            &app,
+            &issuer,
+            OfflineOperationRequest::TopUp(&request),
+            &requested_binding,
+            acceptance_error,
+        )
+        .expect("canonical finality must supersede a local acceptance bookkeeping failure");
+        assert_eq!(
+            decode_offline_operation_reference(response)
+                .await
+                .transaction_hash,
+            transaction_hash.to_string()
+        );
+    }
+    #[tokio::test]
+    async fn foreign_global_applied_outcome_wins_and_accepts_transaction_hash_change() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x8E);
+        let operation_id = request.authorization.operation_id;
+        let configured_transaction = submission_test_transaction(vec![request.clone()]);
+        let configured_transaction_hash = configured_transaction.hash();
+        let configured_result = TransactionResult::new(Err(
+            TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+        ));
+        let configured_outcome = terminal_outcome_fixture(
+            &configured_transaction,
+            &configured_result,
+            1,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            0,
+        );
+        let foreign_signer = KeyPair::try_from_seed(vec![0x8F; 32], Algorithm::Ed25519)
+            .expect("derive second authorized manager fixture key");
+        let foreign_transaction =
+            submission_test_transaction_signed_by(vec![request.clone()], &foreign_signer);
+        let foreign_transaction_hash = foreign_transaction.hash();
+        let foreign_result = TransactionResult::new(Ok(DataTriggerSequence::default()));
+        let foreign_outcome = terminal_outcome_fixture(
+            &foreign_transaction,
+            &foreign_result,
+            1,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            1,
+        );
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(signed_history_block(
+            1,
+            None,
+            request.authorization.issued_at_ms,
+            vec![configured_transaction, foreign_transaction],
+            vec![configured_result.0, foreign_result.0],
+        ))
+        .expect("store competing manager outcome fixture");
+        let app = app_with_offline_histories(
+            kura,
+            Arc::clone(&issuer),
+            [&configured_outcome, &foreign_outcome],
+        );
+
+        let (record, finality) =
+            find_terminal_offline_operation_by_id(&app, &issuer.authority, operation_id)
+                .expect("global Applied lookup must remain coherent")
+                .expect("global Applied must win over the configured manager's rejection");
+        assert_eq!(record.transaction_hash, foreign_transaction_hash);
+        assert_eq!(finality.outcome, KagemushaV2TerminalOutcome::Applied);
+        let admitted = AdmittedOfflineOperationRecord {
+            binding: submission_test_binding(&request),
+            transaction_hash: configured_transaction_hash,
+        };
+        assert!(
+            terminal_operation_supersedes_admitted_record(&admitted, &record, &finality)
+                .expect("global Applied may carry another authorized manager's transaction hash")
+        );
+        issuer.admission.lock().insert_reserved(admitted);
+        let response = find_existing_offline_operation(
+            &app,
+            &issuer,
+            OfflineOperationRequest::TopUp(&request),
+            &submission_test_binding(&request),
+        )
+        .expect("global finality lookup must succeed");
+        let OfflineSubmissionRecovery::Existing(response) = response else {
+            panic!("global finality must supersede process-local admission provenance")
+        };
+        let reference = decode_offline_operation_reference(response).await;
+        assert_eq!(
+            reference.transaction_hash,
+            foreign_transaction_hash.to_string()
+        );
+        assert!(
+            issuer.admission.lock().get(&operation_id).is_some(),
+            "global Applied must return before any attempt-local admission eviction"
+        );
+    }
+    #[test]
+    fn foreign_rejected_attempt_neither_shadows_nor_replaces_configured_attempt() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x90);
+        let operation_id = request.authorization.operation_id;
+        let foreign_signer = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+            .expect("derive rejected foreign manager fixture key");
+        let foreign_transaction =
+            submission_test_transaction_signed_by(vec![request.clone()], &foreign_signer);
+        let foreign_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted("foreign attempt rejected".to_owned()),
+        )));
+        let foreign_outcome = terminal_outcome_fixture(
+            &foreign_transaction,
+            &foreign_result,
+            1,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            0,
+        );
+        let configured_transaction = submission_test_transaction(vec![request.clone()]);
+        let configured_transaction_hash = configured_transaction.hash();
+        let configured_result = TransactionResult::new(Err(
+            TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+        ));
+        let configured_outcome = terminal_outcome_fixture(
+            &configured_transaction,
+            &configured_result,
+            1,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            1,
+        );
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(signed_history_block(
+            1,
+            None,
+            request.authorization.issued_at_ms,
+            vec![foreign_transaction, configured_transaction],
+            vec![foreign_result.0, configured_result.0],
+        ))
+        .expect("store per-manager rejection fixture");
+
+        let foreign_only =
+            app_with_offline_histories(Arc::clone(&kura), Arc::clone(&issuer), [&foreign_outcome]);
+        assert!(
+            find_terminal_offline_operation_by_id(&foreign_only, &issuer.authority, operation_id,)
+                .expect("foreign rejection lookup must remain coherent")
+                .is_none(),
+            "another manager's rejected attempt must remain private to that manager"
+        );
+        assert!(matches!(
+            find_existing_offline_operation(
+                &foreign_only,
+                &issuer,
+                OfflineOperationRequest::TopUp(&request),
+                &submission_test_binding(&request),
+            )
+            .expect("foreign rejection must not corrupt POST recovery"),
+            OfflineSubmissionRecovery::Absent
+        ));
+
+        let both = app_with_offline_histories(
+            kura,
+            Arc::clone(&issuer),
+            [&foreign_outcome, &configured_outcome],
+        );
+        let (record, finality) =
+            find_terminal_offline_operation_by_id(&both, &issuer.authority, operation_id)
+                .expect("configured attempt lookup must remain coherent")
+                .expect("configured manager's rejected attempt must remain visible");
+        assert_eq!(record.transaction_hash, configured_transaction_hash);
+        assert!(matches!(
+            finality.outcome,
+            KagemushaV2TerminalOutcome::Rejected(_)
+        ));
+    }
+    #[tokio::test]
+    async fn exact_rejected_attempt_retries_with_next_nonce_and_newer_status_wins() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x92);
+        let operation_id = request.authorization.operation_id;
+        let rejected_transaction = submission_test_transaction(vec![request.clone()]);
+        assert_eq!(rejected_transaction.nonce(), None);
+        let rejected_transaction_hash = rejected_transaction.hash();
+        let rejected_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::TooComplex,
+        )));
+        let rejected_outcome = terminal_outcome_fixture(
+            &rejected_transaction,
+            &rejected_result,
+            1,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            0,
+        );
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(signed_history_block(
+            1,
+            None,
+            request.authorization.issued_at_ms,
+            vec![rejected_transaction],
+            vec![rejected_result.0],
+        ))
+        .expect("store retryable rejected attempt fixture");
+        issuer
+            .admission
+            .lock()
+            .insert_reserved(AdmittedOfflineOperationRecord {
+                binding: submission_test_binding(&request),
+                transaction_hash: rejected_transaction_hash,
+            });
+        let app = app_with_offline_history(kura, Arc::clone(&issuer), Some(&rejected_outcome));
+
+        let mut conflicting = request.clone();
+        conflicting
+            .artifact_binding
+            .generation
+            .push_str("-conflict");
+        refresh_submission_test_authorization(&mut conflicting);
+        assert!(matches!(
+            find_existing_offline_operation(
+                &app,
+                &issuer,
+                OfflineOperationRequest::TopUp(&conflicting),
+                &submission_test_binding(&conflicting),
+            ),
+            Err(Error::AppConflict {
+                code: "operation_id_conflict",
+                ..
+            })
+        ));
+        assert!(
+            issuer.admission.lock().get(&operation_id).is_some(),
+            "a different request must not evict the rejected request's admitted binding"
+        );
+
+        let recovery = find_existing_offline_operation(
+            &app,
+            &issuer,
+            OfflineOperationRequest::TopUp(&request),
+            &submission_test_binding(&request),
+        )
+        .expect("exact rejected attempt must be recoverable for retry");
+        let OfflineSubmissionRecovery::RetryRejected { next_nonce } = recovery else {
+            panic!("an exact configured-authority rejection must request a replacement carrier")
+        };
+        assert_eq!(next_nonce, NonZeroU32::new(1).expect("one is non-zero"));
+        assert!(
+            issuer.admission.lock().get(&operation_id).is_none(),
+            "only the exact stale admitted transaction may be evicted"
+        );
+        assert!(matches!(
+            reconcile_offline_submission_failure(
+                &app,
+                &issuer,
+                OfflineOperationRequest::TopUp(&request),
+                &submission_test_binding(&request),
+                validation("retry_probe", "retry must not return the old rejection"),
+            ),
+            Err(Error::AppQueryValidation {
+                code: "retry_probe",
+                ..
+            })
+        ));
+
+        let replacement_transaction = submission_test_transaction_signed_by_with_nonce(
+            vec![request.clone()],
+            &issuer.key_pair,
+            Some(next_nonce),
+        );
+        let replacement_hash = replacement_transaction.hash();
+        assert_ne!(replacement_hash, rejected_transaction_hash);
+        assert_eq!(replacement_transaction.nonce(), Some(next_nonce));
+        let replacement_record = offline_operation_record_in_transaction(
+            &replacement_transaction,
+            &issuer.authority,
+            operation_id,
+        )
+        .expect("replacement carrier must preserve the exact logical request");
+        assert_eq!(
+            next_rejected_attempt_nonce(&replacement_record)
+                .expect("a second rejection must advance its exact carrier nonce"),
+            NonZeroU32::new(2).expect("two is non-zero")
+        );
+        issuer
+            .admission
+            .lock()
+            .insert_reserved(AdmittedOfflineOperationRecord {
+                binding: submission_test_binding(&request),
+                transaction_hash: replacement_hash,
+            });
+        app.pipeline_status_cache.record_entry(
+            replacement_hash,
+            crate::PipelineStatusEntry::fresh(crate::PipelineStatusKind::Queued, None, None),
+        );
+
+        let recovery = find_existing_offline_operation(
+            &app,
+            &issuer,
+            OfflineOperationRequest::TopUp(&request),
+            &submission_test_binding(&request),
+        )
+        .expect("newer admitted attempt must remain recoverable");
+        let OfflineSubmissionRecovery::Existing(response) = recovery else {
+            panic!("newer admitted attempt must supersede the older rejection")
+        };
+        assert_eq!(
+            decode_offline_operation_reference(response)
+                .await
+                .transaction_hash,
+            replacement_hash.to_string()
+        );
+        let status = handle_operation_status(&app, &hex::encode(operation_id))
+            .expect("newer pipeline attempt must supersede the older rejection");
+        assert!(matches!(
+            decode_offline_operation_status(status).await,
+            OfflineOperationStatus::Pending {
+                transaction_hash,
+                ..
+            } if transaction_hash == replacement_hash.to_string()
+        ));
+
+        let exhausted_issuer = submission_test_issuer();
+        let exhausted_transaction = submission_test_transaction_signed_by_with_nonce(
+            vec![request.clone()],
+            &exhausted_issuer.key_pair,
+            NonZeroU32::new(u32::MAX),
+        );
+        let exhausted_record = offline_operation_record_in_transaction(
+            &exhausted_transaction,
+            &exhausted_issuer.authority,
+            operation_id,
+        )
+        .expect("exhausted nonce fixture remains an exact carrier");
+        assert!(matches!(
+            next_rejected_attempt_nonce(&exhausted_record),
+            Err(Error::AppConflict {
+                code: "offline_operation_retry_exhausted",
+                ..
+            })
+        ));
+
+        let exhausted_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::TooComplex,
+        )));
+        let exhausted_outcome = terminal_outcome_fixture(
+            &exhausted_transaction,
+            &exhausted_result,
+            1,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            0,
+        );
+        let exhausted_kura = Kura::blank_kura_for_testing();
+        exhausted_kura
+            .store_block(signed_history_block(
+                1,
+                None,
+                request.authorization.issued_at_ms,
+                vec![exhausted_transaction],
+                vec![exhausted_result.0],
+            ))
+            .expect("store exhausted rejected attempt fixture");
+        let exhausted_app = app_with_offline_history(
+            exhausted_kura,
+            Arc::clone(&exhausted_issuer),
+            Some(&exhausted_outcome),
+        );
+        assert!(matches!(
+            find_existing_offline_operation(
+                &exhausted_app,
+                &exhausted_issuer,
+                OfflineOperationRequest::TopUp(&request),
+                &submission_test_binding(&request),
+            ),
+            Err(Error::AppConflict {
+                code: "offline_operation_retry_exhausted",
+                ..
+            })
+        ));
+    }
+    #[test]
+    fn malformed_terminal_outcome_state_is_unavailable() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x7B);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request]);
+        let result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::TooComplex,
+        )));
+        let mut outcome = terminal_outcome_fixture(
+            &transaction,
+            &result,
+            1,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            0,
+        );
+        outcome.version = KAGEMUSHA_OPERATION_OUTCOME_RECORD_VERSION_V4.saturating_sub(1);
+        let app = app_with_offline_history(
+            Kura::blank_kura_for_testing(),
+            Arc::clone(&issuer),
+            Some(&outcome),
+        );
+        let error = find_terminal_offline_operation_by_id(&app, &issuer.authority, operation_id)
+            .expect_err("a malformed consensus outcome must fail closed");
+        assert_offline_history_error(error, "offline_operation_evidence_inconsistent");
     }
     #[tokio::test]
     async fn ordinary_canonical_history_survives_restart_with_an_empty_operation_registry() {
@@ -2791,16 +4317,26 @@ mod tests {
         let transaction = submission_test_transaction(vec![request.clone()]);
         let transaction_hash = transaction.hash();
         let creation_time_ms = request.authorization.issued_at_ms;
+        let terminal_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted("canonical offline history rejection".to_owned()),
+        )));
+        let outcome = terminal_outcome_fixture(
+            &transaction,
+            &terminal_result,
+            1,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            1,
+        );
+        let decoy = submission_test_transaction(vec![submission_test_request(0x80)]);
         let block = signed_history_block(
             1,
             None,
             creation_time_ms,
-            vec![transaction],
-            vec![TransactionResultInner::Err(
-                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-                    "canonical offline history rejection".to_owned(),
-                )),
-            )],
+            vec![decoy, transaction],
+            vec![
+                TransactionResultInner::Ok(DataTriggerSequence::default()),
+                terminal_result.0.clone(),
+            ],
         );
         let kura = Kura::blank_kura_for_testing();
         kura.store_block(block)
@@ -2813,7 +4349,11 @@ mod tests {
                 "restart fixture must not rely on the process-local admission registry"
             );
         }
-        let app = app_with_offline_history(Arc::clone(&kura), Arc::clone(&restarted_issuer));
+        let app = app_with_offline_history(
+            Arc::clone(&kura),
+            Arc::clone(&restarted_issuer),
+            Some(&outcome),
+        );
         let (record, finality) =
             find_terminal_offline_operation_by_id(&app, &restarted_issuer.authority, operation_id)
                 .expect("canonical history lookup must remain available")
@@ -2824,7 +4364,6 @@ mod tests {
         );
         assert_eq!(record.transaction_hash, transaction_hash);
         assert_eq!(finality.finalized_block_height, 1);
-        assert_eq!(finality.server_time_ms, creation_time_ms);
         assert!(matches!(
             finality.outcome,
             KagemushaV2TerminalOutcome::Rejected(_)
@@ -2848,25 +4387,75 @@ mod tests {
             other => panic!("canonical rejection returned the wrong status: {other:?}"),
         }
     }
+    #[test]
+    fn ordinary_terminal_lookup_uses_the_external_result_prefix_before_time_triggers() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x8B);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request]);
+        let terminal_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted("canonical offline result before timer".to_owned()),
+        )));
+        let outcome = terminal_outcome_fixture(
+            &transaction,
+            &terminal_result,
+            1,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            0,
+        );
+        let time_trigger = TimeTriggerEntrypoint {
+            id: "offline-history-timer".parse().expect("fixture trigger id"),
+            instructions: ExecutionStep(ConstVec::new_empty()),
+            authority: issuer.authority.clone(),
+        };
+        let block = signed_history_block_with_time_triggers(
+            1,
+            None,
+            601,
+            vec![transaction],
+            vec![time_trigger],
+            vec![
+                terminal_result.0.clone(),
+                TransactionResultInner::Ok(DataTriggerSequence::default()),
+            ],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(block)
+            .expect("store ordinary history with a time-trigger suffix");
+        let app = app_with_offline_history(kura, Arc::clone(&issuer), Some(&outcome));
+
+        let (_, finality) =
+            find_terminal_offline_operation_by_id(&app, &issuer.authority, operation_id)
+                .expect("time-trigger suffix must not corrupt ordinary operation evidence")
+                .expect("terminal operation must be found at the external prefix");
+        assert!(matches!(
+            finality.outcome,
+            KagemushaV2TerminalOutcome::Rejected(_)
+        ));
+    }
     #[tokio::test]
     async fn committed_merge_execution_history_is_resolved_from_its_carrier_sidecar() {
         let request = submission_test_request(0x82);
         let operation_id = request.authorization.operation_id;
         let transaction = submission_test_transaction(vec![request.clone()]);
         let transaction_hash = transaction.hash();
+        let terminal_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted("certified merge rejection".to_owned()),
+        )));
+        let outcome = terminal_outcome_fixture(
+            &transaction,
+            &terminal_result,
+            2,
+            KagemushaOperationExecutionPhaseV4::Merge,
+            0,
+        );
         let kura = Kura::blank_kura_for_testing();
         let parent = signed_history_block(1, None, 101, Vec::new(), Vec::new());
         let parent_hash = parent.hash();
         kura.store_block(parent)
             .expect("store merge carrier parent block");
         let carrier = signed_history_block(2, Some(parent_hash), 202, Vec::new(), Vec::new());
-        let entry = committed_merge_history_entry(
-            transaction,
-            TransactionResult::new(Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted("certified merge rejection".to_owned()),
-            ))),
-            &carrier.header(),
-        );
+        let entry = committed_merge_history_entry(transaction, terminal_result, &carrier.header());
         let carrier = attach_committed_merge_reference(carrier, &entry);
         kura.store_block_with_merge_entry(carrier, &entry)
             .expect("commit merge execution carrier and exact sidecar");
@@ -2879,7 +4468,11 @@ mod tests {
             "the operation must be recovered from a durable carrier association"
         );
         let restarted_issuer = submission_test_issuer();
-        let app = app_with_offline_history(Arc::clone(&kura), Arc::clone(&restarted_issuer));
+        let app = app_with_offline_history(
+            Arc::clone(&kura),
+            Arc::clone(&restarted_issuer),
+            Some(&outcome),
+        );
         let (record, finality) =
             find_terminal_offline_operation_by_id(&app, &restarted_issuer.authority, operation_id)
                 .expect("merge history lookup must remain available")
@@ -2890,7 +4483,6 @@ mod tests {
         );
         assert_eq!(record.transaction_hash, transaction_hash);
         assert_eq!(finality.finalized_block_height, 2);
-        assert_eq!(finality.server_time_ms, 202);
         assert!(matches!(
             finality.outcome,
             KagemushaV2TerminalOutcome::Rejected(_)
@@ -2903,7 +4495,7 @@ mod tests {
         ));
     }
     #[test]
-    fn partially_reconstructed_kura_index_fails_closed_instead_of_reporting_not_found() {
+    fn absent_terminal_outcome_does_not_scan_partially_reconstructed_kura_history() {
         let request = submission_test_request(0x83);
         let operation_id = request.authorization.operation_id;
         let transaction = submission_test_transaction(vec![request]);
@@ -2919,7 +4511,7 @@ mod tests {
         );
         let block1_hash = block1.hash();
         kura.store_block(block1)
-            .expect("store indexed history prefix before snapshot recovery");
+            .expect("store history prefix before snapshot recovery");
         let snapshot_tail_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"offline-status-verified-snapshot-tail"));
         assert_eq!(
@@ -2936,24 +4528,32 @@ mod tests {
             "verified snapshot recovery deliberately leaves one body pending reconstruction"
         );
         let issuer = submission_test_issuer();
-        assert_eq!(
-            kura.get_earliest_block_height_by_offline_operation_id(
-                &issuer.authority,
-                operation_id,
-            ),
-            None,
-            "a verified snapshot suffix must expose reconstruction as unknown, not as a miss"
-        );
-        let app = app_with_offline_history(kura, issuer);
+        let app = app_with_offline_history(kura, issuer, None);
         let error = handle_operation_status(&app, &hex::encode(operation_id))
-            .expect_err("partial canonical index must make status temporarily unavailable");
-        assert_offline_history_error(error, "offline_operation_index_unavailable");
+            .expect_err("missing authoritative outcome must remain unknown");
+        assert!(matches!(
+            error,
+            Error::AppNotFound {
+                code: "offline_operation_not_found",
+                ..
+            }
+        ));
     }
     #[test]
-    fn indexed_operation_with_missing_block_body_fails_closed() {
+    fn terminal_outcome_with_missing_block_body_fails_closed() {
         let request = submission_test_request(0x84);
         let operation_id = request.authorization.operation_id;
         let transaction = submission_test_transaction(vec![request]);
+        let terminal_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::TooComplex,
+        )));
+        let outcome = terminal_outcome_fixture(
+            &transaction,
+            &terminal_result,
+            2,
+            KagemushaOperationExecutionPhaseV4::Ordinary,
+            0,
+        );
         let directory = TempDir::new().expect("create evicted Kura fixture directory");
         let config = persistent_kura_config(&directory);
         let (kura, _) = Kura::new_fresh_single_lane(&config, &RuntimeLaneConfig::default())
@@ -2966,13 +4566,11 @@ mod tests {
             Some(block1_hash),
             402,
             vec![transaction],
-            vec![TransactionResultInner::Err(
-                TransactionRejectionReason::Validation(ValidationFail::TooComplex),
-            )],
+            vec![terminal_result.0.clone()],
         );
         let block2_hash = block2.hash();
         kura.store_block(block2)
-            .expect("store indexed offline history block");
+            .expect("store terminal offline history block");
         let block3 = signed_history_block(3, Some(block2_hash), 403, Vec::new(), Vec::new());
         let block3_hash = block3.hash();
         kura.store_block(block3).expect("store eviction block 3");
@@ -2985,14 +4583,7 @@ mod tests {
         ))
         .expect("store eviction block 4");
         let issuer = submission_test_issuer();
-        let indexed_height = NonZeroUsize::new(2).expect("history height is non-zero");
-        assert_eq!(
-            kura.get_earliest_block_height_by_offline_operation_id(
-                &issuer.authority,
-                operation_id,
-            ),
-            Some(Some(indexed_height)),
-        );
+        let carrier_height = NonZeroUsize::new(2).expect("history height is non-zero");
         let data_path = RuntimeLaneConfig::default()
             .primary()
             .blocks_dir(directory.path())
@@ -3002,14 +4593,14 @@ mod tests {
             "the canonical body data file must exist before adversarial loss"
         );
         std::fs::remove_file(&data_path)
-            .expect("simulate adversarial loss of the indexed local block body");
+            .expect("simulate adversarial loss of the terminal evidence block body");
         assert!(
-            kura.get_block(indexed_height).is_none(),
-            "the index remains authoritative while the local body is unavailable"
+            kura.get_block(carrier_height).is_none(),
+            "the terminal locator remains while the local body is unavailable"
         );
-        let app = app_with_offline_history(kura, issuer);
+        let app = app_with_offline_history(kura, issuer, Some(&outcome));
         let error = handle_operation_status(&app, &hex::encode(operation_id))
-            .expect_err("an indexed operation cannot be answered without its canonical body");
+            .expect_err("a terminal outcome cannot be answered without its canonical body");
         assert_offline_history_error(error, "offline_operation_history_unavailable");
     }
     #[test]
@@ -3017,19 +4608,24 @@ mod tests {
         let request = submission_test_request(0x85);
         let operation_id = request.authorization.operation_id;
         let transaction = submission_test_transaction(vec![request]);
+        let terminal_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::TooComplex,
+        )));
+        let outcome = terminal_outcome_fixture(
+            &transaction,
+            &terminal_result,
+            2,
+            KagemushaOperationExecutionPhaseV4::Merge,
+            0,
+        );
         let kura = Kura::blank_kura_for_testing();
         let parent = signed_history_block(1, None, 501, Vec::new(), Vec::new());
         let parent_hash = parent.hash();
         kura.store_block(parent)
             .expect("store malformed merge carrier parent");
         let carrier = signed_history_block(2, Some(parent_hash), 502, Vec::new(), Vec::new());
-        let mut entry = committed_merge_history_entry(
-            transaction,
-            TransactionResult::new(Err(TransactionRejectionReason::Validation(
-                ValidationFail::TooComplex,
-            ))),
-            &carrier.header(),
-        );
+        let mut entry =
+            committed_merge_history_entry(transaction, terminal_result, &carrier.header());
         entry
             .execution_batch
             .as_mut()
@@ -3041,18 +4637,10 @@ mod tests {
         kura.store_block_with_merge_entry(carrier, &entry)
             .expect("persist adversarial misaligned merge history fixture");
         let issuer = submission_test_issuer();
-        assert_eq!(
-            kura.get_earliest_block_height_by_offline_operation_id(
-                &issuer.authority,
-                operation_id,
-            ),
-            Some(NonZeroUsize::new(2)),
-            "the index deliberately points at the malformed carrier under test"
-        );
-        let app = app_with_offline_history(kura, Arc::clone(&issuer));
+        let app = app_with_offline_history(kura, Arc::clone(&issuer), Some(&outcome));
         let error = find_terminal_offline_operation_by_id(&app, &issuer.authority, operation_id)
             .expect_err("misaligned entrypoint/result history must fail closed");
-        assert_offline_history_error(error, "offline_operation_index_inconsistent");
+        assert_offline_history_error(error, "offline_operation_evidence_inconsistent");
     }
     #[test]
     fn pipeline_applied_ram_hint_cannot_manufacture_canonical_offline_finality() {
@@ -3069,15 +4657,7 @@ mod tests {
                 transaction_hash,
             });
         let kura = Kura::blank_kura_for_testing();
-        assert_eq!(
-            kura.get_earliest_block_height_by_offline_operation_id(
-                &issuer.authority,
-                operation_id,
-            ),
-            Some(None),
-            "the canonical operation index deliberately has no matching history"
-        );
-        let app = app_with_offline_history(kura, issuer);
+        let app = app_with_offline_history(kura, issuer, None);
         app.pipeline_status_cache.record_entry(
             transaction_hash,
             crate::PipelineStatusEntry::fresh(
@@ -3088,7 +4668,7 @@ mod tests {
         );
         let error = handle_operation_status(&app, &hex::encode(operation_id))
             .expect_err("RAM-only Applied must not become a durable applied operation response");
-        assert_offline_history_error(error, "offline_operation_index_inconsistent");
+        assert_offline_history_error(error, "offline_operation_evidence_inconsistent");
     }
     #[tokio::test]
     async fn submission_claim_deduplicates_and_binds_the_complete_typed_request() {
@@ -3106,6 +4686,7 @@ mod tests {
         };
         let mut conflicting = request.clone();
         conflicting.artifact_binding.generation.push_str("-forged");
+        refresh_submission_test_authorization(&mut conflicting);
         let error = match issuer.claim_submission(submission_test_binding(&conflicting)) {
             Err(error) => error,
             Ok(_) => panic!("same operation id with changed fields must conflict"),
@@ -3517,33 +5098,60 @@ mod tests {
         ));
     }
     #[test]
-    fn only_duplicate_queue_outcomes_enter_idempotent_recovery() {
-        for source in [
-            iroha_core::queue::Error::InBlockchain,
-            iroha_core::queue::Error::IsInQueue,
+    fn post_handlers_reconcile_every_mutable_submission_boundary() {
+        let source = include_str!("offline_commands.rs");
+        let topup_start = source
+            .find("pub(crate) async fn handle_top_up(")
+            .expect("top-up handler source");
+        let redeem_start = source
+            .find("pub(crate) async fn handle_redeem(")
+            .expect("redemption handler source");
+        let redeem_end = source[redeem_start..]
+            .find("fn kagemusha_v4_snapshot_time_ms(")
+            .map(|offset| redeem_start + offset)
+            .expect("redemption handler end");
+        for (name, handler) in [
+            ("top-up", &source[topup_start..redeem_start]),
+            ("redemption", &source[redeem_start..redeem_end]),
         ] {
-            let error = Error::PushIntoQueue {
-                source: Box::new(source),
-                backpressure: iroha_core::queue::BackpressureState::default(),
-            };
-            assert!(is_duplicate_queue_admission_error(&error));
-        }
-        for source in [
-            iroha_core::queue::Error::Full,
-            iroha_core::queue::Error::LatencySaturated,
-            iroha_core::queue::Error::MaximumTransactionsPerUser,
-            iroha_core::queue::Error::Expired,
-        ] {
-            let error = Error::PushIntoQueue {
-                source: Box::new(source),
-                backpressure: iroha_core::queue::BackpressureState::default(),
-            };
+            assert!(handler.contains("let issuer = require_configured_issuer(&app)?;"));
+            assert!(!handler.contains("require_issuer(&app)?"));
+            let recovery = handler
+                .find("find_existing_offline_operation(")
+                .expect("initial authoritative recovery");
+            let claim = handler
+                .find("issuer.claim_submission(requested_binding)")
+                .expect("process-local submission claim");
             assert!(
-                !is_duplicate_queue_admission_error(&error),
-                "non-duplicate queue failure must retain its original semantics: {error}"
+                recovery < claim,
+                "{name} must recover committed or queued work before electing a writer"
             );
+            let leader = handler
+                .find("SubmissionClaim::Leader(submission)")
+                .expect("leader claim arm");
+            let follower = handler
+                .find("SubmissionClaim::Follower(receiver)")
+                .expect("follower claim arm");
+            let readiness = handler
+                .find("ensure_offline_command_authority_ready(&app, &issuer)")
+                .expect("write-readiness check");
+            assert!(
+                leader < readiness && readiness < follower,
+                "{name} must require write readiness only from the elected leader"
+            );
+            assert_eq!(
+                handler
+                    .matches("reconcile_offline_submission_failure(")
+                    .count(),
+                9,
+                "{name} must reconcile claim/readiness, preflight, snapshot, amount, policy, signing, Queue admission, and local acceptance failures"
+            );
+            assert!(handler.contains(
+                "OfflineSubmissionRecovery::RetryRejected { next_nonce } => Some(next_nonce)"
+            ));
+            assert!(handler.contains("transaction.set_nonce(nonce);"));
+            assert!(handler.contains("match submission.accept(tx_hash)"));
         }
-        assert!(!is_duplicate_queue_admission_error(&operation_id_conflict()));
     }
     #[test]
     fn operation_binding_covers_the_full_typed_request_and_route() {
@@ -3624,18 +5232,22 @@ mod tests {
             "the admitted record unexpectedly grew beyond its fixed-size metadata budget"
         );
         let mut request = submission_test_request(0x44);
-        request.shield_evidence.proof.proof.bytes = vec![0xA5; 2 * 1024 * 1024];
+        request.shield_evidence.proof.proof.bytes =
+            vec![0xA5; KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2];
+        refresh_submission_test_authorization(&mut request);
         let original =
             OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(&request))
                 .expect("canonical large request binding");
-        request.shield_evidence.proof.proof.bytes[1_048_576] ^= 0xFF;
+        request.shield_evidence.proof.proof.bytes[KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2 / 2] ^=
+            0xFF;
+        refresh_submission_test_authorization(&mut request);
         let changed =
             OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(&request))
                 .expect("canonical changed request binding");
         assert_eq!(original.operation_id, changed.operation_id);
         assert_ne!(
             original.canonical_request_digest, changed.canonical_request_digest,
-            "a changed byte in a multi-MiB request must change the retained binding"
+            "a changed byte in a maximum-sized request must change the retained binding"
         );
         assert!(matches!(
             ensure_same_offline_request_binding(&original, &changed),
@@ -3811,7 +5423,7 @@ mod tests {
             NonZeroUsize::new(ADMITTED_OPERATION_ACCOUNTED_BYTES).expect("positive bytes"),
         );
         let admitted = AdmittedOfflineOperationRecord {
-            binding: recovered.binding().expect("canonical recovered binding"),
+            binding: recovered.binding(),
             transaction_hash: recovered.transaction_hash,
         };
         registry.insert_reserved(admitted);
@@ -3842,7 +5454,7 @@ mod tests {
         ));
     }
     #[test]
-    fn admitted_binding_recovery_rejects_digest_or_transaction_mismatch() {
+    fn pending_queue_recovery_requires_binding_but_allows_newer_transaction() {
         let issuer = submission_test_issuer();
         let request = submission_test_request(0x37);
         let transaction = submission_test_transaction(vec![request]);
@@ -3850,38 +5462,37 @@ mod tests {
             offline_operation_record_in_transaction(&transaction, &issuer.authority, [0x37; 32])
                 .expect("recover admitted fixture");
         let matching = AdmittedOfflineOperationRecord {
-            binding: recovered.binding().expect("canonical binding"),
+            binding: recovered.binding(),
             transaction_hash: recovered.transaction_hash,
         };
-        ensure_admitted_operation_matches_recovered_record(&matching, &recovered)
+        ensure_admitted_operation_binding_matches_recovered_record(&matching, &recovered)
             .expect("matching authoritative record");
         let mut wrong_digest = matching.clone();
         wrong_digest.binding.canonical_request_digest[0] ^= 1;
         let mut wrong_hash = matching;
         wrong_hash.transaction_hash = submission_test_hash(0x38);
-        for adversarial in [wrong_digest, wrong_hash] {
-            let error =
-                ensure_admitted_operation_matches_recovered_record(&adversarial, &recovered)
-                    .expect_err("mismatched metadata must fail closed");
-            assert!(matches!(
-                error,
-                Error::AppServiceUnavailable {
-                    code: "offline_operation_index_inconsistent",
-                    ..
-                }
-            ));
-        }
+        let error =
+            ensure_admitted_operation_binding_matches_recovered_record(&wrong_digest, &recovered)
+                .expect_err("a mismatched request binding must fail closed");
+        assert!(matches!(
+            error,
+            Error::AppServiceUnavailable {
+                code: "offline_operation_evidence_inconsistent",
+                ..
+            }
+        ));
+        ensure_admitted_operation_binding_matches_recovered_record(&wrong_hash, &recovered)
+            .expect("the same request may advance to a newer authoritative Queue transaction");
     }
     #[test]
     fn applied_kagemusha_v4_finality_preserves_requested_operation_id() {
         let operation_id = [0x5A; 32];
         let finality =
-            kagemusha_v4_applied_finality(operation_id, "transaction-hash".to_owned(), 7, 11);
+            kagemusha_v4_applied_finality(operation_id, "transaction-hash".to_owned(), 7);
         assert_eq!(finality.operation_id, operation_id);
         assert_eq!(finality.transaction_hash, "transaction-hash");
         assert_eq!(finality.finalized_block_height, 7);
         assert_eq!(finality.outcome, KagemushaV2TerminalOutcome::Applied);
-        assert_eq!(finality.server_time_ms, 11);
     }
     #[tokio::test]
     async fn canonical_operation_references_and_applied_redeem_status_preserve_operation_id() {
@@ -3943,7 +5554,6 @@ mod tests {
                     result: OfflineOperationResult::Redeem(OfflineRedeemResult {
                         transaction_hash: transaction_hash.clone(),
                         finalized_block_height: 23,
-                        server_time_ms: 29,
                     }),
                 })
             })
@@ -3978,7 +5588,7 @@ mod tests {
         );
     }
     #[test]
-    fn terminal_finality_requires_nonzero_exact_identity_hash_height_and_time() {
+    fn terminal_finality_requires_nonzero_exact_identity_hash_and_height() {
         let issuer = submission_test_issuer();
         let request = submission_test_request(0x2A);
         let operation_id = request.authorization.operation_id;
@@ -3986,19 +5596,14 @@ mod tests {
         let record =
             offline_operation_record_in_transaction(&transaction, &issuer.authority, operation_id)
                 .expect("fixture operation must be recoverable");
-        let matching = kagemusha_v4_applied_finality(
-            operation_id,
-            record.transaction_hash.to_string(),
-            41,
-            43,
-        );
+        let matching =
+            kagemusha_v4_applied_finality(operation_id, record.transaction_hash.to_string(), 41);
         ensure_kagemusha_v4_terminal_finality_matches_record(&record, &matching)
             .expect("matching canonical finality");
         let rejected = kagemusha_v4_committed_finality(
             operation_id,
             record.transaction_hash.to_string(),
             41,
-            43,
             Some("canonical rejection".to_owned()),
         );
         ensure_kagemusha_v4_terminal_finality_matches_record(&record, &rejected)
@@ -4032,19 +5637,12 @@ mod tests {
                     ..matching.clone()
                 },
             ),
-            (
-                "block timestamp",
-                KagemushaV2CommittedFinality {
-                    server_time_ms: 0,
-                    ..matching.clone()
-                },
-            ),
         ] {
             let error = ensure_kagemusha_v4_terminal_finality_matches_record(&record, &finality)
                 .expect_err("terminal mismatch must fail closed");
             match &error {
                 Error::AppServiceUnavailable { code, .. } => {
-                    assert_eq!(*code, "offline_operation_index_inconsistent", "{label}");
+                    assert_eq!(*code, "offline_operation_evidence_inconsistent", "{label}");
                 }
                 other => panic!("{label} returned the wrong error class: {other:?}"),
             }
@@ -4137,7 +5735,7 @@ mod tests {
             assert!(matches!(
                 &error,
                 Error::AppServiceUnavailable {
-                    code: "offline_operation_index_inconsistent",
+                    code: "offline_operation_evidence_inconsistent",
                     ..
                 }
             ));
@@ -4205,7 +5803,7 @@ mod tests {
             };
             match &error {
                 Error::AppServiceUnavailable { code, .. } => {
-                    assert_eq!(*code, "offline_operation_index_inconsistent");
+                    assert_eq!(*code, "offline_operation_evidence_inconsistent");
                 }
                 other => panic!("anchor mismatch returned the wrong error class: {other:?}"),
             }
@@ -4227,17 +5825,63 @@ mod tests {
         assert!(matches!(
             error,
             Error::AppServiceUnavailable {
-                code: "offline_operation_index_inconsistent",
+                code: "offline_operation_evidence_inconsistent",
                 ..
             }
         ));
+    }
+    #[test]
+    fn kagemusha_v4_anchor_request_binding_rejects_every_shield_field_drift() {
+        let request = submission_test_request(0x34);
+        request
+            .validate_public_binding()
+            .expect("fixture request must be independently valid");
+        let anchor = finalized_topup_anchor_for_request(&request);
+        ensure_kagemusha_v4_topup_anchor_matches_request(&anchor, &request)
+            .expect("exact finalized anchor must bind its admitted request");
+
+        let mut wrong_initial_root = anchor.clone();
+        wrong_initial_root.initial_root = [0x71; 32];
+        let mut wrong_finalized_root = anchor.clone();
+        wrong_finalized_root.finalized_root = [0x72; 32];
+        let mut wrong_leaf_index = anchor.clone();
+        wrong_leaf_index.shield_leaf_index = 1;
+        let mut wrong_verifier_id = anchor.clone();
+        wrong_verifier_id.shield_verifier_id =
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-topup-shield-v2-alternate");
+        let mut wrong_verifier_commitment = anchor;
+        wrong_verifier_commitment.shield_verifier_commitment = [0x73; 32];
+
+        for (case, mutated) in [
+            ("initial root", wrong_initial_root),
+            ("finalized root", wrong_finalized_root),
+            ("shield leaf index", wrong_leaf_index),
+            ("shield verifier id", wrong_verifier_id),
+            ("shield verifier commitment", wrong_verifier_commitment),
+        ] {
+            let mutated = mutated
+                .finalize_digest()
+                .unwrap_or_else(|err| panic!("{case} mutation must remain self-valid: {err}"));
+            let error = ensure_kagemusha_v4_topup_anchor_matches_request(&mutated, &request)
+                .err()
+                .unwrap_or_else(|| panic!("{case} drift must fail closed"));
+            assert!(matches!(
+                error,
+                Error::AppServiceUnavailable {
+                    code: "offline_operation_evidence_inconsistent",
+                    ..
+                }
+            ));
+        }
     }
     #[test]
     fn authorization_refresh_cannot_alias_a_second_anchor_or_bypass_exact_replay() {
         let original = submission_test_request(0x33);
         let mut refreshed = original.clone();
         refreshed.authorization.issued_at_ms = 2;
-        refreshed.authorization.expires_at_ms = u64::MAX - 1;
+        refreshed.authorization.expires_at_ms =
+            2_u64.saturating_add(KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2);
+        refresh_submission_test_authorization(&mut refreshed);
         assert_eq!(
             kagemusha_v4_anchor_state_key(original.authorization.operation_id)
                 .expect("original anchor key"),
@@ -4304,7 +5948,6 @@ mod tests {
             [0x2D; 32],
             submission_test_hash(0x2E).to_string(),
             47,
-            53,
             Some("attacker-controlled\nterminal rejection".to_owned()),
         );
         let KagemushaV2TerminalOutcome::Rejected(message) = finality.outcome else {

@@ -1339,7 +1339,7 @@ the application owns reconciliation and any later explicit submission.
 `POST /v1/offline/receiver-lineage`.
 Use `getOfflineCapability()`, `submitKagemushaTopUp`,
 `submitKagemushaRedeem`,
-`getKagemushaOperationStatus(operationId:chainDiscriminant:)`, and
+`getKagemushaOperationStatus(operationId:expectedKind:chainDiscriminant:)`, and
 `getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`.
 `getOfflineCapability()` takes no selector.
 
@@ -1808,9 +1808,9 @@ if #available(iOS 15, macOS 12, *) {
 ```
 
 Pass `draft.transactionPayload` to Iroha SDK signing abstractions, which apply
-the Iroha prehash themselves. Use `draft.signingMessage` only with raw signature
-primitives or HSM APIs that expect an already-prehashed 32-byte message; signing
-that value through an SDK payload signer would hash it twice. After signing,
+the Iroha prehash themselves. Use `draft.signingMessage` only with low-level
+signer interfaces that expect an already-prehashed 32-byte message; signing that
+value through an SDK payload signer would hash it twice. After signing,
 assemble and submit the signed transaction through the normal pipeline API.
 Before returning a draft, the client decodes the canonical transaction, requires
 the configured chain and requested authority, and accepts exactly one matching
@@ -2125,7 +2125,8 @@ let canonicalAuth = ToriiCanonicalRequestAuth(
     accountId: "<canonical-domainless-account-id>",
     privateKey: Data(repeating: 0x01, count: 32) // Replace with a securely loaded seed.
 )
-let proposal = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
+let proposal = ToriiGovernanceDeployContractProposalRequest(proposalOperator: canonicalAuth.accountId,
+                                                            contractAlias: "demo::universal",
                                                             codeHash: Data(repeating: 0xf0, count: 32),
                                                             abiHash: Data(repeating: 0xe1, count: 32),
                                                             abiVersion: 1,

@@ -1,11 +1,23 @@
 /// Geo lookup configuration for peer telemetry.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiPeerGeo {
     /// Enable geo lookups for peer telemetry.
     #[config(default = "defaults::torii::peer_geo::ENABLED")]
     pub enabled: bool,
     /// Optional geo endpoint; required and HTTPS-only when lookups are enabled.
     pub endpoint: Option<Url>,
+}
+impl core::fmt::Debug for ToriiPeerGeo {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ToriiPeerGeo")
+            .field("enabled", &self.enabled)
+            .field(
+                "endpoint",
+                &RedactedConfigSecret::present(self.endpoint.is_some()),
+            )
+            .finish()
+    }
 }
 impl Default for ToriiPeerGeo {
     fn default() -> Self {

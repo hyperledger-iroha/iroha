@@ -211,7 +211,9 @@ const VERIFYING_KEY_CLIENT_URL = new URL(
   import.meta.url,
 ).href;
 const PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES = 256 * 1024;
-const KAGEMUSHA_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
+const KAGEMUSHA_READINESS_JSON_MAX_BYTES = 4 * 1024;
+const KAGEMUSHA_OPERATION_REFERENCE_JSON_MAX_BYTES = 4 * 1024;
+const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const FEE_QUOTE_JSON_MAX_BYTES = 64 * 1024;
 const FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES = 64 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
@@ -1782,7 +1784,7 @@ export class ToriiClient {
     );
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      KAGEMUSHA_READINESS_JSON_MAX_BYTES,
       "Offline capability response",
       { signal },
     );
@@ -1811,14 +1813,14 @@ export class ToriiClient {
     );
   }
 
-  /** Poll one Kagemusha operation through the unchanged operation route. */
-  async getKagemushaOperationStatus(operationId, options = {}) {
+  /** Poll the operation identified by an accepted Kagemusha operation reference. */
+  async getKagemushaOperationStatus(operationReference, options = {}) {
     const {
-      normalizeKagemushaOperationId,
-      normalizeKagemushaOperationStatus,
+      _normalizeKagemushaOperationStatusWithNativeValidation,
+      normalizeKagemushaOperationReference,
       requireKagemushaJsonContentType,
     } = await loadToriiOptionalModule();
-    const canonicalId = normalizeKagemushaOperationId(operationId);
+    const accepted = normalizeKagemushaOperationReference(operationReference);
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
       "getKagemushaOperationStatus",
@@ -1826,7 +1828,7 @@ export class ToriiClient {
     assertSupportedOptionKeys(rest, new Set([]), "getKagemushaOperationStatus options");
     const response = await this._request(
       "GET",
-      `/v1/offline/operations/${canonicalId}`,
+      accepted.status_uri,
       { headers: JSON_ACCEPT_HEADERS, signal, redirect: "error" },
     );
     await this._expectStatus(response, [200]);
@@ -1834,13 +1836,30 @@ export class ToriiClient {
       this._getHeader(response, "content-type"),
       "Kagemusha operation status response",
     );
-    const payload = await this._readBoundedLosslessIntegerJson(
+    const { payload, sourceBytes } = await this._readBoundedLosslessIntegerJson(
       response,
-      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES,
       "Kagemusha operation status response",
-      { signal },
+      { signal, includeSourceBytes: true },
     );
-    return normalizeKagemushaOperationStatus(payload, canonicalId);
+    const needsNativeValidation =
+      payload !== null &&
+      typeof payload === "object" &&
+      payload.state === "applied" &&
+      payload.value !== null &&
+      typeof payload.value === "object" &&
+      payload.value.result !== null &&
+      typeof payload.value.result === "object" &&
+      payload.value.result.kind === "top_up";
+    const nativeBinding = needsNativeValidation
+      ? resolveNativeRuntimeBinding(this._nativeRuntime)
+      : null;
+    return _normalizeKagemushaOperationStatusWithNativeValidation(
+      payload,
+      accepted,
+      sourceBytes,
+      nativeBinding,
+    );
   }
 
   async _submitKagemushaCommandV4(path, kind, request, options, context) {
@@ -1863,6 +1882,7 @@ export class ToriiClient {
         "Idempotency-Key": normalized.operationId,
       },
       body: Buffer.from(normalized.norito),
+      disableRetries: true,
       signal,
       redirect: "error",
     });
@@ -1875,7 +1895,7 @@ export class ToriiClient {
     const retryAfter = this._getHeader(response, "retry-after");
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      KAGEMUSHA_OPERATION_REFERENCE_JSON_MAX_BYTES,
       "Kagemusha operation reference response",
       { signal },
     );
@@ -7988,8 +8008,14 @@ export class ToriiClient {
       options,
       "governanceProposeDeployContract",
     );
+    const normalized = normalizeGovernanceDeployContractProposalPayload(payload);
+    if (canonicalAuth.accountId !== normalized.proposal_operator) {
+      throw new TypeError(
+        "governanceProposeDeployContract canonicalAuth.accountId must equal the exact proposalOperator",
+      );
+    }
     const body = stringifyStrictLosslessIntegerJson(
-      normalizeGovernanceDeployContractProposalPayload(payload),
+      normalized,
       "governance deploy-contract request",
     );
     const response = await this._request("POST", "/v1/gov/proposals/deploy-contract", {
@@ -11959,7 +11985,7 @@ export class ToriiClient {
     response,
     maxBytes,
     context,
-    { signal, plainObjects = false } = {},
+    { signal, plainObjects = false, includeSourceBytes = false } = {},
   ) {
     let contentType;
     try {
@@ -11997,7 +12023,10 @@ export class ToriiClient {
         cancelReadableBodyBestEffort(body, `${context} was aborted`);
         throw bodyReadAbortError(signal, context);
       }
-      return plainObjects ? JSON.parse(text) : parsed;
+      const payload = plainObjects ? JSON.parse(text) : parsed;
+      return includeSourceBytes
+        ? Object.freeze({ payload, sourceBytes: new Uint8Array(bytes) })
+        : payload;
     } catch (error) {
       if (signalIsAborted(signal) || error?.name === "AbortError") {
         cancelReadableBodyBestEffort(body, `${context} was aborted`);
@@ -15244,7 +15273,13 @@ async function parseGovernanceProposalRecord(payload) {
     "governance.proposal.kind",
   );
   let proposalOperator = null;
-  if (kind.variant === "ValidationFeePolicy") {
+  if (kind.variant === "DeployContract") {
+    proposalOperator = kind.deploy_contract.proposal_operator;
+  } else if (kind.variant === "RuntimeUpgrade") {
+    proposalOperator = kind.runtime_upgrade.proposal_operator;
+  } else if (kind.variant === "ContractLifecycleGovernance") {
+    proposalOperator = kind.contract_lifecycle_governance.proposal_operator;
+  } else if (kind.variant === "ValidationFeePolicy") {
     proposalOperator = kind.validation_fee_policy.proposal_operator;
   } else if (kind.variant === "ValidationFeePayoutLifecycle") {
     proposalOperator = kind.validation_fee_payout_lifecycle.proposal_operator;
@@ -15361,6 +15396,7 @@ function parseGovernanceDeployContract(payload, context) {
   const record = requireExactGovernanceProposalRecord(
     payload,
     [
+      "proposal_operator",
       "contract_address",
       "code_hash",
       "abi_hash",
@@ -15378,6 +15414,10 @@ function parseGovernanceDeployContract(payload, context) {
   );
   parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
   return {
+    proposal_operator: requireCanonicalGovernanceAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
     contract_address: contractAddress,
     code_hash: requireExactLowerHex32String(record.code_hash, `${context}.code_hash`),
     abi_hash: requireExactLowerHex32String(record.abi_hash, `${context}.abi_hash`),
@@ -15405,7 +15445,11 @@ function parseGovernanceManifestProvenance(payload, context) {
 }
 
 function parseGovernanceRuntimeUpgrade(payload, context) {
-  const record = requireExactGovernanceProposalRecord(payload, ["manifest"], context);
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["proposal_operator", "manifest"],
+    context,
+  );
   const manifestContext = `${context}.manifest`;
   const manifest = requireExactGovernanceProposalRecord(
     record.manifest,
@@ -15450,6 +15494,10 @@ function parseGovernanceRuntimeUpgrade(payload, context) {
     throw new TypeError(`${manifestContext}.end_height must be greater than start_height`);
   }
   return {
+    proposal_operator: requireCanonicalGovernanceAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
     manifest: {
       name: requireExactNonEmptyString(manifest.name, `${manifestContext}.name`),
       description: requireExactString(manifest.description, `${manifestContext}.description`),

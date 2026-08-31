@@ -643,8 +643,9 @@ replay the authority to refresh the canonical manifest and current alias:
                  --output-dir=<absolute-private-tmp>/openapi
 The V1 release policy fixes signing_provider=authenticated_external_signer and
 signing_backend=software; successfully verified release output is
-signer_qualification=software-key-qualified. The provider boundary remains
-compatible with a later HSM adapter, which requires new HSM-backed evidence.
+signer_qualification=software-key-qualified. Iroha exposes no HSM-specific
+backend or qualification mode; custody behind the external signer is
+deployment-owned and does not change this provider-neutral contract.
 Local private-key signing is intentionally unavailable; release signing is detached-only.
 For an operator release, set OPENAPI_REQUIRE_SIGNED=1 and
 OPENAPI_ALLOWED_SIGNERS_FILE=<absolute-operator-allowlist-path> when running this gate.

@@ -21,6 +21,9 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
             "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4"
         ))
+        XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
+            "connect_norito_kagemusha_offline_operation_status_validate_v1"
+        ))
         XCTAssertEqual(
             NoritoBridgeLoader.parliamentTimedOvnWalletRequiredSymbols,
             [

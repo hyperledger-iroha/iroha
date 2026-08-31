@@ -567,6 +567,7 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
         )
         let bodies = [
             try JSONEncoder().encode(ToriiGovernanceDeployContractProposalRequest(
+                proposalOperator: owner,
                 contractAlias: "demo::universal",
                 codeHash: Data(repeating: 0x11, count: 32),
                 abiHash: Data(repeating: 0x22, count: 32),

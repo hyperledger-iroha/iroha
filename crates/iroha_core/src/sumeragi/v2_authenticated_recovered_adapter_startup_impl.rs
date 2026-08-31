@@ -1,3 +1,69 @@
+enum CertifiedServePayloadStoreStartupTargetV1<'a> {
+    Kura {
+        kura: &'a Kura,
+        authority: Option<crate::kura::KuraV2CertifiedServePayloadDirectoryAuthority>,
+    },
+    #[cfg(test)]
+    FixtureRoot(&'a std::path::Path),
+}
+
+impl CertifiedServePayloadStoreStartupTargetV1<'_> {
+    fn open(
+        self,
+        context: &wire::HeightContext,
+        emergency_read_only: bool,
+    ) -> Result<
+        (
+            super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
+            super::v2_certified_serve_payload_store::CertifiedServePayloadRecoveryCut,
+        ),
+        ProductionLifecycleOwnerStartupErrorV1,
+    > {
+        let opened = match self {
+            Self::Kura { kura, authority } => {
+                let lifecycle_root = kura
+                    .sumeragi_v2_storage_root()
+                    .join("lifecycle-v1")
+                    .join(hex::encode(context.id().0.as_ref()));
+                match (emergency_read_only, authority) {
+                    (true, None) => super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_emergency_fast_read_only(
+                            &lifecycle_root,
+                            context,
+                        ),
+                    (false, Some(authority)) => super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_with_kura_authority(
+                            kura,
+                            authority,
+                            context,
+                        ),
+                    _ => {
+                        return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::StorageLayout,
+                        ));
+                    }
+                }
+            }
+            #[cfg(test)]
+            Self::FixtureRoot(root) => {
+                if emergency_read_only {
+                    super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_emergency_fast_read_only(
+                        root,
+                        context,
+                    )
+                } else {
+                    super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                        root, context,
+                    )
+                }
+            }
+        };
+        opened.map_err(|error| {
+            ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
+            )
+        })
+    }
+}
+
 impl AuthenticatedRecoveredAdapterStartup {
     /// Borrow the exact marker frontier derived before the startup effect was sealed.
     ///
@@ -165,6 +231,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             kura_identity,
             wal_path,
             lifecycle_root,
+            serve_payload_directory_authority,
             successor_floor,
             ..
         } = storage;
@@ -172,7 +239,10 @@ impl AuthenticatedRecoveredAdapterStartup {
             config,
             reply_route_source_capacity,
             &lifecycle_root,
-            &lifecycle_root,
+            CertifiedServePayloadStoreStartupTargetV1::Kura {
+                kura: kura.as_ref(),
+                authority: serve_payload_directory_authority,
+            },
             body_store,
             &local_signer,
         )?;
@@ -206,7 +276,7 @@ impl AuthenticatedRecoveredAdapterStartup {
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
         ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
+        payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         body_store: super::v2_body_store::RevalidatedV2BodyStore,
         local_signer: &KeyPair,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
@@ -248,7 +318,7 @@ impl AuthenticatedRecoveredAdapterStartup {
                 config,
                 reply_route_source_capacity,
                 ledger_root,
-                serve_payload_root,
+                payload_store_target,
                 local_signer,
             ),
             RecoveredWalStartupAuthorityV1::ControlSign(control) => {
@@ -262,7 +332,7 @@ impl AuthenticatedRecoveredAdapterStartup {
                     config,
                     reply_route_source_capacity,
                     ledger_root,
-                    serve_payload_root,
+                    payload_store_target,
                     local_signer,
                 )
             }
@@ -280,7 +350,7 @@ impl AuthenticatedRecoveredAdapterStartup {
                     config,
                     reply_route_source_capacity,
                     ledger_root,
-                    serve_payload_root,
+                    payload_store_target,
                     local_signer,
                 )
             }
@@ -300,7 +370,7 @@ impl AuthenticatedRecoveredAdapterStartup {
                     config,
                     reply_route_source_capacity,
                     ledger_root,
-                    serve_payload_root,
+                    payload_store_target,
                     local_signer,
                 )
             }
@@ -335,7 +405,7 @@ impl AuthenticatedRecoveredAdapterStartup {
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
         ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
+        payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         local_signer: &KeyPair,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         if let Some(control_attempt) =
@@ -372,7 +442,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             config,
             reply_route_source_capacity,
             ledger_root,
-            serve_payload_root,
+            payload_store_target,
             local_signer,
         )
     }
@@ -387,7 +457,7 @@ impl AuthenticatedRecoveredAdapterStartup {
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
         ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
+        payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         local_signer: &KeyPair,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         let fetch =
@@ -417,7 +487,7 @@ impl AuthenticatedRecoveredAdapterStartup {
                 config,
                 reply_route_source_capacity,
                 ledger_root,
-                serve_payload_root,
+                payload_store_target,
                 local_signer,
             );
         }
@@ -430,7 +500,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             config,
             reply_route_source_capacity,
             ledger_root,
-            serve_payload_root,
+            payload_store_target,
             local_signer,
         )
     }
@@ -510,7 +580,7 @@ impl AuthenticatedRecoveredAdapterStartup {
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
         ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
+        payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         local_signer: &KeyPair,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         let PreparedRecoveredDecisionApplyOwnerOpenV1 { staged, body_store } = *prepared;
@@ -521,22 +591,8 @@ impl AuthenticatedRecoveredAdapterStartup {
                     ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
                 )
             })?;
-        let payload_store_open = if body_store.emergency_read_only() {
-            super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_emergency_fast_read_only(
-                serve_payload_root,
-                verified.context(),
-            )
-        } else {
-            super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
-                serve_payload_root,
-                verified.context(),
-            )
-        };
-        let (payload_store, recovered_payloads) = payload_store_open.map_err(|error| {
-            ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
-            )
-        })?;
+        let (payload_store, recovered_payloads) =
+            payload_store_target.open(verified.context(), body_store.emergency_read_only())?;
         let serve_payloads = recovered_payloads
             .authenticate(&verified, local_signer, &body_store)
             .map_err(|error| {
@@ -572,7 +628,7 @@ impl AuthenticatedRecoveredAdapterStartup {
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
         ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
+        payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         local_signer: &KeyPair,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         let prepared =
@@ -584,7 +640,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             config,
             reply_route_source_capacity,
             ledger_root,
-            serve_payload_root,
+            payload_store_target,
             local_signer,
         )
     }
@@ -593,7 +649,7 @@ impl AuthenticatedRecoveredAdapterStartup {
     fn open_recovered_non_apply_stores(
         verified: &VerifiedHeightContext,
         body_store: super::v2_body_store::RevalidatedV2BodyStore,
-        serve_payload_root: &std::path::Path,
+        payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         local_signer: &KeyPair,
     ) -> Result<
         (
@@ -610,22 +666,8 @@ impl AuthenticatedRecoveredAdapterStartup {
                     ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
                 )
             })?;
-        let payload_store_open = if body_store.emergency_read_only() {
-            super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_emergency_fast_read_only(
-                serve_payload_root,
-                verified.context(),
-            )
-        } else {
-            super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
-                serve_payload_root,
-                verified.context(),
-            )
-        };
-        let (payload_store, recovered_payloads) = payload_store_open.map_err(|error| {
-            ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
-            )
-        })?;
+        let (payload_store, recovered_payloads) =
+            payload_store_target.open(verified.context(), body_store.emergency_read_only())?;
         let serve_payloads = recovered_payloads
             .authenticate(verified, local_signer, &body_store)
             .map_err(|error| {
@@ -646,14 +688,14 @@ impl AuthenticatedRecoveredAdapterStartup {
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
         ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
+        payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         local_signer: &KeyPair,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         Self::ensure_recovered_body_store_context(&body_store, &verified)?;
         let (body_store, payload_store, serve_payloads) = Self::open_recovered_non_apply_stores(
             &verified,
             body_store,
-            serve_payload_root,
+            payload_store_target,
             local_signer,
         )?;
         ProductionLifecycleOwnerV1::open_storage_only_recovered_startup(
@@ -688,13 +730,13 @@ impl AuthenticatedRecoveredAdapterStartup {
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
         ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
+        payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         local_signer: &KeyPair,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         let (body_store, payload_store, serve_payloads) = Self::open_recovered_non_apply_stores(
             &verified,
             body_store,
-            serve_payload_root,
+            payload_store_target,
             local_signer,
         )?;
         ProductionLifecycleOwnerV1::open_recovered_control_startup(
@@ -729,13 +771,13 @@ impl AuthenticatedRecoveredAdapterStartup {
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
         ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
+        payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         local_signer: &KeyPair,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         let (body_store, payload_store, serve_payloads) = Self::open_recovered_non_apply_stores(
             &verified,
             body_store,
-            serve_payload_root,
+            payload_store_target,
             local_signer,
         )?;
         ProductionLifecycleOwnerV1::open_recovered_decision_fetch_startup(
@@ -901,7 +943,7 @@ impl AuthenticatedRecoveredAdapterStartup {
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
         ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
+        payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         local_signer: &KeyPair,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         Self::ensure_recovered_body_store_context(&body_store, &verified)?;
@@ -909,7 +951,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             Self::open_recovered_non_apply_stores(
                 &verified,
                 body_store,
-                serve_payload_root,
+                payload_store_target,
                 local_signer,
             )?;
         let mut registry = Box::new(LifecycleWorkRegistryHolder::empty());
@@ -993,7 +1035,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             config,
             reply_route_source_capacity,
             ledger_root,
-            serve_payload_root,
+            CertifiedServePayloadStoreStartupTargetV1::FixtureRoot(serve_payload_root),
             body_store,
             local_signer,
         )
@@ -1014,7 +1056,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             config,
             reply_route_source_capacity,
             ledger_root,
-            serve_payload_root,
+            CertifiedServePayloadStoreStartupTargetV1::FixtureRoot(serve_payload_root),
             body_store,
             local_signer,
         )

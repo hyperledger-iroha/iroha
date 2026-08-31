@@ -22,7 +22,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     fs::{self, File},
-    io::{ErrorKind, Read, Write},
+    io::{Read, Write},
     mem::size_of,
     path::{Path, PathBuf},
     sync::Arc,
@@ -875,6 +875,7 @@ pub(in crate::sumeragi) enum CertifiedServeRetirementAuthenticationErrorV1 {
 
 /// Failure while opening or advancing the Certified-Serve payload store.
 #[derive(Debug, Error)]
+#[allow(variant_size_differences)]
 pub(crate) enum CertifiedServePayloadStoreError {
     /// A filesystem operation failed.
     #[error("failed to {operation} Certified-Serve payload path {}: {source}", path.display())]
@@ -908,11 +909,19 @@ pub(crate) enum CertifiedServePayloadStoreError {
     /// The retained store directory was replaced by a symlink or non-directory.
     #[error("Certified-Serve payload store target is not the retained directory: {}", .0.display())]
     InvalidStoreDirectory(PathBuf),
+    /// A Kura-minted directory authority no longer names the exact production target.
+    #[error("invalid Certified-Serve payload storage binding at {}: {reason}", path.display())]
+    StorageBinding {
+        /// Expected Kura-derived target.
+        path: PathBuf,
+        /// Stable rejection reason.
+        reason: &'static str,
+    },
     /// This platform cannot provide the descriptor-relative storage contract.
     #[error("descriptor-relative Certified-Serve payload storage is unsupported at {}", .0.display())]
     UnsupportedStorageBinding(PathBuf),
-    /// A supposedly fresh publication collided with an existing canonical leaf.
-    #[error("Certified-Serve payload destination already exists: {}", .0.display())]
+    /// A canonical destination did not match the expected absence or exact incumbent frame.
+    #[error("Certified-Serve payload destination changed or already exists: {}", .0.display())]
     PublicationConflict(PathBuf),
     /// A framed payload is malformed, non-canonical, or corrupt.
     #[error("invalid Certified-Serve payload frame {}: {reason}", path.display())]
@@ -1114,14 +1123,11 @@ struct BoundCertifiedServePayloadDirectory {
 }
 
 impl BoundCertifiedServePayloadDirectory {
+    #[cfg(test)]
     fn open_or_create(path: &Path) -> Result<Self, CertifiedServePayloadStoreError> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
-            use std::os::unix::fs::MetadataExt as _;
-
             ensure_durable_directory(path)?;
-            let lexical = fs::symlink_metadata(path)
-                .map_err(|source| io_error("inspect store directory", path, source))?;
             let canonical_path = fs::canonicalize(path)
                 .map_err(|source| io_error("canonicalize store directory", path, source))?;
             let directory = File::from(
@@ -1136,37 +1142,7 @@ impl BoundCertifiedServePayloadDirectory {
                 .map_err(std::io::Error::from)
                 .map_err(|source| io_error("open store directory", path, source))?,
             );
-            let opened = directory
-                .metadata()
-                .map_err(|source| io_error("inspect opened store directory", path, source))?;
-            let identity = CertifiedServeStorageIdentity::from_metadata(&opened);
-            if lexical.file_type().is_symlink()
-                || !lexical.is_dir()
-                || !opened.is_dir()
-                || lexical.uid() != rustix::process::geteuid().as_raw()
-                || opened.uid() != rustix::process::geteuid().as_raw()
-                || lexical.mode() & 0o022 != 0
-                || opened.mode() & 0o022 != 0
-                || CertifiedServeStorageIdentity::from_metadata(&lexical) != identity
-            {
-                return Err(CertifiedServePayloadStoreError::InvalidStoreDirectory(
-                    path.to_path_buf(),
-                ));
-            }
-            rustix::fs::flock(
-                &directory,
-                rustix::fs::FlockOperation::NonBlockingLockExclusive,
-            )
-            .map_err(std::io::Error::from)
-            .map_err(|source| io_error("lock store directory", path, source))?;
-            let bound = Self {
-                expected_path: path.to_path_buf(),
-                canonical_path,
-                directory,
-                identity,
-            };
-            bound.verify_linked()?;
-            Ok(bound)
+            Self::from_opened_directory(path.to_path_buf(), canonical_path, directory)
         }
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
@@ -1174,6 +1150,100 @@ impl BoundCertifiedServePayloadDirectory {
                 path.to_path_buf(),
             ))
         }
+    }
+
+    fn from_kura_authority(
+        kura: &crate::kura::Kura,
+        authority: crate::kura::KuraV2CertifiedServePayloadDirectoryAuthority,
+        context: &wire::HeightContext,
+    ) -> Result<Self, CertifiedServePayloadStoreError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            let expected_path = kura
+                .sumeragi_v2_storage_root()
+                .join("lifecycle-v1")
+                .join(hex::encode(context.id().0.as_ref()))
+                .join(STORE_DIRECTORY);
+            if !authority.matches_kura(kura) {
+                return Err(CertifiedServePayloadStoreError::StorageBinding {
+                    path: expected_path,
+                    reason: "payload-store authority belongs to another Kura instance",
+                });
+            }
+            if !authority.matches_context(context) {
+                return Err(CertifiedServePayloadStoreError::StorageBinding {
+                    path: expected_path,
+                    reason: "payload-store authority belongs to another height context",
+                });
+            }
+            let (authority_path, mint_time_canonical_path, directory) = authority
+                .into_opened_directory_for(kura, context)
+                .ok_or_else(|| CertifiedServePayloadStoreError::StorageBinding {
+                    path: expected_path.clone(),
+                    reason: "payload-store authority changed after Kura minted it",
+                })?;
+            if authority_path != expected_path {
+                return Err(CertifiedServePayloadStoreError::StorageBinding {
+                    path: authority_path,
+                    reason: "payload-store authority names a non-canonical Kura path",
+                });
+            }
+            return Self::from_opened_directory(expected_path, mint_time_canonical_path, directory);
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (authority, context);
+            Err(CertifiedServePayloadStoreError::UnsupportedStorageBinding(
+                kura.sumeragi_v2_storage_root().join("lifecycle-v1"),
+            ))
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn from_opened_directory(
+        expected_path: PathBuf,
+        mint_time_canonical_path: PathBuf,
+        directory: File,
+    ) -> Result<Self, CertifiedServePayloadStoreError> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let lexical = fs::symlink_metadata(&expected_path)
+            .map_err(|source| io_error("inspect store directory", &expected_path, source))?;
+        let canonical_path = fs::canonicalize(&expected_path)
+            .map_err(|source| io_error("canonicalize store directory", &expected_path, source))?;
+        let opened = directory
+            .metadata()
+            .map_err(|source| io_error("inspect opened store directory", &expected_path, source))?;
+        let identity = CertifiedServeStorageIdentity::from_metadata(&opened);
+        if expected_path.file_name() != Some(OsStr::new(STORE_DIRECTORY))
+            || canonical_path != mint_time_canonical_path
+            || lexical.file_type().is_symlink()
+            || !lexical.is_dir()
+            || !opened.is_dir()
+            || lexical.uid() != rustix::process::geteuid().as_raw()
+            || opened.uid() != rustix::process::geteuid().as_raw()
+            || lexical.mode() & 0o022 != 0
+            || opened.mode() & 0o022 != 0
+            || CertifiedServeStorageIdentity::from_metadata(&lexical) != identity
+        {
+            return Err(CertifiedServePayloadStoreError::InvalidStoreDirectory(
+                expected_path,
+            ));
+        }
+        rustix::fs::flock(
+            &directory,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .map_err(std::io::Error::from)
+        .map_err(|source| io_error("lock store directory", &expected_path, source))?;
+        let bound = Self {
+            expected_path,
+            canonical_path,
+            directory,
+            identity,
+        };
+        bound.verify_linked()?;
+        Ok(bound)
     }
 
     #[cfg(all(unix, not(target_os = "espidf")))]
@@ -1485,6 +1555,41 @@ impl BoundCertifiedServePayloadDirectory {
         }
     }
 
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn validate_publication_destination(
+        &self,
+        destination: &OsStr,
+        maximum: u64,
+        expected: Option<&BoundCertifiedServePayloadLeaf>,
+    ) -> Result<(), CertifiedServePayloadStoreError> {
+        let destination_path = self.expected_path.join(destination);
+        let observed = self.inspect_leaf(destination, maximum)?;
+        match (expected, observed.as_ref()) {
+            (None, None) => Ok(()),
+            (Some(expected), Some(observed)) => {
+                let Some(expected_frame_hash) = expected.frame_hash.as_ref() else {
+                    return Err(CertifiedServePayloadStoreError::PublicationConflict(
+                        destination_path,
+                    ));
+                };
+                if expected.name.as_os_str() != destination
+                    || expected.identity != observed.identity
+                    || expected.length != observed.length
+                    || !Hash::new(&self.read_leaf(observed, maximum)?).eq(expected_frame_hash)
+                {
+                    return Err(CertifiedServePayloadStoreError::PublicationConflict(
+                        destination_path,
+                    ));
+                }
+                Ok(())
+            }
+            (None, Some(_)) => Err(CertifiedServePayloadStoreError::PublicationConflict(
+                destination_path,
+            )),
+            (Some(_), None) => Err(CertifiedServePayloadStoreError::UnknownPayload),
+        }
+    }
+
     fn remove_leaf(
         &self,
         leaf: &BoundCertifiedServePayloadLeaf,
@@ -1625,29 +1730,24 @@ impl BoundCertifiedServePayloadDirectory {
                 self.sync().map_err(PersistPayloadError::Unpublished)?;
             }
             let destination_path = self.expected_path.join(destination);
-            let destination_leaf = self
-                .inspect_leaf(destination, maximum)
+            self.validate_publication_destination(destination, maximum, expected_destination)
                 .map_err(PersistPayloadError::Unpublished)?;
-            let exact_incumbent = match (expected_destination, destination_leaf.as_ref()) {
-                (None, None) => true,
-                (Some(expected), Some(observed)) => {
-                    expected.name.as_os_str() == destination
-                        && expected.identity == observed.identity
-                        && expected.length == observed.length
-                }
-                _ => false,
-            };
-            if !exact_incumbent {
-                let error = if destination_leaf.is_some() {
-                    CertifiedServePayloadStoreError::PublicationConflict(destination_path)
-                } else {
-                    CertifiedServePayloadStoreError::UnknownPayload
-                };
-                return Err(PersistPayloadError::Unpublished(error));
-            }
             let (file, leaf) = self
                 .create_synced_temporary(temporary, frame, maximum)
                 .map_err(PersistPayloadError::Unpublished)?;
+            // The lifetime directory lock serializes every cooperating writer. Recheck after
+            // the potentially slow file write so a non-cooperating replacement is still caught
+            // immediately before the atomic terminal rename.
+            if expected_destination.is_some()
+                && let Err(error) = self.validate_publication_destination(
+                    destination,
+                    maximum,
+                    expected_destination,
+                )
+            {
+                self.unlink_if_identity(temporary, leaf.identity);
+                return Err(PersistPayloadError::Unpublished(error));
+            }
             let rename = if expected_destination.is_some() {
                 rustix::fs::renameat(&self.directory, temporary, &self.directory, destination)
                     .map_err(std::io::Error::from)
@@ -1757,7 +1857,7 @@ fn rename_certified_serve_leaf_noreplace(
     _destination: &OsStr,
 ) -> std::io::Result<()> {
     Err(std::io::Error::new(
-        ErrorKind::Unsupported,
+        std::io::ErrorKind::Unsupported,
         "atomic no-replace Certified-Serve publication is unavailable",
     ))
 }
@@ -1861,7 +1961,7 @@ impl CertifiedServePayloadStoreV1 {
                     .as_ref()
                     .is_some_and(BoundCertifiedServePayloadDirectory::is_linked))
     }
-    /// Open one immutable height store and return its move-only recovery cut.
+    /// Open one immutable height store from a descriptor-bound authority minted by Kura.
     ///
     /// Regular interrupted temporary files are discarded before the cut is
     /// returned. Symlinks, unknown names, foreign contexts, oversized files,
@@ -1871,6 +1971,28 @@ impl CertifiedServePayloadStoreV1 {
     ///
     /// Returns an error when geometry cannot be derived or any directory entry
     /// fails the closed storage contract.
+    pub(crate) fn open_with_kura_authority(
+        kura: &crate::kura::Kura,
+        authority: crate::kura::KuraV2CertifiedServePayloadDirectoryAuthority,
+        context: &wire::HeightContext,
+    ) -> Result<(Self, CertifiedServePayloadRecoveryCut), CertifiedServePayloadStoreError> {
+        let max_entries = MAX_CERTIFIED_SERVE_PAYLOADS_PER_HEIGHT;
+        let expected_path = kura
+            .sumeragi_v2_storage_root()
+            .join("lifecycle-v1")
+            .join(hex::encode(context.id().0.as_ref()))
+            .join(STORE_DIRECTORY);
+        let max_entry_bytes = Self::validate_open_parameters(context, max_entries, &expected_path)?;
+        let bound_directory =
+            BoundCertifiedServePayloadDirectory::from_kura_authority(kura, authority, context)?;
+        Self::open_bound(bound_directory, context, max_entries, max_entry_bytes)
+    }
+
+    /// Open one immutable-height store from a raw test root.
+    ///
+    /// Production must consume a recovery-minted authority through
+    /// [`Self::open_with_kura_authority`].
+    #[cfg(test)]
     pub(crate) fn open(
         root: &Path,
         context: &wire::HeightContext,
@@ -1909,9 +2031,9 @@ impl CertifiedServePayloadStoreV1 {
     }
     /// Open an empty payload owner for a structural lifecycle fixture.
     ///
-    /// Production must use [`Self::open`]. This skips wire-context validation
-    /// only because closed replay-authority fixtures intentionally use
-    /// non-cryptographic parent certificates.
+    /// Production must use [`Self::open_with_kura_authority`]. This skips
+    /// wire-context validation only because closed replay-authority fixtures
+    /// intentionally use non-cryptographic parent certificates.
     #[cfg(test)]
     pub(in crate::sumeragi) fn open_lifecycle_fixture_for_test(
         root: &Path,
@@ -1941,11 +2063,23 @@ impl CertifiedServePayloadStoreV1 {
             },
         ))
     }
+    #[cfg(test)]
     fn open_with_max_entries(
         root: &Path,
         context: &wire::HeightContext,
         max_entries: usize,
     ) -> Result<(Self, CertifiedServePayloadRecoveryCut), CertifiedServePayloadStoreError> {
+        let directory = root.join(STORE_DIRECTORY);
+        let max_entry_bytes = Self::validate_open_parameters(context, max_entries, &directory)?;
+        let bound_directory = BoundCertifiedServePayloadDirectory::open_or_create(&directory)?;
+        Self::open_bound(bound_directory, context, max_entries, max_entry_bytes)
+    }
+
+    fn validate_open_parameters(
+        context: &wire::HeightContext,
+        max_entries: usize,
+        directory: &Path,
+    ) -> Result<u64, CertifiedServePayloadStoreError> {
         if max_entries == 0 || max_entries > MAX_CERTIFIED_SERVE_PAYLOADS_PER_HEIGHT {
             return Err(CertifiedServePayloadStoreError::InvalidGeometry(
                 "payload count is zero or exceeds the per-height hard bound",
@@ -1954,12 +2088,19 @@ impl CertifiedServePayloadStoreV1 {
         context
             .validate()
             .map_err(|error| CertifiedServePayloadStoreError::InvalidFrame {
-                path: root.to_path_buf(),
+                path: directory.to_path_buf(),
                 reason: format!("invalid height context: {error}"),
             })?;
-        let max_entry_bytes = derive_max_entry_bytes(context)?;
-        let directory = root.join(STORE_DIRECTORY);
-        let bound_directory = BoundCertifiedServePayloadDirectory::open_or_create(&directory)?;
+        derive_max_entry_bytes(context)
+    }
+
+    fn open_bound(
+        bound_directory: BoundCertifiedServePayloadDirectory,
+        context: &wire::HeightContext,
+        max_entries: usize,
+        max_entry_bytes: u64,
+    ) -> Result<(Self, CertifiedServePayloadRecoveryCut), CertifiedServePayloadStoreError> {
+        let directory = bound_directory.expected_path.clone();
         let mut store = Self {
             identity: Arc::new(CertifiedServePayloadStoreInstanceIdentityMarker),
             directory,
@@ -3003,6 +3144,7 @@ impl CertifiedServePayloadStoreV1 {
     fn file_name_for(&self, id: CertifiedServePayloadId) -> OsString {
         format!("{}{}", hex::encode(id.request_hash().as_ref()), FILE_SUFFIX).into()
     }
+    #[cfg(test)]
     fn temporary_path(&self, id: CertifiedServePayloadId) -> PathBuf {
         self.directory.join(self.temporary_file_name_for(id))
     }
@@ -3227,14 +3369,17 @@ fn io_error(
         source,
     }
 }
+#[cfg(test)]
 fn sync_directory(directory: &Path) -> Result<(), CertifiedServePayloadStoreError> {
     File::open(directory)
         .and_then(|file| file.sync_all())
         .map_err(|source| io_error("synchronise directory", directory, source))
 }
+#[cfg(test)]
 fn ensure_durable_directory(directory: &Path) -> Result<(), CertifiedServePayloadStoreError> {
     ensure_durable_directory_with(directory, &mut sync_directory)
 }
+#[cfg(test)]
 fn ensure_durable_directory_with<Sync>(
     directory: &Path,
     sync: &mut Sync,
@@ -3259,13 +3404,13 @@ where
             }
             return Ok(());
         }
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(source) => return Err(io_error("inspect directory", directory, source)),
     }
     ensure_durable_directory_with(parent, sync)?;
     match fs::create_dir(directory) {
         Ok(()) => {}
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(source) => return Err(io_error("create directory", directory, source)),
     }
     let metadata = fs::symlink_metadata(directory)
@@ -3336,6 +3481,113 @@ mod tests {
         context.validate().expect("valid fixture context");
         (context, keys)
     }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn production_open_consumes_the_exact_kura_directory_authority() {
+        let first = crate::kura::Kura::blank_kura_for_testing();
+        let second = crate::kura::Kura::blank_kura_for_testing();
+        let deferred = crate::kura::Kura::blank_kura_for_testing();
+        let (context, _) = context_and_keys();
+        let deferred_lifecycle_root = deferred.sumeragi_v2_storage_root().join("lifecycle-v1");
+        let mut invalid_context = context.clone();
+        invalid_context.height = 0;
+        assert!(
+            deferred
+                .mint_v2_certified_serve_payload_directory_authority(&invalid_context)
+                .is_err()
+        );
+        assert!(
+            !deferred_lifecycle_root.exists(),
+            "invalid geometry must fail before Kura materializes lifecycle ancestry"
+        );
+        let foreign = first
+            .mint_v2_certified_serve_payload_directory_authority(&context)
+            .expect("mint first-Kura payload authority");
+        assert!(matches!(
+            CertifiedServePayloadStoreV1::open_with_kura_authority(
+                second.as_ref(),
+                foreign,
+                &context,
+            ),
+            Err(CertifiedServePayloadStoreError::StorageBinding {
+                reason: "payload-store authority belongs to another Kura instance",
+                ..
+            })
+        ));
+
+        let authority = first
+            .mint_v2_certified_serve_payload_directory_authority(&context)
+            .expect("mint exact payload authority");
+        let lifecycle_root = first
+            .sumeragi_v2_storage_root()
+            .join("lifecycle-v1")
+            .join(hex::encode(context.id().0.as_ref()));
+        let (store, recovery) = CertifiedServePayloadStoreV1::open_with_kura_authority(
+            first.as_ref(),
+            authority,
+            &context,
+        )
+        .expect("open exact Kura-bound payload store");
+        assert!(recovery.payloads.is_empty());
+        assert!(store.matches_lifecycle_storage_root(&lifecycle_root, &context));
+
+        let deferred_authority = deferred
+            .mint_v2_certified_serve_payload_directory_authority(&context)
+            .expect("mint deferred Kura payload authority");
+        let (deferred_store, deferred_recovery) =
+            CertifiedServePayloadStoreV1::open_with_kura_authority(
+                deferred.as_ref(),
+                deferred_authority,
+                &context,
+            )
+            .expect("open the deferred Kura target");
+        assert!(deferred_recovery.payloads.is_empty());
+        assert!(deferred_store.matches_lifecycle_storage_root(
+            &deferred_lifecycle_root.join(hex::encode(context.id().0.as_ref())),
+            &context,
+        ));
+    }
+
+    #[test]
+    fn emergency_fast_payload_store_skips_inventory_and_rejects_retirement() {
+        let root = TempDir::new().expect("temporary emergency Serve payload store");
+        let (context, _) = context_and_keys();
+        let expected_directory = root.path().join(STORE_DIRECTORY);
+        let (mut store, recovery) =
+            CertifiedServePayloadStoreV1::open_emergency_fast_read_only(root.path(), &context)
+                .expect("open inert emergency Serve payload store");
+        assert!(recovery.is_empty());
+        assert!(
+            !expected_directory.exists(),
+            "emergency open must not create or inventory the payload directory"
+        );
+
+        fs::create_dir(&expected_directory).expect("create ignored payload directory");
+        let sentinel_path = expected_directory.join("unexpected");
+        let sentinel = b"untouched Strict-recovery Serve payload";
+        fs::write(&sentinel_path, sentinel).expect("write ignored payload sentinel");
+        let authenticated = AuthenticatedCertifiedServePayloadRecoveryCut {
+            context_id: context.id(),
+            height: context.height,
+            payloads: BTreeMap::new(),
+        };
+        store
+            .validate_authenticated_cut(&authenticated)
+            .expect("emergency validation stays inert instead of inventorying the sentinel");
+        assert!(matches!(
+            store.retire_authenticated_cut(authenticated, &BTreeSet::new()),
+            Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                CertifiedServePayloadStoreError::EmergencyFastReadOnly
+            ))
+        ));
+        assert_eq!(
+            fs::read(&sentinel_path).expect("reread ignored payload sentinel"),
+            sentinel,
+            "emergency retirement rejection must not mutate retained payload bytes"
+        );
+    }
+
     #[cfg(feature = "bls")]
     fn verified_bls_context_and_keys() -> (VerifiedHeightContext, Vec<KeyPair>) {
         let mut keys = (0x51_u8..=0x54)
@@ -3698,6 +3950,51 @@ mod tests {
         assert_eq!(completed_ref.responder(), 0);
         assert_eq!(completed_ref.signature(), response.signature);
     }
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn terminal_publication_rejects_same_inode_same_length_content_drift() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let temporary = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (request, _) = request_and_response(&context, &keys[0], 0, b"content-cas".to_vec());
+        let (mut store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), &context).expect("open store");
+        let pending = store.persist_pending(&request).expect("persist pending");
+        let (mut payload, incumbent) = store
+            .load_id_with_leaf(pending.id())
+            .expect("load exact pending leaf");
+        let path = store.path_for(pending.id());
+        let original_metadata = fs::metadata(&path).expect("inspect pending leaf");
+        let mut drifted = fs::read(&path).expect("read pending leaf");
+        let last = drifted
+            .last_mut()
+            .expect("framed pending leaf is non-empty");
+        *last ^= 0x01;
+        fs::write(&path, &drifted).expect("rewrite pending leaf in place");
+        File::open(&path)
+            .and_then(|file| file.sync_all())
+            .expect("synchronise drifted pending leaf");
+        let drifted_metadata = fs::metadata(&path).expect("reinspect drifted pending leaf");
+        assert_eq!(drifted_metadata.dev(), original_metadata.dev());
+        assert_eq!(drifted_metadata.ino(), original_metadata.ino());
+        assert_eq!(drifted_metadata.len(), original_metadata.len());
+
+        payload.state = PersistedCertifiedServePayloadStateV1::Negative {
+            outcome: CertifiedServePayloadNegativeOutcome::Rejected(9),
+        };
+        assert!(matches!(
+            store.persist_payload(&payload, Some(&incumbent)),
+            Err(PersistPayloadError::Unpublished(
+                CertifiedServePayloadStoreError::PublicationConflict(conflict)
+            )) if conflict == path
+        ));
+        assert_eq!(
+            fs::read(&path).expect("reread drifted pending leaf"),
+            drifted
+        );
+        assert!(!store.temporary_path(pending.id()).exists());
+    }
     #[test]
     fn completed_payload_requires_exact_certified_responder_authority() {
         let temporary = TempDir::new().expect("temporary directory");
@@ -4042,12 +4339,11 @@ mod tests {
             hex::encode(id.request_hash().as_ref()),
             FILE_SUFFIX
         ));
-        rustix::fs::mkfifoat(
-            rustix::fs::CWD,
-            &fifo,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        )
-        .expect("create payload FIFO");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("invoke mkfifo for certified payload regression");
+        assert!(status.success(), "mkfifo must create the payload fixture");
         assert!(matches!(
             CertifiedServePayloadStoreV1::open(fifo_root.path(), &context),
             Err(CertifiedServePayloadStoreError::NonRegularEntry(path)) if path == fifo

@@ -2024,9 +2024,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                         executor,
                         services,
                         &mut lane_work,
-                        output_guard.as_ref(),
                         kura.as_ref(),
-                        &local_signer,
                         &mut terminal_block_sync_server,
                     )
                 },

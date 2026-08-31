@@ -12,6 +12,7 @@ import secrets
 import time
 import unicodedata
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from decimal import Decimal
 from typing import (
     Any,
@@ -137,6 +138,9 @@ from .client_status_models import (
 from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
 from .governance_proposals import _contract_address as _canonical_contract_address
+from .kagemusha_native import (
+    validate_offline_operation_status_json_v1 as _validate_kagemusha_operation_status_json_v1,
+)
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
 from .native_amx import (
     _hash_bytes as _iroha_hash_bytes,
@@ -148,7 +152,11 @@ from .native_amx import (
     compute_native_amx_validator_set_hash,
     validate_bls_normal_validator_set,
 )
-from .norito_frame import schema_hash_for_type_name, validate_norito_frame
+from .norito_frame import (
+    decode_norito_frame_payload,
+    schema_hash_for_type_name,
+    validate_norito_frame,
+)
 from .offline_models import (
     KagemushaArtifactBindingV4Json,
     OfflineAndroidKeyMintAssertionJson,
@@ -171,8 +179,8 @@ from .offline_models import (
     OfflineProofAttachmentJson,
     OfflineProofBackend,
     OfflineProofBoxJson,
-    OfflineRecursiveSpendBundleJson,
     OfflineRecursiveOperationVectorV4Json,
+    OfflineRecursiveSpendBundleJson,
     OfflineRecursiveSpendProofJson,
     OfflineRecursiveSpendStatementJson,
     OfflineRecursiveSpendTransitionJson,
@@ -1907,38 +1915,42 @@ class RuntimeUpgradeTxResponse:
 
 @dataclass(frozen=True)
 class KagemushaTopUpRequestV4:
-    """Canonical ABI-21/V4 Norito top-up request and operation identifier."""
+    """Canonical ABI-21/V4 Norito top-up request with its derived operation id."""
 
     norito: bytes
-    operation_id: str
+    operation_id: str = dataclass_field(init=False)
 
     def __post_init__(self) -> None:
-        _validate_kagemusha_norito_request(
+        operation_id = _validate_kagemusha_norito_request(
             self.norito,
             _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES,
             "KagemushaTopUpRequestV4.norito",
             _OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+            field_count=8,
+            operation_id_field_index=6,
         )
         object.__setattr__(self, "norito", bytes(self.norito))
-        object.__setattr__(self, "operation_id", _require_offline_operation_id(self.operation_id))
+        object.__setattr__(self, "operation_id", operation_id)
 
 
 @dataclass(frozen=True)
 class KagemushaRedeemRequestV4:
-    """Canonical ABI-21/V4 Norito redemption request and operation identifier."""
+    """Canonical ABI-21/V4 Norito redemption request with its derived operation id."""
 
     norito: bytes
-    operation_id: str
+    operation_id: str = dataclass_field(init=False)
 
     def __post_init__(self) -> None:
-        _validate_kagemusha_norito_request(
+        operation_id = _validate_kagemusha_norito_request(
             self.norito,
             _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES,
             "KagemushaRedeemRequestV4.norito",
             _OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+            field_count=10,
+            operation_id_field_index=8,
         )
         object.__setattr__(self, "norito", bytes(self.norito))
-        object.__setattr__(self, "operation_id", _require_offline_operation_id(self.operation_id))
+        object.__setattr__(self, "operation_id", operation_id)
 
 
 _OFFLINE_CAPABILITY_PATH = "/v1/offline/readiness"
@@ -1949,6 +1961,9 @@ _OFFLINE_OPERATION_ID_RE = re.compile(r"^(?!0{64}$)[0-9a-f]{64}$")
 _OFFLINE_TRANSACTION_HASH_RE = re.compile(r"^[0-9a-f]{63}[13579bdf]$")
 _OFFLINE_ERROR_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
 _OFFLINE_ASSET_DEFINITION_ID_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{28}$")
+_OFFLINE_VERIFYING_KEY_ID_FIELD_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9._:/_-]*[a-z0-9])?$"
+)
 _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
@@ -1975,7 +1990,9 @@ _OFFLINE_BLS_PROOF_BYTES = 96
 _OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
 _OFFLINE_BLS_VALIDATOR_ID_RE = re.compile(r"^ea0130[0-9A-F]{96}$")
 _OFFLINE_MAX_JSON_DEPTH = 128
-_OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
+_OFFLINE_STATUS_MAX_BYTES = 4 * 1024
+_OFFLINE_OPERATION_REFERENCE_MAX_BYTES = 4 * 1024
+_OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES = 16 * 1024 * 1024
 _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES = 512 * 1024
 _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
 _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 23
@@ -1983,6 +2000,7 @@ _KAGEMUSHA_MAX_HOPS = 8
 _KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1"
 _OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request"
 _OFFLINE_REDEEM_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request"
+_KAGEMUSHA_REQUEST_WIRE_VERSION = 4
 
 
 def _kagemusha_request_timeout(value: Optional[float], context: str) -> Optional[float]:
@@ -2001,7 +2019,10 @@ def _validate_kagemusha_norito_request(
     maximum_bytes: int,
     context: str,
     expected_type_name: str,
-) -> None:
+    *,
+    field_count: int,
+    operation_id_field_index: int,
+) -> str:
     if type(value) is not bytes:
         raise TypeError(f"{context} must be immutable bytes")
     if not value:
@@ -2010,13 +2031,78 @@ def _validate_kagemusha_norito_request(
         raise ValueError(
             f"{context} exceeds {maximum_bytes} bytes"
         )
-    validate_norito_frame(
+    payload = decode_norito_frame_payload(
         value,
         context=context,
         expected_type_name=expected_type_name,
         expected_padding_length=8,
         expected_flags=0x02,
     )
+    fields: List[bytes] = []
+    cursor = 0
+    for field_index in range(field_count):
+        field_length, cursor = _decode_kagemusha_compact_length(
+            payload,
+            cursor,
+            f"{context} field {field_index}",
+        )
+        if field_length > len(payload) - cursor:
+            raise ValueError(f"{context} contains a truncated field {field_index}")
+        field_end = cursor + field_length
+        fields.append(payload[cursor:field_end])
+        cursor = field_end
+    if cursor != len(payload):
+        raise ValueError(
+            f"{context} must contain exactly {field_count} compact-length fields"
+        )
+    if len(fields[0]) != 2 or int.from_bytes(fields[0], "little") != _KAGEMUSHA_REQUEST_WIRE_VERSION:
+        raise ValueError(
+            f"{context} must carry wire version {_KAGEMUSHA_REQUEST_WIRE_VERSION}"
+        )
+    canonical_payload = b"".join(
+        _encode_kagemusha_compact_length(len(field_value)) + field_value
+        for field_value in fields
+    )
+    if canonical_payload != payload:
+        raise ValueError(f"{context} must use canonical compact-length field framing")
+    operation_id = fields[operation_id_field_index]
+    if len(operation_id) != 32 or not any(operation_id):
+        raise ValueError(
+            f"{context} operation_id field must be exactly 32 non-zero bytes"
+        )
+    return operation_id.hex()
+
+
+def _decode_kagemusha_compact_length(
+    payload: bytes,
+    cursor: int,
+    context: str,
+) -> Tuple[int, int]:
+    value = 0
+    shift = 0
+    for byte_count in range(1, 11):
+        if cursor >= len(payload):
+            raise ValueError(f"{context} compact length is truncated")
+        byte = payload[cursor]
+        cursor += 1
+        if shift == 63 and byte & 0x7E:
+            raise ValueError(f"{context} compact length overflows u64")
+        value |= (byte & 0x7F) << shift
+        if byte & 0x80 == 0:
+            if byte_count > 1 and byte == 0:
+                raise ValueError(f"{context} compact length is non-canonical")
+            return value, cursor
+        shift += 7
+    raise ValueError(f"{context} compact length overflows u64")
+
+
+def _encode_kagemusha_compact_length(value: int) -> bytes:
+    encoded = bytearray()
+    while value >= 0x80:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
 
 
 def _offline_exact_string(value: Any, context: str, *, non_empty: bool = True) -> str:
@@ -2057,6 +2143,40 @@ def _offline_canonical_asset_definition_id(value: Any, context: str) -> str:
             f"{context} must be a canonical checksummed UUIDv4 asset definition id"
         )
     return asset_definition_id
+
+
+def _offline_canonical_account_id_bytes(value: Any, context: str) -> bytes:
+    account_id = _offline_exact_string(value, context)
+    try:
+        return _account_id_codec.decode_canonical_i105_account_id(account_id)
+    except ValueError as error:
+        raise RuntimeError(f"{context} must be a canonical I105 AccountId") from error
+
+
+def _offline_asset_id_components(
+    value: Any,
+    context: str,
+) -> Tuple[str, bytes]:
+    asset_id = _offline_exact_string(value, context)
+    parts = asset_id.split("#")
+    if len(parts) not in (2, 3) or not all(parts):
+        raise RuntimeError(
+            f"{context} must use <asset-definition>#<account> with an optional "
+            "#dataspace:<u64> suffix"
+        )
+    definition = _offline_canonical_asset_definition_id(
+        parts[0], f"{context}.definition"
+    )
+    account = _offline_canonical_account_id_bytes(parts[1], f"{context}.account")
+    if len(parts) == 3:
+        scope = parts[2]
+        if re.fullmatch(r"dataspace:(?:0|[1-9][0-9]*)", scope) is None:
+            raise RuntimeError(
+                f"{context}.scope must use canonical dataspace:<u64> syntax"
+            )
+        if int(scope.removeprefix("dataspace:")) > _OFFLINE_MAX_U64:
+            raise RuntimeError(f"{context}.scope dataspace id must fit u64")
+    return definition, account
 
 
 def _fee_quote_asset_sort_key(asset_definition_id: str) -> bytes:
@@ -2236,6 +2356,77 @@ def _offline_hash_literal(value: Any, context: str) -> str:
     if int(body[-2:], 16) & 1 == 0:
         raise RuntimeError(f"{context} must set the Iroha hash marker bit")
     return value
+
+
+def _offline_hash_literal_bytes(value: Any, context: str) -> bytes:
+    canonical = _offline_hash_literal(value, context)
+    match = _OFFLINE_HASH_LITERAL_RE.fullmatch(canonical)
+    if match is None:  # The canonical validator above already rejected this shape.
+        raise AssertionError("validated offline hash literal did not match its grammar")
+    return bytes.fromhex(match.group(1))
+
+
+def _offline_iroha_blake2b_hash(*chunks: bytes) -> bytes:
+    digest = bytearray(hashlib.blake2b(b"".join(chunks), digest_size=32).digest())
+    digest[-1] |= 1
+    return bytes(digest)
+
+
+def _validate_offline_top_up_anchor_inclusion(
+    operation_id: str,
+    anchor_digest: Tuple[int, ...],
+    path: "OfflineTopUpAnchorMerkleProof",
+    commitment: "OfflineTopUpFinalityExecutionCommitment",
+    context: str,
+) -> None:
+    if commitment.topup_anchor_root is None:
+        raise RuntimeError(f"{context} requires a committed top-up root")
+    key_hash = _offline_iroha_blake2b_hash(b"\xd2" + bytes.fromhex(operation_id))
+    value_hash = _offline_iroha_blake2b_hash(bytes(anchor_digest))
+    current = _offline_iroha_blake2b_hash(b"\x00", key_hash, value_hash)
+    index = path.leaf_index
+    node_domain = b"iroha:kagemusha:v2:topup-node\x00"
+    for level, raw_sibling in enumerate(path.siblings):
+        sibling = bytes(raw_sibling)
+        if sibling[-1] & 1 == 0:
+            raise RuntimeError(
+                f"{context}.anchor_path.siblings[{level}] must set the Iroha hash marker bit"
+            )
+        level_bytes = level.to_bytes(2, "little")
+        if index & 1 == 0:
+            current = _offline_iroha_blake2b_hash(
+                node_domain, level_bytes, current, sibling
+            )
+        else:
+            current = _offline_iroha_blake2b_hash(
+                node_domain, level_bytes, sibling, current
+            )
+        index //= 2
+    expected_root = _offline_hash_literal_bytes(
+        commitment.topup_anchor_root, f"{context}.commit_qc.certificate.execution_commitment.topup_anchor_root"
+    )
+    if current != expected_root:
+        raise RuntimeError(f"{context}.anchor_path does not authenticate the top-up anchor")
+
+    ordinary_root = _offline_hash_literal_bytes(
+        commitment.ordinary_writes_root,
+        f"{context}.commit_qc.certificate.execution_commitment.ordinary_writes_root",
+    )
+    expected_post_root = _offline_iroha_blake2b_hash(
+        b"iroha:kagemusha:v2:post-state-root\x00",
+        path.leaf_count.to_bytes(4, "little"),
+        ordinary_root,
+        expected_root,
+    )
+    actual_post_root = _offline_hash_literal_bytes(
+        commitment.post_state_root,
+        f"{context}.commit_qc.certificate.execution_commitment.post_state_root",
+    )
+    if actual_post_root != expected_post_root:
+        raise RuntimeError(
+            f"{context}.commit_qc.certificate.execution_commitment.post_state_root "
+            "does not authenticate the top-up projection"
+        )
 
 
 def taira_local_signing_context(deployed_network_id: str) -> ToriiLocalSigningContext:
@@ -2600,7 +2791,6 @@ class OfflineTopUpResult:
 
     transaction_hash: str
     finalized_block_height: int
-    server_time_ms: int
     anchor: OfflineTopUpAnchor
     finality_proof: OfflineTopUpFinalityProof
 
@@ -2611,7 +2801,6 @@ class OfflineRedeemResult:
 
     transaction_hash: str
     finalized_block_height: int
-    server_time_ms: int
 
 
 @dataclass(frozen=True)
@@ -2708,7 +2897,7 @@ class OfflineAppliedOperation:
 
 @dataclass(frozen=True)
 class OfflineRejectedOperation:
-    """Rejected terminal Offline operation state."""
+    """One rejected carrier attempt for a still-retryable Offline operation."""
 
     operation_id: str
     kind: OfflineOperationKind
@@ -2813,6 +3002,40 @@ def _offline_operation_reference(
             positive=True,
         ),
     )
+
+
+def _validated_offline_operation_reference(
+    value: Any,
+    context: str = "accepted offline operation reference",
+) -> OfflineOperationReference:
+    if type(value) is not OfflineOperationReference:
+        raise TypeError(f"{context} must be an OfflineOperationReference")
+    operation_id = _require_offline_operation_id(
+        value.operation_id, f"{context}.operation_id"
+    )
+    if (
+        type(value.kind) is not OfflineOperationKind
+        or value.kind.kind not in ("top_up", "redeem")
+        or value.kind.value is not None
+    ):
+        raise RuntimeError(f"{context}.kind must be an exact top_up or redeem unit tag")
+    if (
+        type(value.state) is not OfflinePendingState
+        or value.state.state != "pending"
+        or value.state.value is not None
+    ):
+        raise RuntimeError(f"{context}.state must be the exact pending unit tag")
+    _offline_transaction_hash(value.transaction_hash, f"{context}.transaction_hash")
+    expected_uri = _offline_status_uri(operation_id)
+    if value.status_uri != expected_uri:
+        raise RuntimeError(f"{context}.status_uri must equal {expected_uri}")
+    _offline_unsigned(
+        value.submitted_at_ms,
+        f"{context}.submitted_at_ms",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    return value
 
 
 def _offline_optional_error_string(
@@ -2949,6 +3172,11 @@ def _offline_fixed_bytes(
 
 def _offline_scaled_amount_model(value: Any, context: str) -> OfflineScaledAmount:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("atomic_units", "scale"),
+    )
     return OfflineScaledAmount(
         atomic_units=_offline_unsigned(
             _offline_required(record, "atomic_units", context),
@@ -2969,6 +3197,17 @@ def _offline_scaled_amount_model(value: Any, context: str) -> OfflineScaledAmoun
 
 def _offline_spendable_note(value: Any, context: str) -> OfflineSpendableNote:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "network_id",
+            "asset",
+            "note_commitment",
+            "spend_nullifier",
+            "amount",
+        ),
+    )
     note_commitment = _offline_fixed_bytes(
         _offline_required(record, "note_commitment", context),
         f"{context}.note_commitment",
@@ -2985,7 +3224,7 @@ def _offline_spendable_note(value: Any, context: str) -> OfflineSpendableNote:
         network_id=_offline_hash_literal(
             _offline_required(record, "network_id", context), f"{context}.network_id"
         ),
-        asset=_offline_exact_string(
+        asset=_offline_canonical_asset_definition_id(
             _offline_required(record, "asset", context), f"{context}.asset"
         ),
         note_commitment=note_commitment,
@@ -2998,16 +3237,41 @@ def _offline_spendable_note(value: Any, context: str) -> OfflineSpendableNote:
 
 def _offline_verifier_key_id(value: Any, context: str) -> OfflineVerifierKeyId:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("backend", "name"),
+    )
     backend = _offline_exact_string(
         _offline_required(record, "backend", context), f"{context}.backend"
     )
     name = _offline_exact_string(
         _offline_required(record, "name", context), f"{context}.name"
     )
-    if len(backend.encode("utf-8")) > 256:
-        raise RuntimeError(f"{context}.backend must contain at most 256 UTF-8 bytes")
-    if len(name.encode("utf-8")) > 256:
-        raise RuntimeError(f"{context}.name must contain at most 256 UTF-8 bytes")
+    if backend != "halo2/ipa":
+        raise RuntimeError(f"{context}.backend must be halo2/ipa")
+    for field_name, field_value in (("backend", backend), ("name", name)):
+        if (
+            len(field_value.encode("utf-8")) > 256
+            or _OFFLINE_VERIFYING_KEY_ID_FIELD_RE.fullmatch(field_value) is None
+            or any(
+                separator in field_value
+                for separator in (
+                    "..",
+                    "//",
+                    ":::",
+                    "/:",
+                    ":/",
+                    "/.",
+                    "./",
+                    ":.",
+                    ".:",
+                )
+            )
+        ):
+            raise RuntimeError(
+                f"{context}.{field_name} must use the portable verifier-key registry grammar"
+            )
     return OfflineVerifierKeyId(
         backend=backend,
         name=name,
@@ -3169,10 +3433,9 @@ def _offline_top_up_finality_subject(
     _offline_exact_object_fields(
         record,
         context,
-        required=("block_hash", "payload_hash"),
-        optional=("parent_block_hash",),
+        required=("parent_block_hash", "block_hash", "payload_hash"),
     )
-    raw_parent = record.get("parent_block_hash")
+    raw_parent = _offline_required(record, "parent_block_hash", context)
     parent_block_hash = (
         None
         if raw_parent is None
@@ -3227,6 +3490,7 @@ def _offline_top_up_finality_execution_commitment(
             "parent_state_root",
             "post_state_root",
             "ordinary_writes_root",
+            "topup_anchor_root",
             "topup_anchor_count",
             "native_amx_application_manifest_version",
             "native_amx_application_manifest_root",
@@ -3236,14 +3500,13 @@ def _offline_top_up_finality_execution_commitment(
             "executed_block_wire_len",
             "executed_block_wire_hash",
         ),
-        optional=("topup_anchor_root",),
     )
     topup_anchor_count = _offline_unsigned(
         _offline_required(record, "topup_anchor_count", context),
         f"{context}.topup_anchor_count",
         _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK,
     )
-    raw_topup_root = record.get("topup_anchor_root")
+    raw_topup_root = _offline_required(record, "topup_anchor_root", context)
     topup_anchor_root = (
         None
         if raw_topup_root is None
@@ -3640,16 +3903,14 @@ def _offline_top_up_finality_height_context(
             "height",
             "epoch",
             "epoch_end_height",
+            "next_epoch_snapshot",
             "mode",
+            "parent_commit_qc",
+            "snapshot_bootstrap",
             "nexus_amx_context_hash",
             "execution_policy_hash",
             "da_layout",
             "leader_seed",
-        ),
-        optional=(
-            "next_epoch_snapshot",
-            "parent_commit_qc",
-            "snapshot_bootstrap",
         ),
     )
     context_id = _offline_top_up_finality_height_context_id(
@@ -3691,7 +3952,7 @@ def _offline_top_up_finality_height_context(
     mode = _offline_top_up_finality_consensus_mode(
         _offline_required(record, "mode", context), f"{context}.mode"
     )
-    raw_next_snapshot = record.get("next_epoch_snapshot")
+    raw_next_snapshot = _offline_required(record, "next_epoch_snapshot", context)
     if raw_next_snapshot is None:
         next_epoch_snapshot = None
     else:
@@ -3704,7 +3965,7 @@ def _offline_top_up_finality_height_context(
             successor_height=height + 1,
             current_mode=mode,
         )
-    raw_parent_qc = record.get("parent_commit_qc")
+    raw_parent_qc = _offline_required(record, "parent_commit_qc", context)
     parent_commit_qc = (
         None
         if raw_parent_qc is None
@@ -3718,7 +3979,7 @@ def _offline_top_up_finality_height_context(
         raise RuntimeError(
             f"{context}.parent_commit_qc.round.height must immediately precede height"
         )
-    raw_snapshot_bootstrap = record.get("snapshot_bootstrap")
+    raw_snapshot_bootstrap = _offline_required(record, "snapshot_bootstrap", context)
     snapshot_bootstrap = (
         None
         if raw_snapshot_bootstrap is None
@@ -3897,8 +4158,19 @@ def _offline_top_up_anchor(
     asset = _offline_exact_string(
         _offline_required(record, "asset", context), f"{context}.asset"
     )
-    if current_note.asset != asset:
-        raise RuntimeError(f"{context}.current_note.asset must equal asset")
+    asset_definition, asset_account = _offline_asset_id_components(
+        asset, f"{context}.asset"
+    )
+    payer = _offline_exact_string(
+        _offline_required(record, "payer", context), f"{context}.payer"
+    )
+    payer_account = _offline_canonical_account_id_bytes(payer, f"{context}.payer")
+    if not secrets.compare_digest(asset_account, payer_account):
+        raise RuntimeError(f"{context}.asset account must equal payer")
+    if current_note.asset != asset_definition:
+        raise RuntimeError(
+            f"{context}.current_note.asset must equal asset.definition"
+        )
 
     topup_operation_id = _offline_fixed_bytes(
         _offline_required(record, "topup_operation_id", context),
@@ -3961,9 +4233,7 @@ def _offline_top_up_anchor(
     return OfflineTopUpAnchor(
         version=4,
         network_id=network_id,
-        payer=_offline_exact_string(
-            _offline_required(record, "payer", context), f"{context}.payer"
-        ),
+        payer=payer,
         asset=asset,
         asset_scale=asset_scale,
         amount=amount,
@@ -4079,6 +4349,13 @@ def _offline_top_up_finality_proof(
         anchor_path_context,
         expected_leaf_count=certificate.execution_commitment.topup_anchor_count,
     )
+    _validate_offline_top_up_anchor_inclusion(
+        expected_operation_id,
+        anchor_digest,
+        anchor_path,
+        certificate.execution_commitment,
+        context,
+    )
     return OfflineTopUpFinalityProof(
         version=1,
         anchor=OfflineTopUpFinalityProofAnchor(
@@ -4110,7 +4387,6 @@ def _offline_applied_result(
             required=(
                 "transaction_hash",
                 "finalized_block_height",
-                "server_time_ms",
                 "anchor",
                 "finality_proof",
             ),
@@ -4122,7 +4398,6 @@ def _offline_applied_result(
             required=(
                 "transaction_hash",
                 "finalized_block_height",
-                "server_time_ms",
             ),
         )
     transaction_hash = _offline_transaction_hash(
@@ -4132,12 +4407,6 @@ def _offline_applied_result(
     finalized_block_height = _offline_unsigned(
         _offline_required(result, "finalized_block_height", result_context),
         f"{result_context}.finalized_block_height",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    server_time_ms = _offline_unsigned(
-        _offline_required(result, "server_time_ms", result_context),
-        f"{result_context}.server_time_ms",
         _OFFLINE_MAX_U64,
         positive=True,
     )
@@ -4160,7 +4429,6 @@ def _offline_applied_result(
             OfflineTopUpResult(
                 transaction_hash=transaction_hash,
                 finalized_block_height=finalized_block_height,
-                server_time_ms=server_time_ms,
                 anchor=anchor,
                 finality_proof=finality_proof,
             )
@@ -4174,14 +4442,14 @@ def _offline_applied_result(
         OfflineRedeemResult(
             transaction_hash=transaction_hash,
             finalized_block_height=finalized_block_height,
-            server_time_ms=server_time_ms,
         )
     )
 
 
 def _offline_operation_status(
-    payload: Mapping[str, Any], expected_operation_id: str
+    payload: Mapping[str, Any], accepted_reference: OfflineOperationReference
 ) -> OfflineOperationStatus:
+    accepted = _validated_offline_operation_reference(accepted_reference)
     context = "offline operation status"
     record = _offline_mapping(payload, context)
     _offline_exact_object_fields(record, context, required=("state", "value"))
@@ -4210,12 +4478,12 @@ def _offline_operation_status(
         _offline_required(value, "operation_id", value_context),
         f"{value_context}.operation_id",
     )
-    if operation_id != expected_operation_id:
+    if operation_id != accepted.operation_id:
         raise RuntimeError(
-            f"{value_context}.operation_id does not match the requested operation"
+            f"{value_context}.operation_id does not match the accepted operation"
         )
     if state == "pending":
-        return OfflinePendingOperation(
+        status = OfflinePendingOperation(
             operation_id=operation_id,
             kind=_offline_operation_kind(
                 _offline_required(value, "kind", value_context), f"{value_context}.kind"
@@ -4231,8 +4499,16 @@ def _offline_operation_status(
                 positive=True,
             ),
         )
+        if status.kind != accepted.kind or (
+            status.transaction_hash == accepted.transaction_hash
+            and status.submitted_at_ms != accepted.submitted_at_ms
+        ):
+            raise RuntimeError(
+                f"{value_context} does not match the accepted kind or active submission identity"
+            )
+        return status
     if state == "applied":
-        return OfflineAppliedOperation(
+        status = OfflineAppliedOperation(
             operation_id=operation_id,
             result=_offline_applied_result(
                 _offline_required(value, "result", value_context),
@@ -4240,7 +4516,12 @@ def _offline_operation_status(
                 operation_id,
             ),
         )
-    return OfflineRejectedOperation(
+        if status.result.kind != accepted.kind.kind:
+            raise RuntimeError(
+                f"{value_context}.result does not match the accepted operation kind"
+            )
+        return status
+    status = OfflineRejectedOperation(
         operation_id=operation_id,
         kind=_offline_operation_kind(
             _offline_required(value, "kind", value_context), f"{value_context}.kind"
@@ -4253,6 +4534,11 @@ def _offline_operation_status(
             _offline_required(value, "error", value_context), f"{value_context}.error"
         ),
     )
+    if status.kind != accepted.kind:
+        raise RuntimeError(
+            f"{value_context} does not match the accepted operation kind"
+        )
+    return status
 
 
 def _multisig_norito_compact_length(value: int) -> bytes:
@@ -11318,11 +11604,21 @@ class ToriiClient(
             "GET",
             _OFFLINE_CAPABILITY_PATH,
             headers={"Accept": "application/json"},
+            stream=True,
             allow_redirects=False,
             timeout=_kagemusha_request_timeout(timeout, "get_offline_capability"),
         )
-        self._expect_status(response, {200})
-        payload = self._offline_json_response(response, "offline capability response")
+        self._expect_status(
+            response,
+            {200},
+            maximum_body_bytes=_OFFLINE_STATUS_MAX_BYTES,
+            context="offline capability",
+        )
+        payload = self._offline_json_response(
+            response,
+            "offline capability response",
+            maximum_body_bytes=_OFFLINE_STATUS_MAX_BYTES,
+        )
         return OfflineStatus.from_payload(payload)
 
     def submit_kagemusha_top_up(
@@ -11363,26 +11659,48 @@ class ToriiClient(
 
     def get_kagemusha_operation_status(
         self,
-        operation_id: str,
+        accepted_reference: OfflineOperationReference,
         *,
         timeout: Optional[float] = None,
     ) -> OfflineOperationStatus:
-        """Fetch the typed state of one Kagemusha operation with an optional timeout."""
+        """Fetch status bound to an accepted Kagemusha operation identity.
 
-        canonical_id = _require_offline_operation_id(operation_id)
+        Exact retries and a foreign-authority global Applied winner may advance
+        the active transaction hash while the operation id and kind stay fixed.
+        After Pending advances its hash and timestamp, persist that returned
+        pair in the accepted reference used for the next poll.
+        """
+
+        accepted = _validated_offline_operation_reference(accepted_reference)
         response = self._request(
             "GET",
-            f"{_OFFLINE_OPERATIONS_PATH}/{canonical_id}",
+            accepted.status_uri,
             headers={"Accept": "application/json"},
+            stream=True,
             allow_redirects=False,
             timeout=_kagemusha_request_timeout(
                 timeout,
                 "get_kagemusha_operation_status",
             ),
         )
-        self._expect_status(response, {200})
-        payload = self._offline_json_response(response, "offline operation status response")
-        return _offline_operation_status(payload, canonical_id)
+        self._expect_status(
+            response,
+            {200},
+            maximum_body_bytes=_OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
+            context="offline operation status",
+        )
+        payload, status_json = self._offline_json_response_with_bytes(
+            response,
+            "offline operation status response",
+            maximum_body_bytes=_OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
+        )
+        status = _offline_operation_status(payload, accepted)
+        if (
+            isinstance(status, OfflineAppliedOperation)
+            and isinstance(status.result, OfflineTopUpOperationResult)
+        ):
+            _validate_kagemusha_operation_status_json_v1(status_json)
+        return status
 
     def _submit_kagemusha_command(
         self,
@@ -11402,11 +11720,22 @@ class ToriiClient(
                 "Idempotency-Key": operation_id,
             },
             data=body,
+            stream=True,
+            allow_retry=False,
             allow_redirects=False,
             timeout=timeout,
         )
-        self._expect_status(response, {202})
-        payload = self._offline_json_response(response, "offline operation reference response")
+        self._expect_status(
+            response,
+            {202},
+            maximum_body_bytes=_OFFLINE_OPERATION_REFERENCE_MAX_BYTES,
+            context="offline operation reference",
+        )
+        payload = self._offline_json_response(
+            response,
+            "offline operation reference response",
+            maximum_body_bytes=_OFFLINE_OPERATION_REFERENCE_MAX_BYTES,
+        )
         return _offline_operation_reference(
             payload,
             expected_operation_id=operation_id,
@@ -11416,18 +11745,55 @@ class ToriiClient(
         )
 
     @staticmethod
-    def _offline_json_response(
-        response: requests.Response, context: str
-    ) -> Mapping[str, Any]:
-        content_type = response.headers.get("Content-Type", "")
-        media_type = content_type.split(";", 1)[0].strip().lower()
-        if media_type != "application/json":
-            raise RuntimeError(f"{context} must use Content-Type application/json")
-        body = response.content
-        if len(body) > _OFFLINE_MAX_JSON_RESPONSE_BYTES:
-            raise RuntimeError(
-                f"{context} exceeds {_OFFLINE_MAX_JSON_RESPONSE_BYTES} bytes"
-            )
+    def _offline_json_response_with_bytes(
+        response: requests.Response,
+        context: str,
+        *,
+        maximum_body_bytes: int,
+    ) -> Tuple[Mapping[str, Any], bytes]:
+        if (
+            isinstance(maximum_body_bytes, bool)
+            or not isinstance(maximum_body_bytes, int)
+            or maximum_body_bytes <= 0
+        ):
+            raise ValueError(f"{context} byte-size bound must be a positive integer")
+        try:
+            content_type = response.headers.get("Content-Type", "")
+            media_type = content_type.split(";", 1)[0].strip().lower()
+            if media_type != "application/json":
+                raise RuntimeError(f"{context} must use Content-Type application/json")
+
+            raw_content_length = response.headers.get("Content-Length")
+            if raw_content_length is not None:
+                if not isinstance(raw_content_length, str) or re.fullmatch(
+                    r"(?:0|[1-9][0-9]*)", raw_content_length
+                ) is None:
+                    raise RuntimeError(
+                        f"{context} Content-Length must be a canonical unsigned decimal integer"
+                    )
+                maximum_literal = str(maximum_body_bytes)
+                if len(raw_content_length) > len(maximum_literal) or (
+                    len(raw_content_length) == len(maximum_literal)
+                    and raw_content_length > maximum_literal
+                ):
+                    raise RuntimeError(
+                        f"{context} exceeds {maximum_body_bytes} bytes"
+                    )
+
+            bounded_body = bytearray()
+            for chunk in response.iter_content(chunk_size=8192, decode_unicode=False):
+                if not chunk:
+                    continue
+                if not isinstance(chunk, (bytes, bytearray)):
+                    raise RuntimeError(f"{context} yielded a non-byte response chunk")
+                if len(chunk) > maximum_body_bytes - len(bounded_body):
+                    raise RuntimeError(
+                        f"{context} exceeds {maximum_body_bytes} bytes"
+                    )
+                bounded_body.extend(chunk)
+            body = bytes(bounded_body)
+        finally:
+            response.close()
         try:
             text = body.decode("utf-8")
         except UnicodeDecodeError as error:
@@ -11444,6 +11810,20 @@ class ToriiClient(
         payload = _snapshot_offline_json(payload, context)
         if not isinstance(payload, Mapping):
             raise RuntimeError(f"{context} must be a JSON object")
+        return payload, body
+
+    @staticmethod
+    def _offline_json_response(
+        response: requests.Response,
+        context: str,
+        *,
+        maximum_body_bytes: int,
+    ) -> Mapping[str, Any]:
+        payload, _body = ToriiClient._offline_json_response_with_bytes(
+            response,
+            context,
+            maximum_body_bytes=maximum_body_bytes,
+        )
         return payload
 
     # ------------------------------------------------------------------

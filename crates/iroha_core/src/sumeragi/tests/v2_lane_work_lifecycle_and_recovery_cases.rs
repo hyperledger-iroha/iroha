@@ -667,7 +667,6 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
             pop: Some(replacement_pop.clone()),
             activation_height: successor_height,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Pending,
         };

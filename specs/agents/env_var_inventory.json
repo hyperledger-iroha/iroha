@@ -2,8 +2,8 @@
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
   "generated_at": "2026-08-26T09:08:55Z",
   "root": "iroha",
-  "total_refs": 786,
-  "unique_vars": 188,
+  "total_refs": 784,
+  "unique_vars": 186,
   "variables": {
     "CARGO": {
       "counts": {
@@ -4270,19 +4270,6 @@
         }
       ]
     },
-    "IROHA_TORII_ALLOW_LIVE_ASSET_HOLDER_AGGREGATE": {
-      "counts": {
-        "test": 1
-      },
-      "paths": [
-        {
-          "context": "|| std::env::var(\"IROHA_TORII_ALLOW_LIVE_ASSET_HOLDER_AGGREGATE\")",
-          "line": 66182,
-          "path": "crates/iroha_torii/src/routing.rs",
-          "scope": "test"
-        }
-      ]
-    },
     "IROHA_TORII_OPENAPI_ACTUAL": {
       "counts": {
         "test": 1
@@ -4331,19 +4318,6 @@
           "line": 13674,
           "path": "xtask/src/main.rs",
           "scope": "tool"
-        }
-      ]
-    },
-    "IROHA_TORII_PUBLIC_DATASPACE_UPSTREAMS": {
-      "counts": {
-        "prod": 1
-      },
-      "paths": [
-        {
-          "context": "let Ok(raw) = std::env::var(\"IROHA_TORII_PUBLIC_DATASPACE_UPSTREAMS\") else {",
-          "line": 2203,
-          "path": "crates/iroha_torii/src/lib.rs",
-          "scope": "prod"
         }
       ]
     },

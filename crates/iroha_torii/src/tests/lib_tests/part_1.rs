@@ -865,7 +865,7 @@ fn fused_privacy_preflight_requires_raw_governance_signer() {
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("standalone signed Governance publication must require its raw signer");
     assert!(
-        error.contains("requires a raw runtime HSM signer"),
+        error.contains("requires a raw runtime signer"),
         "unexpected error: {error}"
     );
 }
@@ -1350,9 +1350,6 @@ fn torii_runtime_deps_retain_fenced_privacy_pair() {
     );
 }
 #[tokio::test]
-#[should_panic(
-    expected = "invalid SoraFS node runtime preflight: standalone fused privacy runtime requires the raw writer and authenticated-head reader as one complete pair"
-)]
 async fn new_with_handle_preflights_fused_privacy_before_startup() {
     tokio::task::yield_now().await;
     let cfg = crate::test_utils::mk_minimal_root_cfg();
@@ -1375,7 +1372,7 @@ async fn new_with_handle_preflights_fused_privacy_before_startup() {
     let (publisher, _) = prebuilt_fenced_transparency_runtime();
     let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
         .with_sorafs_fenced_transparency_publisher(publisher);
-    let _ = Torii::new_with_handle(
+    let error = Torii::new_with_handle(
         ChainId::from("fused-privacy-preflight-test"),
         signed_query_test_network_id(),
         kiso,
@@ -1389,6 +1386,21 @@ async fn new_with_handle_preflights_fused_privacy_before_startup() {
         OnlinePeersProvider::new(peers_rx),
         None,
         runtime_deps,
+    )
+    .err()
+    .expect("an incomplete fused-privacy pair must fail construction");
+    assert!(matches!(
+        error,
+        ToriiBuildError::InvalidRuntimeDependency {
+            component: "sorafs.storage",
+            ..
+        }
+    ));
+    assert!(
+        error
+            .to_string()
+            .contains("standalone fused privacy runtime requires the raw writer and authenticated-head reader as one complete pair"),
+        "unexpected construction error: {error}"
     );
 }
 fn proof_json_headers() -> HeaderMap {
@@ -2071,6 +2083,8 @@ fn next_block_height(app: &SharedAppState) -> u64 {
     current_block_height(app).saturating_add(1).max(1)
 }
 #[cfg(feature = "app_api")]
+const TX_HISTORY_TEST_HMAC_SECRET: &str = "0123456789abcdef0123456789abcdef";
+#[cfg(feature = "app_api")]
 fn sample_tx_history_jwt_claims(subject: &str) -> Value {
     let mut claims = Map::new();
     claims.insert("sub".to_string(), Value::from(subject));
@@ -2087,13 +2101,7 @@ fn sample_tx_history_jwt_claims(subject: &str) -> Value {
     Value::Object(claims)
 }
 #[cfg(feature = "app_api")]
-fn sign_tx_history_jwt_claims(secret: &str, claims: Value) -> String {
-    let mut header = Map::new();
-    header.insert("typ".to_string(), Value::from("JWT"));
-    header.insert(
-        "alg".to_string(),
-        Value::from(tx_history_jwt_algorithm_name(JwtAlgorithm::HS256)),
-    );
+fn sign_tx_history_jwt_header_and_claims(secret: &str, header: Map, claims: Value) -> String {
     let encoded_header = JWT_BASE64.encode(
         norito::json::to_vec(&Value::Object(header)).expect("sample JWT header should encode"),
     );
@@ -2107,6 +2115,16 @@ fn sign_tx_history_jwt_claims(secret: &str, claims: Value) -> String {
     )
     .expect("sample tx-history jwt should sign");
     format!("{message}.{signature}")
+}
+#[cfg(feature = "app_api")]
+fn sign_tx_history_jwt_claims(secret: &str, claims: Value) -> String {
+    let mut header = Map::new();
+    header.insert("typ".to_string(), Value::from("JWT"));
+    header.insert(
+        "alg".to_string(),
+        Value::from(tx_history_jwt_algorithm_name(JwtAlgorithm::HS256)),
+    );
+    sign_tx_history_jwt_header_and_claims(secret, header, claims)
 }
 #[cfg(feature = "app_api")]
 fn sample_tx_history_jwt(secret: &str) -> String {
@@ -2186,6 +2204,77 @@ fn tx_history_policy_loader_rejects_malformed_asymmetric_keys_without_unwinding(
 }
 #[cfg(feature = "app_api")]
 #[test]
+fn tx_history_policy_loader_rejects_out_of_range_hmac_secrets() {
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+    ])
+    .expect("dataspace catalog");
+    for (algorithm, minimum) in [("HS256", 32), ("HS384", 48), ("HS512", 64)] {
+        for accepted_length in [minimum, 4 * 1024] {
+            let config = actual::ToriiTxHistory {
+                mandatory_aliases_path: None,
+                mandatory_aliases_max_file_bytes:
+                    iroha_config::parameters::defaults::torii::tx_history::
+                        MANDATORY_ALIASES_MAX_FILE_BYTES_V1,
+                allowed_asset_definition_id: None,
+                jwt: Some(actual::ToriiTxHistoryJwt {
+                    algorithm: algorithm.to_owned(),
+                    secret: Some("s".repeat(accepted_length)),
+                    public_key_pem: None,
+                    issuer: None,
+                    audience: None,
+                }),
+            };
+            load_tx_history_access_policy(Some(&config), &catalog)
+                .expect("boundary-valid HMAC secret must load");
+        }
+        for rejected_length in [minimum - 1, 4 * 1024 + 1] {
+            let config = actual::ToriiTxHistory {
+                mandatory_aliases_path: None,
+                mandatory_aliases_max_file_bytes:
+                    iroha_config::parameters::defaults::torii::tx_history::
+                        MANDATORY_ALIASES_MAX_FILE_BYTES_V1,
+                allowed_asset_definition_id: None,
+                jwt: Some(actual::ToriiTxHistoryJwt {
+                    algorithm: algorithm.to_owned(),
+                    secret: Some("s".repeat(rejected_length)),
+                    public_key_pem: None,
+                    issuer: None,
+                    audience: None,
+                }),
+            };
+            assert!(matches!(
+                load_tx_history_access_policy(Some(&config), &catalog),
+                Err(TxHistoryStartupError::InvalidJwtSecretLength {
+                    minimum: rejected_minimum,
+                    maximum: 4096,
+                    actual,
+                    ..
+                }) if rejected_minimum == minimum && actual == rejected_length
+            ));
+        }
+        let config = actual::ToriiTxHistory {
+            mandatory_aliases_path: None,
+            mandatory_aliases_max_file_bytes:
+                iroha_config::parameters::defaults::torii::tx_history::
+                    MANDATORY_ALIASES_MAX_FILE_BYTES_V1,
+            allowed_asset_definition_id: None,
+            jwt: Some(actual::ToriiTxHistoryJwt {
+                algorithm: algorithm.to_owned(),
+                secret: Some(" ".repeat(minimum)),
+                public_key_pem: None,
+                issuer: None,
+                audience: None,
+            }),
+        };
+        assert!(matches!(
+            load_tx_history_access_policy(Some(&config), &catalog),
+            Err(TxHistoryStartupError::InvalidJwtSecretLength { .. })
+        ));
+    }
+}
+#[cfg(feature = "app_api")]
+#[test]
 fn tx_history_policy_loader_propagates_missing_alias_policy_as_startup_error() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let path = directory.path().join("missing-alias-policy.json");
@@ -2223,11 +2312,11 @@ async fn invalid_tx_history_policy_fails_closed_when_test_router_bypasses_startu
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .tx_history_access_policy = Arc::new(TxHistoryAccessPolicy::with_startup_error(
-            TxHistoryStartupError::InvalidJwtPublicKey {
-                algorithm: "RS256".to_owned(),
-                reason: "invalid test key".to_owned(),
-            },
-        ));
+        TxHistoryStartupError::InvalidJwtPublicKey {
+            algorithm: "RS256".to_owned(),
+            reason: "invalid test key".to_owned(),
+        },
+    ));
     let response = tx_history_viewer_from_headers(&app, &HeaderMap::new())
         .expect_err("invalid startup policy must not degrade to unconfigured authentication");
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -2242,7 +2331,7 @@ async fn invalid_tx_history_policy_fails_closed_when_test_router_bypasses_startu
 #[cfg(feature = "app_api")]
 #[test]
 fn tx_history_jwt_claims_accept_valid_hmac_token() {
-    let secret = "shared-secret";
+    let secret = TX_HISTORY_TEST_HMAC_SECRET;
     let token = sample_tx_history_jwt(secret);
     let jwt = TxHistoryJwtConfig {
         algorithm: JwtAlgorithm::HS256,
@@ -2258,7 +2347,7 @@ fn tx_history_jwt_claims_accept_valid_hmac_token() {
 #[cfg(feature = "app_api")]
 #[test]
 fn tx_history_jwt_claims_accept_case_insensitive_bearer_scheme() {
-    let secret = "shared-secret";
+    let secret = TX_HISTORY_TEST_HMAC_SECRET;
     let token = sample_tx_history_jwt(secret);
     let jwt = TxHistoryJwtConfig {
         algorithm: JwtAlgorithm::HS256,
@@ -2266,17 +2355,113 @@ fn tx_history_jwt_claims_accept_case_insensitive_bearer_scheme() {
         issuer: Some("pk-cbdc-dev".to_string()),
         audience: Some("pk-cbdc".to_string()),
     };
-    let claims = decode_tx_history_jwt_claims(&format!("BEARER   {token}"), &jwt)
-        .expect("Bearer scheme is case-insensitive and allows HTTP whitespace");
+    let claims = decode_tx_history_jwt_claims(&format!("BEARER {token}"), &jwt)
+        .expect("Bearer scheme is case-insensitive");
     assert_eq!(claims.sub.as_deref(), Some("operator1@banka"));
 }
 #[cfg(feature = "app_api")]
 #[test]
-fn tx_history_jwt_claims_reject_invalid_hmac_signature() {
-    let token = sample_tx_history_jwt("correct-secret");
+fn tx_history_jwt_claims_reject_noncanonical_authorization_whitespace() {
+    let token = sample_tx_history_jwt(TX_HISTORY_TEST_HMAC_SECRET);
     let jwt = TxHistoryJwtConfig {
         algorithm: JwtAlgorithm::HS256,
-        key: TxHistoryJwtKey::Hmac(b"wrong-secret".to_vec()),
+        key: TxHistoryJwtKey::Hmac(TX_HISTORY_TEST_HMAC_SECRET.as_bytes().to_vec()),
+        issuer: Some("pk-cbdc-dev".to_string()),
+        audience: Some("pk-cbdc".to_string()),
+    };
+    for header in [
+        format!(" Bearer {token}"),
+        format!("Bearer  {token}"),
+        format!("Bearer\t{token}"),
+        format!("Bearer {token} "),
+    ] {
+        decode_tx_history_jwt_claims(&header, &jwt)
+            .expect_err("noncanonical Authorization whitespace must fail closed");
+    }
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn tx_history_jwt_claim_constraints_are_compared_byte_exactly() {
+    let jwt = TxHistoryJwtConfig {
+        algorithm: JwtAlgorithm::HS256,
+        key: TxHistoryJwtKey::Hmac(TX_HISTORY_TEST_HMAC_SECRET.as_bytes().to_vec()),
+        issuer: Some("pk-cbdc-dev".to_string()),
+        audience: Some("pk-cbdc".to_string()),
+    };
+
+    let mut claims = sample_tx_history_jwt_claims("operator1@banka");
+    claims
+        .as_object_mut()
+        .expect("sample claims object")
+        .insert("iss".to_owned(), Value::from("pk-cbdc-dev "));
+    let token = sign_tx_history_jwt_claims(TX_HISTORY_TEST_HMAC_SECRET, claims);
+    assert_eq!(
+        decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
+            .expect_err("issuer whitespace alias must be rejected"),
+        "invalid JWT issuer"
+    );
+
+    let mut claims = sample_tx_history_jwt_claims("operator1@banka");
+    claims
+        .as_object_mut()
+        .expect("sample claims object")
+        .insert(
+            "aud".to_owned(),
+            Value::Array(vec![Value::from(" pk-cbdc"), Value::from("pk-cbdc ")]),
+        );
+    let token = sign_tx_history_jwt_claims(TX_HISTORY_TEST_HMAC_SECRET, claims);
+    assert_eq!(
+        decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
+            .expect_err("audience whitespace aliases must be rejected"),
+        "invalid JWT audience"
+    );
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn tx_history_jwt_header_is_schema_closed_and_exact() {
+    let jwt = TxHistoryJwtConfig {
+        algorithm: JwtAlgorithm::HS256,
+        key: TxHistoryJwtKey::Hmac(TX_HISTORY_TEST_HMAC_SECRET.as_bytes().to_vec()),
+        issuer: Some("pk-cbdc-dev".to_string()),
+        audience: Some("pk-cbdc".to_string()),
+    };
+    let mut minimal_header = Map::new();
+    minimal_header.insert("alg".to_owned(), Value::from("HS256"));
+    let token = sign_tx_history_jwt_header_and_claims(
+        TX_HISTORY_TEST_HMAC_SECRET,
+        minimal_header,
+        sample_tx_history_jwt_claims("operator1@banka"),
+    );
+    decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
+        .expect("optional typ header may be absent");
+
+    for (field, value) in [
+        ("typ", Value::from("jwt")),
+        (
+            "crit",
+            Value::Array(vec![Value::from("unsupported-extension")]),
+        ),
+        ("kid", Value::from("unconfigured-key-selector")),
+    ] {
+        let mut header = Map::new();
+        header.insert("alg".to_owned(), Value::from("HS256"));
+        header.insert(field.to_owned(), value);
+        let token = sign_tx_history_jwt_header_and_claims(
+            TX_HISTORY_TEST_HMAC_SECRET,
+            header,
+            sample_tx_history_jwt_claims("operator1@banka"),
+        );
+        decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
+            .expect_err("unsupported or noncanonical JWT header must fail closed");
+    }
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn tx_history_jwt_claims_reject_invalid_hmac_signature() {
+    let token = sample_tx_history_jwt(TX_HISTORY_TEST_HMAC_SECRET);
+    let jwt = TxHistoryJwtConfig {
+        algorithm: JwtAlgorithm::HS256,
+        key: TxHistoryJwtKey::Hmac(b"fedcba9876543210fedcba9876543210".to_vec()),
         issuer: Some("pk-cbdc-dev".to_string()),
         audience: Some("pk-cbdc".to_string()),
     };
@@ -2309,23 +2494,35 @@ fn tx_history_alias_resolution_reject_maps_invalid_alias_literals_to_bad_request
 }
 #[cfg(feature = "app_api")]
 #[test]
-fn normalize_tx_history_alias_preserves_on_chain_literals() {
-    assert_eq!(
-        normalize_tx_history_alias("operator1@banka"),
-        "operator1@banka"
-    );
-    assert_eq!(
-        normalize_tx_history_alias("operator2@bankb"),
-        "operator2@bankb"
-    );
-    assert_eq!(
-        normalize_tx_history_alias("banking@universal"),
-        "banking@universal"
-    );
-    assert_eq!(
-        normalize_tx_history_alias("operator1@banka.dataspace"),
-        "operator1@banka.dataspace"
-    );
+fn tx_history_dataspace_claim_requires_an_exact_catalog_alias() {
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: DataSpaceId::new(10),
+            alias: "banka".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+    assert!(is_exact_tx_history_dataspace_alias(&catalog, "banka"));
+    for noncanonical in ["", " banka", "banka ", "BANKA", "unknown"] {
+        assert!(!is_exact_tx_history_dataspace_alias(&catalog, noncanonical));
+    }
+    let noncanonical_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: DataSpaceId::new(11),
+            alias: "BANKA".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("catalog constructor currently permits a noncanonical alias");
+    assert!(!is_exact_tx_history_dataspace_alias(
+        &noncanonical_catalog,
+        "BANKA"
+    ));
 }
 #[cfg(feature = "app_api")]
 #[test]
@@ -2376,10 +2573,28 @@ fn canonical_tx_history_subject_alias_rejects_bare_subjects() {
     );
 }
 #[cfg(feature = "app_api")]
+#[test]
+fn canonical_tx_history_subject_alias_rejects_noncanonical_spellings() {
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: DataSpaceId::new(10),
+            alias: "banka".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+    for noncanonical in [" operator1@banka", "operator1@banka ", "OPERATOR1@BANKA"] {
+        canonical_tx_history_subject_alias(&catalog, noncanonical)
+            .expect_err("noncanonical subject aliases must not be normalized");
+    }
+}
+#[cfg(feature = "app_api")]
 #[tokio::test]
 async fn tx_history_viewer_from_headers_rejects_bare_subject_aliases() {
     let mut app = mk_app_state_for_tests();
-    let secret = "shared-secret";
+    let secret = TX_HISTORY_TEST_HMAC_SECRET;
     let token = sign_tx_history_jwt_claims(secret, sample_tx_history_jwt_claims("operator1"));
     let app_state = Arc::get_mut(&mut app).expect("unique app state");
     app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
@@ -2406,7 +2621,7 @@ async fn tx_history_viewer_from_headers_rejects_bare_subject_aliases() {
 #[tokio::test]
 async fn tx_history_viewer_from_headers_rejects_duplicate_authorization_headers() {
     let mut app = mk_app_state_for_tests();
-    let secret = "shared-secret";
+    let secret = TX_HISTORY_TEST_HMAC_SECRET;
     let token = sample_tx_history_jwt(secret);
     Arc::get_mut(&mut app)
         .expect("unique app state")

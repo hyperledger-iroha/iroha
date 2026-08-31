@@ -185,6 +185,13 @@ impl BlockMessageWire {
             exact_output_hash: OnceLock::new(),
         })
     }
+    /// Return the allocated capacity of the retained canonical frame.
+    ///
+    /// Cache accounting uses capacity rather than length so spare `Vec`
+    /// allocation cannot escape the configured retained-heap bound.
+    pub(crate) fn encoded_capacity(&self) -> Option<usize> {
+        self.encoded.as_ref().map(|encoded| encoded.capacity())
+    }
     /// Borrow the underlying consensus message.
     pub fn as_message(&self) -> &BlockMessage {
         self.message.as_ref()
@@ -323,6 +330,16 @@ impl<'a> ncore::DecodeFromSlice<'a> for BlockMessageWire {
     }
 }
 impl crate::NetworkMessage {
+    /// Return a previously computed exact-output identity without scanning the frame.
+    ///
+    /// Prepared historical-body output uses this fail-closed accessor on the
+    /// serialized actor: only its dedicated worker may pay the full-frame hash.
+    pub(crate) fn cached_exact_output_hash(&self) -> Option<HashOf<Self>> {
+        match self {
+            Self::SumeragiBlock(envelope) => envelope.exact_output_hash.get().copied(),
+            _ => None,
+        }
+    }
     /// Return the immutable exact-output identity, caching large Sumeragi frames.
     ///
     /// `BlockMessageWire::make_mut` clears this cache together with the encoded
@@ -838,6 +855,7 @@ mod tests {
             unreachable!()
         };
         assert!(envelope.exact_output_hash.get().is_none());
+        assert_eq!(network.cached_exact_output_hash(), None);
         let debug_before_hash = format!("{network:?}");
 
         let first = network.exact_output_hash();
@@ -847,6 +865,7 @@ mod tests {
             unreachable!()
         };
         assert_eq!(envelope.exact_output_hash.get(), Some(&first));
+        assert_eq!(network.cached_exact_output_hash(), Some(first));
 
         let mut mutated = network.clone();
         let crate::NetworkMessage::SumeragiBlock(envelope) = &mut mutated else {

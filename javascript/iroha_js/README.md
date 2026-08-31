@@ -3265,6 +3265,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   authority,
   feePayment,
   proposal: {
+    proposalOperator: authority,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: Buffer.alloc(32, 0xaa),
     abiHash: `blake2b32:${"bb".repeat(32)}`,
@@ -4421,6 +4422,7 @@ if (!tallyResult.found) {
 // Governance write helpers also accept AbortSignal options so transactions can be cancelled.
 const writeController = new AbortController();
 const deployDraft = await torii.governanceProposeDeployContract({
+  proposalOperator: governanceCanonicalAuth.accountId,
   contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   codeHash: "11".repeat(32),
   abiHash: Buffer.alloc(32, 0xaa),

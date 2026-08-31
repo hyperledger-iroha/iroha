@@ -631,7 +631,7 @@ public final class KagemushaRecursiveSpendProver {
     requireArtifactBridge();
     final byte[][] fields = nativeProjectOperationStatusV4(
         Objects.requireNonNull(status, "status").noritoEncoded());
-    requireFieldCount(fields, 10, "operation status projection");
+    requireFieldCount(fields, 9, "operation status projection");
     final String stateText = canonicalText(fields[0], "operationState");
     final OperationState state;
     if ("pending".equals(stateText)) state = OperationState.PENDING;
@@ -641,29 +641,27 @@ public final class KagemushaRecursiveSpendProver {
     final OperationKind kind = operationKind(canonicalText(fields[1], "operationKind"));
     final Long heightOrSubmittedAt = fields[4].length == 0
         ? null : longInteger(fields[4], "operationHeightOrSubmittedAt");
-    final Long serverTime = fields[5].length == 0
-        ? null : longInteger(fields[5], "serverTimeMilliseconds");
     final FinalizedTopUp finalizedTopUp;
-    if (fields[6].length != 0 || fields[7].length != 0) {
+    if (fields[5].length != 0 || fields[6].length != 0) {
       if (state != OperationState.APPLIED || kind != OperationKind.TOP_UP
-          || fields[6].length == 0 || fields[7].length == 0
-          || heightOrSubmittedAt == null || serverTime == null) {
+          || fields[5].length == 0 || fields[6].length == 0
+          || heightOrSubmittedAt == null) {
         throw new IllegalStateException("native Kagemusha finalized top-up fields are invalid");
       }
       finalizedTopUp = new FinalizedTopUp(
-          new TopUpAnchorV4(fields[6]), new TopUpFinalityProof(fields[7]),
-          heightOrSubmittedAt, serverTime);
+          new TopUpAnchorV4(fields[5]), new TopUpFinalityProof(fields[6]),
+          heightOrSubmittedAt);
     } else {
       finalizedTopUp = null;
     }
     final OperationRejection rejection;
-    if (fields[8].length != 0 || fields[9].length != 0) {
-      if (state != OperationState.REJECTED || fields[8].length == 0 || fields[9].length == 0) {
+    if (fields[7].length != 0 || fields[8].length != 0) {
+      if (state != OperationState.REJECTED || fields[7].length == 0 || fields[8].length == 0) {
         throw new IllegalStateException("native Kagemusha rejection fields are invalid");
       }
       rejection = new OperationRejection(
-          canonicalText(fields[8], "rejectionCode"),
-          canonicalText(fields[9], "rejectionMessage"));
+          canonicalText(fields[7], "rejectionCode"),
+          canonicalText(fields[8], "rejectionMessage"));
     } else {
       rejection = null;
     }
@@ -672,7 +670,7 @@ public final class KagemushaRecursiveSpendProver {
         requireTransactionHash(fields[3], "transactionHash"),
         state == OperationState.PENDING ? heightOrSubmittedAt : null,
         state == OperationState.APPLIED ? heightOrSubmittedAt : null,
-        serverTime, finalizedTopUp, rejection);
+        finalizedTopUp, rejection);
   }
 
   public static RequestAuthorizationPreparation prepareRequestAuthorization(
@@ -4232,26 +4230,22 @@ public final class KagemushaRecursiveSpendProver {
     private final TopUpAnchorV4 anchor;
     private final TopUpFinalityProof finalityProof;
     private final long finalizedBlockHeight;
-    private final long serverTimeMilliseconds;
 
     private FinalizedTopUp(
         final TopUpAnchorV4 anchor,
         final TopUpFinalityProof finalityProof,
-        final long finalizedBlockHeight,
-        final long serverTimeMilliseconds) {
+        final long finalizedBlockHeight) {
       this.anchor = anchor;
       this.finalityProof = finalityProof;
-      if (finalizedBlockHeight <= 0 || serverTimeMilliseconds <= 0) {
-        throw new IllegalArgumentException("finalized top-up times must be positive");
+      if (finalizedBlockHeight <= 0) {
+        throw new IllegalArgumentException("finalized top-up height must be positive");
       }
       this.finalizedBlockHeight = finalizedBlockHeight;
-      this.serverTimeMilliseconds = serverTimeMilliseconds;
     }
 
     public TopUpAnchorV4 anchor() { return anchor; }
     public TopUpFinalityProof finalityProof() { return finalityProof; }
     public long finalizedBlockHeight() { return finalizedBlockHeight; }
-    public long serverTimeMilliseconds() { return serverTimeMilliseconds; }
   }
 
   public static final class OperationStatusProjection {
@@ -4261,7 +4255,6 @@ public final class KagemushaRecursiveSpendProver {
     private final byte[] transactionHash;
     private final Long submittedAtMilliseconds;
     private final Long finalizedBlockHeight;
-    private final Long serverTimeMilliseconds;
     private final FinalizedTopUp finalizedTopUp;
     private final OperationRejection rejection;
 
@@ -4272,7 +4265,6 @@ public final class KagemushaRecursiveSpendProver {
         final byte[] transactionHash,
         final Long submittedAtMilliseconds,
         final Long finalizedBlockHeight,
-        final Long serverTimeMilliseconds,
         final FinalizedTopUp finalizedTopUp,
         final OperationRejection rejection) {
       this.operationId = requireDigest(operationId, "operationId");
@@ -4282,18 +4274,16 @@ public final class KagemushaRecursiveSpendProver {
       }
       final boolean valid = switch (state) {
         case PENDING -> submittedAtMilliseconds != null && submittedAtMilliseconds > 0
-            && finalizedBlockHeight == null && serverTimeMilliseconds == null
+            && finalizedBlockHeight == null
             && finalizedTopUp == null && rejection == null;
         case APPLIED -> submittedAtMilliseconds == null
             && finalizedBlockHeight != null && finalizedBlockHeight > 0
-            && serverTimeMilliseconds != null && serverTimeMilliseconds > 0
             && rejection == null
             && ((kind == OperationKind.TOP_UP && finalizedTopUp != null
-                    && finalizedTopUp.finalizedBlockHeight == finalizedBlockHeight
-                    && finalizedTopUp.serverTimeMilliseconds == serverTimeMilliseconds)
+                    && finalizedTopUp.finalizedBlockHeight == finalizedBlockHeight)
                 || (kind == OperationKind.REDEEM && finalizedTopUp == null));
         case REJECTED -> submittedAtMilliseconds == null && finalizedBlockHeight == null
-            && serverTimeMilliseconds == null && finalizedTopUp == null && rejection != null;
+            && finalizedTopUp == null && rejection != null;
       };
       if (!valid) {
         throw new IllegalArgumentException("operation status fields are inconsistent");
@@ -4302,7 +4292,6 @@ public final class KagemushaRecursiveSpendProver {
       this.kind = kind;
       this.submittedAtMilliseconds = submittedAtMilliseconds;
       this.finalizedBlockHeight = finalizedBlockHeight;
-      this.serverTimeMilliseconds = serverTimeMilliseconds;
       this.finalizedTopUp = finalizedTopUp;
       this.rejection = rejection;
     }
@@ -4313,7 +4302,6 @@ public final class KagemushaRecursiveSpendProver {
     public byte[] transactionHash() { return Arrays.copyOf(transactionHash, transactionHash.length); }
     public Long submittedAtMilliseconds() { return submittedAtMilliseconds; }
     public Long finalizedBlockHeight() { return finalizedBlockHeight; }
-    public Long serverTimeMilliseconds() { return serverTimeMilliseconds; }
     public FinalizedTopUp finalizedTopUp() { return finalizedTopUp; }
     public OperationRejection rejection() { return rejection; }
   }

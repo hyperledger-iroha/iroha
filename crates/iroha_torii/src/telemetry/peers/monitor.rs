@@ -5,6 +5,7 @@ use http::StatusCode;
 use iroha_config::client_api::ConfigGetDTO;
 use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::NetworkId;
+use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::prelude::*;
 use iroha_telemetry::metrics::Status;
 use norito::json::{self, Value};
@@ -17,11 +18,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::JoinSet,
-    time::MissedTickBehavior,
-};
+use tokio::{sync::mpsc, task::JoinSet, time::MissedTickBehavior};
 use tracing::{Instrument, info_span};
 use url::Url;
 const GEO_QUERY_FIELDS: &str = "status,message,lat,lon,country,city";
@@ -47,6 +44,9 @@ const CONFIG_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const PEERS_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 /// Fixed-schema `/status` response accepted from one monitored node.
 const STATUS_RESPONSE_MAX_BYTES: usize = 64 * 1024;
+fn peer_monitor_http_client() -> Result<Client, reqwest::Error> {
+    Client::builder().redirect(Policy::none()).build()
+}
 /// Read one remote response without allowing a peer, proxy, or decompressor to
 /// grow a monitor task's resident body buffer without bound.
 async fn read_response_body_bounded(
@@ -111,11 +111,22 @@ pub enum Update {
     Geo(GeoLocation),
     Peers(BTreeSet<PublicKey>),
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MonitorWorkerExit {
+    Geo,
+    Polling,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PeerPollingWorkerExit {
+    PeerList,
+    Status,
+}
 pub fn run(
     torii_url: ToriiUrl,
     geo_config: GeoLookupConfig,
     network_id: NetworkId,
     operator_signer: Option<KeyPair>,
+    shutdown_signal: ShutdownSignal,
 ) -> (mpsc::Receiver<Update>, impl Future<Output = ()> + Sized) {
     let (tx, rx) = mpsc::channel(128);
     let url = Arc::new(torii_url);
@@ -127,55 +138,60 @@ pub fn run(
             if geo_config.enabled {
                 let geo_span_url = Arc::clone(&url);
                 let geo_config = geo_config.clone();
+                let geo_shutdown = shutdown_signal.clone();
                 set.spawn({
                     let tx = tx.clone();
                     let url = Arc::clone(&geo_span_url);
                     async move {
-                        let geo = match collect_geo(&url, geo_config).await {
+                        let geo = match collect_geo(&url, geo_config, &geo_shutdown).await {
                             Ok(geo) => geo,
+                            Err(GeoLookupError::StoppedByShutdown) => {
+                                return MonitorWorkerExit::Geo;
+                            }
                             Err(GeoLookupError::Disabled) => {
                                 iroha_logger::debug!("geo lookup disabled for peer telemetry");
-                                return;
+                                return MonitorWorkerExit::Geo;
                             }
                             Err(GeoLookupError::NonPublicHost { host }) => {
                                 iroha_logger::debug!(
                                     %host,
                                     "skipping geo lookup for non-public torii host"
                                 );
-                                return;
+                                return MonitorWorkerExit::Geo;
                             }
                             Err(GeoLookupError::MissingHost) => {
                                 iroha_logger::warn!(
                                     "Torii URL does not have host; skipping geo lookup"
                                 );
-                                return;
+                                return MonitorWorkerExit::Geo;
                             }
                             Err(GeoLookupError::MissingEndpoint) => {
                                 iroha_logger::warn!(
                                     "peer geo lookup enabled without torii.peer_geo.endpoint; skipping geo lookup"
                                 );
-                                return;
+                                return MonitorWorkerExit::Geo;
                             }
                             Err(GeoLookupError::InsecureEndpoint { endpoint }) => {
                                 iroha_logger::warn!(
                                     %endpoint,
                                     "peer geo lookup endpoint must use HTTPS; skipping geo lookup"
                                 );
-                                return;
+                                return MonitorWorkerExit::Geo;
                             }
                             Err(GeoLookupError::InvalidEndpoint { endpoint }) => {
                                 iroha_logger::warn!(
                                     %endpoint,
                                     "peer geo lookup endpoint is not a base URL; skipping geo lookup"
                                 );
-                                return;
+                                return MonitorWorkerExit::Geo;
                             }
                             Err(err) => {
                                 iroha_logger::error!(?err, "failed to collect geo data");
-                                return;
+                                return MonitorWorkerExit::Geo;
                             }
                         };
-                        let _: Result<_, _> = tx.send(Update::Geo(geo)).await;
+                        let _ = send_update(&tx, Update::Geo(geo), &geo_shutdown).await;
+                        MonitorWorkerExit::Geo
                     }
                     .instrument(info_span!("peer_geo", torii_url = %geo_span_url.as_ref()))
                 });
@@ -183,52 +199,153 @@ pub fn run(
                 iroha_logger::debug!("peer geo lookups disabled by configuration");
             }
             let monitor_span_url = Arc::clone(&url);
+            let monitor_shutdown = shutdown_signal.clone();
             set.spawn(
                 {
                     let url = Arc::clone(&monitor_span_url);
                     async move {
                         loop {
-                            let cfg =
-                                get_config_with_retry(&url, &network_id, operator_signer.as_ref())
-                                    .await;
+                            let Some(cfg) = get_config_with_retry(
+                                &url,
+                                &network_id,
+                                operator_signer.as_ref(),
+                                &monitor_shutdown,
+                            )
+                            .await
+                            else {
+                                return MonitorWorkerExit::Polling;
+                            };
                             iroha_logger::debug!(?cfg, "peer connected");
-                            let _ = tx.send(Update::Connected(Box::new(cfg))).await;
-                            let (status_fin_tx, status_fin_rx) = oneshot::channel();
+                            if !send_update(
+                                &tx,
+                                Update::Connected(Box::new(cfg)),
+                                &monitor_shutdown,
+                            )
+                            .await
+                            {
+                                return MonitorWorkerExit::Polling;
+                            }
                             let mut workers = JoinSet::new();
                             workers.spawn({
                                 let tx = tx.clone();
                                 let url = Arc::clone(&url);
                                 let network_id = network_id;
                                 let operator_signer = operator_signer.clone();
+                                let shutdown = monitor_shutdown.clone();
                                 async move {
                                     get_peers_periodic(
                                         &url,
                                         &network_id,
                                         operator_signer.as_ref(),
                                         tx,
+                                        &shutdown,
                                     )
                                     .await;
+                                    PeerPollingWorkerExit::PeerList
                                 }
                             });
                             workers.spawn({
                                 let tx = tx.clone();
                                 let url = Arc::clone(&url);
+                                let shutdown = monitor_shutdown.clone();
                                 async move {
-                                    get_metrics_periodic_timeout(&url, tx).await;
-                                    let _ = status_fin_tx.send(());
+                                    get_metrics_periodic_timeout(&url, tx, &shutdown).await;
+                                    PeerPollingWorkerExit::Status
                                 }
                             });
-                            let _ = status_fin_rx.await;
+                            loop {
+                                tokio::select! {
+                                    biased;
+                                    () = monitor_shutdown.receive() => {
+                                        workers.shutdown().await;
+                                        return MonitorWorkerExit::Polling;
+                                    }
+                                    result = workers.join_next() => match result {
+                                        Some(Ok(PeerPollingWorkerExit::Status)) => break,
+                                        Some(Ok(PeerPollingWorkerExit::PeerList)) if monitor_shutdown.is_sent() => {
+                                            workers.shutdown().await;
+                                            return MonitorWorkerExit::Polling;
+                                        }
+                                        Some(Ok(PeerPollingWorkerExit::PeerList)) => {
+                                            iroha_logger::error!(
+                                                "peer-list telemetry worker exited before shutdown"
+                                            );
+                                            workers.shutdown().await;
+                                            return MonitorWorkerExit::Polling;
+                                        }
+                                        Some(Err(error)) => {
+                                            iroha_logger::error!(
+                                                ?error,
+                                                "peer telemetry polling worker failed"
+                                            );
+                                            workers.shutdown().await;
+                                            return MonitorWorkerExit::Polling;
+                                        }
+                                        None if monitor_shutdown.is_sent() => {
+                                            return MonitorWorkerExit::Polling;
+                                        }
+                                        None => {
+                                            iroha_logger::error!(
+                                                "all peer telemetry polling workers exited"
+                                            );
+                                            return MonitorWorkerExit::Polling;
+                                        }
+                                    },
+                                }
+                            }
+                            workers.shutdown().await;
+                            if monitor_shutdown.is_sent() {
+                                return MonitorWorkerExit::Polling;
+                            }
                             iroha_logger::warn!(
                                 "peer stopped responding to /status; marking as disconnected"
                             );
-                            let _ = tx.send(Update::Disconnected).await;
+                            if !send_update(&tx, Update::Disconnected, &monitor_shutdown).await {
+                                return MonitorWorkerExit::Polling;
+                            }
                         }
                     }
                 }
                 .instrument(info_span!("peer_monitor", torii_url = %monitor_span_url.as_ref())),
             );
-            while set.join_next().await.is_some() {}
+            loop {
+                tokio::select! {
+                    biased;
+                    () = shutdown_signal.receive() => {
+                        set.shutdown().await;
+                        return;
+                    }
+                    result = set.join_next() => match result {
+                        Some(Ok(MonitorWorkerExit::Geo)) => {}
+                        Some(Ok(MonitorWorkerExit::Polling)) if shutdown_signal.is_sent() => {
+                            set.shutdown().await;
+                            return;
+                        }
+                        Some(Ok(MonitorWorkerExit::Polling)) => {
+                            iroha_logger::error!(
+                                "peer telemetry polling loop exited before shutdown"
+                            );
+                            set.shutdown().await;
+                            return;
+                        }
+                        Some(Err(error)) => {
+                            iroha_logger::error!(
+                                ?error,
+                                "peer telemetry monitor worker failed"
+                            );
+                            set.shutdown().await;
+                            return;
+                        }
+                        None if shutdown_signal.is_sent() => return,
+                        None => {
+                            iroha_logger::error!(
+                                "peer telemetry monitor has no live polling worker"
+                            );
+                            return;
+                        }
+                    },
+                }
+            }
         }
     };
     (rx, fut)
@@ -249,6 +366,8 @@ enum RequestError {
 }
 #[derive(thiserror::Error, Debug)]
 enum GeoLookupError {
+    #[error("peer telemetry stopped by shutdown")]
+    StoppedByShutdown,
     #[error("geo lookup disabled")]
     Disabled,
     #[error("Torii URL does not have host")]
@@ -263,6 +382,24 @@ enum GeoLookupError {
     InvalidEndpoint { endpoint: String },
     #[error(transparent)]
     Request(#[from] RequestError),
+}
+async fn wait_or_shutdown(duration: Duration, shutdown_signal: &ShutdownSignal) -> bool {
+    tokio::select! {
+        biased;
+        () = shutdown_signal.receive() => false,
+        () = tokio::time::sleep(duration) => true,
+    }
+}
+async fn send_update(
+    tx: &mpsc::Sender<Update>,
+    update: Update,
+    shutdown_signal: &ShutdownSignal,
+) -> bool {
+    tokio::select! {
+        biased;
+        () = shutdown_signal.receive() => false,
+        result = tx.send(update) => result.is_ok(),
+    }
 }
 fn decode_ip_api_response(bytes: &[u8]) -> Result<IpApiComResponse, RequestError> {
     let value: Value =
@@ -322,11 +459,12 @@ fn decode_ip_api_response(bytes: &[u8]) -> Result<IpApiComResponse, RequestError
 async fn collect_geo(
     torii_url: &ToriiUrl,
     geo_config: GeoLookupConfig,
+    shutdown_signal: &ShutdownSignal,
 ) -> Result<GeoLocation, GeoLookupError> {
     if !geo_config.enabled {
         return Err(GeoLookupError::Disabled);
     }
-    let client = Client::new();
+    let client = peer_monitor_http_client().map_err(RequestError::Http)?;
     let url = construct_geo_query(torii_url, geo_config.endpoint.as_ref())?;
     let do_request = || async {
         let response = client.get(url.clone()).send().await?;
@@ -340,11 +478,18 @@ async fn collect_geo(
         }
     };
     loop {
-        match do_request().await {
+        let result = tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => return Err(GeoLookupError::StoppedByShutdown),
+            result = do_request() => result,
+        };
+        match result {
             Ok(value) => return Ok(value),
             Err(RequestError::Http(err)) => {
                 iroha_logger::warn!(?err, "failed to fetch geo (http error)");
-                tokio::time::sleep(GET_GEO_RETRY_INTERVAL).await;
+                if !wait_or_shutdown(GET_GEO_RETRY_INTERVAL, shutdown_signal).await {
+                    return Err(GeoLookupError::StoppedByShutdown);
+                }
             }
             Err(RequestError::FailResponse { message }) => {
                 iroha_logger::error!(%message, "failed to fetch geo (service error)");
@@ -502,8 +647,23 @@ async fn get_config_with_retry(
     torii_url: &ToriiUrl,
     network_id: &NetworkId,
     operator_signer: Option<&KeyPair>,
-) -> PeerConfigSnapshot {
-    let client = Client::new();
+    shutdown_signal: &ShutdownSignal,
+) -> Option<PeerConfigSnapshot> {
+    let mut interval = GET_CONFIG_INIT_INTERVAL;
+    let client = loop {
+        match peer_monitor_http_client() {
+            Ok(client) => break client,
+            Err(err) => {
+                iroha_logger::warn!(?err, "failed to build peer configuration HTTP client");
+                if !wait_or_shutdown(interval, shutdown_signal).await {
+                    return None;
+                }
+                let next = (interval.as_secs_f64() * GET_CONFIG_INTERVAL_MULTIPLIER)
+                    .min(GET_CONFIG_MAX_INTERVAL.as_secs_f64());
+                interval = Duration::from_secs_f64(next);
+            }
+        }
+    };
     let url = torii_url
         .0
         .join(iroha_torii_shared::uri::CONFIGURATION)
@@ -518,13 +678,19 @@ async fn get_config_with_retry(
         let config = decode_peer_config_response(status, &bytes)?;
         Ok::<_, Report>(config)
     };
-    let mut interval = GET_CONFIG_INIT_INTERVAL;
     loop {
-        match do_request().await {
-            Ok(value) => return value,
+        let result = tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => return None,
+            result = do_request() => result,
+        };
+        match result {
+            Ok(value) => return Some(value),
             Err(err) => {
                 iroha_logger::warn!(?err, "failed to fetch configuration");
-                tokio::time::sleep(interval).await;
+                if !wait_or_shutdown(interval, shutdown_signal).await {
+                    return None;
+                }
                 let next = (interval.as_secs_f64() * GET_CONFIG_INTERVAL_MULTIPLIER)
                     .min(GET_CONFIG_MAX_INTERVAL.as_secs_f64());
                 interval = Duration::from_secs_f64(next);
@@ -563,11 +729,19 @@ async fn get_peers_periodic(
     network_id: &NetworkId,
     operator_signer: Option<&KeyPair>,
     tx: mpsc::Sender<Update>,
-) -> ! {
-    let client = Client::builder()
-        .redirect(Policy::none())
-        .build()
-        .expect("peer monitor HTTP client configuration is valid");
+    shutdown_signal: &ShutdownSignal,
+) {
+    let client = loop {
+        match peer_monitor_http_client() {
+            Ok(client) => break client,
+            Err(err) => {
+                iroha_logger::warn!(?err, "failed to build peer-list HTTP client");
+                if !wait_or_shutdown(GET_PEERS_INTERVAL, shutdown_signal).await {
+                    return;
+                }
+            }
+        }
+    };
     let url = torii_url
         .0
         .join(iroha_torii_shared::uri::PEERS)
@@ -588,7 +762,12 @@ async fn get_peers_periodic(
     let mut interval = tokio::time::interval(GET_PEERS_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
-        match get().await {
+        let result = tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => return,
+            result = get() => result,
+        };
+        match result {
             Ok(peers) => {
                 let mut set = BTreeSet::new();
                 for peer_repr in peers {
@@ -605,13 +784,19 @@ async fn get_peers_periodic(
                         }
                     }
                 }
-                let _ = tx.send(Update::Peers(set)).await;
+                if !send_update(&tx, Update::Peers(set), shutdown_signal).await {
+                    return;
+                }
             }
             Err(err) => {
                 iroha_logger::warn!(?err, "failed to fetch peer list");
             }
         }
-        interval.tick().await;
+        tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => return,
+            _ = interval.tick() => {}
+        }
     }
 }
 fn peer_public_key(peer_repr: &str) -> eyre::Result<PublicKey> {
@@ -620,7 +805,11 @@ fn peer_public_key(peer_repr: &str) -> eyre::Result<PublicKey> {
         .ok_or_else(|| eyre!("peer value missing '@' separator"))?;
     PublicKey::from_str(public_key).map_err(|err| eyre!(err))
 }
-async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Update>) {
+async fn get_metrics_periodic_timeout(
+    torii_url: &ToriiUrl,
+    tx: mpsc::Sender<Update>,
+    shutdown_signal: &ShutdownSignal,
+) {
     #[derive(thiserror::Error, Debug)]
     enum GetError {
         #[error("http error: {0}")]
@@ -636,7 +825,13 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
     }
     let mut avg_commit_time = AverageCommitTime::<AVG_COMMIT_BLOCK_TIME_WINDOW>::new();
     let mut status_rtt_window = LatencyWindow::<STATUS_RTT_WINDOW>::new();
-    let client = Client::new();
+    let client = match peer_monitor_http_client() {
+        Ok(client) => client,
+        Err(err) => {
+            iroha_logger::error!(?err, "failed to build peer-status HTTP client");
+            return;
+        }
+    };
     let url = torii_url.0.join("/status").expect("valid url");
     let get_status = || async {
         let started_at = Instant::now();
@@ -667,7 +862,12 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
     let mut interval = tokio::time::interval(GET_STATUS_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
-        match tokio::time::timeout(GET_STATUS_INTERVAL, get_status()).await {
+        let result = tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => return,
+            result = tokio::time::timeout(GET_STATUS_INTERVAL, get_status()) => result,
+        };
+        match result {
             Ok(Ok((status, request_rtt, observed_at_ms))) => {
                 let block_height = u32::try_from(status.blocks).unwrap_or(u32::MAX);
                 let queue_depth = u32::try_from(status.queue_size).unwrap_or(u32::MAX);
@@ -687,14 +887,20 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
                     status_rtt_p95: status_rtt_window.percentile(95),
                     observed_at_ms,
                 };
-                let _ = tx.send(Update::Metrics(metrics)).await;
+                if !send_update(&tx, Update::Metrics(metrics), shutdown_signal).await {
+                    return;
+                }
             }
             Ok(Err(GetError::TelemetryUnavailable(_))) => {
                 if telemetry_unsupported_checked.elapsed() >= TELEMETRY_UNSUPPORTED_CHECK_INTERVAL {
                     telemetry_unsupported_checked = Instant::now();
-                    let _ = tx.send(Update::TelemetryUnsupported).await;
+                    if !send_update(&tx, Update::TelemetryUnsupported, shutdown_signal).await {
+                        return;
+                    }
                 }
-                tokio::time::sleep(TELEMETRY_UNSUPPORTED_CHECK_INTERVAL).await;
+                if !wait_or_shutdown(TELEMETRY_UNSUPPORTED_CHECK_INTERVAL, shutdown_signal).await {
+                    return;
+                }
             }
             Ok(Err(GetError::UnexpectedStatus(status))) => {
                 iroha_logger::warn!(status = status.as_u16(), "unexpected /status response");
@@ -716,7 +922,11 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
                 return;
             }
         }
-        interval.tick().await;
+        tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => return,
+            _ = interval.tick() => {}
+        }
     }
 }
 fn unix_epoch_ms() -> Option<u64> {
@@ -845,6 +1055,51 @@ mod tests {
             .expect("receive raw response headers")
     }
     #[tokio::test]
+    async fn peer_monitor_http_client_does_not_follow_redirects() {
+        let redirect_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind redirect listener");
+        let redirect_addr = redirect_listener
+            .local_addr()
+            .expect("redirect listener address");
+        let destination_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind redirect destination");
+        let destination_addr = destination_listener
+            .local_addr()
+            .expect("redirect destination address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = redirect_listener.accept().await.expect("accept request");
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 302 Found\r\nLocation: http://{destination_addr}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("write redirect response");
+        });
+
+        let response = peer_monitor_http_client()
+            .expect("build peer monitor client")
+            .get(format!("http://{redirect_addr}/status"))
+            .send()
+            .await
+            .expect("receive redirect response");
+
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), destination_listener.accept())
+                .await
+                .is_err(),
+            "peer monitor must not connect to a redirect destination"
+        );
+        server.await.expect("redirect server task");
+    }
+    #[tokio::test]
     async fn bounded_response_reader_rejects_declared_and_streamed_overflow() {
         let declared = raw_http_response(
             b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\n123456789".to_vec(),
@@ -959,7 +1214,8 @@ mod tests {
     #[tokio::test]
     async fn collect_geo_respects_disabled_config() {
         let url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
-        let err = collect_geo(&url, GeoLookupConfig::disabled())
+        let shutdown = ShutdownSignal::new();
+        let err = collect_geo(&url, GeoLookupConfig::disabled(), &shutdown)
             .await
             .expect_err("disabled config should short-circuit");
         assert!(matches!(err, GeoLookupError::Disabled));
@@ -967,12 +1223,14 @@ mod tests {
     #[tokio::test]
     async fn collect_geo_rejects_non_public_hosts() {
         let url: ToriiUrl = "http://127.0.0.1:8080".parse().expect("valid torii url");
+        let shutdown = ShutdownSignal::new();
         let err = collect_geo(
             &url,
             GeoLookupConfig {
                 enabled: true,
                 endpoint: Some(Url::parse("https://geo.internal/api").expect("valid endpoint")),
             },
+            &shutdown,
         )
         .await
         .expect_err("non-public host should be rejected");
@@ -986,12 +1244,14 @@ mod tests {
     #[tokio::test]
     async fn collect_geo_requires_explicit_endpoint_when_enabled() {
         let url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
+        let shutdown = ShutdownSignal::new();
         let err = collect_geo(
             &url,
             GeoLookupConfig {
                 enabled: true,
                 endpoint: None,
             },
+            &shutdown,
         )
         .await
         .expect_err("missing endpoint should fail closed");
@@ -1000,12 +1260,14 @@ mod tests {
     #[tokio::test]
     async fn collect_geo_rejects_non_https_endpoint() {
         let url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
+        let shutdown = ShutdownSignal::new();
         let err = collect_geo(
             &url,
             GeoLookupConfig {
                 enabled: true,
                 endpoint: Some(Url::parse("http://geo.internal/api").expect("valid endpoint")),
             },
+            &shutdown,
         )
         .await
         .expect_err("non-HTTPS endpoint should fail closed");
@@ -1030,9 +1292,10 @@ mod tests {
         });
         let url: ToriiUrl = format!("http://{addr}").parse().expect("valid torii url");
         let (tx, _rx) = mpsc::channel(1);
+        let shutdown = ShutdownSignal::new();
         let result = tokio::time::timeout(
             GET_STATUS_INTERVAL + Duration::from_secs(2),
-            get_metrics_periodic_timeout(&url, tx),
+            get_metrics_periodic_timeout(&url, tx, &shutdown),
         )
         .await;
         accept_task.abort();
@@ -1055,8 +1318,10 @@ mod tests {
         });
         let url: ToriiUrl = format!("http://{addr}").parse().expect("valid torii url");
         let (tx, mut rx) = mpsc::channel(4);
+        let shutdown = ShutdownSignal::new();
+        let worker_shutdown = shutdown.clone();
         let metrics_task = tokio::spawn(async move {
-            get_metrics_periodic_timeout(&url, tx).await;
+            get_metrics_periodic_timeout(&url, tx, &worker_shutdown).await;
         });
         let timeout =
             TELEMETRY_UNSUPPORTED_CHECK_INTERVAL + GET_STATUS_INTERVAL + GET_STATUS_INTERVAL;
@@ -1065,7 +1330,10 @@ mod tests {
             .expect("telemetry update timeout")
             .expect("telemetry update");
         assert!(matches!(update, Update::TelemetryUnsupported));
-        metrics_task.abort();
+        shutdown.send();
+        metrics_task
+            .await
+            .expect("metrics worker stops on shutdown");
         server.abort();
     }
     #[test]

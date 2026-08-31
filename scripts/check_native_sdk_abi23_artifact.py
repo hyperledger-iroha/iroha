@@ -110,6 +110,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
         "connect_norito_private_settlement_audit_approval_response_verify_v1",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
+        "connect_norito_kagemusha_offline_operation_status_json_validate_v1",
         "iroha_privacy_compiled_profile_catalog_v1",
         "iroha_privacy_validate_compiled_profile_catalog_v1",
         "iroha_privacy_exact12_fixture_bundle_v1",

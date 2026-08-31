@@ -25,14 +25,16 @@
 //!
 //! The worker verifies `ProofAttachment` payloads (single or list, Norito or JSON)
 //! using core backend verifiers and records per-proof metadata. It never mutates WSV.
+#[cfg(test)]
+use crate::zk_attachments::{load_prover_processing_receipt, prover_processing_decision};
 use crate::{
     routing::MaybeTelemetry,
     zk_attachments::{
-        ATTACHMENT_META_FILE_MAX_BYTES, ProverProcessingDecision, ProverProcessingReceipt,
-        ZK_PROVER_PROCESSING_STATE_VERSION, ensure_prover_processing_reference,
-        load_prover_processing_receipt, open_attachment_regular_file,
-        persist_prover_processing_receipt_if_referenced, prover_processing_decision,
-        read_bounded_attachment_regular_file, reconcile_prover_processing_receipt_if_referenced,
+        ProverProcessingDecision, ProverProcessingReceipt, ZK_PROVER_PROCESSING_STATE_VERSION,
+        attachment_pair_exists, ensure_prover_processing_reference, open_attachment_regular_file,
+        persist_prover_processing_receipt_if_referenced, read_bounded_attachment_regular_file,
+        reconcile_prover_processing_receipt_if_referenced, try_load_meta_for_tenant_key,
+        try_load_prover_processing_receipt, try_prover_processing_decision,
         validate_attachment_body_contract, validate_attachment_metadata_contract,
     },
     zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
@@ -380,20 +382,26 @@ fn prover_dir() -> PathBuf {
 fn reports_dir() -> PathBuf {
     prover_dir().join("reports")
 }
-fn ensure_dirs() {
-    // `base_dir()` can be overridden in tests; keep directory creation keyed to the current path.
-    static LAST_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
-    let slot = LAST_DIR.get_or_init(|| Mutex::new(None));
-    let dir = reports_dir();
-    let mut guard = slot.lock();
-    if guard.as_ref() != Some(&dir) {
-        let _ = fs::create_dir_all(&dir);
-        // The first-release store uses independent summary shards. Remove the
-        // obsolete generated aggregate rather than retaining attacker-amplified
-        // bytes that no code reads.
-        let _ = fs::remove_file(prover_dir().join("reports_index.json"));
-        *guard = Some(dir);
-    }
+fn ensure_dirs() -> std::io::Result<()> {
+    // `base_dir()` can be overridden in tests. Verify the current path on every
+    // call so a failed or subsequently replaced directory is never cached.
+    let base = super::zk_attachments::base_dir();
+    super::zk_attachments::ensure_direct_directory(&base)?;
+    let prover = prover_dir();
+    super::zk_attachments::ensure_direct_directory(&prover)?;
+    crate::durable_fs::sync_direct_directory(&base)?;
+    super::zk_attachments::ensure_direct_directory(&reports_dir())?;
+    super::zk_attachments::ensure_direct_directory(&report_index_dir())?;
+    crate::durable_fs::sync_direct_directory(&prover)?;
+    // The first-release store uses independent summary shards. Remove the
+    // obsolete generated aggregate rather than retaining attacker-amplified
+    // bytes that no code reads.
+    remove_file_if_present(&prover.join("reports_index.json"))?;
+    Ok(())
+}
+pub(crate) fn init_persistence() -> std::io::Result<()> {
+    ensure_dirs()?;
+    recover_prover_writer_temps()
 }
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -451,8 +459,7 @@ impl Drop for AttachmentProcessingClaim {
 }
 #[cfg(test)]
 fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io::Result<()> {
-    ensure_dirs();
-    fs::create_dir_all(report_index_dir())?;
+    ensure_dirs()?;
     for summary in summaries {
         let Some(id) = sanitize_report_id(&summary.id) else {
             continue;
@@ -482,85 +489,154 @@ fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io
     }
     Ok(())
 }
-fn read_report_summary_locked(id: &str) -> Option<ProverReportSummary> {
-    let clean = sanitize_report_id(id)?;
-    let path = report_summary_path_from_sanitized(&clean);
-    let metadata = fs::symlink_metadata(&path).ok()?;
-    if !metadata.file_type().is_file() || metadata.len() > REPORT_SUMMARY_FILE_MAX_BYTES {
-        return None;
-    }
-    let mut reader = fs::File::open(path)
-        .ok()?
-        .take(REPORT_SUMMARY_FILE_MAX_BYTES.saturating_add(1));
-    let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).ok()?;
-    if buf.len() as u64 > REPORT_SUMMARY_FILE_MAX_BYTES {
-        return None;
-    }
-    let s = std::str::from_utf8(&buf).ok()?;
-    let mut summary = norito::json::from_json::<ProverReportSummary>(s).ok()?;
-    summary.id = clean;
-    Some(bound_persisted_report_summary(summary))
-}
-fn report_id_from_entry(entry: &fs::DirEntry) -> Option<String> {
-    if !entry.file_type().ok()?.is_file() {
-        return None;
-    }
-    let name = entry.file_name();
-    let raw_id = name.to_str()?.strip_suffix(".json")?;
-    let clean = sanitize_report_id(raw_id)?;
-    (raw_id == clean).then_some(clean)
-}
-fn visit_report_ids(mut visitor: impl FnMut(String) -> bool) {
-    let Ok(entries) = fs::read_dir(reports_dir()) else {
-        return;
+fn try_read_report_summary_locked(id: &str) -> std::io::Result<Option<ProverReportSummary>> {
+    let Some(clean) = sanitize_report_id(id) else {
+        return Ok(None);
     };
-    for entry in entries.flatten() {
-        let Some(id) = report_id_from_entry(&entry) else {
+    let path = report_summary_path_from_sanitized(&clean);
+    let buf = match super::zk_attachments::read_bounded_attachment_regular_file(
+        &path,
+        REPORT_SUMMARY_FILE_MAX_BYTES,
+    ) {
+        Ok(buf) => buf,
+        Err(error) if error.kind() == IoErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let Some(s) = std::str::from_utf8(&buf).ok() else {
+        return Ok(None);
+    };
+    let Some(summary) = norito::json::from_json::<ProverReportSummary>(s).ok() else {
+        return Ok(None);
+    };
+    if summary.id != clean {
+        return Ok(None);
+    }
+    Ok(Some(bound_persisted_report_summary(summary)))
+}
+fn report_id_from_entry(entry: &fs::DirEntry) -> std::io::Result<Option<String>> {
+    let name = entry.file_name();
+    let name = name.to_str().ok_or_else(|| {
+        IoError::new(
+            IoErrorKind::InvalidData,
+            "ZK prover persistence directory contains a non-UTF-8 entry",
+        )
+    })?;
+    if is_prover_persistence_temp_name(name) {
+        if !entry.file_type()?.is_file() {
+            return Err(IoError::new(
+                IoErrorKind::InvalidData,
+                format!(
+                    "ZK prover temporary path is not a direct regular file: {}",
+                    entry.path().display()
+                ),
+            ));
+        }
+        return Ok(None);
+    }
+    let raw_id = name.strip_suffix(".json").ok_or_else(|| {
+        IoError::new(
+            IoErrorKind::InvalidData,
+            format!("ZK prover persistence directory contains an unexpected entry: {name}"),
+        )
+    })?;
+    let clean = sanitize_report_id(raw_id).ok_or_else(|| {
+        IoError::new(
+            IoErrorKind::InvalidData,
+            format!("ZK prover persistence directory has an invalid report id: {name}"),
+        )
+    })?;
+    if raw_id != clean {
+        return Err(IoError::new(
+            IoErrorKind::InvalidData,
+            format!("ZK prover persistence directory has a non-canonical report id: {name}"),
+        ));
+    };
+    if !entry.file_type()?.is_file() {
+        return Err(IoError::new(
+            IoErrorKind::InvalidData,
+            format!(
+                "ZK prover report path is not a direct regular file: {}",
+                entry.path().display()
+            ),
+        ));
+    }
+    Ok(Some(clean))
+}
+fn visit_report_ids(
+    mut visitor: impl FnMut(String) -> std::io::Result<bool>,
+) -> std::io::Result<()> {
+    let max_entries = cfg_reports_max_count()
+        .max(iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT)
+        .saturating_add(1_024);
+    let mut scanned = 0_u64;
+    for entry in fs::read_dir(reports_dir())? {
+        let entry = entry?;
+        scanned = scanned.saturating_add(1);
+        if scanned > max_entries {
+            return Err(IoError::new(
+                IoErrorKind::InvalidData,
+                format!("ZK prover report scan exceeds {max_entries} entries"),
+            ));
+        }
+        let Some(id) = report_id_from_entry(&entry)? else {
             continue;
         };
-        if !visitor(id) {
+        if !visitor(id)? {
             break;
         }
     }
+    Ok(())
 }
-fn load_or_repair_report_summary_locked(id: &str) -> Option<ProverReportSummary> {
-    let clean = sanitize_report_id(id)?;
-    if !report_path_from_sanitized(&clean).is_file() {
-        let _ = fs::remove_file(report_summary_path_from_sanitized(&clean));
-        return None;
+fn load_or_repair_report_summary_locked(id: &str) -> std::io::Result<Option<ProverReportSummary>> {
+    let Some(clean) = sanitize_report_id(id) else {
+        return Ok(None);
+    };
+    let Some(report) = try_load_report(&clean)? else {
+        remove_file_if_present(&report_summary_path_from_sanitized(&clean))?;
+        return Ok(None);
+    };
+    let expected = report_summary_from_report(&report);
+    if try_read_report_summary_locked(&clean)?.as_ref() == Some(&expected) {
+        return Ok(Some(expected));
     }
-    if let Some(summary) = read_report_summary_locked(&clean) {
-        return Some(summary);
-    }
-    let report = load_report(&clean)?;
-    let summary = report_summary_from_report(&report);
-    let _ = persist_report_summary_locked(&summary);
-    Some(summary)
+    persist_report_summary_locked(&expected)?;
+    Ok(Some(expected))
 }
-fn visit_report_summaries_locked(mut visitor: impl FnMut(ProverReportSummary) -> bool) {
+fn visit_report_summaries_locked(
+    mut visitor: impl FnMut(ProverReportSummary) -> std::io::Result<bool>,
+) -> std::io::Result<()> {
     visit_report_ids(|id| {
-        if let Some(summary) = load_or_repair_report_summary_locked(&id) {
+        if let Some(summary) = load_or_repair_report_summary_locked(&id)? {
             visitor(summary)
         } else {
-            true
+            Ok(true)
         }
-    });
+    })
 }
-fn prune_stale_report_summaries_locked() -> usize {
+fn prune_stale_report_summaries_locked() -> std::io::Result<usize> {
     let mut pruned = 0usize;
-    let Ok(entries) = fs::read_dir(report_index_dir()) else {
-        return pruned;
-    };
-    for entry in entries.flatten() {
-        let Some(id) = report_id_from_entry(&entry) else {
+    for entry in fs::read_dir(report_index_dir())? {
+        let entry = entry?;
+        let Some(id) = report_id_from_entry(&entry)? else {
             continue;
         };
-        if !report_path_from_sanitized(&id).is_file() && fs::remove_file(entry.path()).is_ok() {
-            pruned = pruned.saturating_add(1);
+        match fs::symlink_metadata(report_path_from_sanitized(&id)) {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => {
+                return Err(IoError::new(
+                    IoErrorKind::InvalidData,
+                    format!("ZK prover report path is not a direct regular file: {id}"),
+                ));
+            }
+            Err(error) if error.kind() == IoErrorKind::NotFound => {
+                if remove_file_if_present(&entry.path())? {
+                    pruned = pruned.saturating_add(1);
+                }
+            }
+            Err(error) => return Err(error),
         }
     }
-    pruned
+    Ok(pruned)
 }
 #[cfg(test)]
 fn read_report_summaries_locked() -> Vec<ProverReportSummary> {
@@ -572,18 +648,19 @@ fn read_report_summaries_locked() -> Vec<ProverReportSummary> {
             )
             .unwrap_or(usize::MAX)
         {
-            return false;
+            return Ok(false);
         }
         summaries.push(summary);
-        true
-    });
+        Ok(true)
+    })
+    .expect("read prover report summaries");
     summaries.sort_by(|left, right| left.id.cmp(&right.id));
     summaries
 }
 #[cfg(test)]
 fn load_report_summaries() -> Vec<ProverReportSummary> {
     let _guard = report_summary_lock().lock();
-    let _ = prune_stale_report_summaries_locked();
+    prune_stale_report_summaries_locked().expect("prune stale prover report summaries");
     read_report_summaries_locked()
 }
 #[cfg(test)]
@@ -616,17 +693,10 @@ fn processing_retry_delay_ms(retry_count: u32) -> u64 {
         .min(MAX_RETRY_DELAY_MS)
 }
 fn processing_receipt_from_report(report: &ProverReport) -> Option<ProverProcessingReceipt> {
-    let processing = if report.ok {
-        ProverReportProcessing {
-            terminal: true,
-            retry_not_before_ms: None,
-            retry_count: 0,
-            completed_proof_indices: Vec::new(),
-            processing_context_hash: None,
-        }
-    } else {
-        report.processing.clone()?
-    };
+    let processing = report.processing.clone()?;
+    if report.ok == report.error.is_some() {
+        return None;
+    }
     let receipt = ProverProcessingReceipt {
         version: ZK_PROVER_PROCESSING_STATE_VERSION,
         id: report.id.clone(),
@@ -637,54 +707,48 @@ fn processing_receipt_from_report(report: &ProverReport) -> Option<ProverProcess
         completed_proof_indices: processing.completed_proof_indices,
         processing_context_hash: processing.processing_context_hash,
     };
-    receipt.disposition_is_valid().then_some(receipt)
+    (receipt.disposition_is_valid() && (!report.ok || receipt.terminal)).then_some(receipt)
 }
-fn committed_report_processing_decision(id: &str, now_ms: u64) -> Option<ProverProcessingDecision> {
-    let report = load_report(id)?;
-    let committed = processing_receipt_from_report(&report)?;
-    let receipt =
-        reconcile_prover_processing_receipt_if_referenced(&committed).unwrap_or_else(|error| {
-            iroha_logger::warn!(
-                attachment_id = %id,
-                %error,
-                "Failed to reconcile a committed ZK prover report receipt"
-            );
-            ProverProcessingReceipt::reconcile_committed(
-                load_prover_processing_receipt(id),
-                committed,
-            )
-        });
+fn committed_report_processing_decision(
+    id: &str,
+    now_ms: u64,
+) -> std::io::Result<Option<ProverProcessingDecision>> {
+    let Some(report) = try_load_report(id)? else {
+        return Ok(None);
+    };
+    let committed = processing_receipt_from_report(&report).ok_or_else(|| {
+        IoError::new(
+            IoErrorKind::InvalidData,
+            "persisted ZK prover report has an invalid processing disposition",
+        )
+    })?;
+    let receipt = reconcile_prover_processing_receipt_if_referenced(&committed)?;
     if receipt.terminal
         || receipt
             .retry_not_before_ms
             .is_some_and(|retry_at| now_ms < retry_at)
     {
-        Some(ProverProcessingDecision::Suppress)
+        Ok(Some(ProverProcessingDecision::Suppress))
     } else {
-        Some(ProverProcessingDecision::Due {
+        Ok(Some(ProverProcessingDecision::Due {
             retry_count: receipt.retry_count,
-        })
+        }))
     }
 }
-fn attachment_needs_processing(location: &AttachmentLocation) -> bool {
-    if let Err(error) = ensure_prover_processing_reference(&location.tenant_key, &location.id) {
-        iroha_logger::warn!(
-            attachment_id = %location.id,
-            tenant = %location.tenant_key,
-            %error,
-            "Failed to persist ZK prover live-attachment reference"
-        );
-        return false;
+fn attachment_needs_processing(location: &AttachmentLocation) -> std::io::Result<bool> {
+    if !attachment_pair_exists(&location.tenant_key, &location.id)? {
+        return Ok(false);
     }
-    processing_retry_count(&location.id).is_some()
+    ensure_prover_processing_reference(&location.tenant_key, &location.id)?;
+    Ok(processing_retry_count(&location.id)?.is_some())
 }
 fn discover_attachment_window(
     stream: &mut AttachmentDirectoryStream,
     geometry: AttachmentDiscoveryGeometry,
     start: std::time::Instant,
     max_millis: u64,
-    mut include: impl FnMut(&AttachmentLocation) -> bool,
-) -> AttachmentDiscovery {
+    mut include: impl FnMut(&AttachmentLocation) -> std::io::Result<bool>,
+) -> std::io::Result<AttachmentDiscovery> {
     let mut discovery = AttachmentDiscovery::default();
     loop {
         if discovery.locations.len() >= geometry.max_locations {
@@ -699,12 +763,12 @@ fn discover_attachment_window(
             discovery.time_exhausted = true;
             break;
         }
-        let step = stream.step();
+        let step = stream.step()?;
         discovery.work_items = discovery.work_items.saturating_add(1);
         match step {
             AttachmentDirectoryStep::Advanced => {}
             AttachmentDirectoryStep::Location(location) => {
-                if include(&location) {
+                if include(&location)? {
                     discovery.locations.push(location);
                 }
             }
@@ -722,7 +786,7 @@ fn discover_attachment_window(
     // inside each bounded window keeps scheduling and tests reproducible without
     // retaining the complete attachment population merely to sort it.
     canonicalize_attachment_locations(&mut discovery.locations);
-    discovery
+    Ok(discovery)
 }
 fn attachment_discovery_state() -> &'static Mutex<Option<AttachmentDiscoveryState>> {
     ATTACHMENT_DISCOVERY_STATE.get_or_init(|| Mutex::new(None))
@@ -731,7 +795,7 @@ fn discover_pending_attachment_locations(
     geometry: AttachmentDiscoveryGeometry,
     start: std::time::Instant,
     max_millis: u64,
-) -> AttachmentDiscovery {
+) -> std::io::Result<AttachmentDiscovery> {
     let root = attachments_root_dir();
     let mut state_guard = attachment_discovery_state().lock();
     let root_changed = state_guard
@@ -766,7 +830,7 @@ fn discover_pending_attachment_locations(
             }
             let location = retry_locations.next().expect("peeked above");
             discovery.work_items = discovery.work_items.saturating_add(1);
-            if attachment_needs_processing(&location) {
+            if attachment_needs_processing(&location)? {
                 discovery.locations.push(location);
             }
             if scan_deadline_reached(start, max_millis) {
@@ -777,15 +841,11 @@ fn discover_pending_attachment_locations(
         state.retry_locations.extend(retry_locations);
         if discovery.work_exhausted || discovery.time_exhausted {
             canonicalize_attachment_locations(&mut discovery.locations);
-            return discovery;
+            return Ok(discovery);
         }
     }
     if state.stream.is_none() {
-        let Ok(stream) = AttachmentDirectoryStream::open(root) else {
-            discovery.sweep_complete = true;
-            canonicalize_attachment_locations(&mut discovery.locations);
-            return discovery;
-        };
+        let stream = AttachmentDirectoryStream::open(root)?;
         state.stream = Some(stream);
     }
     let remaining_geometry = AttachmentDiscoveryGeometry {
@@ -800,7 +860,7 @@ fn discover_pending_attachment_locations(
         start,
         max_millis,
         attachment_needs_processing,
-    );
+    )?;
     discovery.locations.extend(streamed.locations);
     discovery.work_items = discovery.work_items.saturating_add(streamed.work_items);
     discovery.sweep_complete = streamed.sweep_complete;
@@ -810,7 +870,7 @@ fn discover_pending_attachment_locations(
         state.stream = None;
     }
     canonicalize_attachment_locations(&mut discovery.locations);
-    discovery
+    Ok(discovery)
 }
 fn retry_pending_attachment_locations(locations: Vec<AttachmentLocation>) {
     if locations.is_empty() {
@@ -838,12 +898,15 @@ fn retry_pending_attachment_locations(locations: Vec<AttachmentLocation>) {
     canonicalize_attachment_locations(&mut state.retry_locations);
     state.retry_locations.truncate(hard_cap);
 }
-fn find_attachment_location(id: &str) -> Option<AttachmentLocation> {
-    let clean = sanitize_attachment_id(id)?;
-    let mut stream = AttachmentDirectoryStream::open(attachments_root_dir()).ok()?;
+fn find_attachment_location(id: &str) -> std::io::Result<Option<AttachmentLocation>> {
+    let clean = sanitize_attachment_id(id)
+        .filter(|clean| clean == id)
+        .ok_or_else(|| IoError::new(IoErrorKind::InvalidInput, "invalid attachment id"))?;
+    let _store_guard = super::zk_attachments::attachment_store_read_lock();
+    let mut stream = AttachmentDirectoryStream::open(attachments_root_dir())?;
     let mut found: Option<AttachmentLocation> = None;
     loop {
-        match stream.step() {
+        match stream.step()? {
             AttachmentDirectoryStep::Advanced => {}
             AttachmentDirectoryStep::Location(location) => {
                 if location.id == clean && found.as_ref().is_none_or(|current| &location < current)
@@ -851,15 +914,14 @@ fn find_attachment_location(id: &str) -> Option<AttachmentLocation> {
                     found = Some(location);
                 }
             }
-            AttachmentDirectoryStep::Complete => return found,
+            AttachmentDirectoryStep::Complete => return Ok(found),
         }
     }
 }
-fn load_attachment_meta(loc: &AttachmentLocation) -> Option<super::zk_attachments::AttachmentMeta> {
-    let path = attachment_meta_path(&loc.tenant_key, &loc.id);
-    let buf = read_bounded_attachment_regular_file(&path, ATTACHMENT_META_FILE_MAX_BYTES).ok()?;
-    let s = std::str::from_utf8(&buf).ok()?;
-    norito::json::from_json::<super::zk_attachments::AttachmentMeta>(s).ok()
+fn load_attachment_meta(
+    loc: &AttachmentLocation,
+) -> std::io::Result<Option<super::zk_attachments::AttachmentMeta>> {
+    try_load_meta_for_tenant_key(&loc.tenant_key, &loc.id)
 }
 struct AttachmentBodyLoad {
     observed_size: u64,
@@ -881,12 +943,12 @@ enum AttachmentSnapshotLoad {
 fn load_attachment_body_with_read_budget(
     loc: &AttachmentLocation,
     read_budget: u64,
-) -> Option<AttachmentBodyLoadOutcome> {
+) -> std::io::Result<AttachmentBodyLoadOutcome> {
     let path = attachment_bin_path(&loc.tenant_key, &loc.id);
     let (file, opened_metadata) = match open_attachment_regular_file(&path) {
         Ok(opened) => opened,
         Err(error) => {
-            return Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+            return Ok(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
                 observed_size: 0,
                 bytes_read: 0,
                 body: Err(format!(
@@ -897,7 +959,7 @@ fn load_attachment_body_with_read_budget(
     };
     let observed_size = opened_metadata.len();
     if observed_size > PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 {
-        return Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+        return Ok(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
             observed_size,
             bytes_read: 0,
             body: Err(format!(
@@ -906,7 +968,7 @@ fn load_attachment_body_with_read_budget(
         }));
     }
     if observed_size > read_budget {
-        return Some(AttachmentBodyLoadOutcome::DeferredForByteBudget {
+        return Ok(AttachmentBodyLoadOutcome::DeferredForByteBudget {
             required_bytes: observed_size,
         });
     }
@@ -914,20 +976,36 @@ fn load_attachment_body_with_read_budget(
     // Limiting the read to the opened size makes aggregate accounting exact;
     // a concurrent grow/shrink is detected from descriptor metadata below.
     let mut reader = file.take(observed_size);
-    let mut bytes = Vec::with_capacity(usize::try_from(observed_size).ok()?);
+    let capacity = usize::try_from(observed_size).map_err(|_| {
+        IoError::new(
+            IoErrorKind::InvalidData,
+            "proof attachment size does not fit the platform address space",
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
     if let Err(error) = reader.read_to_end(&mut bytes) {
-        let bytes_read = u64::try_from(bytes.len()).ok()?;
-        return Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+        let bytes_read = u64::try_from(bytes.len()).map_err(|_| {
+            IoError::new(
+                IoErrorKind::InvalidData,
+                "proof attachment read length does not fit u64",
+            )
+        })?;
+        return Ok(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
             observed_size,
             bytes_read,
             body: Err(format!("failed to read proof attachment body: {error}")),
         }));
     }
-    let read_size = u64::try_from(bytes.len()).ok()?;
+    let read_size = u64::try_from(bytes.len()).map_err(|_| {
+        IoError::new(
+            IoErrorKind::InvalidData,
+            "proof attachment read length does not fit u64",
+        )
+    })?;
     let final_size = match reader.get_ref().metadata() {
         Ok(metadata) => metadata.len(),
         Err(error) => {
-            return Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+            return Ok(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
                 observed_size: read_size,
                 bytes_read: read_size,
                 body: Err(format!(
@@ -937,7 +1015,7 @@ fn load_attachment_body_with_read_budget(
         }
     };
     if read_size != observed_size || final_size != observed_size {
-        return Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+        return Ok(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
             observed_size: final_size,
             bytes_read: read_size,
             body: Err(format!(
@@ -945,7 +1023,7 @@ fn load_attachment_body_with_read_budget(
             )),
         }));
     }
-    Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+    Ok(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
         observed_size,
         bytes_read: read_size,
         body: Ok(bytes),
@@ -953,7 +1031,7 @@ fn load_attachment_body_with_read_budget(
 }
 #[cfg(test)]
 fn load_attachment_body(loc: &AttachmentLocation) -> Option<AttachmentBodyLoad> {
-    match load_attachment_body_with_read_budget(loc, PROOF_ATTACHMENT_BODY_MAX_BYTES_V1)? {
+    match load_attachment_body_with_read_budget(loc, PROOF_ATTACHMENT_BODY_MAX_BYTES_V1).ok()? {
         AttachmentBodyLoadOutcome::Loaded(body_load) => Some(body_load),
         AttachmentBodyLoadOutcome::DeferredForByteBudget { .. } => {
             unreachable!("the intrinsic body ceiling is a sufficient direct-load read budget")
@@ -963,8 +1041,17 @@ fn load_attachment_body(loc: &AttachmentLocation) -> Option<AttachmentBodyLoad> 
 fn load_attachment_snapshot(
     loc: &AttachmentLocation,
     read_budget: u64,
-) -> Option<AttachmentSnapshotLoad> {
-    let meta = load_attachment_meta(loc)?;
+) -> std::io::Result<Option<AttachmentSnapshotLoad>> {
+    let _store_guard = super::zk_attachments::attachment_store_read_lock();
+    if !attachment_pair_exists(&loc.tenant_key, &loc.id)? {
+        return Ok(None);
+    }
+    let Some(meta) = load_attachment_meta(loc)? else {
+        return Err(IoError::new(
+            IoErrorKind::InvalidData,
+            "attachment metadata disappeared from a stable complete pair",
+        ));
+    };
     let snapshot_load = match load_attachment_body_with_read_budget(loc, read_budget)? {
         AttachmentBodyLoadOutcome::Loaded(body_load) => {
             AttachmentSnapshotLoad::Ready(AttachmentSnapshot { meta, body_load })
@@ -980,7 +1067,7 @@ fn load_attachment_snapshot(
             std::thread::sleep(Duration::from_millis(delay));
         }
     }
-    Some(snapshot_load)
+    Ok(Some(snapshot_load))
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReportRetentionCandidate {
@@ -1008,25 +1095,44 @@ struct ReportStoreScan {
     retained_bytes: u64,
     oldest: BinaryHeap<ReportRetentionCandidate>,
 }
-fn scan_report_store_locked(exclude_id: &str) -> ReportStoreScan {
+fn scan_report_store_locked(exclude_id: &str) -> std::io::Result<ReportStoreScan> {
     let mut scan = ReportStoreScan::default();
     visit_report_ids(|id| {
         if id == exclude_id {
-            return true;
+            return Ok(true);
         }
         let report_path = report_path_from_sanitized(&id);
-        let Ok(report_metadata) = fs::symlink_metadata(&report_path) else {
-            return true;
+        let report_metadata = match fs::symlink_metadata(&report_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == IoErrorKind::NotFound => return Ok(true),
+            Err(error) => return Err(error),
         };
         if !report_metadata.file_type().is_file() {
-            return true;
+            return Err(IoError::new(
+                IoErrorKind::InvalidData,
+                format!(
+                    "ZK prover report path is not a direct regular file: {}",
+                    report_path.display()
+                ),
+            ));
         }
         let processed_ms =
-            load_or_repair_report_summary_locked(&id).map_or(0, |summary| summary.processed_ms);
-        let summary_bytes = fs::symlink_metadata(report_summary_path_from_sanitized(&id))
-            .ok()
-            .filter(|metadata| metadata.file_type().is_file())
-            .map_or(0, |metadata| metadata.len());
+            load_or_repair_report_summary_locked(&id)?.map_or(0, |summary| summary.processed_ms);
+        let summary_path = report_summary_path_from_sanitized(&id);
+        let summary_bytes = match fs::symlink_metadata(&summary_path) {
+            Ok(metadata) if metadata.file_type().is_file() => metadata.len(),
+            Ok(_) => {
+                return Err(IoError::new(
+                    IoErrorKind::InvalidData,
+                    format!(
+                        "ZK prover report summary path is not a direct regular file: {}",
+                        summary_path.display()
+                    ),
+                ));
+            }
+            Err(error) if error.kind() == IoErrorKind::NotFound => 0,
+            Err(error) => return Err(error),
+        };
         let retained_bytes = report_metadata.len().saturating_add(summary_bytes);
         scan.count = scan.count.saturating_add(1);
         scan.retained_bytes = scan.retained_bytes.saturating_add(retained_bytes);
@@ -1045,32 +1151,54 @@ fn scan_report_store_locked(exclude_id: &str) -> ReportStoreScan {
             let _ = scan.oldest.pop();
             scan.oldest.push(candidate);
         }
-        true
-    });
-    scan
+        Ok(true)
+    })?;
+    Ok(scan)
 }
 fn report_store_fits(count: u64, retained_bytes: u64, max_count: u64, max_bytes: u64) -> bool {
     count <= max_count && retained_bytes <= max_bytes
 }
 fn remove_file_if_present(path: &Path) -> std::io::Result<bool> {
     match fs::remove_file(path) {
-        Ok(()) => Ok(true),
+        Ok(()) => {
+            let parent = path.parent().ok_or_else(|| {
+                IoError::new(
+                    IoErrorKind::InvalidInput,
+                    "ZK prover persistence path has no parent directory",
+                )
+            })?;
+            crate::durable_fs::sync_direct_directory(parent)?;
+            Ok(true)
+        }
         Err(error) if error.kind() == IoErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }
 }
 fn delete_report_files_locked(id: &str) -> std::io::Result<bool> {
-    let Some(clean) = sanitize_report_id(id) else {
-        return Ok(false);
-    };
+    let clean = sanitize_report_id(id)
+        .filter(|clean| clean == id)
+        .ok_or_else(|| IoError::new(IoErrorKind::InvalidInput, "invalid prover report id"))?;
     let report_path = report_path_from_sanitized(&clean);
-    if report_path.is_file() {
-        if let Some(committed) = load_report(&clean)
-            .as_ref()
-            .and_then(processing_receipt_from_report)
-        {
-            let _ = reconcile_prover_processing_receipt_if_referenced(&committed)?;
+    match fs::symlink_metadata(&report_path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            if let Some(committed) = try_load_report(&clean)?
+                .as_ref()
+                .and_then(processing_receipt_from_report)
+            {
+                let _ = reconcile_prover_processing_receipt_if_referenced(&committed)?;
+            }
         }
+        Ok(_) => {
+            return Err(IoError::new(
+                IoErrorKind::InvalidData,
+                format!(
+                    "ZK prover report path is not a direct regular file: {}",
+                    report_path.display()
+                ),
+            ));
+        }
+        Err(error) if error.kind() == IoErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
     let removed_report = remove_file_if_present(&report_path)?;
     let removed_summary = remove_file_if_present(&report_summary_path_from_sanitized(&clean))?;
@@ -1089,10 +1217,10 @@ fn enforce_report_store_capacity_locked(
             "prover report retention geometry cannot admit the report",
         ));
     }
-    let _ = prune_stale_report_summaries_locked();
+    prune_stale_report_summaries_locked()?;
     let mut evicted = 0usize;
     loop {
-        let scan = scan_report_store_locked(exclude_id);
+        let scan = scan_report_store_locked(exclude_id)?;
         let mut projected_count = scan.count.saturating_add(added_count);
         let mut projected_bytes = scan.retained_bytes.saturating_add(added_bytes);
         if report_store_fits(projected_count, projected_bytes, max_count, max_bytes) {
@@ -1120,13 +1248,19 @@ fn save_report_with_limits(
     max_count: u64,
     max_bytes: u64,
 ) -> std::io::Result<()> {
-    let Some(id) = sanitize_report_id(&rep.id) else {
+    let Some(id) = sanitize_report_id(&rep.id).filter(|id| id == &rep.id) else {
         return Err(IoError::new(
             IoErrorKind::InvalidInput,
             "invalid prover report id",
         ));
     };
-    ensure_dirs();
+    if processing_receipt_from_report(rep).is_none() {
+        return Err(IoError::new(
+            IoErrorKind::InvalidData,
+            "invalid prover report processing disposition",
+        ));
+    }
+    ensure_dirs()?;
     let body = norito::json::to_json_pretty(rep)
         .map_err(|error| IoError::new(IoErrorKind::InvalidData, error.to_string()))?;
     if body.len() as u64 > REPORT_FILE_MAX_BYTES {
@@ -1148,54 +1282,54 @@ fn save_report_with_limits(
     let _guard = report_summary_lock().lock();
     enforce_report_store_capacity_locked(&id, 1, incoming_bytes, max_count, max_bytes)?;
     let path = report_path_from_sanitized(&id);
-    let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
-    use std::io::Write as _;
-    tmp.write_all(body.as_bytes())?;
-    tmp.flush()?;
-    tmp.persist(&path).map(|_| ()).map_err(|e| e.error)?;
+    super::zk_attachments::persist_bytes_atomically(&path, body.as_bytes(), ".tmp")?;
     persist_report_summary_locked(&summary)?;
     Ok(())
 }
 fn save_report(rep: &ProverReport) -> std::io::Result<()> {
     save_report_with_limits(rep, cfg_reports_max_count(), cfg_reports_max_bytes())
 }
-fn load_report(id: &str) -> Option<ProverReport> {
-    let clean = sanitize_report_id(id)?;
+fn try_load_report(id: &str) -> std::io::Result<Option<ProverReport>> {
+    let clean = sanitize_report_id(id)
+        .filter(|clean| clean == id)
+        .ok_or_else(|| IoError::new(IoErrorKind::InvalidInput, "invalid prover report id"))?;
     let path = report_path_from_sanitized(&clean);
-    let file_len = fs::metadata(&path).ok()?.len();
-    if file_len > REPORT_FILE_MAX_BYTES {
-        iroha_logger::warn!(
-            %clean,
-            file_len,
-            max = REPORT_FILE_MAX_BYTES,
-            "Skipping oversized prover report file"
-        );
-        return None;
+    let buf = match super::zk_attachments::read_bounded_attachment_regular_file(
+        &path,
+        REPORT_FILE_MAX_BYTES,
+    ) {
+        Ok(buf) => buf,
+        Err(error) if error.kind() == IoErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let s = std::str::from_utf8(&buf).map_err(|error| {
+        IoError::new(
+            IoErrorKind::InvalidData,
+            format!("ZK prover report is not UTF-8: {error}"),
+        )
+    })?;
+    let report = norito::json::from_json::<ProverReport>(s).map_err(|error| {
+        IoError::new(
+            IoErrorKind::InvalidData,
+            format!("decode ZK prover report: {error}"),
+        )
+    })?;
+    if report.id != clean || processing_receipt_from_report(&report).is_none() {
+        return Err(IoError::new(
+            IoErrorKind::InvalidData,
+            "persisted ZK prover report violates its identity or processing contract",
+        ));
     }
-    let f = fs::File::open(path).ok()?;
-    let mut reader = f.take(REPORT_FILE_MAX_BYTES.saturating_add(1));
-    let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).ok()?;
-    if (buf.len() as u64) > REPORT_FILE_MAX_BYTES {
-        iroha_logger::warn!(
-            %clean,
-            read_len = buf.len(),
-            max = REPORT_FILE_MAX_BYTES,
-            "Skipping oversized prover report payload"
-        );
-        return None;
-    }
-    let s = std::str::from_utf8(&buf).ok()?;
-    let mut report = norito::json::from_json::<ProverReport>(s).ok()?;
-    // Normalize persisted ids defensively so lookups remain canonical.
-    report.id = clean;
-    Some(report)
+    Ok(Some(report))
 }
 #[cfg(test)]
-fn delete_report_files(id: &str) {
+fn load_report(id: &str) -> Option<ProverReport> {
+    try_load_report(id).expect("load ZK prover report")
+}
+#[cfg(test)]
+fn delete_report_files(id: &str) -> std::io::Result<bool> {
     let _guard = report_summary_lock().lock();
-    let _ = delete_report_files_locked(id);
+    delete_report_files_locked(id)
 }
 fn record_prover_metrics(report: &ProverReport) {
     let telemetry = telemetry_handle();
@@ -1212,8 +1346,15 @@ fn record_prover_metrics(report: &ProverReport) {
 /// Garbage collect expired report artifacts and stale index entries.
 ///
 /// Returns the number of report records removed by retention GC.
-pub fn gc_reports_once() -> usize {
-    ensure_dirs();
+///
+/// # Errors
+///
+/// Returns a persistence error rather than reporting a false successful no-op.
+pub fn gc_reports_once() -> std::io::Result<usize> {
+    try_gc_reports_once()
+}
+fn try_gc_reports_once() -> std::io::Result<usize> {
+    ensure_dirs()?;
     let ttl = Duration::from_secs(cfg_reports_ttl_secs());
     let now = now_ms();
     let ttl_ms = ttl.as_millis() as u64;
@@ -1221,31 +1362,24 @@ pub fn gc_reports_once() -> usize {
     let _guard = report_summary_lock().lock();
     visit_report_summaries_locked(|summary| {
         let age_ms = now.saturating_sub(summary.processed_ms);
-        if age_ms > ttl_ms {
-            if delete_report_files_locked(&summary.id).unwrap_or(false) {
-                deleted = deleted.saturating_add(1);
-            }
+        if age_ms > ttl_ms && delete_report_files_locked(&summary.id)? {
+            deleted = deleted.saturating_add(1);
         }
-        true
-    });
-    deleted = deleted.saturating_add(prune_stale_report_summaries_locked());
-    match enforce_report_store_capacity_locked(
+        Ok(true)
+    })?;
+    deleted = deleted.saturating_add(prune_stale_report_summaries_locked()?);
+    deleted = deleted.saturating_add(enforce_report_store_capacity_locked(
         "",
         0,
         0,
         cfg_reports_max_count(),
         cfg_reports_max_bytes(),
-    ) {
-        Ok(evicted) => deleted = deleted.saturating_add(evicted),
-        Err(error) => {
-            iroha_logger::warn!(%error, "Failed to enforce prover report retention geometry");
-        }
-    }
+    )?);
     if deleted > 0 {
         let telemetry = telemetry_handle();
         telemetry.with_metrics(|tel| tel.inc_torii_zk_prover_gc(deleted as u64));
     }
-    deleted
+    Ok(deleted)
 }
 #[derive(Clone)]
 struct ProverContext {
@@ -1781,41 +1915,51 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     process_proof_attachment_with_disposition(ctx, attachment).report
 }
 /// Process a single attachment id, emitting a report if not present yet.
-pub fn process_attachment_once(id: &str) -> Option<ProverReport> {
-    let clean = sanitize_attachment_id(id)?;
-    let loc = find_attachment_location(&clean)?;
+///
+/// # Errors
+///
+/// Returns a persistence error when attachment discovery, receipt recovery, or
+/// durable report publication cannot be completed safely.
+pub fn process_attachment_once(id: &str) -> std::io::Result<Option<ProverReport>> {
+    let clean = sanitize_attachment_id(id)
+        .filter(|clean| clean == id)
+        .ok_or_else(|| IoError::new(IoErrorKind::InvalidInput, "invalid attachment id"))?;
+    let Some(loc) = find_attachment_location(&clean)? else {
+        return Ok(None);
+    };
     process_attachment_once_at(&loc)
 }
-fn processing_retry_count(id: &str) -> Option<u32> {
+fn processing_retry_count(id: &str) -> std::io::Result<Option<u32>> {
     let now_ms = now_ms();
     let report_decision = || committed_report_processing_decision(id, now_ms);
-    match prover_processing_decision(id, now_ms) {
+    match try_prover_processing_decision(id, now_ms)? {
         ProverProcessingDecision::Suppress => {
             // A report rename may have committed immediately before a crash or
             // failed terminal-receipt write. Reconcile it even while the
             // provisional backoff is active, before retention can evict it.
             // A terminal receipt is already authoritative, so avoid reopening
             // and decoding its potentially large report on every scan.
-            let receipt = load_prover_processing_receipt(id);
-            reconcile_suppressed_report_if_needed(receipt.as_ref(), || {
-                let _ = report_decision();
-            });
-            None
+            let receipt = try_load_prover_processing_receipt(id)?;
+            if receipt.as_ref().is_none_or(|receipt| !receipt.terminal) {
+                let _ = report_decision()?;
+            }
+            Ok(None)
         }
-        ProverProcessingDecision::Due { retry_count } => match report_decision() {
+        ProverProcessingDecision::Due { retry_count } => Ok(match report_decision()? {
             Some(ProverProcessingDecision::Suppress) => None,
             Some(ProverProcessingDecision::Due {
                 retry_count: report_retry_count,
             }) => Some(retry_count.max(report_retry_count)),
             Some(ProverProcessingDecision::Missing) | None => Some(retry_count),
-        },
-        ProverProcessingDecision::Missing => match report_decision() {
+        }),
+        ProverProcessingDecision::Missing => Ok(match report_decision()? {
             Some(ProverProcessingDecision::Suppress) => None,
             Some(ProverProcessingDecision::Due { retry_count }) => Some(retry_count),
             Some(ProverProcessingDecision::Missing) | None => Some(0),
-        },
+        }),
     }
 }
+#[cfg(test)]
 fn reconcile_suppressed_report_if_needed(
     receipt: Option<&ProverProcessingReceipt>,
     reconcile_report: impl FnOnce(),
@@ -1829,9 +1973,9 @@ struct CompletedProofCache {
     indices: Vec<u16>,
     context_hash: Option<String>,
 }
-fn completed_proof_cache_for_retry(id: &str) -> CompletedProofCache {
-    let durable = load_prover_processing_receipt(id).filter(|receipt| !receipt.terminal);
-    let committed = load_report(id)
+fn completed_proof_cache_for_retry(id: &str) -> std::io::Result<CompletedProofCache> {
+    let durable = try_load_prover_processing_receipt(id)?.filter(|receipt| !receipt.terminal);
+    let committed = try_load_report(id)?
         .as_ref()
         .and_then(processing_receipt_from_report)
         .filter(|receipt| !receipt.terminal);
@@ -1840,12 +1984,12 @@ fn completed_proof_cache_for_retry(id: &str) -> CompletedProofCache {
             ProverProcessingReceipt::reconcile_committed(Some(durable), committed)
         }
         (Some(receipt), None) | (None, Some(receipt)) => receipt,
-        (None, None) => return CompletedProofCache::default(),
+        (None, None) => return Ok(CompletedProofCache::default()),
     };
-    CompletedProofCache {
+    Ok(CompletedProofCache {
         indices: selected.completed_proof_indices,
         context_hash: selected.processing_context_hash,
-    }
+    })
 }
 fn checkpoint_completed_proofs(
     loc: &AttachmentLocation,
@@ -1853,9 +1997,9 @@ fn checkpoint_completed_proofs(
     retry_not_before_ms: u64,
     completed_proof_indices: &[u16],
     processing_context_hash: &str,
-) {
+) -> std::io::Result<()> {
     if completed_proof_indices.is_empty() {
-        return;
+        return Ok(());
     }
     let receipt = ProverProcessingReceipt {
         version: ZK_PROVER_PROCESSING_STATE_VERSION,
@@ -1867,33 +2011,25 @@ fn checkpoint_completed_proofs(
         completed_proof_indices: completed_proof_indices.to_vec(),
         processing_context_hash: Some(processing_context_hash.to_owned()),
     };
-    match persist_prover_processing_receipt_if_referenced(&receipt) {
-        Ok(true) => {}
-        Ok(false) => iroha_logger::debug!(
+    if persist_prover_processing_receipt_if_referenced(&receipt)? {
+        Ok(())
+    } else {
+        iroha_logger::debug!(
             attachment_id = %loc.id,
             "Skipping successful-proof checkpoint because no live attachment reference remains"
-        ),
-        Err(error) => iroha_logger::warn!(
-            attachment_id = %loc.id,
-            %error,
-            "Failed to checkpoint a successful sibling proof before processing the next proof"
-        ),
+        );
+        Ok(())
     }
 }
-fn process_attachment_once_at(loc: &AttachmentLocation) -> Option<ProverReport> {
-    if let Err(error) = ensure_prover_processing_reference(&loc.tenant_key, &loc.id) {
-        iroha_logger::warn!(
-            attachment_id = %loc.id,
-            tenant = %loc.tenant_key,
-            %error,
-            "Failed to persist ZK prover live-attachment reference"
-        );
-        return load_report(&loc.id);
+fn process_attachment_once_at(loc: &AttachmentLocation) -> std::io::Result<Option<ProverReport>> {
+    ensure_prover_processing_reference(&loc.tenant_key, &loc.id)?;
+    if processing_retry_count(&loc.id)?.is_none() {
+        return try_load_report(&loc.id);
     }
-    if processing_retry_count(&loc.id).is_none() {
-        return load_report(&loc.id);
-    }
-    match load_attachment_snapshot(loc, PROOF_ATTACHMENT_BODY_MAX_BYTES_V1)? {
+    let Some(snapshot) = load_attachment_snapshot(loc, PROOF_ATTACHMENT_BODY_MAX_BYTES_V1)? else {
+        return Ok(None);
+    };
+    match snapshot {
         AttachmentSnapshotLoad::Ready(snapshot) => process_attachment_snapshot_at(loc, snapshot),
         AttachmentSnapshotLoad::DeferredForByteBudget { .. } => {
             unreachable!("the intrinsic body ceiling is a sufficient direct-load read budget")
@@ -1904,32 +2040,39 @@ fn validate_attachment_snapshot<'a>(
     loc: &AttachmentLocation,
     meta: &super::zk_attachments::AttachmentMeta,
     body_load: &'a AttachmentBodyLoad,
-) -> Result<&'a [u8], String> {
+) -> std::io::Result<&'a [u8]> {
     let body = body_load
         .body
         .as_deref()
-        .map_err(std::clone::Clone::clone)?;
+        .map_err(|error| IoError::new(IoErrorKind::InvalidData, error.clone()))?;
     if meta.size != body_load.observed_size {
-        return Err(format!(
-            "proof attachment metadata size {} does not match the actual {}-byte body",
-            meta.size, body_load.observed_size
+        return Err(IoError::new(
+            IoErrorKind::InvalidData,
+            format!(
+                "proof attachment metadata size {} does not match the actual {}-byte body",
+                meta.size, body_load.observed_size
+            ),
         ));
     }
-    validate_attachment_metadata_contract(meta, &loc.tenant_key, &loc.id)?;
-    validate_attachment_body_contract(meta, body)?;
+    validate_attachment_metadata_contract(meta, &loc.tenant_key, &loc.id)
+        .map_err(|error| IoError::new(IoErrorKind::InvalidData, error))?;
+    validate_attachment_body_contract(meta, body)
+        .map_err(|error| IoError::new(IoErrorKind::InvalidData, error))?;
     Ok(body)
 }
 fn process_attachment_snapshot_at(
     loc: &AttachmentLocation,
     snapshot: AttachmentSnapshot,
-) -> Option<ProverReport> {
+) -> std::io::Result<Option<ProverReport>> {
     // A direct request and the background scan may race. Only one claimant may
     // verify a content id; later claimants observe its durable receipt/report.
-    let _claim = AttachmentProcessingClaim::acquire(&loc.id)?;
-    let Some(previous_retry_count) = processing_retry_count(&loc.id) else {
-        return load_report(&loc.id);
+    let Some(_claim) = AttachmentProcessingClaim::acquire(&loc.id) else {
+        return try_load_report(&loc.id);
     };
-    let previous_completed_proofs = completed_proof_cache_for_retry(&loc.id);
+    let Some(previous_retry_count) = processing_retry_count(&loc.id)? else {
+        return try_load_report(&loc.id);
+    };
+    let previous_completed_proofs = completed_proof_cache_for_retry(&loc.id)?;
     let retry_count = previous_retry_count.saturating_add(1);
     let attempt_started_ms = now_ms();
     let provisional_retry_not_before_ms =
@@ -1944,27 +2087,19 @@ fn process_attachment_snapshot_at(
         completed_proof_indices: previous_completed_proofs.indices.clone(),
         processing_context_hash: previous_completed_proofs.context_hash.clone(),
     };
-    match persist_prover_processing_receipt_if_referenced(&provisional_receipt) {
-        Ok(true) => {}
-        Ok(false) => return None,
-        Err(error) => {
-            iroha_logger::warn!(
-                attachment_id = %loc.id,
-                %error,
-                "Skipping ZK proof processing because its provisional receipt could not persist"
-            );
-            return None;
-        }
+    if !persist_prover_processing_receipt_if_referenced(&provisional_receipt)? {
+        return Ok(None);
     }
     let AttachmentSnapshot { meta, body_load } = snapshot;
-    let validated_body = validate_attachment_snapshot(loc, &meta, &body_load);
-    let zk1_tags = validated_body.as_ref().ok().and_then(|body| {
+    let validated_body = validate_attachment_snapshot(loc, &meta, &body_load)?;
+    let zk1_tags = {
+        let body = validated_body;
         if body.len() >= 4 && &body[..4] == b"ZK1\0" {
             parse_zk1_tags(body).ok()
         } else {
             None
         }
-    });
+    };
     let ctx = ProverContext {
         keys_dir: cfg_keys_dir(),
         allowed_backends: cfg_allowed_backends(),
@@ -1984,7 +2119,7 @@ fn process_attachment_snapshot_at(
         retryable,
         completed_proof_indices,
         processing_context_hash,
-    ) = match validated_body.and_then(|body| decode_proof_attachments(&meta.content_type, body)) {
+    ) = match decode_proof_attachments(&meta.content_type, validated_body) {
         Ok(attachments) => {
             if attachments.is_empty() {
                 (
@@ -2034,7 +2169,7 @@ fn process_attachment_snapshot_at(
                             provisional_retry_not_before_ms,
                             &completed_proof_indices,
                             &current_processing_context_hash,
-                        );
+                        )?;
                     }
                     proofs.push(processed.report);
                 }
@@ -2137,42 +2272,18 @@ fn process_attachment_snapshot_at(
     };
     let receipt = processing_receipt_from_report(&rep)
         .expect("new prover reports always carry a valid processing disposition");
-    if !receipt.terminal
-        && let Err(error) = persist_prover_processing_receipt_if_referenced(&receipt)
-    {
-        iroha_logger::warn!(
+    if !receipt.terminal {
+        let _ = persist_prover_processing_receipt_if_referenced(&receipt)?;
+    }
+    save_report(&rep)?;
+    if !persist_prover_processing_receipt_if_referenced(&receipt)? {
+        iroha_logger::debug!(
             attachment_id = %rep.id,
-            %error,
-            "Failed to checkpoint successful sibling proofs before retry report persistence"
+            "Skipping durable ZK prover receipt because no live attachment reference remains"
         );
     }
-    match save_report(&rep) {
-        Ok(()) => match persist_prover_processing_receipt_if_referenced(&receipt) {
-            Ok(true) => {}
-            Ok(false) => {
-                iroha_logger::debug!(
-                    attachment_id = %rep.id,
-                    "Skipping durable ZK prover receipt because no live attachment reference remains"
-                );
-            }
-            Err(error) => {
-                iroha_logger::warn!(
-                    attachment_id = %rep.id,
-                    %error,
-                    "Failed to finalize ZK prover processing receipt"
-                );
-            }
-        },
-        Err(error) => {
-            iroha_logger::warn!(
-                attachment_id = %rep.id,
-                %error,
-                "Failed to persist ZK prover report; provisional retry receipt remains active"
-            );
-        }
-    }
     record_prover_metrics(&rep);
-    Some(rep)
+    Ok(Some(rep))
 }
 /// Scan one bounded attachment-discovery window, generating missing reports.
 #[derive(Debug, Clone, Default)]
@@ -2183,8 +2294,43 @@ struct ScanStats {
     remaining_pending: u64,
     budget_exhausted: Option<&'static str>,
 }
-async fn run_budgeted_scan() -> ScanStats {
-    ensure_dirs();
+enum BudgetedScanOutcome {
+    Completed(ScanStats),
+    StoppedByShutdown,
+}
+fn scan_shutdown_requested(shutdown: Option<&ShutdownSignal>) -> bool {
+    shutdown.is_some_and(ShutdownSignal::is_sent)
+}
+fn record_prover_join_result(
+    result: Result<std::io::Result<bool>, tokio::task::JoinError>,
+    processed_reports: &mut usize,
+    first_error: &mut Option<IoError>,
+) {
+    match result {
+        Ok(Ok(true)) => *processed_reports = (*processed_reports).saturating_add(1),
+        Ok(Ok(false)) => {}
+        Ok(Err(error)) => {
+            if first_error.is_none() {
+                *first_error = Some(error);
+            }
+        }
+        Err(error) => {
+            if first_error.is_none() {
+                *first_error = Some(IoError::other(format!(
+                    "background prover task join failed: {error}"
+                )));
+            }
+        }
+    }
+}
+async fn run_budgeted_scan_with_shutdown(
+    shutdown: Option<&ShutdownSignal>,
+) -> std::io::Result<BudgetedScanOutcome> {
+    if scan_shutdown_requested(shutdown) {
+        return Ok(BudgetedScanOutcome::StoppedByShutdown);
+    }
+    ensure_dirs()?;
+    super::zk_attachments::verify_direct_directory(&attachments_root_dir())?;
     let telemetry = telemetry_handle();
     let max_bytes = cfg_max_scan_bytes();
     let max_millis = cfg_max_scan_millis();
@@ -2194,11 +2340,14 @@ async fn run_budgeted_scan() -> ScanStats {
     // bounded window. Otherwise a large directory can consume the entire
     // deadline repeatedly without allowing any discovered item to progress.
     let discovery_max_millis = max_millis.div_ceil(2).max(1);
-    let discovery = discover_pending_attachment_locations(
-        AttachmentDiscoveryGeometry::from_scan_bytes(max_bytes),
-        start,
-        discovery_max_millis,
-    );
+    let discovery = {
+        let _store_guard = super::zk_attachments::attachment_store_read_lock();
+        discover_pending_attachment_locations(
+            AttachmentDiscoveryGeometry::from_scan_bytes(max_bytes),
+            start,
+            discovery_max_millis,
+        )?
+    };
     let mut remaining = discovery.pending_estimate();
     let discovery_budget_reason = discovery.budget_reason();
     let discovery_work_exhausted = discovery_budget_reason == Some("work");
@@ -2213,27 +2362,33 @@ async fn run_budgeted_scan() -> ScanStats {
     let mut processed_reports = 0usize;
     let mut join_set = JoinSet::new();
     let mut retry_locations = Vec::new();
+    let mut first_error = None;
+    let mut stopped_by_shutdown = false;
     while let Some(loc) = pending.next() {
+        if scan_shutdown_requested(shutdown) {
+            stopped_by_shutdown = true;
+            retry_locations.push(loc);
+            retry_locations.extend(pending);
+            break;
+        }
         while join_set.len() >= max_inflight {
             let Some(res) = join_set.join_next().await else {
                 break;
             };
-            match res {
-                Ok(Ok(true)) => processed_reports += 1,
-                Ok(Ok(false)) => {}
-                Ok(Err(err)) => {
-                    iroha_logger::warn!(%err, "Background prover attachment processing failed");
-                }
-                Err(err) => {
-                    iroha_logger::warn!(%err, "Background prover task join failed");
-                }
+            record_prover_join_result(res, &mut processed_reports, &mut first_error);
+            if first_error.is_some() {
+                break;
+            }
+            if scan_shutdown_requested(shutdown) {
+                stopped_by_shutdown = true;
+                break;
             }
             if scan_deadline_reached(start, max_millis) {
                 budget_reason = Some("time");
                 break;
             }
         }
-        if budget_reason.is_some() {
+        if first_error.is_some() || stopped_by_shutdown || budget_reason.is_some() {
             retry_locations.push(loc);
             retry_locations.extend(pending);
             break;
@@ -2246,21 +2401,38 @@ async fn run_budgeted_scan() -> ScanStats {
         }
         let remaining_read_budget = max_bytes.saturating_sub(bytes_processed);
         let snapshot_loc = loc.clone();
-        let snapshot_load = match crate::panic_recovery::join_recoverable(
+        let snapshot_result = crate::panic_recovery::join_recoverable(
             crate::panic_recovery::spawn_blocking_recoverable(move || {
                 load_attachment_snapshot(&snapshot_loc, remaining_read_budget)
             }),
         )
-        .await
-        {
-            Ok(snapshot_load) => snapshot_load,
-            Err(error) => {
-                iroha_logger::warn!(%error, "Background prover snapshot load failed");
+        .await;
+        let snapshot_load = match snapshot_result {
+            Ok(Ok(snapshot_load)) => snapshot_load,
+            Ok(Err(error)) => {
+                first_error = Some(error);
                 retry_locations.push(loc);
-                continue;
+                retry_locations.extend(pending);
+                break;
+            }
+            Err(error) => {
+                first_error = Some(IoError::other(format!(
+                    "background prover snapshot load failed: {error}"
+                )));
+                retry_locations.push(loc);
+                retry_locations.extend(pending);
+                break;
             }
         };
         let crossed_time_budget = scan_deadline_reached(start, max_millis);
+        if scan_shutdown_requested(shutdown) {
+            stopped_by_shutdown = true;
+            if snapshot_load.is_some() {
+                retry_locations.push(loc);
+            }
+            retry_locations.extend(pending);
+            break;
+        }
         let Some(snapshot_load) = snapshot_load else {
             remaining = remaining.saturating_sub(1);
             telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
@@ -2289,21 +2461,20 @@ async fn run_budgeted_scan() -> ScanStats {
         };
         let bytes_read = snapshot.body_load.bytes_read;
         if bytes_read > remaining_read_budget {
-            iroha_logger::error!(
-                bytes_read,
-                remaining_read_budget,
-                "bounded attachment snapshot exceeded its assigned read budget"
-            );
-            byte_deferred = true;
+            first_error = Some(IoError::other(format!(
+                "bounded attachment snapshot read {bytes_read} bytes beyond its {remaining_read_budget}-byte budget"
+            )));
             retry_locations.push(loc);
-            continue;
+            retry_locations.extend(pending);
+            break;
         }
         bytes_processed = bytes_processed.saturating_add(bytes_read);
         remaining = remaining.saturating_sub(1);
         telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
         let permit = match semaphore.clone().acquire_owned().await {
             Ok(permit) => permit,
-            Err(_) => {
+            Err(error) => {
+                first_error = Some(IoError::other(format!("prover semaphore closed: {error}")));
                 retry_locations.push(loc);
                 retry_locations.extend(pending);
                 break;
@@ -2324,13 +2495,20 @@ async fn run_budgeted_scan() -> ScanStats {
                     process_attachment_snapshot_at(&loc_owned, snapshot)
                 }),
             )
-            .await
-            .map_err(|err| err.to_string())?;
+            .await;
             drop(permit);
             let after = inflight.fetch_sub(1, Ordering::SeqCst) - 1;
             telemetry_clone.with_metrics(|tel| tel.set_torii_zk_prover_inflight(after));
-            Ok::<_, String>(result.is_some())
+            let report = result.map_err(|error| {
+                IoError::other(format!("background prover processing panicked: {error}"))
+            })??;
+            Ok::<_, IoError>(report.is_some())
         });
+        if scan_shutdown_requested(shutdown) {
+            stopped_by_shutdown = true;
+            retry_locations.extend(pending);
+            break;
+        }
         if crossed_time_budget {
             // The body bytes have already been read and charged. Complete
             // this immutable snapshot once, then stop scheduling new work.
@@ -2339,19 +2517,11 @@ async fn run_budgeted_scan() -> ScanStats {
             break;
         }
     }
-    retry_pending_attachment_locations(retry_locations);
     while let Some(res) = join_set.join_next().await {
-        match res {
-            Ok(Ok(true)) => processed_reports += 1,
-            Ok(Ok(false)) => {}
-            Ok(Err(err)) => {
-                iroha_logger::warn!(%err, "Background prover attachment processing failed");
-            }
-            Err(err) => {
-                iroha_logger::warn!(%err, "Background prover task join failed");
-            }
-        }
+        record_prover_join_result(res, &mut processed_reports, &mut first_error);
     }
+    retry_pending_attachment_locations(retry_locations);
+    stopped_by_shutdown |= scan_shutdown_requested(shutdown);
     if budget_reason.is_none() {
         if byte_deferred {
             budget_reason = Some("bytes");
@@ -2366,18 +2536,35 @@ async fn run_budgeted_scan() -> ScanStats {
         tel.set_torii_zk_prover_pending(remaining);
         tel.record_torii_zk_prover_scan(bytes_processed, start.elapsed().as_millis() as u64);
     });
-    if let Some(reason) = budget_reason {
+    if first_error.is_none()
+        && !stopped_by_shutdown
+        && let Some(reason) = budget_reason
+    {
         telemetry.with_metrics(|tel| tel.inc_torii_zk_prover_budget_exhausted(reason));
     }
-    ScanStats {
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    if stopped_by_shutdown {
+        return Ok(BudgetedScanOutcome::StoppedByShutdown);
+    }
+    Ok(BudgetedScanOutcome::Completed(ScanStats {
         processed_reports,
         bytes_processed,
         duration_ms: start.elapsed().as_millis() as u64,
         remaining_pending: remaining,
         budget_exhausted: budget_reason,
+    }))
+}
+async fn run_budgeted_scan() -> std::io::Result<ScanStats> {
+    match run_budgeted_scan_with_shutdown(None).await? {
+        BudgetedScanOutcome::Completed(stats) => Ok(stats),
+        BudgetedScanOutcome::StoppedByShutdown => {
+            unreachable!("a scan without a shutdown signal cannot be stopped")
+        }
     }
 }
-fn block_on_scan() -> ScanStats {
+fn block_on_scan() -> std::io::Result<ScanStats> {
     Handle::try_current().map_or_else(
         |_| {
             tokio::runtime::Builder::new_current_thread()
@@ -2412,35 +2599,65 @@ fn block_on_scan() -> ScanStats {
     )
 }
 /// Run a single scan synchronously, returning the number of new reports created.
-pub fn scan_once() -> usize {
-    block_on_scan().processed_reports
+///
+/// # Errors
+///
+/// Returns a storage error when the attachment or prover persistence tree
+/// cannot be enumerated or updated safely.
+pub fn scan_once() -> std::io::Result<usize> {
+    Ok(block_on_scan()?.processed_reports)
 }
-/// Start background scan worker when enabled. No-op if disabled.
-pub fn start_worker(shutdown: ShutdownSignal) {
+/// Start the enabled background scan worker.
+pub(crate) fn start_worker(
+    shutdown: ShutdownSignal,
+) -> std::io::Result<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
     if !cfg_enabled() {
-        return;
+        return Err(IoError::new(
+            IoErrorKind::InvalidInput,
+            "cannot start a disabled ZK prover worker",
+        ));
     }
-    ensure_dirs();
+    init_persistence()?;
+    super::zk_attachments::verify_direct_directory(&attachments_root_dir())?;
     let period = cfg_scan_period();
-    tokio::spawn(async move {
+    Ok(tokio::spawn(async move {
         loop {
-            let stats = tokio::select! {
-                () = shutdown.receive() => break,
-                stats = run_budgeted_scan() => stats,
+            let stats = match run_budgeted_scan_with_shutdown(Some(&shutdown)).await {
+                Ok(BudgetedScanOutcome::Completed(stats)) => stats,
+                Ok(BudgetedScanOutcome::StoppedByShutdown) => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
+                Err(error) => {
+                    iroha_logger::error!(%error, "ZK prover worker stopped after a persistence failure");
+                    return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                }
             };
             if let Some(reason) = stats.budget_exhausted {
                 iroha_logger::warn!(%reason, processed = stats.processed_reports, bytes = stats.bytes_processed, "Background prover scan hit budget");
             }
-            let _ = crate::panic_recovery::join_recoverable(
-                crate::panic_recovery::spawn_blocking_recoverable(gc_reports_once),
+            let gc_result = crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(try_gc_reports_once),
             )
             .await;
+            match gc_result {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    iroha_logger::error!(%error, "ZK prover worker stopped after a report-GC persistence failure");
+                    return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                }
+                Err(error) => {
+                    iroha_logger::error!(%error, "ZK prover report-GC task failed");
+                    return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                }
+            }
             tokio::select! {
-                () = shutdown.receive() => break,
+                () = shutdown.receive() => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
                 () = tokio::time::sleep(period) => {}
             }
         }
-    });
+    }))
 }
 #[cfg(test)]
 mod tests {
@@ -2488,6 +2705,115 @@ mod tests {
         .join();
         assert!(panic.is_err());
         let _guard = super::report_summary_lock().lock();
+    }
+    #[test]
+    fn prover_persistence_preflight_retries_after_creation_failure() {
+        let data_dir = TestDataDirGuard::new();
+        let root = super::prover_dir();
+        fs::write(&root, b"blocks prover directory").expect("write prover root blocker");
+
+        assert!(super::init_persistence().is_err());
+
+        fs::remove_file(&root).expect("remove prover root blocker");
+        super::init_persistence().expect("preflight must retry instead of caching failure");
+        crate::zk_attachments::verify_direct_directory(&root).expect("verified direct prover root");
+        assert_eq!(data_dir.path(), crate::zk_attachments::base_dir());
+    }
+    #[test]
+    fn prover_persistence_preflight_removes_crash_temporary_files() {
+        let _data_dir = TestDataDirGuard::new();
+        init_test_cfg();
+        super::ensure_dirs().expect("create prover directories");
+        let report_temp = super::reports_dir().join(".tmpABC123");
+        let summary_temp = super::report_index_dir().join(".tmpXYZ789");
+        fs::write(&report_temp, b"partial report").expect("write report temp");
+        fs::write(&summary_temp, b"partial summary").expect("write summary temp");
+
+        super::init_persistence().expect("recover prover persistence");
+
+        assert!(!report_temp.exists());
+        assert!(!summary_temp.exists());
+    }
+    #[test]
+    fn prover_persistence_preflight_rejects_unknown_namespace_entries() {
+        let _data_dir = TestDataDirGuard::new();
+        init_test_cfg();
+        super::ensure_dirs().expect("create prover directories");
+        fs::write(super::reports_dir().join("unexpected"), b"not a report")
+            .expect("write unexpected report entry");
+
+        let error = super::init_persistence()
+            .expect_err("unknown report namespace entries must fail startup recovery");
+        assert!(error.to_string().contains("unexpected entry"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn prover_persistence_preflight_rejects_hard_linked_report_entries() {
+        let _data_dir = TestDataDirGuard::new();
+        init_test_cfg();
+        super::ensure_dirs().expect("create prover directories");
+        let outside = super::prover_dir().join("outside-report");
+        fs::write(&outside, b"linked report").expect("write hard-link target");
+        let linked =
+            super::reports_dir().join(format!("{}.json", "a".repeat(super::ATTACHMENT_ID_HEX_LEN)));
+        fs::hard_link(&outside, &linked).expect("create hard-linked report entry");
+
+        let error = super::init_persistence()
+            .expect_err("hard-linked report entries must fail startup recovery");
+        assert!(error.to_string().contains("single-link"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn prover_persistence_preflight_rejects_symlinked_root() {
+        let _data_dir = TestDataDirGuard::new();
+        let target = tempfile::tempdir().expect("symlink target");
+        let root = super::prover_dir();
+        std::os::unix::fs::symlink(target.path(), &root).expect("symlink prover root");
+
+        let error = super::init_persistence().expect_err("symlinked prover root must fail");
+
+        assert!(error.to_string().contains("not a direct directory"));
+    }
+    #[tokio::test]
+    async fn prover_worker_reports_shutdown_and_storage_failure() {
+        let _data_dir = TestDataDirGuard::new();
+        init_test_cfg();
+        crate::zk_attachments::init_persistence().expect("attachment preflight");
+        let shutdown = ShutdownSignal::new();
+        let worker = super::start_worker(shutdown.clone()).expect("start prover worker");
+
+        shutdown.send();
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), worker)
+                .await
+                .expect("prover worker observes shutdown")
+                .expect("prover worker joins"),
+            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+        );
+
+        let invalid_tenant = attachments_root_dir().join("a".repeat(TENANT_KEY_HEX_LEN));
+        fs::write(&invalid_tenant, b"not a tenant directory").expect("write tenant blocker");
+        let failure_shutdown = ShutdownSignal::new();
+        let failed_worker =
+            super::start_worker(failure_shutdown).expect("worker startup preflight succeeds");
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), failed_worker)
+                .await
+                .expect("prover storage failure is visible")
+                .expect("prover worker joins"),
+            crate::ToriiCriticalWorkerExit::UnexpectedExit
+        );
+
+        fs::remove_file(invalid_tenant).expect("remove tenant blocker");
+        let invalid_summary =
+            report_index_dir().join(format!("{}.json", "b".repeat(ATTACHMENT_ID_HEX_LEN)));
+        fs::create_dir(invalid_summary).expect("create report-summary blocker");
+        let failure_shutdown = ShutdownSignal::new();
+        assert!(
+            super::start_worker(failure_shutdown).is_err(),
+            "report-summary namespace corruption must fail worker startup"
+        );
     }
     fn configure_test_cfg(allowed_circuits: Vec<String>) {
         configure_test_cfg_with_state(allowed_circuits, fixture_state());
@@ -3381,7 +3707,7 @@ mod tests {
             summaries.iter().any(|summary| summary.id == id),
             "saved report should appear in index"
         );
-        delete_report_files(&id);
+        delete_report_files(&id).expect("delete report files");
         let summaries = load_report_summaries();
         assert!(
             summaries.iter().all(|summary| summary.id != id),
@@ -3530,17 +3856,22 @@ mod tests {
             zk1_tags: None,
         }])
         .expect("persist stale index");
-        delete_report_files(&id);
+        delete_report_files(&id).expect("delete stale report summary");
         let persisted = read_report_summaries_locked();
         assert!(persisted.is_empty(), "stale summary should be removed");
     }
     #[test]
-    fn delete_report_files_ignores_invalid_id_and_preserves_existing_reports() {
+    fn delete_report_files_rejects_invalid_id_and_preserves_existing_reports() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
         let report = sample_report("f2".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-        delete_report_files("../bad");
+        assert_eq!(
+            delete_report_files("../bad")
+                .expect_err("invalid report id must be rejected")
+                .kind(),
+            IoErrorKind::InvalidInput
+        );
         assert!(
             load_report(&report.id).is_some(),
             "invalid delete should not remove valid reports"
@@ -3565,43 +3896,54 @@ mod tests {
     fn load_report_rejects_oversized_report_file() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        ensure_dirs();
+        ensure_dirs().expect("create prover directories");
         let id = "ab".repeat(32);
         let path = report_path_from_sanitized(&id);
         std::fs::write(&path, vec![b'x'; (REPORT_FILE_MAX_BYTES as usize) + 1])
             .expect("write oversized report");
-        assert!(
-            load_report(&id).is_none(),
-            "oversized report must be rejected"
+        assert_eq!(
+            try_load_report(&id)
+                .expect_err("oversized report must be rejected")
+                .kind(),
+            IoErrorKind::InvalidData
         );
     }
     #[test]
     fn load_report_rejects_non_utf8_report_file() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        ensure_dirs();
+        ensure_dirs().expect("create prover directories");
         let id = "ac".repeat(32);
         fs::write(report_path_from_sanitized(&id), [0xff, 0xfe, 0xfd]).expect("write report");
-        assert!(
-            load_report(&id).is_none(),
-            "non-utf8 report payload must be rejected"
+        assert_eq!(
+            try_load_report(&id)
+                .expect_err("non-utf8 report payload must be rejected")
+                .kind(),
+            IoErrorKind::InvalidData
         );
     }
     #[test]
     fn load_report_rejects_malformed_report_json() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        ensure_dirs();
+        ensure_dirs().expect("create prover directories");
         let id = "ad".repeat(32);
         fs::write(report_path_from_sanitized(&id), "{not json").expect("write report");
-        assert!(
-            load_report(&id).is_none(),
-            "malformed report json must be rejected"
+        assert_eq!(
+            try_load_report(&id)
+                .expect_err("malformed report json must be rejected")
+                .kind(),
+            IoErrorKind::InvalidData
         );
     }
     #[test]
     fn load_report_returns_none_for_invalid_id() {
-        assert!(load_report("../bad").is_none());
+        assert_eq!(
+            try_load_report("../bad")
+                .expect_err("invalid report id must be rejected")
+                .kind(),
+            IoErrorKind::InvalidInput
+        );
     }
     #[test]
     fn normalize_report_summaries_drops_invalid_ids_and_keeps_last_duplicate() {
@@ -3693,7 +4035,7 @@ mod tests {
         assert_eq!(persisted[0].id, keep_id);
     }
     #[test]
-    fn load_report_summaries_normalizes_valid_index_entries_and_deduplicates_ids() {
+    fn load_report_summaries_repairs_mismatched_index_from_authoritative_report() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
         let id = "45".repeat(32);
@@ -3729,13 +4071,10 @@ mod tests {
         let summaries = load_report_summaries();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, id);
-        assert!(!summaries[0].ok);
-        assert_eq!(summaries[0].error.as_deref(), Some("latest"));
-        assert_eq!(summaries[0].content_type, "application/x-zk1");
-        assert_eq!(
-            summaries[0].zk1_tags.as_deref(),
-            Some(&["PROF".to_string()][..])
-        );
+        assert!(summaries[0].ok);
+        assert!(summaries[0].error.is_none());
+        assert_eq!(summaries[0].content_type, "application/json");
+        assert!(summaries[0].zk1_tags.is_none());
         let persisted = read_report_summaries_locked();
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].id, id);
@@ -3761,10 +4100,10 @@ mod tests {
         assert!(summaries.iter().any(|summary| summary.id == second.id));
     }
     #[test]
-    fn load_report_normalizes_persisted_uppercase_id() {
+    fn load_report_rejects_persisted_identity_rebinding() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        ensure_dirs();
+        ensure_dirs().expect("create prover directories");
         let id = "ef".repeat(32);
         let persisted = sample_report(
             id.to_ascii_uppercase(),
@@ -3778,8 +4117,12 @@ mod tests {
             norito::json::to_json_pretty(&persisted).expect("report json"),
         )
         .expect("write report");
-        let loaded = load_report(&id.to_ascii_uppercase()).expect("load report");
-        assert_eq!(loaded.id, id);
+        assert_eq!(
+            try_load_report(&id)
+                .expect_err("embedded report id must match its canonical filename")
+                .kind(),
+            IoErrorKind::InvalidData
+        );
     }
     #[test]
     fn save_report_rejects_invalid_id() {
@@ -3829,21 +4172,16 @@ mod tests {
         assert_eq!(loaded.zk1_tags.as_deref(), Some(&["PROF".to_string()][..]));
     }
     #[test]
-    fn report_id_visitor_ignores_invalid_entries() {
+    fn report_id_visitor_rejects_invalid_owned_entries() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        ensure_dirs();
+        ensure_dirs().expect("create prover directories");
         let uppercase_id = "AB".repeat(32);
         let clean_id = uppercase_id.to_ascii_lowercase();
         fs::write(report_path_from_sanitized(&clean_id), b"{}").expect("write report file");
         fs::write(reports_dir().join("bad.json"), b"{}").expect("write invalid report id");
         fs::write(reports_dir().join("not-a-report.txt"), b"{}").expect("write non-report file");
-        let mut ids = Vec::new();
-        visit_report_ids(|id| {
-            ids.push(id);
-            true
-        });
-        assert_eq!(ids, vec![clean_id]);
+        visit_report_ids(|_| Ok(true)).expect_err("invalid owned report entries must fail closed");
     }
     #[test]
     fn gc_reports_once_deletes_only_expired_reports_and_retains_fresh_index() {
@@ -3868,7 +4206,7 @@ mod tests {
         );
         save_report(&expired).expect("save expired report");
         save_report(&fresh).expect("save fresh report");
-        let deleted = gc_reports_once();
+        let deleted = gc_reports_once().expect("garbage collect prover reports");
         assert_eq!(deleted, 1);
         assert!(
             load_report(&expired.id).is_none(),
@@ -3895,7 +4233,7 @@ mod tests {
             now_ms().saturating_sub(ttl_ms.saturating_div(2)),
         );
         save_report(&fresh).expect("save fresh report");
-        let deleted = gc_reports_once();
+        let deleted = gc_reports_once().expect("garbage collect prover reports");
         assert_eq!(deleted, 0);
         assert!(
             load_report(&fresh.id).is_some(),
@@ -3912,7 +4250,7 @@ mod tests {
         let fresh = sample_report("31".repeat(32), true, None, "application/json", now_ms());
         save_report(&fresh).expect("save fresh report");
         corrupt_report_summary(&fresh.id);
-        let deleted = gc_reports_once();
+        let deleted = gc_reports_once().expect("garbage collect prover reports");
         assert_eq!(deleted, 0);
         assert!(
             load_report(&fresh.id).is_some(),
@@ -3936,7 +4274,7 @@ mod tests {
             zk1_tags: Some(vec!["PROF".to_string()]),
         }])
         .expect("persist stale index");
-        let deleted = gc_reports_once();
+        let deleted = gc_reports_once().expect("garbage collect prover reports");
         assert_eq!(deleted, 1);
         assert!(load_report_summaries().is_empty());
     }

@@ -16,16 +16,19 @@
 //! depends on a second mutable-or-missing copy of the same authority. Their
 //! response signature uses their current P2P identity, so validator key
 //! rotation does not make a retired height unservable.
+#[path = "v2_historical_body_serve.rs"]
+mod historical_body_serve;
 #[cfg(test)]
 use super::v2::verify_historical_quorum_certificate;
-#[cfg(test)]
-use super::v2_transport::authenticate_certified_body_request;
 use super::v2_transport::{
     AuthenticatedCertifiedBodyRequest, AuthenticatedCommitCertificateResponse,
     OutstandingCommitCertificateRequests, V2TransportError,
-    authenticate_certified_body_request_identity,
     authenticate_certified_body_request_with_validator_pops,
     authenticate_commit_certificate_request, authenticate_commit_certificate_request_identity,
+};
+#[cfg(test)]
+use super::v2_transport::{
+    authenticate_certified_body_request, authenticate_certified_body_request_identity,
 };
 use super::{
     v2_chunks::encode_payload,
@@ -40,8 +43,15 @@ use super::{
 };
 use crate::kura::Kura;
 use core::fmt;
+use historical_body_serve::HistoricalBodyServeService;
+pub(crate) use historical_body_serve::{
+    HistoricalBodyDurableSourceProof, HistoricalBodyServeAdmission, HistoricalBodyServeCompletion,
+    HistoricalBodyServeLimits, HistoricalBodyServeTask, PreparedHistoricalBodyOutput,
+    PreparedHistoricalBodyPostOutcome,
+};
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{NetworkId, block::consensus_v2 as wire, peer::PeerId};
+#[cfg(test)]
 use norito::codec::Encode as _;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -93,29 +103,28 @@ pub(crate) struct V2BlockSyncDiscovery {
     requester: PeerId,
     outstanding: OutstandingCommitCertificateRequests,
 }
-/// Chain-scoped bounded server state for historical CommitQC discovery.
+/// Chain-scoped bounded server state for historical recovery.
 ///
-/// Exact retransmissions reuse the signed cached response without another disk
-/// read. Request signature bytes are deliberately excluded from the cache
-/// identity: after the transport boundary authenticates a signature variant
-/// over the same immutable request, the server rebinds the already-validated
-/// cached response to its new exact request hash instead of waiting for
-/// unrelated FIFO eviction. A request that changes any unsigned field still
-/// conflicts with the occupied logical slot. A serving-key rotation uses the
-/// same re-signing path so the response identity always matches the current
-/// authenticated outer peer. Historical body responses are bounded by both
-/// entry count and aggregate canonical wire bytes; a response larger than the
-/// cache byte ceiling is still served, but is not retained.
+/// CommitQC retransmissions use the actor-local bounded response cache. Body
+/// requests cross only the non-blocking handle to an isolated worker which owns
+/// its Kura reads, encoding, signing, precomputed output identity, and bounded
+/// response cache.
 pub(crate) struct V2BlockSyncServer {
     network_id: NetworkId,
     capacity: usize,
     responses: BTreeMap<HashOf<wire::CommitCertificateRequest>, wire::ConsensusMessageV2>,
     identities: BTreeMap<CommitCertificateServerIdentity, CachedCommitCertificateRequestIdentity>,
     order: VecDeque<HashOf<wire::CommitCertificateRequest>>,
+    historical_body_service: Option<HistoricalBodyServeService>,
+    #[cfg(test)]
     body_responses: BTreeMap<HashOf<wire::CertifiedBodyRequest>, CachedHistoricalBodyResponse>,
+    #[cfg(test)]
     body_identities: BTreeMap<HistoricalBodyRequestIdentity, CachedHistoricalBodyRequestIdentity>,
+    #[cfg(test)]
     body_order: VecDeque<HashOf<wire::CertifiedBodyRequest>>,
+    #[cfg(test)]
     body_response_byte_capacity: usize,
+    #[cfg(test)]
     body_response_bytes: usize,
 }
 impl V2BlockSyncServer {
@@ -123,18 +132,8 @@ impl V2BlockSyncServer {
     pub(crate) fn new(network_id: NetworkId, capacity: usize) -> Result<Self, V2BlockSyncError> {
         // Bound persistent history-response retention independently of the
         // ingress byte queues while leaving oversized responses serviceable.
+        #[cfg(test)]
         let body_response_byte_capacity = usize::try_from(wire::MAX_DA_ENCODED_PAYLOAD_BYTES)?;
-        Self::new_with_body_response_byte_capacity(
-            network_id,
-            capacity,
-            body_response_byte_capacity,
-        )
-    }
-    fn new_with_body_response_byte_capacity(
-        network_id: NetworkId,
-        capacity: usize,
-        body_response_byte_capacity: usize,
-    ) -> Result<Self, V2BlockSyncError> {
         if capacity == 0 {
             return Err(V2TransportError::ZeroCapacity.into());
         }
@@ -144,12 +143,88 @@ impl V2BlockSyncServer {
             responses: BTreeMap::new(),
             identities: BTreeMap::new(),
             order: VecDeque::new(),
+            historical_body_service: None,
+            #[cfg(test)]
             body_responses: BTreeMap::new(),
+            #[cfg(test)]
             body_identities: BTreeMap::new(),
+            #[cfg(test)]
             body_order: VecDeque::new(),
+            #[cfg(test)]
             body_response_byte_capacity,
+            #[cfg(test)]
             body_response_bytes: 0,
         })
+    }
+    #[cfg(test)]
+    fn new_with_body_response_byte_capacity(
+        network_id: NetworkId,
+        capacity: usize,
+        body_response_byte_capacity: usize,
+    ) -> Result<Self, V2BlockSyncError> {
+        let mut server = Self::new(network_id, capacity)?;
+        server.body_response_byte_capacity = body_response_byte_capacity;
+        Ok(server)
+    }
+    /// Construct the chain-scoped server and its isolated historical-body worker.
+    pub(crate) fn new_with_historical_body_service(
+        network_id: NetworkId,
+        capacity: usize,
+        kura: std::sync::Arc<Kura>,
+        responder_key: KeyPair,
+        limits: HistoricalBodyServeLimits,
+    ) -> Result<Self, V2BlockSyncError> {
+        let mut server = Self::new(network_id, capacity)?;
+        server.historical_body_service = Some(HistoricalBodyServeService::spawn(
+            network_id,
+            kura,
+            responder_key,
+            limits,
+        )?);
+        Ok(server)
+    }
+    /// Admit one authenticated historical-body request without blocking the actor.
+    pub(crate) fn try_enqueue_historical_body(
+        &mut self,
+        task: HistoricalBodyServeTask,
+    ) -> Result<HistoricalBodyServeAdmission, V2BlockSyncError> {
+        self.historical_body_service
+            .as_mut()
+            .ok_or_else(|| {
+                V2BlockSyncError::HistoricalBodyService(
+                    "historical-body worker is not installed".into(),
+                )
+            })?
+            .try_enqueue(task)
+    }
+    /// Take at most one prepared historical-body completion.
+    pub(crate) fn try_recv_historical_body_completion(
+        &mut self,
+    ) -> Result<Option<HistoricalBodyServeCompletion>, V2BlockSyncError> {
+        let Some(service) = self.historical_body_service.as_mut() else {
+            return Ok(None);
+        };
+        service.try_recv()
+    }
+    /// Retain one exact-output-rejected body for the next serialized actor turn.
+    pub(crate) fn defer_prepared_historical_body_output(
+        &mut self,
+        prepared: PreparedHistoricalBodyOutput,
+    ) -> Result<(), V2BlockSyncError> {
+        self.historical_body_service
+            .as_mut()
+            .ok_or_else(|| {
+                V2BlockSyncError::HistoricalBodyService(
+                    "historical-body worker is not installed".into(),
+                )
+            })?
+            .defer_prepared(prepared)
+    }
+    /// Return whether admitted work or an undelivered completion still owns ingress.
+    pub(crate) fn has_pending_historical_body_serve(&self) -> bool {
+        self.historical_body_service
+            .as_ref()
+            .is_some_and(HistoricalBodyServeService::has_pending)
     }
     /// Authenticate and answer one exact request from canonical Kura history.
     pub(crate) fn serve(
@@ -178,6 +253,7 @@ impl V2BlockSyncServer {
     /// peer signs the response containing the exact subject-bound bytes. The
     /// receiver still stores and validates the returned body through its active
     /// reducer effects; this service never imports or applies a block locally.
+    #[cfg(test)]
     pub(crate) fn serve_historical_body(
         &mut self,
         kura: &Kura,
@@ -185,6 +261,7 @@ impl V2BlockSyncServer {
         authenticated_requester: &PeerId,
         responder_key: &KeyPair,
     ) -> Result<Option<wire::ConsensusMessageV2>, V2BlockSyncError> {
+        let network_id = self.network_id;
         self.serve_historical_body_with(
             request,
             authenticated_requester,
@@ -192,6 +269,7 @@ impl V2BlockSyncServer {
             |request| {
                 build_historical_body_response(
                     kura,
+                    network_id,
                     request.clone(),
                     authenticated_requester,
                     responder_key,
@@ -199,6 +277,7 @@ impl V2BlockSyncServer {
             },
         )
     }
+    #[cfg(test)]
     fn serve_historical_body_with<Build>(
         &mut self,
         request: wire::CertifiedBodyRequest,
@@ -214,6 +293,7 @@ impl V2BlockSyncServer {
         authenticate_certified_body_request_identity(&request, authenticated_requester)?;
         self.serve_authenticated_historical_body_with(request, responder_key, build)
     }
+    #[cfg(test)]
     fn serve_authenticated_historical_body_with<Build>(
         &mut self,
         request: wire::CertifiedBodyRequest,
@@ -274,6 +354,7 @@ impl V2BlockSyncServer {
             response,
         )
     }
+    #[cfg(test)]
     fn retain_historical_body_response(
         &mut self,
         request_hash: HashOf<wire::CertifiedBodyRequest>,
@@ -431,6 +512,7 @@ impl V2BlockSyncServer {
             .retain(|_, cached| cached.request_hash != request_hash);
         self.order.retain(|hash| *hash != request_hash);
     }
+    #[cfg(test)]
     fn remove_body(
         &mut self,
         request_hash: HashOf<wire::CertifiedBodyRequest>,
@@ -462,12 +544,14 @@ impl V2BlockSyncServer {
         self.body_response_bytes
     }
 }
+#[cfg(test)]
 #[derive(Clone, Debug)]
 struct CachedHistoricalBodyResponse {
     responder: PeerId,
     message: wire::ConsensusMessageV2,
     retained_bytes: usize,
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CachedHistoricalBodyRequestIdentity {
     request_hash: HashOf<wire::CertifiedBodyRequest>,
@@ -800,6 +884,7 @@ fn serve_commit_certificate_from_artifact(
 }
 fn build_historical_body_response(
     kura: &Kura,
+    expected_network_id: NetworkId,
     request: wire::CertifiedBodyRequest,
     authenticated_requester: &PeerId,
     responder_key: &KeyPair,
@@ -809,6 +894,11 @@ fn build_historical_body_response(
         return Ok(None);
     };
     let context = &artifact.height_context;
+    if context.network_id != expected_network_id {
+        return Err(V2BlockSyncError::HistoricalBodyService(
+            "historical-body Kura source belongs to another network".into(),
+        ));
+    }
     let proofs_of_possession = &artifact.validator_set_pops;
     let authenticated: AuthenticatedCertifiedBodyRequest =
         authenticate_certified_body_request_with_validator_pops(
@@ -881,6 +971,12 @@ pub(crate) enum V2BlockSyncError {
     /// A locally built historical response could not cross canonical transport encoding.
     #[error("failed to post a guarded Sumeragi v2 block-sync response: {0}")]
     ResponsePost(String),
+    /// The isolated historical-body service could not preserve its bounded contract.
+    #[error("Sumeragi v2 historical-body service failed: {0}")]
+    HistoricalBodyService(String),
+    /// The isolated historical-body worker stopped while consensus still owned its handle.
+    #[error("Sumeragi v2 historical-body worker disconnected")]
+    HistoricalBodyWorkerDisconnected,
     /// A wire value does not match the requested historical context.
     #[error(transparent)]
     Wire(#[from] wire::ValidationError),
@@ -1213,6 +1309,8 @@ pub(super) mod tests {
         pub(in crate::sumeragi) requester: PeerId,
         /// Signed CommitQC response reconstructed from the finality artifact.
         pub(in crate::sumeragi) commit_response: wire::ConsensusMessageV2,
+        /// Signed body request consumed by the bounded historical worker.
+        pub(in crate::sumeragi) body_request: wire::CertifiedBodyRequest,
         /// Signed body response reconstructed from the canonical block.
         pub(in crate::sumeragi) body_response: wire::ConsensusMessageV2,
     }
@@ -1308,7 +1406,8 @@ pub(super) mod tests {
         let body_request = fixture.body_request(certificate);
         let body_response = build_historical_body_response(
             kura.as_ref(),
-            body_request,
+            context.network_id,
+            body_request.clone(),
             &requester,
             &fixture.old_validators[3],
         )
@@ -1320,6 +1419,7 @@ pub(super) mod tests {
             validators: fixture.old_validators,
             requester,
             commit_response,
+            body_request,
             body_response,
         }
     }

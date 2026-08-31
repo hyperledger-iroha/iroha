@@ -86,7 +86,7 @@ def valid_manifest() -> dict:
         "runtime_handles": {
             "monitoring": "monitoring-prod-fleet",
             "external_signer": "external-signer-prod-release",
-            "kms": "kms-prod-envelope",
+            "key_custody": "key-custody-prod-envelope",
             "webauthn": "webauthn-prod-operators",
         },
         "runtime_material_policy": {
@@ -149,12 +149,31 @@ def test_complete_topology_is_configuration_qualified_only() -> None:
     assert summary["runtime_handle_kinds"] == [
         "monitoring",
         "external_signer",
-        "kms",
+        "key_custody",
         "webauthn",
     ]
     assert summary["signed_model_artifact_count"] == 1
     assert summary["recognized_lane_slot_count"] == 17
     assert summary["required_lane_slots"] == list(MODULE.DEFAULT_REQUIRED_GATES)
+
+
+@pytest.mark.parametrize(
+    "handle",
+    (
+        "software://key-custody/prod-primary",
+        "remote://key-custody/prod-primary",
+        "hsm://key-custody/prod-primary",
+        "pkcs11://key-custody/prod-primary",
+    ),
+)
+def test_key_custody_handle_is_provider_neutral(handle: str) -> None:
+    payload = valid_manifest()
+    payload["runtime_handles"]["key_custody"] = handle
+
+    summary, errors = validate(payload)
+
+    assert errors == []
+    assert summary["status"] == "configuration-qualified"
 
 
 def test_schema_complete_production_topology_example_qualifies() -> None:
@@ -255,6 +274,13 @@ def test_schema_complete_production_topology_example_qualifies() -> None:
         ),
         (
             lambda payload: payload["runtime_handles"].pop("external_signer"),
+            "runtime_handles fields must match the schema-closed contract",
+        ),
+        (
+            lambda payload: (
+                payload["runtime_handles"].pop("key_custody"),
+                payload["runtime_handles"].update(kms="kms-prod-envelope"),
+            ),
             "runtime_handles fields must match the schema-closed contract",
         ),
         (

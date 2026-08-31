@@ -122,7 +122,7 @@ const ARTIFACT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"musubi-artifact-descriptor-v1\0";
 #[cfg(test)]
 const BUNDLE_DOMAIN_V1: &[u8] = b"musubi-bundle-v1\0";
 // TODO: Deployments must inject and qualify their private HTTPS listener, durable replay journal,
-// broker HSM/signer, and authoritative SoraFS backends around the transport-independent server
+// broker signer, and authoritative SoraFS backends around the transport-independent server
 // below. Before declaring a deployment production-qualified, bind each configured hostname to
 // deployment-signed provider-advert IPs and add DNS-rebinding tests; disabling proxies and
 // redirects alone is not DNS pinning. Do not adapt the daemon-private provider broker or restore
@@ -2040,10 +2040,11 @@ impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJourn
 }
 /// Deployment-owned signing boundary for one exact seed-ingress receipt payload.
 ///
-/// Implementations may call an HSM, KMS, or threshold collection service. They return only
-/// controller approvals: the publication service constructs the payload and lifetime, then verifies
-/// the assembled receipt before committing it to the replay journal. This prevents a signer
-/// implementation from substituting any chain, publisher, archive, body, nonce, or expiry field.
+/// Implementations may call a deployment-owned signing or threshold collection service. They
+/// return only controller approvals: the publication service constructs the payload and lifetime,
+/// then verifies the assembled receipt before committing it to the replay journal. This prevents a
+/// signer implementation from substituting any chain, publisher, archive, body, nonce, or expiry
+/// field.
 pub trait MusubiSeedIngressReceiptSigningProviderV1: Send {
     /// Exact broker account controlled by this signing provider.
     fn broker(&self) -> &AccountId;
@@ -2093,9 +2094,10 @@ impl MusubiPublicationServiceClockV1 for MusubiPublicationSystemClockV1 {
 }
 /// Runtime-only software signing adapter for a single-controller ingress broker.
 ///
-/// Production deployments should inject an HSM/KMS implementation of
-/// [`MusubiSeedIngressReceiptSigningProviderV1`]. This adapter exists for focused tests and
-/// explicitly controlled development deployments.
+/// Production deployments should inject an authenticated implementation of
+/// [`MusubiSeedIngressReceiptSigningProviderV1`] whose custody boundary meets
+/// their policy. This adapter exists for focused tests and explicitly
+/// controlled development deployments.
 pub struct SoftwareMusubiSeedIngressReceiptSignerV1 {
     broker: AccountId,
     key_pair: KeyPair,
@@ -3362,9 +3364,9 @@ pub enum MusubiPublicationRuntimeAuthorizationSigningErrorV1 {
 }
 /// Deployment-owned controller signing boundary for private publication requests.
 ///
-/// Implementations may collect approvals from an HSM, KMS, or threshold service. The client
-/// constructs every payload field and accepts only approvals, then independently verifies the
-/// assembled authorization before any network request is built.
+/// Implementations may collect approvals from a deployment-owned signing or threshold service. The
+/// client constructs every payload field and accepts only approvals, then independently verifies
+/// the assembled authorization before any network request is built.
 pub trait MusubiPublicationRuntimeAuthorizationSigningProviderV1: Send + Sync {
     /// Exact publisher account controlled by this provider.
     fn publisher(&self) -> &AccountId;
@@ -3561,7 +3563,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             timeout,
         )
     }
-    /// Construct with a deployment-owned HSM/KMS or threshold authorization provider.
+    /// Construct with a deployment-owned signing or threshold authorization provider.
     ///
     /// # Errors
     /// Returns a stable error when the provider identity or timeout is invalid.

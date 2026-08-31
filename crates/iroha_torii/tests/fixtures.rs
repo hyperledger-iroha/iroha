@@ -164,6 +164,7 @@ impl ToriiHarness {
             None,
             telemetry,
         )
+        .expect("valid Torii integration-test fixture")
         .with_local_peer_id(local_peer_id.clone());
         Self {
             torii,
@@ -195,7 +196,9 @@ impl ToriiHarness {
     }
     /// Build the complete test router while retaining the backing Kiso task.
     pub fn router(&self) -> axum::Router {
-        self.torii.api_router_for_tests()
+        self.torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes")
     }
 }
 /// Standard single-ledger Torii fixture used by endpoint tests.

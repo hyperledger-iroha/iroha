@@ -88,7 +88,7 @@ contains only:
   queue scanning;
 - `queues`, bounding serialized reducer/body/chunk/ready-body ingress;
 - `limits`, bounding lane, merge, historical-recovery, and Native AMX services;
-- `keys`, defining consensus key rotation, algorithms, and HSM policy.
+- `keys`, defining consensus key rotation and allowed algorithms.
 
 The canonical shared projection fingerprints signed mode/cadence with these
 finite limits and key policy. Validators must agree on the fingerprint before

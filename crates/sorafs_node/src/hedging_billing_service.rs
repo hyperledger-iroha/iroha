@@ -4,8 +4,9 @@
 //! typed, contiguous pages from a finalized native-ledger query. The checkpoint retains rebuildable
 //! accrual material, statement delivery state, acknowledgements, and hedge intents; it never
 //! becomes an independent authority for orderbook, reserve/rent, metering, or penalty state.
-//! Statement signatures are produced by a runtime-only HSM/KMS provider, and automatic hedge
-//! execution is not exposed by this V1 service.
+//! Statement signatures are produced by a qualified runtime-only signing provider, and automatic
+//! hedge execution is not exposed by this V1 service. Deployment-owned implementations must all
+//! satisfy the same provider contract.
 //!
 //! Checkpoint compaction and signer/feed-policy rotation use one consensus-authenticated,
 //! governance-signed epoch transition plus a runtime-only sealed monotonic witness archive. The
@@ -752,7 +753,7 @@ pub trait HedgingBillingFinalizedQuery: HedgingBillingRuntimeProviderV1 {
         position: HedgingBillingQueryPositionV1,
     ) -> Result<Option<HedgingBillingFinalizedPeriodCloseV1>, HedgingBillingExternalError>;
 }
-/// Expected runtime identity for the statement-signing HSM/KMS provider.
+/// Expected runtime identity for the statement-signing provider.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct BillingStatementSignerPolicyV1 {
     /// Schema version.
@@ -1438,10 +1439,10 @@ struct HedgingBillingPeriodClosePreimageV1 {
     feed_admitted_at_unix: u64,
     governed_reference_price: GovernedHedgingReferencePriceDecisionV1,
 }
-/// Runtime signer identity rechecked around every HSM operation.
+/// Runtime signer identity rechecked around every provider operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BillingStatementSignerIdentityV1 {
-    /// Stable opaque HSM/KMS provider handle.
+    /// Stable opaque signing-provider handle.
     pub provider_handle: String,
     /// Stable signer identifier.
     pub signer_id: String,
@@ -1464,7 +1465,7 @@ pub enum HedgingBillingExternalError {
     #[error("external result is ambiguous")]
     Ambiguous,
 }
-/// Runtime-only HSM/KMS statement signer.
+/// Runtime-only statement signer.
 pub trait BillingStatementRuntimeSigner: HedgingBillingRuntimeProviderV1 {
     /// Return the current public signer identity.
     ///
@@ -1472,7 +1473,7 @@ pub trait BillingStatementRuntimeSigner: HedgingBillingRuntimeProviderV1 {
     ///
     /// Returns a fixed failure class without provider diagnostics.
     fn identity(&self) -> Result<BillingStatementSignerIdentityV1, HedgingBillingExternalError>;
-    /// Authenticate HSM/KMS readiness without signing payload material.
+    /// Authenticate provider readiness without signing payload material.
     ///
     /// # Errors
     ///
@@ -1485,7 +1486,7 @@ pub trait BillingStatementRuntimeSigner: HedgingBillingRuntimeProviderV1 {
     /// Returns a fixed failure class without key material or provider diagnostics.
     fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], HedgingBillingExternalError>;
 }
-/// Signed, governed billing statement returned by a runtime HSM/KMS provider.
+/// Signed, governed billing statement returned by a qualified runtime provider.
 #[derive(
     Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
 )]
@@ -3417,9 +3418,9 @@ pub struct HedgingBillingEpochTransitionOutcomeV1 {
 )]
 #[norito(tag = "status", content = "value", rename_all = "snake_case")]
 pub enum BillingStatementDeliveryStatusV1 {
-    /// Waiting for HSM/KMS signing.
+    /// Waiting for runtime-provider signing.
     ReadyForSigning,
-    /// An HSM/KMS signing claim is durable.
+    /// A runtime-provider signing claim is durable.
     Signing,
     /// Signed bytes are durable and ready for publication.
     ReadyForPublication,
@@ -3486,7 +3487,7 @@ pub struct HedgingBillingServiceStatusV1 {
     pub finalized_height: u64,
     /// Exact next fixed billing boundary.
     pub next_period_end_unix: u64,
-    /// Statements waiting for an HSM/KMS signature.
+    /// Statements waiting for a runtime-provider signature.
     pub ready_for_signing: u32,
     /// Statements with an in-progress durable signing claim.
     pub signing: u32,
@@ -3958,7 +3959,7 @@ pub struct HedgingBillingDaemonMetricsV1 {
     pub finalized_events_applied: u64,
     /// Finalized period closes applied.
     pub period_closes_applied: u64,
-    /// Statements signed through the configured HSM/KMS.
+    /// Statements signed through the configured runtime provider.
     pub statements_signed: u64,
     /// Statements durably published.
     pub statements_published: u64,
@@ -4015,7 +4016,7 @@ pub enum HedgingBillingRuntimeApiErrorV1 {
 /// Object-safe production API implemented by the supervised `irohad` runtime.
 ///
 /// Torii depends only on this node-owned boundary and never receives the raw billing service,
-/// HSM/KMS adapters, publisher, or hedge-execution adapter. Projection methods, including
+/// signing-provider adapters, publisher, or hedge-execution adapter. Projection methods, including
 /// reconciliation status, must fail closed unless a live qualified finalized head proves the
 /// retained projection fresh and remains stable through response construction. Payload-free daemon
 /// health and metrics remain observable while the projection is unavailable.
@@ -4883,7 +4884,7 @@ impl HedgingBillingService {
             witness_revision: next_witness.revision,
         })
     }
-    /// Sign the first ready statement with a runtime-only HSM/KMS provider.
+    /// Sign the first ready statement with a qualified runtime-only provider.
     ///
     /// Identity is checked before the durable claim, immediately before the signing call, and after
     /// the call. The produced signature is verified locally before it is persisted.

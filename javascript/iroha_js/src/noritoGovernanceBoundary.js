@@ -18,6 +18,7 @@ const GOVERNANCE_INSTRUCTION_CONTEXT = "governance instruction";
 const ELECTION_ID_FIELD = "election_id";
 const PUBLIC_INPUTS_JSON_FIELD = "public_inputs_json";
 const CONTRACT_ADDRESS_FIELD = "contract_address";
+const PROPOSAL_OPERATOR_FIELD = "proposal_operator";
 const DURATION_BLOCKS_FIELD = "duration_blocks";
 const CODE_HASH_FIELD = "code_hash";
 const REFERENDUM_ID_FIELD = "referendum_id";
@@ -307,14 +308,25 @@ export function createNoritoGovernanceInstructionBoundary({
     assertExactGovernanceObjectKeys(
       value,
       [
+        PROPOSAL_OPERATOR_FIELD,
         CONTRACT_ADDRESS_FIELD,
         CODE_HASH_FIELD,
         ABI_HASH_FIELD,
         ABI_VERSION_FIELD,
         "manifest_provenance",
       ],
-      [CONTRACT_ADDRESS_FIELD, CODE_HASH_FIELD, ABI_HASH_FIELD, ABI_VERSION_FIELD],
+      [
+        PROPOSAL_OPERATOR_FIELD,
+        CONTRACT_ADDRESS_FIELD,
+        CODE_HASH_FIELD,
+        ABI_HASH_FIELD,
+        ABI_VERSION_FIELD,
+      ],
       context,
+    );
+    value.proposal_operator = ensureCanonicalAccountId(
+      value.proposal_operator,
+      `${context}.proposal_operator`,
     );
     const contractAddress = assertExactNonEmptyString(
       value.contract_address,

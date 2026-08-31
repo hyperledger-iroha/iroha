@@ -1705,8 +1705,11 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
         OnlinePeersProvider::new(peers_rx),
         None,
         runtime_deps,
-    );
-    let app = torii.api_router_for_tests();
+    )
+    .expect("valid Torii SoraFS-discovery fixture");
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let alias_policy = cfg.torii.sorafs_alias_cache;
     ToriiHarness {
         torii,

@@ -366,6 +366,7 @@ mod tests {
         "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
         "PRTRY:TX_SIGNATURE_INSUFFICIENT",
         "ED07",
+        "PRTRY:KAGEMUSHA_OPERATION_CARRIER_REJECTED",
         "PRTRY:ROUTE_UNRESOLVED",
     ];
     const TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES: &[&str] = &[
@@ -375,8 +376,11 @@ mod tests {
         "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
         "PRTRY:CONFIDENTIAL_POLICY_REJECTED",
     ];
-    const TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES: &[&str] =
-        &["PRTRY:ALREADY_COMMITTED", "PRTRY:ALREADY_ENQUEUED"];
+    const TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES: &[&str] = &[
+        "PRTRY:ALREADY_COMMITTED",
+        "PRTRY:ALREADY_ENQUEUED",
+        "PRTRY:KAGEMUSHA_OPERATION_ID_CONFLICT",
+    ];
     const TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES: &[&str] = &[
         "PRTRY:QUEUE_FULL",
         "PRTRY:QUEUE_LATENCY",
@@ -387,6 +391,7 @@ mod tests {
         "route_unavailable",
         "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
         "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+        "PRTRY:KAGEMUSHA_OPERATION_INDEX_INCONSISTENT",
     ];
     const OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES: &[&str] = &[
         "offline_auth_header_unsupported",
@@ -399,8 +404,10 @@ mod tests {
     const OFFLINE_COMMAND_CONFLICT_REJECT_CODES: &[&str] = &[
         "idempotency_key_conflict",
         "operation_id_conflict",
+        "offline_operation_retry_exhausted",
         "PRTRY:ALREADY_COMMITTED",
         "PRTRY:ALREADY_ENQUEUED",
+        "PRTRY:KAGEMUSHA_OPERATION_ID_CONFLICT",
     ];
     const OFFLINE_COMMAND_RATE_LIMIT_REJECT_CODES: &[&str] = &[
         "PRTRY:QUEUE_FULL",
@@ -418,17 +425,17 @@ mod tests {
         "offline_command_admission_configuration_invalid",
         "offline_operation_capacity_exhausted",
         "offline_operation_admission_inconsistent",
-        "offline_operation_index_unavailable",
+        "offline_operation_pending_unavailable",
         "offline_operation_history_unavailable",
-        "offline_operation_index_inconsistent",
+        "offline_operation_evidence_inconsistent",
         "offline_recursive_release_invalid",
         "offline_recursive_release_outside_issuance_window",
     ];
     const OFFLINE_OPERATION_STATUS_UNAVAILABLE_REJECT_CODES: &[&str] = &[
         "offline_service_unavailable",
-        "offline_operation_index_unavailable",
+        "offline_operation_pending_unavailable",
         "offline_operation_history_unavailable",
-        "offline_operation_index_inconsistent",
+        "offline_operation_evidence_inconsistent",
         "offline_topup_finality_proof_unavailable",
     ];
     fn offline_command_bad_request_reject_codes(operation_id: &str) -> Vec<&'static str> {
@@ -1104,9 +1111,7 @@ mod tests {
         while let Some(value) = pending.pop() {
             match value {
                 Value::Object(object) => {
-                    if object.get("type").and_then(Value::as_str) == Some("object")
-                        || object.contains_key("properties")
-                    {
+                    if object.get("type").and_then(Value::as_str) == Some("object") {
                         assert_eq!(
                             object.get("additionalProperties"),
                             Some(&Value::Bool(false)),
@@ -2303,22 +2308,11 @@ mod tests {
             );
         }
     }
-    #[cfg(all(
-        feature = "node-api",
-        feature = "ws_integration_tests",
-        feature = "telemetry",
-        feature = "profiling",
-        feature = "schema",
-        feature = "zk-verify-batch"
-    ))]
     #[test]
-    fn checked_openapi_assets_match_and_compiled_projection_matches_served_bytes() {
-        let generated = norito::json::to_string_pretty(&generate_spec())
-            .expect("serialize compiled release Torii OpenAPI");
+    fn checked_openapi_assets_match_package_authority() {
         let latest = include_str!("../../../artifacts/openapi/torii.json");
         let current = include_str!("../../../artifacts/openapi/versions/current/torii.json");
         let package = CANONICAL_OPENAPI_JSON;
-        let served = compiled_spec_json();
         assert_eq!(
             latest.as_bytes(),
             current.as_bytes(),
@@ -2329,6 +2323,20 @@ mod tests {
             package.as_bytes(),
             "release/package authority drift"
         );
+    }
+    #[cfg(all(
+        feature = "node-api",
+        feature = "ws_integration_tests",
+        feature = "telemetry",
+        feature = "profiling",
+        feature = "schema",
+        feature = "zk-verify-batch"
+    ))]
+    #[test]
+    fn compiled_projection_matches_served_bytes() {
+        let generated = norito::json::to_string_pretty(&generate_spec())
+            .expect("serialize compiled release Torii OpenAPI");
+        let served = compiled_spec_json();
         assert_eq!(
             generated.as_bytes(),
             served.as_bytes(),
@@ -2948,15 +2956,11 @@ mod tests {
                 .and_then(Value::as_object)
                 .expect("catalog route-auth metadata");
             assert_eq!(
-                route_auth
-                    .get("stableRouteId")
-                    .and_then(Value::as_str),
+                route_auth.get("stableRouteId").and_then(Value::as_str),
                 Some(stable_route_id)
             );
             assert_eq!(
-                route_auth
-                    .get("authentication")
-                    .and_then(Value::as_str),
+                route_auth.get("authentication").and_then(Value::as_str),
                 Some("operator_signature")
             );
             assert!(
@@ -2978,9 +2982,7 @@ mod tests {
                 .keys()
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>(),
-            ["200", "401", "403", "429", "500"]
-                .into_iter()
-                .collect()
+            ["200", "401", "403", "429", "500"].into_iter().collect()
         );
         assert_eq!(
             operation_response_schema_ref(inventory, "200", INVENTORY_PATH),
@@ -4702,6 +4704,7 @@ mod tests {
                 "block_height",
                 "operation_id",
                 "authorization",
+                "offline_change",
             ],
             "redeem transport fields must exactly match the authoritative V4 request"
         );
@@ -4746,8 +4749,43 @@ mod tests {
                 "branch_claims",
                 "artifact_binding",
                 "verifier_key_id",
+                "transition",
             ],
             "the proof statement must contain the complete spendable public state"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineRedemptionIntent"),
+            [
+                "network_id",
+                "asset",
+                "input_note",
+                "parent_branch_claims",
+                "parent_topup_anchor_refs",
+                "parent_proof_step_count",
+                "parent_peer_hop_count",
+                "parent_bundle_digest",
+                "input_root",
+                "recipient",
+                "public_amount",
+                "unshield_public_inputs",
+                "unshield_public_inputs_digest",
+                "operation_id",
+                "change_output",
+                "change_artifact_binding",
+            ],
+            "nullable redemption change fields must remain present on the canonical wire"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineProofAttachment"),
+            [
+                "backend",
+                "proof",
+                "vk_ref",
+                "vk_commitment",
+                "envelope_hash",
+                "lane_privacy",
+            ],
+            "nullable proof commitments must remain present on the canonical wire"
         );
         assert_eq!(
             component_required(schemas, "OfflineSpendBundle"),
@@ -4951,6 +4989,35 @@ mod tests {
             ios["signature"].get("$ref").and_then(Value::as_str),
             Some("#/components/schemas/OfflineSignature")
         );
+        let device_key = schemas
+            .get("OfflineDevicePublicKey")
+            .and_then(Value::as_object)
+            .expect("offline device public key schema");
+        assert_eq!(device_key.get("minItems").and_then(Value::as_u64), Some(65));
+        assert_eq!(device_key.get("maxItems").and_then(Value::as_u64), Some(65));
+        assert_eq!(
+            device_key
+                .get("prefixItems")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_object)
+                .and_then(|prefix| prefix.get("const"))
+                .and_then(Value::as_u64),
+            Some(4),
+            "device public key must use the uncompressed SEC1 point prefix"
+        );
+        let signature = schemas
+            .get("OfflineSignature")
+            .and_then(Value::as_object)
+            .expect("offline hardware signature schema");
+        assert_eq!(
+            signature.get("minLength").and_then(Value::as_u64),
+            Some(128)
+        );
+        assert_eq!(
+            signature.get("maxLength").and_then(Value::as_u64),
+            Some(128)
+        );
 
         let hardware = schemas
             .get("OfflineHardwareAssertion")
@@ -5091,10 +5158,8 @@ mod tests {
                 iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION
             ))
         );
-        let finality_chain = &component_properties(
-            schemas,
-            "OfflineRecipientRegistrationLineage",
-        )["finality_chain"];
+        let finality_chain =
+            &component_properties(schemas, "OfflineRecipientRegistrationLineage")["finality_chain"];
         assert_eq!(finality_chain["minItems"].as_u64(), Some(1));
         assert_eq!(
             finality_chain["maxItems"].as_u64(),
@@ -5112,8 +5177,7 @@ mod tests {
         );
 
         let operation = openapi_operation(&doc, PATH, "post");
-        let request_schema = &operation["requestBody"]["content"]["application/x-norito"]
-            ["schema"];
+        let request_schema = &operation["requestBody"]["content"]["application/x-norito"]["schema"];
         assert_eq!(
             request_schema["$ref"].as_str(),
             Some("#/components/schemas/OfflineRecipientLineageRequest")
@@ -5146,6 +5210,37 @@ mod tests {
                     as u64
             )
         );
+        let responses = operation["responses"]
+            .as_object()
+            .expect("receiver-lineage responses");
+        assert_eq!(
+            documented_reject_codes(responses, "400"),
+            [
+                "offline_receiver_lineage_checkpoint_invalid",
+                "offline_receiver_lineage_network_mismatch",
+                "offline_receiver_lineage_request_invalid",
+            ]
+        );
+        assert_eq!(
+            documented_reject_codes(responses, "404"),
+            [
+                "offline_receiver_lineage_unavailable",
+                "offline_receiver_not_registered",
+            ]
+        );
+        assert_eq!(
+            documented_reject_codes(responses, "409"),
+            [
+                "offline_receiver_lineage_checkpoint_too_old",
+                "offline_receiver_registration_ambiguous",
+            ]
+        );
+        assert_eq!(
+            documented_reject_codes(responses, "503"),
+            ["offline_receiver_lineage_inconsistent"]
+        );
+        assert!(responses.contains_key("413"));
+        assert!(responses.contains_key("415"));
     }
     #[test]
     fn generated_spec_exposes_strict_offline_operation_json_contract() {
@@ -5192,18 +5287,13 @@ mod tests {
                 &[
                     "transaction_hash",
                     "finalized_block_height",
-                    "server_time_ms",
                     "anchor",
                     "finality_proof",
                 ][..],
             ),
             (
                 "OfflineRedeemResult",
-                &[
-                    "transaction_hash",
-                    "finalized_block_height",
-                    "server_time_ms",
-                ][..],
+                &["transaction_hash", "finalized_block_height"][..],
             ),
             (
                 "OfflineOperationPendingValue",
@@ -5237,6 +5327,46 @@ mod tests {
             "OfflineOperationRejected",
         ] {
             assert_strict_object_schema(schemas, name, &["state", "value"], &[]);
+        }
+        assert_strict_object_schema(
+            schemas,
+            "OfflineTopUpFinalityHeightContext",
+            &[
+                "context_id",
+                "network_id",
+                "protocol_version",
+                "height",
+                "epoch",
+                "epoch_end_height",
+                "next_epoch_snapshot",
+                "mode",
+                "parent_commit_qc",
+                "snapshot_bootstrap",
+                "nexus_amx_context_hash",
+                "execution_policy_hash",
+                "da_layout",
+                "leader_seed",
+            ],
+            &[],
+        );
+        for (field, expected_ref) in [
+            (
+                "next_epoch_snapshot",
+                "#/components/schemas/SumeragiV2FinalizedNextEpochSnapshot",
+            ),
+            (
+                "parent_commit_qc",
+                "#/components/schemas/SumeragiV2CommitQuorumCertificate",
+            ),
+            (
+                "snapshot_bootstrap",
+                "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor",
+            ),
+        ] {
+            assert_eq!(
+                nullable_property_ref(schemas, "OfflineTopUpFinalityHeightContext", field),
+                expected_ref
+            );
         }
         let result = schemas
             .get("OfflineOperationResult")
@@ -5301,6 +5431,215 @@ mod tests {
                 "#/components/schemas/OfflineOperationRejected",
             ])
         );
+    }
+    #[test]
+    fn generated_spec_exposes_bounded_kagemusha_responses_and_required_headers() {
+        let doc = generate_spec();
+        let schemas = component_schemas(&doc);
+        let opaque_proof = component_properties(schemas, "OfflineOpaqueProof");
+        assert_eq!(opaque_proof["backend"]["maxLength"].as_u64(), Some(256));
+        assert_eq!(opaque_proof["bytes"]["minItems"].as_u64(), Some(1));
+        assert_eq!(
+            opaque_proof["bytes"]["maxItems"].as_u64(),
+            Some(u64::from(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+            ))
+        );
+        let proof_envelope = component_properties(schemas, "OfflinePastaCycleProofEnvelope");
+        let proof_envelope_version = u64::from(
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+        );
+        assert_eq!(
+            proof_envelope["version"]["minimum"].as_u64(),
+            Some(proof_envelope_version)
+        );
+        assert_eq!(
+            proof_envelope["version"]["maximum"].as_u64(),
+            Some(proof_envelope_version)
+        );
+        assert_eq!(
+            component_properties(schemas, "OfflineProofAttachment")["backend"]["maxLength"]
+                .as_u64(),
+            Some(256)
+        );
+
+        let assert_required_headers = |response: &Value, expected: &[&str]| {
+            let headers = response["headers"].as_object().expect("response headers");
+            for name in expected {
+                assert_eq!(
+                    headers[*name].get("required").and_then(Value::as_bool),
+                    Some(true),
+                    "{name} must be a required response header"
+                );
+            }
+        };
+        let assert_response_cap = |response: &Value, media_type: &str, expected: usize| {
+            assert_eq!(
+                response["content"][media_type]["schema"]["x-iroha-max-bytes"].as_u64(),
+                Some(expected as u64),
+                "{media_type} response cap"
+            );
+        };
+
+        for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
+            let accepted = &openapi_operation(&doc, path, "post")["responses"]["202"];
+            assert_required_headers(
+                accepted,
+                &["Cache-Control", "Location", "Retry-After", "Vary"],
+            );
+            for media_type in ["application/json", "application/x-norito"] {
+                assert_response_cap(
+                    accepted,
+                    media_type,
+                    iroha_torii_shared::offline_api::OFFLINE_OPERATION_REFERENCE_MAX_BYTES,
+                );
+            }
+        }
+
+        let readiness = openapi_operation(&doc, "/v1/offline/readiness", "get");
+        let readiness_ok = &readiness["responses"]["200"];
+        assert_required_headers(readiness_ok, &["Cache-Control", "ETag", "Vary"]);
+        for media_type in ["application/json", "application/x-norito"] {
+            assert_response_cap(
+                readiness_ok,
+                media_type,
+                iroha_torii_shared::offline_api::OFFLINE_STATUS_MAX_BYTES,
+            );
+        }
+        assert_required_headers(
+            &readiness["responses"]["304"],
+            &["Cache-Control", "ETag", "Vary"],
+        );
+
+        let operation_status = &openapi_operation(
+            &doc,
+            "/v1/offline/operations/{operation_id}",
+            "get",
+        )["responses"]["200"];
+        assert_required_headers(operation_status, &["Cache-Control", "Vary"]);
+        let operation_status_content = operation_status["content"]
+            .as_object()
+            .expect("operation-status response content");
+        assert_eq!(
+            operation_status_content
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            ["application/json", "application/x-norito"]
+                .into_iter()
+                .collect()
+        );
+        for (media_type, max_bytes) in [
+            (
+                "application/json",
+                iroha_torii_shared::offline_api::OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
+            ),
+            (
+                "application/x-norito",
+                iroha_torii_shared::offline_api::OFFLINE_OPERATION_STATUS_MAX_BYTES,
+            ),
+        ] {
+            assert_eq!(
+                operation_status_content[media_type]["schema"]["$ref"].as_str(),
+                Some("#/components/schemas/OfflineOperationStatus")
+            );
+            assert_response_cap(operation_status, media_type, max_bytes);
+        }
+
+        let lifecycle_operation = openapi_operation(
+            &doc,
+            "/v1/offline/kagemusha/lifecycle-v4/transactions",
+            "post",
+        );
+        let lifecycle_responses = lifecycle_operation["responses"]
+            .as_object()
+            .expect("lifecycle responses");
+        let lifecycle = &lifecycle_responses["202"];
+        assert_required_headers(
+            lifecycle,
+            &[
+                "x-iroha-entrypoint-hash",
+                "x-iroha-signed-transaction-hash",
+                "Vary",
+            ],
+        );
+        let lifecycle_content = lifecycle["content"]
+            .as_object()
+            .expect("lifecycle accepted response content");
+        assert_eq!(
+            lifecycle_content
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            ["application/json", "application/x-norito"]
+                .into_iter()
+                .collect()
+        );
+        for media_type in ["application/json", "application/x-norito"] {
+            assert_eq!(
+                lifecycle_content[media_type]["schema"]["$ref"].as_str(),
+                Some("#/components/schemas/TransactionSubmissionReceipt")
+            );
+            assert_response_cap(lifecycle, media_type, 64 * 1024);
+        }
+        let lifecycle_timeout = &lifecycle_responses["408"];
+        assert!(!response_documents_reject_code(lifecycle_responses, "408"));
+        for media_type in ["application/json", "application/x-norito"] {
+            assert_eq!(
+                lifecycle_timeout["content"][media_type]["schema"]["$ref"].as_str(),
+                Some("#/components/schemas/ErrorEnvelope")
+            );
+        }
+    }
+    #[test]
+    fn generated_spec_requires_positive_offline_timestamps_and_retry_delays() {
+        let doc = generate_spec();
+        let schemas = component_schemas(&doc);
+        for schema_name in ["OfflineOperationReference", "OfflineOperationPendingValue"] {
+            assert_eq!(
+                component_properties(schemas, schema_name)["submitted_at_ms"]
+                    .get("minimum")
+                    .and_then(Value::as_u64),
+                Some(1),
+                "{schema_name}.submitted_at_ms must exclude the zero sentinel"
+            );
+        }
+
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        let mut retry_header_count = 0_u64;
+        for (path, path_item) in paths
+            .iter()
+            .filter(|(path, _)| path.starts_with("/v1/offline"))
+        {
+            let methods = path_item.as_object().expect("offline path item");
+            for operation in methods.values().filter_map(Value::as_object) {
+                let Some(responses) = operation.get("responses").and_then(Value::as_object) else {
+                    continue;
+                };
+                for response in responses.values().filter_map(Value::as_object) {
+                    let Some(schema) = response
+                        .get("headers")
+                        .and_then(Value::as_object)
+                        .and_then(|headers| headers.get("Retry-After"))
+                        .and_then(Value::as_object)
+                        .and_then(|header| header.get("schema"))
+                        .and_then(Value::as_object)
+                    else {
+                        continue;
+                    };
+                    retry_header_count += 1;
+                    assert_eq!(
+                        schema.get("minimum").and_then(Value::as_u64),
+                        Some(1),
+                        "{path} Retry-After must exclude a zero-second retry loop"
+                    );
+                }
+            }
+        }
+        assert!(retry_header_count > 0, "offline Retry-After headers");
     }
     #[test]
     fn generated_spec_exposes_only_the_closed_verifier_backend_registry_v1() {
@@ -6762,7 +7101,11 @@ mod tests {
             ]
             .map(SignatureRejectionCode::as_str),
         );
-        acceptance_codes.extend(["ED07", "PRTRY:ROUTE_UNRESOLVED"]);
+        acceptance_codes.extend([
+            "ED07",
+            "PRTRY:KAGEMUSHA_OPERATION_CARRIER_REJECTED",
+            "PRTRY:ROUTE_UNRESOLVED",
+        ]);
         assert_eq!(
             acceptance_codes,
             TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES
@@ -6772,7 +7115,7 @@ mod tests {
             TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES
         );
         assert_eq!(
-            &OFFLINE_COMMAND_CONFLICT_REJECT_CODES[2..],
+            &OFFLINE_COMMAND_CONFLICT_REJECT_CODES[3..],
             TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES
         );
         assert_eq!(
@@ -6811,7 +7154,7 @@ mod tests {
         for (errors, expected) in [
             (
                 vec![QueueError::InBlockchain, QueueError::IsInQueue],
-                TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES,
+                &TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES[..2],
             ),
             (
                 vec![

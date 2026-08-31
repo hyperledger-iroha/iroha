@@ -486,6 +486,7 @@ public enum KagemushaRecursiveSpend {
 
     public static let requiredProtocolSymbols = [
         "connect_norito_kagemusha_recursive_spend_capabilities_v4",
+        "connect_norito_kagemusha_offline_operation_status_validate_v1",
         "connect_norito_kagemusha_topup_finality_verify_v4",
         "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
         "connect_norito_kagemusha_recursive_spend_topup_v4",

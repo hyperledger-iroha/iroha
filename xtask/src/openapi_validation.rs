@@ -376,12 +376,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_component_header_is_rejected() {
+    fn missing_local_component_header_is_rejected() {
         let spec = release_spec_with_header_reference("#/components/headers/Missing");
         let error = validate_release_openapi_spec(&spec)
             .expect_err("a missing component header must fail")
             .to_string();
         assert!(error.contains("missing component header Missing"));
+        assert!(error.contains("$.paths./config.get.responses.200.headers"));
     }
 
     #[test]

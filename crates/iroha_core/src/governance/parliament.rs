@@ -31,7 +31,8 @@ use iroha_data_model::{
         MAX_PARLIAMENT_BALLOT_RETRIES_V1, MAX_PARLIAMENT_BODY_TARGET_SEATS_V1,
         MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1, MAX_PARLIAMENT_CITIZENS_V1,
         MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, MAX_PARLIAMENT_SORTITION_RETRIES_V1,
-        ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1, ParliamentBallotAttemptV1,
+        MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1, ParliamentAggregateOutcomeV1,
+        ParliamentAggregateTallyV1, ParliamentBallotAttemptV1,
         ParliamentBallotCertificateBindingV1, ParliamentBallotFailureKindV1, ParliamentBody,
         ParliamentBodyCertificateBindingV1, ParliamentBodyInstanceV1, ParliamentNoResultKindV1,
         ParliamentPublicFindingCertificateBindingV1, ParliamentSeatAssignmentV1, ProposalContentId,
@@ -62,6 +63,10 @@ use super::{
 /// exposing an independently tunable consensus parameter.
 pub(crate) const MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1: u32 =
     MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1;
+
+pub(crate) fn hidden_ballot_population_meets_anonymity_floor_v1(count: usize) -> bool {
+    u32::try_from(count).is_ok_and(|count| count >= MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
+}
 
 /// Enumerate every canonical attempt identity available to one V1 proposal.
 ///
@@ -103,6 +108,14 @@ pub enum ParliamentReducerErrorV1 {
     AttemptNotActive,
     /// The canonical framed attempt state exceeds or cannot satisfy the hard V1 byte bound.
     AttemptStateSizeLimitExceeded,
+    /// A derived per-member attempt-reference count overflowed its fixed integer domain.
+    MemberReferenceCountOverflow,
+    /// A derived per-member attempt-reference row disagreed with authoritative attempt state.
+    MemberReferenceProjectionMismatch,
+    /// A derived Parliament status or stage count overflowed its fixed integer domain.
+    AttemptCountOverflow,
+    /// Derived Parliament status and stage counts disagree with authoritative attempt state.
+    AttemptCountProjectionMismatch,
     /// The attempt names a Parliament policy version other than the sole first-release version.
     UnsupportedPolicyVersion,
     /// The requested risk tier is below the already accepted tier.
@@ -238,6 +251,18 @@ impl fmt::Display for ParliamentReducerErrorV1 {
             Self::AttemptNotActive => f.write_str("governance attempt is not active"),
             Self::AttemptStateSizeLimitExceeded => {
                 f.write_str("Parliament attempt state exceeds the V1 encoded-size limit")
+            }
+            Self::MemberReferenceCountOverflow => {
+                f.write_str("Parliament member-reference count exceeds the fixed integer limit")
+            }
+            Self::MemberReferenceProjectionMismatch => {
+                f.write_str("Parliament member-reference projection disagrees with attempt state")
+            }
+            Self::AttemptCountOverflow => {
+                f.write_str("Parliament attempt count exceeds the fixed integer limit")
+            }
+            Self::AttemptCountProjectionMismatch => {
+                f.write_str("Parliament attempt-count projection disagrees with attempt state")
             }
             Self::UnsupportedPolicyVersion => {
                 f.write_str("unsupported Parliament governance policy version")
@@ -1103,7 +1128,8 @@ fn timed_ballot_schedule(
         || policy.release_delay_blocks == 0
         || policy.opening_phase_blocks == 0
         || policy.max_ballot_retries > MAX_PARLIAMENT_BALLOT_RETRIES_V1
-        || !(1..=MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1).contains(&policy.max_corpus_entries)
+        || !(MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1..=MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1)
+            .contains(&policy.max_corpus_entries)
         || policy.registration_phase_blocks < minimum_registration_phase_blocks
         || policy.survivor_freeze_phase_blocks < minimum_survivor_freeze_phase_blocks
         || policy.commitment_phase_blocks
@@ -1252,12 +1278,16 @@ fn ballot_failure_matches_state(
     let survivors_frozen = registration_frozen
         && ballot.dropout_root.is_some()
         && ballot.survivor_root.is_some()
-        && ballot.survivors.is_some()
+        && ballot
+            .survivors
+            .is_some_and(|survivors| survivors >= MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
         && ballot.no_recovery_root.is_some()
         && ballot.survivors_frozen_at_height == Some(ballot.survivor_freeze_height);
     let corpus_frozen = survivors_frozen
         && ballot.corpus_root.is_some()
-        && ballot.accepted_ballots.is_some()
+        && ballot
+            .accepted_ballots
+            .is_some_and(|accepted| accepted >= MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
         && ballot.timed_commitment_root.is_some()
         && timed_commitment_completed_in_window(ballot);
 
@@ -1349,10 +1379,10 @@ fn ballot_failure_matches_state(
                     .eligible_confirmation_candidates
                     .is_some_and(|count| match failure_kind {
                         ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable => {
-                            count < 2
+                            count < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
                         }
                         ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted => {
-                            count >= 2
+                            count >= MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
                         }
                         _ => unreachable!("matched post-opening failure kind"),
                     })
@@ -1684,43 +1714,75 @@ impl ParliamentAttemptStateV1 {
         Err(ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded)
     }
 
-    /// Return whether this immutable attempt currently retains `member` in a
-    /// live draw, a retryable hidden-capacity snapshot, or a sealed Parliament seat.
+    /// Return the distinct accounts referenced by this attempt and the subset
+    /// whose citizenship bonds it currently retains.
+    ///
+    /// Candidate snapshots are transient: they reference accounts only while
+    /// the containing governance attempt remains active and their inner draw is
+    /// still live. Sealed body assignments are immutable audit references for
+    /// every later attempt status. Bond retention additionally ends once the
+    /// attempt is neither active nor certified.
+    #[must_use]
+    pub(crate) fn parliament_member_reference_sets_v1(
+        &self,
+    ) -> (BTreeSet<AccountId>, BTreeSet<AccountId>) {
+        let mut referenced = BTreeSet::new();
+        if self.attempt.status == GovernanceAttemptStatusV1::Active {
+            for election in self.elections.values().filter(|election| {
+                matches!(
+                    election.attempt.status,
+                    BodyElectionAttemptStatusV1::AwaitingPulse
+                        | BodyElectionAttemptStatusV1::Drawing
+                        | BodyElectionAttemptStatusV1::AcceptingInvitations
+                )
+            }) {
+                if let Ok(index) = usize::try_from(election.candidate_snapshot_index)
+                    && let Some(snapshot) = self.candidate_snapshots.get(index)
+                {
+                    referenced.extend(snapshot.iter().cloned());
+                }
+            }
+            for failure in self
+                .active_sortition_capacity_failures
+                .values()
+                .filter_map(|id| self.sortition_capacity_failures.get(id))
+                .filter(|failure| {
+                    failure.status == BodyElectionAttemptStatusV1::NoRoster
+                        && failure.sequence < MAX_PARLIAMENT_SORTITION_RETRIES_V1
+                })
+            {
+                referenced.extend(failure.candidate_snapshot.iter().cloned());
+            }
+        }
+        referenced.extend(self.bodies.values().flat_map(|body| {
+            body.assignments()
+                .iter()
+                .map(|assignment| assignment.member.clone())
+        }));
+        let bond_retaining = matches!(
+            self.attempt.status,
+            GovernanceAttemptStatusV1::Active | GovernanceAttemptStatusV1::Certified
+        )
+        .then(|| referenced.clone())
+        .unwrap_or_default();
+        (referenced, bond_retaining)
+    }
+
+    /// Return whether this attempt references `member` through a currently
+    /// live draw or an immutable sealed Parliament seat.
     #[must_use]
     pub(crate) fn references_parliament_member(&self, member: &AccountId) -> bool {
-        self.elections.values().any(|election| {
-            matches!(
-                election.attempt.status,
-                BodyElectionAttemptStatusV1::AwaitingPulse
-                    | BodyElectionAttemptStatusV1::Drawing
-                    | BodyElectionAttemptStatusV1::AcceptingInvitations
-            ) && usize::try_from(election.candidate_snapshot_index)
-                .ok()
-                .and_then(|index| self.candidate_snapshots.get(index))
-                .is_some_and(|snapshot| snapshot.binary_search(member).is_ok())
-        }) || self
-            .active_sortition_capacity_failures
-            .values()
-            .filter_map(|id| self.sortition_capacity_failures.get(id))
-            .any(|failure| {
-                failure.status == BodyElectionAttemptStatusV1::NoRoster
-                    && failure.sequence < MAX_PARLIAMENT_SORTITION_RETRIES_V1
-                    && failure.candidate_snapshot.binary_search(member).is_ok()
-            })
-            || self.bodies.values().any(|body| {
-                body.assignments()
-                    .iter()
-                    .any(|assignment| &assignment.member == member)
-            })
+        self.parliament_member_reference_sets_v1()
+            .0
+            .contains(member)
     }
 
     /// Return whether an active attempt still retains `member`'s citizenship bond.
     #[must_use]
     pub(crate) fn retains_citizenship_bond(&self, member: &AccountId) -> bool {
-        matches!(
-            self.attempt.status,
-            GovernanceAttemptStatusV1::Active | GovernanceAttemptStatusV1::Certified
-        ) && self.references_parliament_member(member)
+        self.parliament_member_reference_sets_v1()
+            .1
+            .contains(member)
     }
 
     /// Return the immutable proposal content identifier.
@@ -2001,22 +2063,29 @@ impl ParliamentAttemptStateV1 {
         self.ballots.iter()
     }
 
-    /// Return the greatest committed opening deadline that references one TLE key session.
+    /// Return this attempt's maximum committed opening deadline per TLE key session.
     ///
-    /// Runtime secret-share custody uses this read-only projection before
-    /// retiring a rotating share. Historical retries remain included: a share
-    /// is retained through every deadline ever committed for this attempt,
-    /// even when a later retry superseded the corresponding ballot.
+    /// Historical retries remain included: a share is retained through every
+    /// deadline ever committed for this attempt, even when a later retry
+    /// superseded the corresponding ballot. World state folds these bounded,
+    /// deterministic contributions into its snapshot-skipped retention index.
     #[must_use]
-    pub(crate) fn tle_key_session_retention_deadline(
+    pub(crate) fn tle_key_session_retention_contributions_v1(
         &self,
-        key_session_id: TleKeySessionId,
-    ) -> Option<u64> {
-        self.ballots
-            .values()
-            .filter(|ballot| ballot.tle_key_session_id == Some(key_session_id))
-            .map(|ballot| ballot.opening_deadline_height)
-            .max()
+    ) -> BTreeMap<TleKeySessionId, u64> {
+        let mut contributions = BTreeMap::<TleKeySessionId, u64>::new();
+        for ballot in self.ballots.values() {
+            let Some(key_session_id) = ballot.tle_key_session_id else {
+                continue;
+            };
+            contributions
+                .entry(key_session_id)
+                .and_modify(|deadline| {
+                    *deadline = (*deadline).max(ballot.opening_deadline_height);
+                })
+                .or_insert(ballot.opening_deadline_height);
+        }
+        contributions
     }
 
     /// Return whether a live reducer object requests the exact beacon slot.

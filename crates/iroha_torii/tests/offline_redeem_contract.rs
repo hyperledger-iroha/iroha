@@ -38,14 +38,14 @@ fn offline_operation_polling_preserves_redeem_identity_and_finality_integrity() 
         "offline_operation_reference_response",
         "offline_operation_status_uri",
         "find_terminal_offline_operation_by_id",
-        "ensure_kagemusha_v2_terminal_finality_matches_record",
+        "ensure_kagemusha_v4_terminal_finality_matches_record",
         "terminal_rejected_or_expired_offline_operation_status",
         "ensure_unproven_pending_window_is_live",
         "OfflineOperationStatus::Applied",
         "OfflineOperationResult::Redeem",
         "operation_id: operation_id_hex.clone()",
         "known_pending_in_queue",
-        "offline_operation_index_inconsistent",
+        "offline_operation_evidence_inconsistent",
     ] {
         assert!(
             commands.contains(marker),
@@ -53,7 +53,6 @@ fn offline_operation_polling_preserves_redeem_identity_and_finality_integrity() 
         );
     }
     assert!(commands.contains("finality.finalized_block_height == 0"));
-    assert!(commands.contains("finality.server_time_ms == 0"));
     assert!(commands.contains("finality.operation_id == [0; 32]"));
     assert!(commands.contains("anchor_transaction_hash == [0; 32]"));
 }

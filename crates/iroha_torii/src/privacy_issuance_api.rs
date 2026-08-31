@@ -335,8 +335,8 @@ impl From<BootleLanternIssuanceErrorV1> for BootleLanternIssuerCryptoProviderErr
 }
 /// Runtime-only native issuer cryptography boundary.
 ///
-/// Implementations hold the issuer trapdoor or its HSM boundary but never a
-/// replay store. Torii is the sole authority for authorization registration,
+/// Implementations hold the issuer trapdoor inside an isolated qualified provider, which may be
+/// software, remote, or hardware backed, but never a replay store. Torii is the sole authority for authorization registration,
 /// request preflight, atomic claim, completion, and irreversible failure.
 pub trait BootleLanternIssuerCryptoProviderV1: Send + Sync {
     /// Exact stable issuer identity served by this provider.
@@ -376,7 +376,7 @@ pub trait BootleLanternIssuerCryptoProviderV1: Send + Sync {
 }
 /// Runtime-only private dependencies returned by one coherent registry resolve.
 pub struct BootleLanternIssuanceRuntimeSecretsV1 {
-    /// Native issuer cryptography provider holding the trapdoor or HSM boundary.
+    /// Native issuer cryptography provider holding the isolated trapdoor boundary.
     pub issuer_provider: Arc<dyn BootleLanternIssuerCryptoProviderV1>,
     /// Opaque bearer authentication authority.
     pub authenticator: Arc<dyn BootleLanternIssuanceAuthenticatorV1>,

@@ -17,9 +17,7 @@ use iroha_data_model::{
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
-    consensus::{
-        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, HsmBinding,
-    },
+    consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
     domain::{Domain, DomainId},
     isi::{
         Grant, RegisterPeerWithPop,
@@ -208,11 +206,6 @@ fn seed_public_lane_state(
         pop: Some(consensus_pop),
         activation_height: 1,
         expiry_height: None,
-        hsm: Some(HsmBinding {
-            provider: "softkey".to_string(),
-            key_label: "consensus-main".to_string(),
-            slot: None,
-        }),
         replaces: None,
         status: ConsensusKeyStatus::Active,
     };

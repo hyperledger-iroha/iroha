@@ -24,7 +24,6 @@ import {
 } from "./operatorRequest.browser.js";
 import { ensureCanonicalAccountId } from "./normalizers.js";
 import {
-  normalizeKagemushaOperationId,
   normalizeKagemushaOperationReference,
   normalizeKagemushaOperationStatus,
   normalizeKagemushaRedeemRequestV4,
@@ -45,7 +44,9 @@ const DEFAULT_SUCCESS_STATUSES = Object.freeze([200]);
 const BOUNDED_RESPONSE_MAX_STREAM_CHUNKS = 16_384;
 const DEFAULT_JSON_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const DEFAULT_BINARY_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
-const KAGEMUSHA_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
+const KAGEMUSHA_READINESS_JSON_MAX_BYTES = 4 * 1024;
+const KAGEMUSHA_OPERATION_REFERENCE_JSON_MAX_BYTES = 4 * 1024;
+const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const KAIGI_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
 const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
@@ -2077,7 +2078,7 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/offline/readiness", {
       signal: opts.signal,
       oneShot: true,
-      maximumBodyBytes: KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      maximumBodyBytes: KAGEMUSHA_READINESS_JSON_MAX_BYTES,
       jsonParser: (text) => parseStrictLosslessIntegerJson(
         text,
         "Offline capability response",
@@ -2109,13 +2110,13 @@ export class ToriiBrowserClient {
     );
   }
 
-  getKagemushaOperationStatus(operationId, options = {}) {
-    const canonicalId = normalizeKagemushaOperationId(operationId);
+  getKagemushaOperationStatus(operationReference, options = {}) {
+    const accepted = normalizeKagemushaOperationReference(operationReference);
     const opts = signalOnlyOptions(options, "getKagemushaOperationStatus options");
-    return this._json("GET", `/v1/offline/operations/${canonicalId}`, {
+    return this._json("GET", accepted.status_uri, {
       signal: opts.signal,
       oneShot: true,
-      maximumBodyBytes: KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      maximumBodyBytes: KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES,
       jsonParser: (text) => parseStrictLosslessIntegerJson(
         text,
         "Kagemusha operation status response",
@@ -2124,7 +2125,7 @@ export class ToriiBrowserClient {
         response.headers.get("content-type"),
         "Kagemusha operation status response",
       ),
-    }).then((payload) => normalizeKagemushaOperationStatus(payload, canonicalId));
+    }).then((payload) => normalizeKagemushaOperationStatus(payload, accepted));
   }
 
   _submitKagemushaCommandV4(path, kind, request, options, context) {
@@ -2144,7 +2145,7 @@ export class ToriiBrowserClient {
       },
       signal: opts.signal,
       oneShot: true,
-      maximumBodyBytes: KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      maximumBodyBytes: KAGEMUSHA_OPERATION_REFERENCE_JSON_MAX_BYTES,
       jsonParser: (text) => parseStrictLosslessIntegerJson(
         text,
         "Kagemusha operation reference response",

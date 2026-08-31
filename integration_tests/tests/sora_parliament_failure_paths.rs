@@ -1128,6 +1128,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         "the competing artifact must preserve the proposal's exact ABI surface",
     );
     let competing_deploy_proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: client.account.clone(),
         contract_address: contract_address.clone(),
         code_hash: competing_contract_code_hash,
         abi_hash: competing_abi_hash,
@@ -1167,6 +1168,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
     // same absent head; ordinary block progression enacts the competitor before
     // this attempt finishes certification.
     let deploy_proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: client.account.clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,
@@ -1294,6 +1296,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         provenance: Vec::new(),
     };
     let runtime_proposal = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+        proposal_operator: client.account.clone(),
         manifest: runtime_manifest.clone(),
     });
     let runtime_create = CreateParliamentGovernanceAttemptV1 {
@@ -1469,6 +1472,7 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
 
     let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: client.account.clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,
@@ -1699,6 +1703,7 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
 
     let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: client.account.clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,

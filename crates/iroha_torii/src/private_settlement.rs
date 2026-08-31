@@ -898,12 +898,19 @@ fn phase_certificate_acknowledges_lifecycle_v1(
 }
 
 fn parse_digest(literal: &str) -> Result<Hash, Response> {
-    Hash::from_str(literal.trim()).map_err(|_| {
+    let digest = Hash::from_str(literal).map_err(|_| {
         error_response(
             StatusCode::BAD_REQUEST,
             "private_settlement_invalid_identifier",
         )
-    })
+    })?;
+    if digest.to_string() != literal {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "private_settlement_invalid_identifier",
+        ));
+    }
+    Ok(digest)
 }
 
 fn audit_capsule_within_canonical_bound(
@@ -2070,5 +2077,24 @@ mod tests {
             PrivateSettlementPhaseV1::Commit,
             PrivateSettlementSidecarLifecycleV1::Prepared,
         ));
+    }
+
+    #[test]
+    fn digest_path_segments_require_canonical_lowercase_hex() {
+        let digest = Hash::new(b"canonical private settlement digest");
+        let canonical = digest.to_string();
+        assert_eq!(parse_digest(&canonical).expect("canonical digest"), digest);
+
+        for alias in [
+            canonical.to_ascii_uppercase(),
+            format!("0x{canonical}"),
+            format!(" {canonical}"),
+            format!("{canonical} "),
+        ] {
+            assert!(
+                parse_digest(&alias).is_err(),
+                "non-canonical digest alias must fail: {alias:?}"
+            );
+        }
     }
 }

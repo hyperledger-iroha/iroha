@@ -473,12 +473,15 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
         None,
         telemetry,
     )
+    .expect("valid Torii Connect fixture")
 }
 #[tokio::test]
 async fn connect_endpoints_report_typed_unavailability_when_disabled() {
     let cfg = minimal_actual_config(false);
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     // The WebSocket route remains mounted but rejects the upgrade while disabled.
     let resp = app
         .clone()
@@ -532,7 +535,9 @@ async fn connect_endpoints_report_typed_unavailability_when_disabled() {
 async fn connect_status_present_when_enabled() {
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let unsigned = app
         .clone()
         .oneshot(
@@ -563,7 +568,9 @@ async fn connect_status_reports_exact_local_only_strategy() {
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::LocalOnly;
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let payload = connect_aggregate_status_json(&app, &cfg).await;
     assert_eq!(relay_strategy(&payload), "local_only");
     let ConnectStatusCounters {
@@ -582,7 +589,9 @@ async fn connect_status_reports_broadcast_effective_when_p2p_attached() {
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let AttachedConnectRelayStatus {
         relay_strategy,
         relay_effective_strategy,
@@ -602,7 +611,9 @@ async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached
     cfg.torii.connect.relay_enabled = false;
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let AttachedConnectRelayStatus {
         relay_strategy,
         relay_effective_strategy,
@@ -620,7 +631,9 @@ async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached
 async fn connect_session_delete_endpoint_removes_tokens() {
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let (_, payload) = create_connect_session_payload(&app, 0x24).await;
     let sid = payload
         .get("sid")
@@ -681,7 +694,9 @@ async fn connect_session_delete_endpoint_removes_tokens() {
 async fn connect_session_status_requires_management_token() {
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let (_, created) = create_connect_session_payload(&app, 0x34).await;
     let sid = created
         .get("sid")
@@ -751,7 +766,9 @@ async fn connect_session_delete_rejects_ws_attach() {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -763,7 +780,9 @@ async fn connect_session_delete_rejects_ws_attach() {
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
     // Use a second router handle for in-process REST calls.
-    let app2 = torii.api_router_for_tests();
+    let app2 = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let (sid_fixed, req_body) = connect_session_request_body(0x44);
     let create_resp = app2
         .clone()
@@ -839,7 +858,9 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
     // Build enabled config and Torii router
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     // Serve on an ephemeral port
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
@@ -852,7 +873,9 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
     // Create a session via in-process router call to obtain tokens and sid
-    let app2 = torii.api_router_for_tests();
+    let app2 = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let (sid_fixed, req_body) = connect_session_request_body(0x52);
     let res = app2
         .clone()
@@ -900,7 +923,9 @@ async fn connect_ws_accepts_protocol_token() {
     use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::header};
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -911,7 +936,9 @@ async fn connect_ws_accepts_protocol_token() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-    let app2 = torii.api_router_for_tests();
+    let app2 = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let (sid_fixed, req_body) = connect_session_request_body(0x62);
     let res = app2
         .clone()
@@ -962,7 +989,9 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -973,7 +1002,9 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-    let app2 = torii.api_router_for_tests();
+    let app2 = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let (sid_fixed, req_body) = connect_session_request_body(0x92);
     let res = app2
         .clone()
@@ -1100,7 +1131,9 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -1111,7 +1144,9 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-    let app2 = torii.api_router_for_tests();
+    let app2 = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let (sid_fixed, req_body) = connect_session_request_body(0xA3);
     let res = app2
         .clone()
@@ -1272,7 +1307,9 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     cfg.torii.connect.p2p_ttl_hops = 1;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let Some((listener, addr)) =
         bind_connect_test_listener("connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter")
             .await
@@ -1280,7 +1317,9 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
         return;
     };
     spawn_test_server(listener, app);
-    let app2 = torii.api_router_for_tests();
+    let app2 = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let session = create_connect_app_session(&app2, 0xB4).await;
     // Wait until async bus attachment reports active P2P relay wiring.
     let mut relay_p2p_attached = wait_for_connect_relay_p2p_attachment(&app2, &cfg).await;
@@ -1335,7 +1374,9 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     cfg.torii.connect.p2p_ttl_hops = 1;
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let Some((listener, addr)) = bind_connect_test_listener(
         "connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter",
     )
@@ -1344,7 +1385,9 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
         return;
     };
     spawn_test_server(listener, app);
-    let app2 = torii.api_router_for_tests();
+    let app2 = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let session = create_connect_app_session(&app2, 0xC5).await;
     let mut app_ws = open_connect_app_websocket(addr, &session).await;
     let seq1 = proto::ConnectFrameV1 {
@@ -1395,14 +1438,18 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::LocalOnly;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let Some((listener, addr)) =
         bind_connect_test_listener("connect_ws_local_only_with_p2p_does_not_rebroadcast").await
     else {
         return;
     };
     spawn_test_server(listener, app);
-    let app2 = torii.api_router_for_tests();
+    let app2 = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let session = create_connect_app_session(&app2, 0xD6).await;
     // Wait for async P2P bus attachment before sending frames.
     let mut relay_p2p_attached = wait_for_connect_relay_p2p_attachment(&app2, &cfg).await;
@@ -1454,14 +1501,18 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     cfg.torii.connect.relay_enabled = false;
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let Some((listener, addr)) =
         bind_connect_test_listener("connect_ws_relay_disabled_with_p2p_does_not_rebroadcast").await
     else {
         return;
     };
     spawn_test_server(listener, app);
-    let app2 = torii.api_router_for_tests();
+    let app2 = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let session = create_connect_app_session(&app2, 0xE7).await;
     // Wait for async P2P bus attachment before sending frames.
     let mut relay_p2p_attached = wait_for_connect_relay_p2p_attachment(&app2, &cfg).await;
@@ -1509,7 +1560,9 @@ async fn connect_ws_rejects_query_token() {
     use tokio::net::TcpListener;
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {

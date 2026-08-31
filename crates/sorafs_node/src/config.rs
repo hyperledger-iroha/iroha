@@ -378,7 +378,7 @@ impl StorageConfig {
     pub fn governance_dag_publisher_peer_id(&self) -> Option<&String> {
         self.governance_dag_publisher_peer_id.as_ref()
     }
-    /// Opaque runtime HSM/KMS handle for signed runtime Governance DAG blocks.
+    /// Opaque runtime signing-provider handle for signed runtime Governance DAG blocks.
     #[must_use]
     pub fn governance_dag_signer_handle(&self) -> Option<&String> {
         self.governance_dag_signer_handle.as_ref()

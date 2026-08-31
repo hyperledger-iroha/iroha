@@ -421,7 +421,7 @@ mod iter {
     }
     /// Iterate over range of entries in block, view or transaction
     pub struct RangeIter<'slf, K: Key, V: Value> {
-        pub(crate) iter: Box<dyn Iterator<Item = (&'slf K, &'slf V)> + 'slf>,
+        pub(crate) iter: Box<dyn DoubleEndedIterator<Item = (&'slf K, &'slf V)> + 'slf>,
     }
     impl<'slf, K: Key, V: Value> Iterator for Iter<'slf, K, V> {
         type Item = (&'slf K, &'slf V);
@@ -433,6 +433,11 @@ mod iter {
         type Item = (&'slf K, &'slf V);
         fn next(&mut self) -> Option<Self::Item> {
             self.iter.next()
+        }
+    }
+    impl<'slf, K: Key, V: Value> DoubleEndedIterator for RangeIter<'slf, K, V> {
+        fn next_back(&mut self) -> Option<Self::Item> {
+            self.iter.next_back()
         }
     }
 }
@@ -627,6 +632,7 @@ mod tests {
         {
             assert_eq!(kv_actual, kv_expected);
         }
+        assert_eq!(view.range(..=3).next_back(), Some((&3, &1)));
         let mut block = storage.block();
         block.insert(0, 3);
         block.insert(5, 3);
@@ -647,6 +653,7 @@ mod tests {
         {
             assert_eq!(kv_actual, kv_expected);
         }
+        assert_eq!(transaction.range(..=5).next_back(), Some((&5, &3)));
         for (kv_actual, kv_expected) in transaction
             .range((Bound::Included(&1), Bound::Included(&3)))
             .zip([(&1, &4), (&2, &0), (&3, &1)])

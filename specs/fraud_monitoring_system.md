@@ -26,7 +26,9 @@ This document captures the reference design for the shared fraud monitoring capa
 - **Determinism & Consistency**: Risk scores guide PSP decisions but do not mutate ledger execution. Ledger commits remain deterministic across nodes.
 - **Scalability**: Sustain ≥10k risk evaluations per second with horizontal scaling and message partitioning keyed by pseudo-wallet identifiers.
 - **Observability**: Expose metrics (`fraud.scoring_latency_ms`, `fraud.risk_score_distribution`, `fraud.api_error_rate`, `fraud.model_version_active`) and structured logs for each scoring call.
-- **Security**: Mutual TLS between PSPs and the central service, hardware security modules for signing response envelopes, tamper-evident audit trails.
+- **Security**: Mutual TLS between PSPs and the central service, an authenticated
+  purpose-separated signing service with rotation and revocation for response
+  envelopes, and tamper-evident audit trails.
 - **Compliance**: Align with AML/CFT requirements, provide configurable retention periods, and integrate with evidence preservation workflows.
 
 ## Architecture Overview
@@ -187,7 +189,9 @@ Summing these gives ~160 ns of compute and ~120 ns of memory stalls per request 
 6. **Dashboard validation**: PSP operations teams must review Prometheus dashboards after onboarding and after every red-team exercise to confirm metrics are flowing with expected tenant labels.
 
 ## Security Considerations
-- All responses are signed with hardware-backed keys; PSPs validate signatures before trusting scores.
+- All responses are signed through a qualified, purpose-separated custody
+  provider; PSPs validate signatures before trusting scores. Provider
+  implementation details remain deployment-owned.
 - Rate-limit by alias/device to mitigate probing attacks aiming to learn model boundaries.
 - Embed watermarking inside assessments to trace leaked responses without revealing PSP identity publicly.
 - Run quarterly red-team exercises in coordination with the Security WG (Milestone 0) and feed findings into roadmap updates.

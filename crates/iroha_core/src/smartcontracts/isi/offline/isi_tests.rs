@@ -187,7 +187,7 @@ mod tests {
                 manifest_sha256: [0x4D; 32],
             },
             finalized_height: transaction.block_height(),
-            finalized_tx_hash: [0x4E; 32],
+            finalized_tx_hash: Hash::new([0x4E; 32]).into(),
             anchor_digest: [0; 32],
         }
         .finalize_digest()

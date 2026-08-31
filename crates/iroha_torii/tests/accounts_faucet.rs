@@ -258,9 +258,12 @@ fn build_faucet_test_context_with_registration(
         state.clone(),
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
-    );
+    )
+    .expect("valid Torii faucet fixture");
     FaucetTestContext {
-        app: torii.api_router_for_tests(),
+        app: torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
         state,
         queue,
         chain_id,

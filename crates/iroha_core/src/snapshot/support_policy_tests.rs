@@ -1025,15 +1025,6 @@ async fn borrowed_snapshot_wsv_hash_canonicalizes_json_lexemes() {
         canonical_snapshot_wsv_hash(lexical).expect("hash lexical snapshot spelling"),
         Hash::new(canonical),
     );
-
-    let lexical_set =
-        br#"{"world":{"parameters":{"sumeragi":{"key_allowed_hsm_providers":["\u0078","x"]}}}}"#;
-    let canonical_set =
-        br#"{"world":{"parameters":{"sumeragi":{"key_allowed_hsm_providers":["x"]}}}}"#;
-    assert_eq!(
-        canonical_snapshot_wsv_hash(lexical_set).expect("hash lexical set spelling"),
-        Hash::new(canonical_set),
-    );
 }
 
 #[tokio::test]
@@ -1085,7 +1076,7 @@ async fn canonical_wsv_hash_uses_current_mv_cell_values() {
     );
 }
 #[tokio::test]
-async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
+async fn canonical_wsv_hash_sorts_sumeragi_key_algorithm_set() {
     let state = state_factory();
     {
         let mut parameters = state.world.parameters.block();
@@ -1093,12 +1084,6 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
             Algorithm::Secp256k1,
             Algorithm::Ed25519,
             Algorithm::Secp256k1,
-        ];
-        parameters.sumeragi.key_allowed_hsm_providers = vec![
-            "yubihsm".to_owned(),
-            "pkcs11".to_owned(),
-            "softkey".to_owned(),
-            "pkcs11".to_owned(),
         ];
         parameters.commit();
     }
@@ -1112,11 +1097,6 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
     {
         let mut parameters = state.world.parameters.block();
         parameters.sumeragi.key_allowed_algorithms = vec![Algorithm::Ed25519, Algorithm::Secp256k1];
-        parameters.sumeragi.key_allowed_hsm_providers = vec![
-            "pkcs11".to_owned(),
-            "softkey".to_owned(),
-            "yubihsm".to_owned(),
-        ];
         parameters.commit();
     }
     let second = canonical_state_snapshot_bytes_for_tests(&state);
@@ -1128,24 +1108,8 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
     );
     assert_eq!(
         first, second,
-        "set-like Sumeragi key policy fields must not make WSV checkpoints order-sensitive"
+        "the set-like Sumeragi key algorithm field must not make WSV checkpoints order-sensitive"
     );
-    let value = canonical_state_snapshot_value(&state);
-    let providers = value
-        .get("world")
-        .and_then(|world| world.get("parameters"))
-        .and_then(|parameters| parameters.get("sumeragi"))
-        .and_then(|sumeragi| sumeragi.get("key_allowed_hsm_providers"))
-        .and_then(json::Value::as_array)
-        .expect("canonical snapshot should contain normalized HSM providers");
-    let providers = providers
-        .iter()
-        .map(|value| match value {
-            json::Value::String(provider) => provider.as_str(),
-            _ => panic!("HSM provider should serialize as a string"),
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(providers, ["pkcs11", "softkey", "yubihsm"]);
 }
 #[tokio::test]
 async fn canonical_state_snapshot_ignores_consensus_topology_caches() {

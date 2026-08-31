@@ -384,8 +384,8 @@ impl JsonKeyCodec for crate::ram_lfe::RamLfeProgramId {
 
 // Closed V1 profile names, two 64-byte identifiers, and canonical `u32` decimal.
 const SCCP_ROUTE_JSON_MAP_KEY_MAX_BYTES: usize = 182;
-// Route-key ceiling plus the longer replay prefix and two-byte boundary tag.
-const SCCP_REPLAY_JSON_MAP_KEY_MAX_BYTES: usize = 198;
+// Route-key ceiling plus the longer replay prefix, boundary tag, and complete domain hash.
+const SCCP_REPLAY_JSON_MAP_KEY_MAX_BYTES: usize = 263;
 
 fn decode_sccp_route_key_parts(
     parts: &mut core::str::Split<'_, char>,
@@ -496,13 +496,14 @@ fn sccp_replay_boundary_from_key(value: &str) -> Option<crate::bridge::SccpRepla
 impl JsonKeyCodec for crate::bridge::SccpReplayAccumulatorIdV1 {
     fn encode_json_key(&self, out: &mut String) {
         let encoded = format!(
-            "sccp-replay-accumulator-v1:{}:{}:{}:{}:{}:{:02x}",
+            "sccp-replay-accumulator-v1:{}:{}:{}:{}:{}:{:02x}:{}",
             self.route_key.lane_id.source.profile_key(),
             self.route_key.lane_id.target.profile_key(),
             self.route_key.route_id,
             self.route_key.asset_key,
             self.route_key.revision,
-            self.boundary.tag()
+            self.boundary.tag(),
+            hex::encode(self.domain_hash)
         );
         json::write_json_string(&encoded, out);
     }
@@ -527,14 +528,32 @@ impl JsonKeyCodec for crate::bridge::SccpReplayAccumulatorIdV1 {
             .ok_or_else(|| {
                 json::Error::Message("unknown or non-canonical SCCP replay boundary".into())
             })?;
+        let domain_hash_hex = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP replay domain hash".into()))?;
         if parts.next().is_some() {
             return Err(json::Error::Message(
                 "too many SCCP replay accumulator key parts".into(),
             ));
         }
+        if domain_hash_hex.len() != 64
+            || !domain_hash_hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(json::Error::Message(
+                "SCCP replay domain hash must be exactly 64 lowercase hexadecimal characters"
+                    .into(),
+            ));
+        }
+        let domain_hash = hex::decode(domain_hash_hex)
+            .map_err(|error| json::Error::Message(error.to_string()))?
+            .try_into()
+            .map_err(|_| json::Error::Message("SCCP replay domain hash must be 32 bytes".into()))?;
         Ok(Self {
             route_key,
             boundary,
+            domain_hash,
         })
     }
 }
@@ -900,12 +919,17 @@ mod tests {
         let replay_key = SccpReplayAccumulatorIdV1 {
             route_key: route_key.clone(),
             boundary: SccpReplayBoundaryV1::TonBridgeOutboundBurn,
+            domain_hash: [0xab; 32],
         };
         encoded.clear();
         replay_key.encode_json_key(&mut encoded);
         assert_eq!(
             encoded,
-            "\"sccp-replay-accumulator-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:7:31\""
+            concat!(
+                "\"sccp-replay-accumulator-v1:ton-mainnet:sora-taira:",
+                "taira_ton_xor:xor:7:31:",
+                "abababababababababababababababababababababababababababababababab\""
+            )
         );
         let mut parser = Parser::new(&encoded);
         let raw = parser
@@ -915,6 +939,15 @@ mod tests {
             SccpReplayAccumulatorIdV1::decode_json_key(&raw)
                 .expect("decode replay accumulator key"),
             replay_key
+        );
+
+        let mut actor_distinct_key = replay_key.clone();
+        actor_distinct_key.domain_hash = [0xac; 32];
+        let mut actor_distinct_encoded = String::new();
+        actor_distinct_key.encode_json_key(&mut actor_distinct_encoded);
+        assert_ne!(
+            encoded, actor_distinct_encoded,
+            "complete replay-domain hashes must select distinct JSON map keys"
         );
     }
 
@@ -1016,7 +1049,11 @@ mod tests {
             "sccp-replay-accumulator-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:7:FF",
             "sccp-replay-accumulator-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:7:1",
             "sccp-replay-accumulator-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:7:38",
+            "sccp-replay-accumulator-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:7:31",
             "sccp-replay-accumulator-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:7:31:tail",
+            "sccp-replay-accumulator-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:7:31:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "sccp-replay-accumulator-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:7:31:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sccp-replay-accumulator-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:7:31:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tail",
         ] {
             assert!(
                 SccpReplayAccumulatorIdV1::decode_json_key(encoded).is_err(),

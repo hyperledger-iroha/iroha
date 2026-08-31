@@ -490,13 +490,17 @@ fn solid_height(latest_block_numbers: &[u64]) -> Option<u64> {
     sorted.get(position).copied()
 }
 fn validate_anchor(anchor: &TronNativeDposAnchorV1) -> Option<()> {
+    let maintenance_delta = anchor
+        .next_maintenance_time_ms
+        .checked_sub(anchor.timestamp_ms)?;
     if anchor.version != 1
         || tron_network_tag(anchor.network).is_none()
         || anchor.block_number == 0
         || block_id_number(&anchor.block_id) != anchor.block_number
         || anchor.genesis_timestamp_ms == 0
         || anchor.timestamp_ms <= anchor.genesis_timestamp_ms
-        || anchor.next_maintenance_time_ms <= anchor.timestamp_ms
+        || maintenance_delta == 0
+        || maintenance_delta > anchor.maintenance_interval_ms
         || (anchor.anchor_is_maintenance
             && anchor.next_maintenance_time_ms
                 <= anchor.timestamp_ms.saturating_add(
@@ -1741,7 +1745,7 @@ mod tests {
                 },
                 timestamp_ms: 3_300_000,
                 genesis_timestamp_ms: 300_000,
-                next_maintenance_time_ms: 30_000_000,
+                next_maintenance_time_ms: 24_900_000,
                 maintenance_interval_ms: 21_600_000,
                 maintenance_skip_slots: 2,
                 single_repeat: 1,
@@ -1829,6 +1833,23 @@ mod tests {
     }
     fn proof_with_distinct_confirmations() -> (TronNativeFinalityProofV1, H256) {
         proof_with_target_root([0xD5; 32])
+    }
+    #[test]
+    fn native_dpos_anchor_requires_next_maintenance_within_interval() {
+        let mut anchor = fixture().anchor;
+        anchor.next_maintenance_time_ms = anchor
+            .timestamp_ms
+            .checked_add(anchor.maintenance_interval_ms)
+            .expect("fixture maintenance boundary fits u64");
+        assert!(canonical_tron_native_anchor_bytes(&anchor).is_some());
+        assert!(tron_native_anchor_hash(&anchor).is_some());
+
+        anchor.next_maintenance_time_ms = anchor
+            .next_maintenance_time_ms
+            .checked_add(1)
+            .expect("fixture over-boundary timestamp fits u64");
+        assert_eq!(canonical_tron_native_anchor_bytes(&anchor), None);
+        assert_eq!(tron_native_anchor_hash(&anchor), None);
     }
     #[test]
     fn finality_work_estimate_enforces_witness_round_target_and_suffix_bounds() {

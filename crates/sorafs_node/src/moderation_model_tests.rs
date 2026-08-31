@@ -10,7 +10,7 @@ use iroha_data_model::sorafs::moderation::{
     moderation_model_required_operations_v1,
 };
 const SCREENING_AUTH_NOW: u64 = 1_800_000_000;
-const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
+const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "software://sorafs/moderation/quarantine/primary";
 const TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION: ModerationQuarantineKeyProviderQualificationV1 =
     ModerationQuarantineKeyProviderQualificationV1::new(7, [0xC7; 32]);
 fn deterministic_ed25519_key(seed: u8) -> KeyPair {
@@ -413,7 +413,7 @@ impl ModerationQuarantineKeyWrapper for FailingQuarantineKeyWrapper {
         Ok(TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION)
     }
     fn active_key_id(&self) -> &str {
-        "pkcs11:test/redacted-provider-error"
+        "software://sorafs/moderation/redacted-provider-error"
     }
     fn wrap_dek(
         &self,
@@ -467,7 +467,7 @@ impl ModerationQuarantineKeyWrapper for FailingOperationThenStaleWrapper {
         }
     }
     fn active_key_id(&self) -> &str {
-        "pkcs11:test/failure-before-requalification"
+        "software://sorafs/moderation/failure-before-requalification"
     }
     fn wrap_dek(
         &self,
@@ -504,7 +504,7 @@ fn screening_input(subject: &str, verdict: ModerationScreeningVerdict) -> Modera
     }
 }
 fn quarantine_object_record(seed: u8) -> ModerationQuarantineObjectRecord {
-    let wrapper = test_key_wrapper(0x7B, "pkcs11:test/quarantine");
+    let wrapper = test_key_wrapper(0x7B, "software://sorafs/moderation/quarantine-primary");
     let binding = test_key_provider_binding();
     seal_moderation_quarantine_object(
         ModerationQuarantineObjectInput {
@@ -776,14 +776,14 @@ fn authenticated_screening_runtime_persists_idempotency_and_replay_bindings() {
 #[test]
 fn moderation_quarantine_key_provider_rejects_unavailable_and_stale_adapters() {
     let binding = test_key_provider_binding();
-    let ready = test_key_wrapper(0x81, "kms:test/ready");
+    let ready = test_key_wrapper(0x81, "software://sorafs/moderation/ready");
     assert_eq!(
         validate_moderation_quarantine_key_wrapper(&binding, &ready),
         Ok(())
     );
     let unavailable = test_key_wrapper_for_provider(
         0x81,
-        "kms:test/unavailable",
+        "software://sorafs/moderation/unavailable",
         TEST_QUARANTINE_KEY_PROVIDER_HANDLE,
         Err(ModerationQuarantineKeyProviderReadinessErrorV1::Unavailable),
     );
@@ -797,7 +797,7 @@ fn moderation_quarantine_key_provider_rejects_unavailable_and_stale_adapters() {
     );
     let rejected_as_stale = test_key_wrapper_for_provider(
         0x81,
-        "kms:test/stale",
+        "software://sorafs/moderation/stale",
         TEST_QUARANTINE_KEY_PROVIDER_HANDLE,
         Err(ModerationQuarantineKeyProviderReadinessErrorV1::Rejected),
     );
@@ -807,7 +807,7 @@ fn moderation_quarantine_key_provider_rejects_unavailable_and_stale_adapters() {
     );
     let old_revision = test_key_wrapper_for_provider(
         0x81,
-        "kms:test/old-revision",
+        "software://sorafs/moderation/old-revision",
         TEST_QUARANTINE_KEY_PROVIDER_HANDLE,
         Ok(ModerationQuarantineKeyProviderQualificationV1::new(
             TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION.revision() - 1,
@@ -824,8 +824,8 @@ fn moderation_quarantine_key_provider_rejects_substitution() {
     let binding = test_key_provider_binding();
     let substituted = test_key_wrapper_for_provider(
         0x82,
-        "kms:test/substituted",
-        "kms://moderation/quarantine/secondary",
+        "software://sorafs/moderation/substituted",
+        "software://sorafs/moderation/quarantine/secondary",
         Ok(TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION),
     );
     assert_eq!(
@@ -840,6 +840,7 @@ fn moderation_quarantine_key_provider_rejects_substitution() {
 #[test]
 fn moderation_quarantine_provider_handles_use_canonical_production_grammar() {
     for handle in [
+        "software://sorafs/moderation/quarantine-primary",
         "kms://sorafs/moderation/quarantine-primary",
         "hsm://sorafs/moderation/quarantine-primary",
     ] {
@@ -866,10 +867,35 @@ fn moderation_quarantine_provider_handles_use_canonical_production_grammar() {
     }
 }
 #[test]
+fn moderation_quarantine_wrapping_key_ids_use_canonical_production_grammar() {
+    for key_id in [
+        "software://sorafs/moderation/quarantine-primary",
+        "pkcs11:sorafs/moderation/quarantine-primary",
+        "kms:sorafs/moderation/quarantine-primary",
+    ] {
+        assert_eq!(validate_wrapping_key_id_text(key_id), Ok(()));
+    }
+    for key_id in [
+        "",
+        " software://sorafs/moderation/quarantine-primary",
+        "software://sorafs/moderation/quarantine?token",
+        "software://sorafs/moderation/test/quarantine",
+        "software://sorafs/moderation/dummy/quarantine",
+        "software://sorafs/moderation/quarantine\nprimary",
+    ] {
+        let error = validate_wrapping_key_id_text(key_id)
+            .expect_err("malformed or test-marked key id must fail closed");
+        assert_eq!(
+            error,
+            "wrapping key id must be a canonical production runtime handle"
+        );
+    }
+}
+#[test]
 fn moderation_quarantine_key_provider_rejects_test_markers_and_zero_qualification() {
     assert_eq!(
         ModerationQuarantineKeyProviderBindingV1::try_new(
-            "kms://moderation/dummy/primary".to_owned(),
+            "software://sorafs/moderation/dummy/primary".to_owned(),
             TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION,
         ),
         Err(ModerationQuarantineKeyProviderQualificationErrorV1::TestMarkedConfiguredHandle)
@@ -877,8 +903,8 @@ fn moderation_quarantine_key_provider_rejects_test_markers_and_zero_qualificatio
     let binding = test_key_provider_binding();
     let test_marked = test_key_wrapper_for_provider(
         0x83,
-        "kms:test/marked-provider",
-        "kms://moderation/dummy/primary",
+        "software://sorafs/moderation/marked-provider",
+        "software://sorafs/moderation/dummy/primary",
         Ok(TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION),
     );
     assert_eq!(
@@ -900,7 +926,7 @@ fn moderation_quarantine_key_provider_rejects_test_markers_and_zero_qualificatio
         );
         let invalid_provider = test_key_wrapper_for_provider(
             0x83,
-            "kms:test/invalid-qualification",
+            "software://sorafs/moderation/invalid-qualification",
             TEST_QUARANTINE_KEY_PROVIDER_HANDLE,
             Ok(invalid),
         );
@@ -914,7 +940,7 @@ fn moderation_quarantine_key_provider_rejects_test_markers_and_zero_qualificatio
 fn moderation_quarantine_wrap_and_unwrap_discard_outputs_on_provider_drift() {
     let binding = test_key_provider_binding();
     let wrapping = DriftingQuarantineKeyWrapper::new(
-        test_key_wrapper(0x84, "kms:test/drifting-wrap"),
+        test_key_wrapper(0x84, "software://sorafs/moderation/drifting-wrap"),
         QualificationDriftTrigger::Wrap,
     );
     assert_eq!(
@@ -931,7 +957,7 @@ fn moderation_quarantine_wrap_and_unwrap_discard_outputs_on_provider_drift() {
         ),
         Err(ModerationQuarantineObjectError::KeyWrapperUnqualified)
     );
-    let stable = test_key_wrapper(0x85, "kms:test/drifting-unwrap");
+    let stable = test_key_wrapper(0x85, "software://sorafs/moderation/drifting-unwrap");
     let (record, bytes) = seal_moderation_quarantine_object(
         ModerationQuarantineObjectInput {
             quarantine_id: [0x85; 16],
@@ -947,7 +973,7 @@ fn moderation_quarantine_wrap_and_unwrap_discard_outputs_on_provider_drift() {
     let envelope: ModerationQuarantineObjectEnvelopeV1 =
         norito::decode_from_bytes(&bytes).expect("decode drift fixture");
     let unwrapping = DriftingQuarantineKeyWrapper::new(
-        test_key_wrapper(0x85, "kms:test/drifting-unwrap"),
+        test_key_wrapper(0x85, "software://sorafs/moderation/drifting-unwrap"),
         QualificationDriftTrigger::Unwrap,
     );
     assert_eq!(
@@ -959,8 +985,8 @@ fn moderation_quarantine_wrap_and_unwrap_discard_outputs_on_provider_drift() {
 fn moderation_quarantine_discards_wrap_output_when_active_key_changes() {
     let binding = test_key_provider_binding();
     let seal_wrapper = ActiveKeyIdDriftQuarantineKeyWrapper::new(
-        test_key_wrapper(0x88, "kms:test/active-key-v1"),
-        test_key_wrapper(0x89, "kms:test/active-key-v2"),
+        test_key_wrapper(0x88, "software://sorafs/moderation/active-key-v1"),
+        test_key_wrapper(0x89, "software://sorafs/moderation/active-key-v2"),
     );
     assert_eq!(
         seal_moderation_quarantine_object(
@@ -976,7 +1002,8 @@ fn moderation_quarantine_discards_wrap_output_when_active_key_changes() {
         ),
         Err(ModerationQuarantineObjectError::KeyWrapperUnqualified)
     );
-    let current_wrapper = test_key_wrapper(0x8A, "kms:test/rewrap-active-current");
+    let current_wrapper =
+        test_key_wrapper(0x8A, "software://sorafs/moderation/rewrap-active-current");
     let (record, bytes) = seal_moderation_quarantine_object(
         ModerationQuarantineObjectInput {
             quarantine_id: [0x8A; 16],
@@ -992,8 +1019,8 @@ fn moderation_quarantine_discards_wrap_output_when_active_key_changes() {
     let envelope: ModerationQuarantineObjectEnvelopeV1 =
         norito::decode_from_bytes(&bytes).expect("decode active-key rewrap fixture");
     let replacement_wrapper = ActiveKeyIdDriftQuarantineKeyWrapper::new(
-        test_key_wrapper(0x8B, "kms:test/rewrap-active-v1"),
-        test_key_wrapper(0x8C, "kms:test/rewrap-active-v2"),
+        test_key_wrapper(0x8B, "software://sorafs/moderation/rewrap-active-v1"),
+        test_key_wrapper(0x8C, "software://sorafs/moderation/rewrap-active-v2"),
     );
     assert_eq!(
         rewrap_moderation_quarantine_object(
@@ -1010,7 +1037,7 @@ fn moderation_quarantine_discards_wrap_output_when_active_key_changes() {
 #[test]
 fn moderation_quarantine_rewrap_checks_current_and_replacement_provider_drift_independently() {
     let current_binding = test_key_provider_binding();
-    let current_wrapper = test_key_wrapper(0x86, "kms:test/rewrap-current");
+    let current_wrapper = test_key_wrapper(0x86, "software://sorafs/moderation/rewrap-current");
     let (record, bytes) = seal_moderation_quarantine_object(
         ModerationQuarantineObjectInput {
             quarantine_id: [0x86; 16],
@@ -1028,18 +1055,18 @@ fn moderation_quarantine_rewrap_checks_current_and_replacement_provider_drift_in
     let replacement_qualification =
         ModerationQuarantineKeyProviderQualificationV1::new(9, [0xD9; 32]);
     let replacement_binding = ModerationQuarantineKeyProviderBindingV1::try_new(
-        "kms://moderation/quarantine/secondary".to_owned(),
+        "software://sorafs/moderation/quarantine/secondary".to_owned(),
         replacement_qualification,
     )
     .expect("valid replacement provider binding");
     let replacement_wrapper = test_key_wrapper_for_provider(
         0x87,
-        "kms:test/rewrap-replacement",
+        "software://sorafs/moderation/rewrap-replacement",
         replacement_binding.provider_handle(),
         Ok(replacement_qualification),
     );
     let drifting_current = DriftingQuarantineKeyWrapper::new(
-        test_key_wrapper(0x86, "kms:test/rewrap-current"),
+        test_key_wrapper(0x86, "software://sorafs/moderation/rewrap-current"),
         QualificationDriftTrigger::Unwrap,
     );
     assert_eq!(
@@ -1056,7 +1083,7 @@ fn moderation_quarantine_rewrap_checks_current_and_replacement_provider_drift_in
     let drifting_replacement = DriftingQuarantineKeyWrapper::new(
         test_key_wrapper_for_provider(
             0x87,
-            "kms:test/rewrap-replacement",
+            "software://sorafs/moderation/rewrap-replacement",
             replacement_binding.provider_handle(),
             Ok(replacement_qualification),
         ),
@@ -1076,7 +1103,7 @@ fn moderation_quarantine_rewrap_checks_current_and_replacement_provider_drift_in
 }
 #[test]
 fn moderation_quarantine_object_seal_open_preserves_object_id() {
-    let wrapper = test_key_wrapper(0x7B, "pkcs11:test/quarantine");
+    let wrapper = test_key_wrapper(0x7B, "software://sorafs/moderation/quarantine-primary");
     let binding = test_key_provider_binding();
     let payload = b"quarantine payload bytes".to_vec();
     let input = ModerationQuarantineObjectInput {
@@ -1132,7 +1159,7 @@ fn moderation_quarantine_key_operation_errors_are_stable_and_payload_free() {
         }
         assert!(matches!(
             ModerationQuarantineObjectError::key_operation_failure(
-                "kms:production/moderation/quarantine".to_owned(),
+                "software://sorafs/moderation/quarantine-primary".to_owned(),
                 failure,
             ),
             ModerationQuarantineObjectError::KeyWrapping {
@@ -1172,7 +1199,8 @@ fn key_operation_failure_is_not_masked_by_post_call_requalification() {
             .load(std::sync::atomic::Ordering::SeqCst),
         1
     );
-    let working_wrapper = test_key_wrapper(0x6F, "kms:test/error-ordering-source");
+    let working_wrapper =
+        test_key_wrapper(0x6F, "software://sorafs/moderation/error-ordering-source");
     let (record, bytes) = seal_moderation_quarantine_object(
         ModerationQuarantineObjectInput {
             quarantine_id: [0x4E; 16],
@@ -1264,7 +1292,7 @@ fn moderation_quarantine_plaintext_and_provider_errors_are_redacted() {
         assert!(!rendered.contains(SECRET_PROVIDER_ERROR_SENTINEL));
         assert!(!rendered.contains("PIN"));
     }
-    let working_wrapper = test_key_wrapper(0x70, "pkcs11:test/redaction-source");
+    let working_wrapper = test_key_wrapper(0x70, "software://sorafs/moderation/redaction-source");
     let (record, bytes) = seal_moderation_quarantine_object(
         ModerationQuarantineObjectInput {
             quarantine_id: [0x51; 16],
@@ -1300,7 +1328,7 @@ fn moderation_quarantine_plaintext_and_provider_errors_are_redacted() {
 }
 #[test]
 fn moderation_quarantine_object_authenticates_ranges_and_chunk_order() {
-    let wrapper = test_key_wrapper(0x71, "kms:test/active");
+    let wrapper = test_key_wrapper(0x71, "software://sorafs/moderation/active");
     let binding = test_key_provider_binding();
     let payload_len =
         usize::try_from(MODERATION_QUARANTINE_OBJECT_CHUNK_BYTES_V1).expect("chunk size") * 2 + 137;
@@ -1365,8 +1393,8 @@ fn moderation_quarantine_object_authenticates_ranges_and_chunk_order() {
 }
 #[test]
 fn moderation_quarantine_object_rejects_wrong_key_tag_aad_and_wrapped_key_replay() {
-    let wrapper = test_key_wrapper(0x72, "kms:test/active");
-    let wrong_wrapper = test_key_wrapper(0x73, "kms:test/active");
+    let wrapper = test_key_wrapper(0x72, "software://sorafs/moderation/active");
+    let wrong_wrapper = test_key_wrapper(0x73, "software://sorafs/moderation/active");
     let binding = test_key_provider_binding();
     let input = |quarantine_id| ModerationQuarantineObjectInput {
         quarantine_id,
@@ -1423,8 +1451,8 @@ fn moderation_quarantine_object_rejects_wrong_key_tag_aad_and_wrapped_key_replay
 }
 #[test]
 fn moderation_quarantine_object_rewrap_keeps_ciphertext_and_identity_stable() {
-    let original_wrapper = test_key_wrapper(0x74, "pkcs11:test/key-v1");
-    let replacement_wrapper = test_key_wrapper(0x75, "pkcs11:test/key-v2");
+    let original_wrapper = test_key_wrapper(0x74, "software://sorafs/moderation/key-v1");
+    let replacement_wrapper = test_key_wrapper(0x75, "software://sorafs/moderation/key-v2");
     let binding = test_key_provider_binding();
     let payload = vec![0xC3; 70_000];
     let (record, bytes) = seal_moderation_quarantine_object(

@@ -1019,7 +1019,8 @@ fn verify_release_directory_v4(
     let mut canonical_manifest_json = norito::json::to_string_pretty(&manifest)
         .wrap_err("Kagemusha V4 manifest JSON cannot be canonically encoded")?;
     canonical_manifest_json.push('\n');
-    if manifest_from_json != manifest || manifest_json.as_bytes() != canonical_manifest_json.as_bytes()
+    if manifest_from_json != manifest
+        || manifest_json.as_bytes() != canonical_manifest_json.as_bytes()
     {
         bail!("Kagemusha V4 JSON manifest is noncanonical or differs from manifest.norito");
     }

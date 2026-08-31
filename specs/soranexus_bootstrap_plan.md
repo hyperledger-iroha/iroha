@@ -11,7 +11,7 @@ summary: Operational plan for bringing the core Nexus validator cluster online b
 - Establish CI/CD workflows and observability dashboards/alerts to ensure network health.
 
 ## Prerequisites
-- Governance key material (council multisig, committee keys) available in HSM or Vault.
+- Governance key material (council multisig, committee keys) available through a qualified deployment-owned signer.
 - Baseline infrastructure (Kubernetes clusters or bare-metal nodes) in primary/secondary regions.
 - Reviewed mainnet and testnet profile fixtures (`configs/soranexus/nexus/config.toml` and `configs/soranexus/taira/config.toml`) reflecting the intended consensus parameters.
 

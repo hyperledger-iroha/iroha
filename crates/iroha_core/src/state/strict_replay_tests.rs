@@ -634,7 +634,6 @@ impl StrictReplayFixture {
             let mut parameters = state.world.parameters.block();
             parameters.sumeragi.block_cadence_ms =
                 NonZeroU64::new(1_000).expect("fixture cadence is non-zero");
-            parameters.sumeragi.key_require_hsm = false;
             parameters.commit();
         }
         state

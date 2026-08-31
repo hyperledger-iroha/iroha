@@ -5865,22 +5865,24 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
             ));
         }
     }
-    let lifecycle_rows = tle_key_session_lifecycles.iter().collect::<Vec<_>>();
-    for left_index in 0..lifecycle_rows.len() {
-        for right_index in left_index + 1..lifecycle_rows.len() {
-            let (_, left) = lifecycle_rows[left_index];
-            let (_, right) = lifecycle_rows[right_index];
-            if left.activation_height <= right.selectable_through_height
-                && right.activation_height <= left.selectable_through_height
-            {
-                return Err(invalid_tle_ovn_persistence(
-                    "tle_key_session_lifecycles",
-                    "TLE key-session new-ballot selection intervals overlap",
-                ));
-            }
+    let mut lifecycle_rows = tle_key_session_lifecycles.iter().collect::<Vec<_>>();
+    lifecycle_rows.sort_by(|(left_id, left), (right_id, right)| {
+        left.activation_height
+            .cmp(&right.activation_height)
+            .then_with(|| left_id.cmp(right_id))
+    });
+    for adjacent in lifecycle_rows.windows(2) {
+        let (_, left) = adjacent[0];
+        let (_, right) = adjacent[1];
+        if right.activation_height <= left.selectable_through_height {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_key_session_lifecycles",
+                "TLE key-session new-ballot selection intervals overlap",
+            ));
         }
     }
     let active_tle_sessions = world.tle_active_key_session.view();
+    let mut active_key_session_id = None;
     for (key, key_session_id) in active_tle_sessions.iter() {
         if *key != TLE_KEY_SESSION_SINGLETON_KEY {
             return Err(invalid_tle_ovn_persistence(
@@ -5896,7 +5898,19 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                 "active TLE session pointer references a missing or invalid public session",
             ));
         }
+        if active_key_session_id.replace(*key_session_id).is_some() {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_active_key_session",
+                "multiple active TLE session pointers are persisted",
+            ));
+        }
     }
+    let ordered_lifecycles = lifecycle_rows
+        .iter()
+        .map(|(_, lifecycle)| **lifecycle)
+        .collect::<Vec<_>>();
+    validate_tle_key_session_lifecycle_head_v1(&ordered_lifecycles, active_key_session_id)
+        .map_err(|message| invalid_tle_ovn_persistence("tle_active_key_session", message))?;
 
     for (ballot_attempt_id, lifecycle) in timed_ovn_evidence.iter() {
         if ballot_attempt_id.as_bytes() != &lifecycle.ballot_attempt_id() {
@@ -6432,6 +6446,9 @@ mod timed_ovn_persistence_phase_tests {
             TleKeySessionLifecycleV1::new(key_session_id, 1, 100, 1)
                 .expect("valid frozen-roster lifecycle fixture"),
         );
+        world
+            .tle_active_key_session
+            .insert(TLE_KEY_SESSION_SINGLETON_KEY, key_session_id);
         (world, key_session_id, ordered_roster)
     }
 
@@ -6572,6 +6589,108 @@ mod timed_ovn_persistence_phase_tests {
                         && message.contains("counter disagrees")
             ),
             "unexpected lifecycle-counter rejection: {mismatch}"
+        );
+
+        let (mut world, key_session_id, _) = world_with_frozen_tle_roster_binding_v1();
+        world.tle_active_key_session = Storage::default();
+        let missing_head = validate_tle_ovn_persistence(&world)
+            .expect_err("an open lifecycle head without its active pointer must fail restore");
+        assert!(
+            matches!(
+                &missing_head,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_active_key_session"
+                        && message.contains("open latest lifecycle head")
+            ),
+            "unexpected missing-head rejection: {missing_head}"
+        );
+
+        let mut closed = *world
+            .tle_key_session_lifecycles
+            .view()
+            .get(&key_session_id)
+            .expect("fixture lifecycle");
+        closed
+            .cut_over_after(50)
+            .expect("close the fixture lifecycle explicitly");
+        world
+            .tle_key_session_lifecycles
+            .insert(key_session_id, closed);
+        validate_tle_ovn_persistence(&world)
+            .expect("a closed latest lifecycle restores without an active pointer");
+        world
+            .tle_active_key_session
+            .insert(TLE_KEY_SESSION_SINGLETON_KEY, key_session_id);
+        let stale_closed_head = validate_tle_ovn_persistence(&world)
+            .expect_err("a closed lifecycle head cannot retain an active pointer");
+        assert!(
+            matches!(
+                &stale_closed_head,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_active_key_session"
+                        && message.contains("closed latest lifecycle head")
+            ),
+            "unexpected closed-head rejection: {stale_closed_head}"
+        );
+
+        let (mut world, first_key_session_id, ordered_roster) =
+            world_with_frozen_tle_roster_binding_v1();
+        let second_public_state = public_key_session_fixture_for_context_v1(
+            [0xC1; 32],
+            0xC3,
+            crate::beacon::global_threshold_beacon_roster_hash_v1(&ordered_roster),
+        );
+        let second_key_session_id = second_public_state.key_session_id;
+        world
+            .tle_key_sessions
+            .insert(second_key_session_id, second_public_state);
+        world
+            .tle_key_session_rosters
+            .insert(second_key_session_id, ordered_roster);
+        world.tle_key_session_lifecycles.insert(
+            second_key_session_id,
+            TleKeySessionLifecycleV1::new(second_key_session_id, 101, 100, 1)
+                .expect("nonoverlapping successor lifecycle"),
+        );
+        world
+            .tle_active_key_session
+            .insert(TLE_KEY_SESSION_SINGLETON_KEY, second_key_session_id);
+        let open_history = validate_tle_ovn_persistence(&world)
+            .expect_err("a non-latest open lifecycle must fail restore");
+        assert!(
+            matches!(
+                &open_history,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_active_key_session"
+                        && message.contains("non-latest")
+            ),
+            "unexpected open-history rejection: {open_history}"
+        );
+
+        let mut first_lifecycle = *world
+            .tle_key_session_lifecycles
+            .view()
+            .get(&first_key_session_id)
+            .expect("first fixture lifecycle");
+        first_lifecycle
+            .cut_over_after(100)
+            .expect("close the predecessor at the successor boundary");
+        world
+            .tle_key_session_lifecycles
+            .insert(first_key_session_id, first_lifecycle);
+        world
+            .tle_active_key_session
+            .insert(TLE_KEY_SESSION_SINGLETON_KEY, first_key_session_id);
+        let stale_head = validate_tle_ovn_persistence(&world)
+            .expect_err("a stale active lifecycle head must fail restore");
+        assert!(
+            matches!(
+                &stale_head,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_active_key_session"
+                        && message.contains("latest lifecycle head")
+            ),
+            "unexpected stale-head rejection: {stale_head}"
         );
     }
 }
@@ -6749,10 +6868,22 @@ mod validation_fee_registry_restore_tests {
                 .tle_key_session_rosters
                 .insert(key_session_id, ordered_roster);
         }
+        let mut open_key_session_id = None;
         for (key_session_id, lifecycle) in stored_fixture.tle_key_session_lifecycles {
+            if !lifecycle.selection_is_closed() {
+                assert!(
+                    open_key_session_id.replace(key_session_id).is_none(),
+                    "restore fixture must have at most one open TLE lifecycle head"
+                );
+            }
             world
                 .tle_key_session_lifecycles
                 .insert(key_session_id, lifecycle);
+        }
+        if let Some(key_session_id) = open_key_session_id {
+            world
+                .tle_active_key_session
+                .insert(TLE_KEY_SESSION_SINGLETON_KEY, key_session_id);
         }
         for (ballot_attempt_id, lifecycle) in stored_fixture.timed_ovn_evidence {
             world
@@ -7840,10 +7971,15 @@ fn parse_world(
         governance_last_unlock_sweep_height,
         governance_unlock_stats,
         parliament_attempts,
+        parliament_attempt_counts: Cell::default(),
+        parliament_member_reference_counts: Storage::default(),
         parliament_timed_ovn_resource_reservations: Storage::default(),
+        parliament_timed_ovn_casting_candidates: Storage::default(),
         parliament_required_beacon_pulse_slots: Storage::default(),
         parliament_certified_enactments: Storage::default(),
         parliament_unavailable_beacon_pulse_slots: Storage::default(),
+        parliament_tle_key_session_retention_deadlines: Storage::default(),
+        tle_key_session_selection_intervals: Storage::default(),
         tle_key_sessions,
         tle_key_session_rosters,
         tle_key_session_lifecycles,
@@ -7925,19 +8061,14 @@ fn parse_world(
                             .to_owned(),
                 });
             }
-            let proposal_operator = match &proposal.kind {
-                iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) => {
-                    Some(&payload.proposal_operator)
-                }
-                iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
-                    payload,
-                ) => Some(&payload.proposal_operator),
-                _ => None,
-            };
-            if proposal_operator.is_some_and(|operator| operator != &proposal.proposer) {
+            if proposal
+                .kind
+                .proposal_operator_v1()
+                .is_some_and(|operator| operator != &proposal.proposer)
+            {
                 return Err(json::Error::InvalidField {
                     field: "governance_proposals".into(),
-                    message: "validation-fee proposal operator differs from its retained proposer"
+                    message: "governance proposal operator differs from its retained proposer"
                         .to_owned(),
                 });
             }
@@ -8423,6 +8554,7 @@ fn build_state(
         state_write_lock: parking_lot::Mutex::new(()),
         view_generation: AtomicU64::new(0),
         view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
+        sumeragi_v2_pending_evidence: parking_lot::Mutex::new(BTreeMap::new()),
         sccp_registry_cache: parking_lot::Mutex::new(SccpRegistryCache::default()),
     };
     crate::validation_fee::validate_persisted_policy_registry_runtime_v1(
@@ -8447,8 +8579,15 @@ fn build_state(
         let view = state.world.governance_proposals.view();
         let records: Vec<_> = view.iter().map(|(id, rec)| (*id, rec.status)).collect();
         telemetry_seed.seed_governance_proposals(records);
-        let citizens_total =
-            u64::try_from(state.world.citizens.view().iter().count()).unwrap_or(u64::MAX);
+        let (status_counts, stage_counts) = state
+            .world
+            .parliament_attempt_counts
+            .view()
+            .get()
+            .telemetry_counts();
+        telemetry_seed.set_parliament_attempt_counts(status_counts, stage_counts);
+        let citizens_total = u64::try_from(state.world.citizens.view().iter().count())
+            .expect("Parliament citizen count must fit into u64");
         telemetry_seed.record_citizens_total(citizens_total);
     }
     if allow_durable_recovery && state.kura.emergency_fast_startup_enabled() {
@@ -8666,6 +8805,9 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
         max_conviction: 6,
         min_enactment_delay: 20,
         window_span: 100,
+        max_active_referenda: iroha_config::parameters::defaults::governance::MAX_ACTIVE_REFERENDA,
+        max_lock_owners_per_referendum:
+            iroha_config::parameters::defaults::governance::MAX_LOCK_OWNERS_PER_REFERENDUM,
         plain_voting_enabled: iroha_config::parameters::defaults::governance::PLAIN_VOTING_ENABLED,
         approval_threshold_q_num: 1,
         approval_threshold_q_den: 2,
@@ -8774,6 +8916,7 @@ mod decode_tests {
     fn restore_rejects_every_standalone_state_alias_for_a_typed_proposal() {
         let kind = ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
+                proposal_operator: musubi_account(59),
                 contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                     .parse()
                     .expect("contract address"),

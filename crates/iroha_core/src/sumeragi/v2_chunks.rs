@@ -49,6 +49,7 @@ pub(crate) struct V2ChunkSession {
     stripe_width: usize,
     shards_needed_by_stripe: Vec<u16>,
     stripes_waiting: usize,
+    terminal_reconstruction_error: Option<TerminalReconstructionError>,
     #[cfg(test)]
     reconstruction_attempts: AtomicUsize,
     #[cfg(test)]
@@ -76,6 +77,7 @@ impl V2ChunkSession {
             stripe_width,
             shards_needed_by_stripe: vec![data_shards; stripe_count],
             stripes_waiting: stripe_count,
+            terminal_reconstruction_error: None,
             #[cfg(test)]
             reconstruction_attempts: AtomicUsize::new(0),
             #[cfg(test)]
@@ -90,6 +92,10 @@ impl V2ChunkSession {
     pub(crate) const fn validated_manifest(&self) -> &wire::ValidatedPayloadManifest {
         &self.validated
     }
+    /// Whether deterministic reconstruction terminally poisoned this session.
+    pub(crate) const fn is_terminally_failed(&self) -> bool {
+        self.terminal_reconstruction_error.is_some()
+    }
     /// Buffer one structurally and cryptographically authenticated chunk.
     ///
     /// The authentication seal carries the hash already verified with the
@@ -100,6 +106,7 @@ impl V2ChunkSession {
         &mut self,
         authenticated: AuthenticatedPayloadChunk,
     ) -> Result<ChunkAdmission, V2ChunkError> {
+        self.ensure_live()?;
         let (chunk, chunk_hash) = authenticated.into_parts();
         if chunk.manifest_hash != self.validated.manifest_hash() {
             return Err(V2ChunkError::ManifestMismatch);
@@ -115,6 +122,7 @@ impl V2ChunkSession {
         index: u32,
         bytes: &[u8],
     ) -> Result<ChunkAdmission, V2ChunkError> {
+        self.ensure_live()?;
         let index = usize::try_from(index).map_err(|_| V2ChunkError::ChunkIndexOutOfRange)?;
         if let Some(existing) = self
             .chunks
@@ -169,19 +177,38 @@ impl V2ChunkSession {
     /// Reconstruct and verify the canonical payload once enough chunks exist.
     ///
     /// RS16 reconstruction needs any `data_shards` chunks per stripe. Missing
-    /// parity chunks are not materialized unless needed to recover data.
-    pub(crate) fn reconstruct(&self) -> Result<Option<Vec<u8>>, V2ChunkError> {
+    /// parity chunks are not materialized unless needed to recover data. The
+    /// completed payload is then re-encoded one stripe at a time to prove every
+    /// committed systematic and parity hash belongs to its canonical codeword.
+    pub(crate) fn reconstruct(&mut self) -> Result<Option<Vec<u8>>, V2ChunkError> {
+        self.ensure_live()?;
         #[cfg(test)]
         self.reconstruction_attempts.fetch_add(1, Ordering::Relaxed);
         if self.stripes_waiting != 0 {
             return Ok(None);
         }
-        let payload = self.reconstruct_rs16()?;
+        let payload = match self.reconstruct_rs16() {
+            Ok(payload) => payload,
+            Err(V2ChunkError::ReconstructionFailed) => {
+                return Err(self.poison(TerminalReconstructionError::ReconstructionFailed));
+            }
+            Err(error) => return Err(error),
+        };
         if u64::try_from(payload.len()).unwrap_or(u64::MAX)
             != self.validated.manifest().payload_size_bytes
             || Hash::new(&payload) != self.validated.manifest().subject.payload_hash
         {
-            return Err(V2ChunkError::PayloadMismatch);
+            return Err(self.poison(TerminalReconstructionError::PayloadMismatch));
+        }
+        match self.canonical_codeword_matches(&payload) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(self.poison(TerminalReconstructionError::NoncanonicalCodeword));
+            }
+            Err(V2ChunkError::ReconstructionFailed) => {
+                return Err(self.poison(TerminalReconstructionError::ReconstructionFailed));
+            }
+            Err(error) => return Err(error),
         }
         Ok(Some(payload))
     }
@@ -194,6 +221,21 @@ impl V2ChunkSession {
     #[cfg(test)]
     pub(crate) fn payload_allocation_attempts(&self) -> usize {
         self.payload_allocation_attempts.load(Ordering::Relaxed)
+    }
+    fn ensure_live(&self) -> Result<(), V2ChunkError> {
+        match self.terminal_reconstruction_error {
+            Some(error) => Err(error.into()),
+            None => Ok(()),
+        }
+    }
+    fn poison(&mut self, error: TerminalReconstructionError) -> V2ChunkError {
+        self.terminal_reconstruction_error = Some(error);
+        // The manifest is retained as a rejection tombstone, but no buffered
+        // shard survives or can make the session reconstructible again.
+        self.chunks = Vec::new();
+        self.shards_needed_by_stripe = Vec::new();
+        self.stripes_waiting = 0;
+        error.into()
     }
     fn validate_chunk(
         &self,
@@ -286,6 +328,81 @@ impl V2ChunkSession {
         payload.truncate(payload_size);
         Ok(payload)
     }
+    fn canonical_codeword_matches(&self, payload: &[u8]) -> Result<bool, V2ChunkError> {
+        let manifest = self.validated.manifest();
+        let data_shards = usize::from(manifest.layout.data_shards);
+        let parity_shards = usize::from(manifest.layout.parity_shards);
+        let stripe_width = data_shards
+            .checked_add(parity_shards)
+            .ok_or(V2ChunkError::InvalidErasureLayout)?;
+        if stripe_width != self.stripe_width
+            || stripe_width == 0
+            || !manifest.chunk_hashes.len().is_multiple_of(stripe_width)
+        {
+            return Err(V2ChunkError::InvalidErasureLayout);
+        }
+        let chunk_size = usize::try_from(manifest.layout.chunk_size_bytes)
+            .map_err(|_| V2ChunkError::InvalidChunkLength)?;
+        if chunk_size == 0 || !chunk_size.is_multiple_of(2) {
+            return Err(V2ChunkError::InvalidErasureLayout);
+        }
+        let symbol_count = chunk_size / 2;
+        let mut canonical_chunk = vec![0_u8; chunk_size];
+        for (stripe_index, expected_hashes) in
+            manifest.chunk_hashes.chunks_exact(stripe_width).enumerate()
+        {
+            let mut data_symbols = Vec::with_capacity(data_shards);
+            for data_index in 0..data_shards {
+                canonical_chunk.fill(0);
+                let payload_chunk_index = stripe_index
+                    .checked_mul(data_shards)
+                    .and_then(|base| base.checked_add(data_index))
+                    .ok_or(V2ChunkError::InvalidErasureLayout)?;
+                let offset = payload_chunk_index
+                    .checked_mul(chunk_size)
+                    .ok_or(V2ChunkError::InvalidErasureLayout)?;
+                if offset < payload.len() {
+                    let end = offset
+                        .checked_add(chunk_size)
+                        .unwrap_or(usize::MAX)
+                        .min(payload.len());
+                    canonical_chunk[..end - offset].copy_from_slice(&payload[offset..end]);
+                }
+                if Hash::new(&canonical_chunk) != expected_hashes[data_index] {
+                    return Ok(false);
+                }
+                data_symbols.push(rs16::symbols_from_chunk(symbol_count, &canonical_chunk));
+            }
+            let parity = rs16::encode_parity(&data_symbols, parity_shards)
+                .map_err(|_| V2ChunkError::ReconstructionFailed)?;
+            if parity.len() != parity_shards {
+                return Err(V2ChunkError::ReconstructionFailed);
+            }
+            for (parity_index, symbols) in parity.iter().enumerate() {
+                let bytes = rs16::chunk_from_symbols(symbols, chunk_size)
+                    .map_err(|_| V2ChunkError::ReconstructionFailed)?;
+                if Hash::new(&bytes) != expected_hashes[data_shards + parity_index] {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalReconstructionError {
+    PayloadMismatch,
+    ReconstructionFailed,
+    NoncanonicalCodeword,
+}
+impl From<TerminalReconstructionError> for V2ChunkError {
+    fn from(error: TerminalReconstructionError) -> Self {
+        match error {
+            TerminalReconstructionError::PayloadMismatch => Self::PayloadMismatch,
+            TerminalReconstructionError::ReconstructionFailed => Self::ReconstructionFailed,
+            TerminalReconstructionError::NoncanonicalCodeword => Self::NoncanonicalCodeword,
+        }
+    }
 }
 /// Encode exact canonical payload bytes using the height-frozen DA layout.
 pub(crate) fn encode_payload(
@@ -342,6 +459,9 @@ pub(crate) enum V2ChunkError {
     /// Enough shards existed but deterministic RS16 recovery failed.
     #[error("Sumeragi v2 RS16 reconstruction failed")]
     ReconstructionFailed,
+    /// Committed shards are not the canonical RS16 codeword for the payload.
+    #[error("Sumeragi v2 manifest commits a noncanonical RS16 codeword")]
+    NoncanonicalCodeword,
 }
 #[cfg(test)]
 mod tests {
@@ -697,7 +817,7 @@ mod tests {
             ChunkAdmission::Buffered
         );
         drop(session);
-        let restarted = V2ChunkSession::open(&context, encoded.manifest)
+        let mut restarted = V2ChunkSession::open(&context, encoded.manifest)
             .expect("restart with an empty volatile session");
         assert!(restarted.chunks.iter().all(Option::is_none));
         assert_eq!(
@@ -706,7 +826,7 @@ mod tests {
         );
     }
     #[test]
-    fn noncanonical_codeword_stays_invalid_as_more_shards_arrive() {
+    fn noncanonical_data_terminally_rejects_later_shards_without_reconstruction() {
         let payload = b"a structurally valid manifest can still commit a noncanonical codeword";
         let (context, encoded) = encode_fixture(payload);
         let mut noncanonical_chunks = encoded.chunks.clone();
@@ -737,23 +857,85 @@ mod tests {
         ));
         assert_eq!(session.reconstruction_attempts(), 1);
         assert_eq!(session.payload_allocation_attempts(), 1);
+        assert!(session.is_terminally_failed());
+        assert!(
+            session.chunks.is_empty(),
+            "poisoning releases shard buffers"
+        );
 
-        session
-            .admit_bytes(
+        assert!(matches!(
+            session.admit_bytes(
                 u32::try_from(data_shards).expect("parity index"),
                 &noncanonical_chunks[data_shards],
-            )
-            .expect("buffer another committed shard");
+            ),
+            Err(V2ChunkError::PayloadMismatch)
+        ));
         assert!(matches!(
             session.reconstruct(),
             Err(V2ChunkError::PayloadMismatch)
         ));
         assert_eq!(
             session.reconstruction_attempts(),
-            2,
-            "a newly admitted shard authorizes a fresh deterministic reconstruction attempt"
+            1,
+            "a later unique shard cannot reopen deterministic reconstruction"
         );
-        assert_eq!(session.payload_allocation_attempts(), 2);
+        assert_eq!(
+            session.payload_allocation_attempts(),
+            1,
+            "a later unique shard cannot allocate another payload"
+        );
+    }
+    #[test]
+    fn noncanonical_parity_terminally_rejects_later_shards_without_reconstruction() {
+        let payload = b"canonical data can still be paired with noncanonical parity commitments";
+        let (context, encoded) = encode_fixture(payload);
+        let data_shards = usize::from(context.da_layout.data_shards);
+        let stripe_width =
+            usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
+        let mut noncanonical_chunks = encoded.chunks.clone();
+        noncanonical_chunks[data_shards][0] ^= 0x80;
+        let manifest = wire::PayloadManifest::derive(
+            &context,
+            encoded.manifest.round,
+            encoded.manifest.subject,
+            encoded.manifest.payload_size_bytes,
+            &noncanonical_chunks,
+        )
+        .expect("derive a structurally valid noncanonical parity manifest");
+        let mut session = V2ChunkSession::open(&context, manifest).expect("open session");
+        for (index, chunk) in noncanonical_chunks.iter().enumerate() {
+            if index % stripe_width >= data_shards {
+                continue;
+            }
+            session
+                .admit_bytes(u32::try_from(index).expect("index"), chunk)
+                .expect("buffer canonical data shard");
+        }
+        assert!(matches!(
+            session.reconstruct(),
+            Err(V2ChunkError::NoncanonicalCodeword)
+        ));
+        assert_eq!(session.reconstruction_attempts(), 1);
+        assert_eq!(session.payload_allocation_attempts(), 1);
+        assert!(session.is_terminally_failed());
+        assert!(
+            session.chunks.is_empty(),
+            "poisoning releases shard buffers"
+        );
+
+        assert!(matches!(
+            session.admit_bytes(
+                u32::try_from(data_shards).expect("parity index"),
+                &noncanonical_chunks[data_shards],
+            ),
+            Err(V2ChunkError::NoncanonicalCodeword)
+        ));
+        assert!(matches!(
+            session.reconstruct(),
+            Err(V2ChunkError::NoncanonicalCodeword)
+        ));
+        assert_eq!(session.reconstruction_attempts(), 1);
+        assert_eq!(session.payload_allocation_attempts(), 1);
     }
     #[test]
     fn encoding_is_deterministic_and_subject_bound() {

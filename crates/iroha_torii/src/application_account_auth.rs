@@ -85,8 +85,7 @@ fn mount_signed_proof_query(builder: &mut RouterBuilder) {
 #[cfg(feature = "app_api")]
 macro_rules! mount_authenticated_asset_holder_routes {
     ($torii:expr, $builder:expr) => {{
-        let max_body_bytes = usize::try_from($torii.transaction_max_content_len.get())
-            .expect("transaction content limit should fit usize");
+        let max_body_bytes = $torii.transaction_max_content_len;
         $builder.route(
             &route_catalog::telemetry::ASSET_HOLDERS,
             catalog_get(handler_asset_holders)

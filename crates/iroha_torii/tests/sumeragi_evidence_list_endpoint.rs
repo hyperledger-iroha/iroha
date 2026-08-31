@@ -118,7 +118,6 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
-            consensus_admitted_at_height: None,
         },
         EvidenceRecord {
             evidence: make_phase_vote_evidence(20, 0xB2),
@@ -129,7 +128,6 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
-            consensus_admitted_at_height: None,
         },
         EvidenceRecord {
             evidence: make_phase_vote_evidence(30, 0xC3),
@@ -140,7 +138,6 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
-            consensus_admitted_at_height: None,
         },
     ];
     for record in records {

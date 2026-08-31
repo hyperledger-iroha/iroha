@@ -1,4 +1,4 @@
-/// Build exact signed phase-vote evidence for the production persistence bridge.
+/// Build exact signed phase-vote evidence for the production admission bridge.
 fn exact_vote_equivocation(
     service: &ProductionV2Services,
     keys: &[KeyPair],
@@ -45,17 +45,19 @@ fn exact_vote_equivocation(
 }
 
 #[test]
-fn production_equivocation_bridge_validates_persists_and_deduplicates_restart_replay() {
+fn production_equivocation_bridge_retains_locally_and_deduplicates_service_replay() {
     let (mut service, keys) = fixture();
     let evidence = exact_vote_equivocation(&service, &keys);
     service
         .report_equivocation(evidence.clone())
-        .expect("persist valid exact equivocation evidence");
+        .expect("retain valid exact equivocation evidence");
     let shared_state = Arc::clone(&service.state);
     assert_eq!(
         shared_state.world.consensus_evidence.view().iter().count(),
-        1
+        0,
+        "private observation must not mutate consensus state"
     );
+    assert_eq!(shared_state.sumeragi_v2_pending_evidence.lock().len(), 1);
 
     let wire::SumeragiV2Equivocation::PhaseVote { first, second } = evidence.clone() else {
         unreachable!("phase-vote fixture")
@@ -73,11 +75,12 @@ fn production_equivocation_bridge_validates_persists_and_deduplicates_restart_re
     restarted_service.state = Arc::clone(&shared_state);
     restarted_service
         .report_equivocation(evidence)
-        .expect("restart replay observes the canonical persisted key");
+        .expect("service replay observes the process-local canonical key");
     assert_eq!(
         shared_state.world.consensus_evidence.view().iter().count(),
-        1
+        0
     );
+    assert_eq!(shared_state.sumeragi_v2_pending_evidence.lock().len(), 1);
 }
 
 #[test]

@@ -158,13 +158,13 @@ def test_passive_recovery_contract_rejects_deadline_before_local_check(
     models = copy_fixture(tmp_path, support, module)
     support.swap_ordered_once_after(
         tmp_path / "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "fn service_next_historical_recovery_at(",
+        "fn service_next_historical_recovery_at_with_archive_targets(",
         "self.persist_historical_recovery_session(&session)",
         "self.schedule_historical_recovery_request(",
     )
     errors = validate_fixture(tmp_path, module, models)
     assert any(
-        "service_next_historical_recovery_at" in error
+        "service_next_historical_recovery_at_with_archive_targets" in error
         and "missing or reorders" in error
         for error in errors
     ), errors
@@ -252,16 +252,16 @@ def test_passive_recovery_contract_rejects_missing_quiet_tick_branch(
             "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
             "fn run_lifecycle_active_height(",
             "run_lifecycle_active_height",
-            "service_historical_recovery_tick(&mut lane_work)?",
-            "skip_historical_recovery_tick(&mut lane_work)?",
+            "service_historical_recovery_tick(&mut lane_work, services)?",
+            "skip_historical_recovery_tick(&mut lane_work, services)?",
         ),
         (
             "pending-kura",
             "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
             "fn run_pending_active_height(",
             "run_pending_active_height",
-            "service_historical_recovery_tick(lane_work)?",
-            "skip_historical_recovery_tick(lane_work)?",
+            "service_historical_recovery_tick(lane_work, services)?",
+            "skip_historical_recovery_tick(lane_work, services)?",
         ),
     )
     for fixture_name, relative, anchor, symbol, old, new in cases:

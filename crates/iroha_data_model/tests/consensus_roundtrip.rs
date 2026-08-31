@@ -290,7 +290,6 @@ fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> Eviden
         penalty_cancelled: false,
         penalty_cancelled_at_height: None,
         penalty_applied_at_height: None,
-        consensus_admitted_at_height: None,
     }
 }
 fn rng_sumeragi_v2_status(rng: &mut DeterministicRng) -> SumeragiV2Status {
@@ -403,7 +402,6 @@ fn consensus_persistence_norito_roundtrip() {
         penalty_cancelled: true,
         penalty_cancelled_at_height: Some(45),
         penalty_applied_at_height: None,
-        consensus_admitted_at_height: Some(44),
     };
     let exec_witness = ExecWitness {
         reads: vec![ExecKv {
@@ -458,7 +456,6 @@ fn evidence_record_rejects_shortened_pre_release_binary_layouts() {
         penalty_cancelled: false,
         penalty_cancelled_at_height: None,
         penalty_applied_at_height: Some(85),
-        consensus_admitted_at_height: Some(84),
     };
     assert_roundtrip(&record);
     let shortened_record = PreReleaseEvidenceRecord {
@@ -470,7 +467,7 @@ fn evidence_record_rejects_shortened_pre_release_binary_layouts() {
     .encode();
     assert!(
         EvidenceRecord::decode_all(&mut shortened_record.as_slice()).is_err(),
-        "EvidenceRecord must reject the pre-release layout without penalty and admission state"
+        "EvidenceRecord must reject the pre-release layout without penalty state"
     );
 
     let pending_record = EvidenceRecord {
@@ -482,7 +479,6 @@ fn evidence_record_rejects_shortened_pre_release_binary_layouts() {
         penalty_cancelled: false,
         penalty_cancelled_at_height: None,
         penalty_applied_at_height: None,
-        consensus_admitted_at_height: None,
     };
     assert_roundtrip(&pending_record);
     let omitted_nullable_slots = PreReleaseEvidenceRecordWithoutNullableSlots {

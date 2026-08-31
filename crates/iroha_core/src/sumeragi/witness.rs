@@ -19,6 +19,7 @@ use iroha_data_model::{
     fastpq::{TransferTranscript, TransferTranscriptBundle},
     name::Name,
     nft::NftId,
+    state_path::StatePath,
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
@@ -359,6 +360,19 @@ fn key_asset_def_total(id: &AssetDefinitionId) -> Vec<u8> {
     out.extend_from_slice(id.to_string().as_bytes());
     out
 }
+/// Execution-witness tag for one composite Kagemusha terminal outcome key.
+///
+/// This is intentionally distinct from the dedicated top-up anchor tag, so
+/// lifecycle outcomes remain in the ordinary-writes commitment.
+pub(crate) const KAGEMUSHA_OPERATION_OUTCOME_WITNESS_KEY_TAG_V4: u8 = 0xD4;
+/// Return the ordinary consensus-witness key for one Kagemusha outcome record.
+pub(crate) fn kagemusha_operation_outcome_witness_key_v4(key: &StatePath) -> Vec<u8> {
+    let key = key.to_string();
+    let mut out = Vec::with_capacity(1 + key.len());
+    out.push(KAGEMUSHA_OPERATION_OUTCOME_WITNESS_KEY_TAG_V4);
+    out.extend_from_slice(key.as_bytes());
+    out
+}
 /// Return the consensus-witness key for one finalized Kagemusha V4 top-up anchor.
 pub(crate) fn kagemusha_v4_topup_anchor_witness_key(operation_id: [u8; 32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + operation_id.len());
@@ -537,6 +551,24 @@ pub(crate) fn record_write_kagemusha_v4_topup_drawdown(
         witness
             .writes
             .insert(key, redeemed_atomic_units.to_le_bytes().to_vec());
+    });
+}
+/// Record the pre-state value or canonical absence of one Kagemusha outcome.
+pub(crate) fn record_read_kagemusha_operation_outcome_v4(key: &StatePath, value: Option<&[u8]>) {
+    let key = kagemusha_operation_outcome_witness_key_v4(key);
+    let value = value.map_or_else(Vec::new, ToOwned::to_owned);
+    with_active_slot(|witness| {
+        witness.reads.entry(key).or_insert(value);
+    });
+}
+/// Record the canonical post-state bytes for one Kagemusha outcome, or empty bytes for deletion.
+pub(crate) fn record_write_kagemusha_operation_outcome_v4(
+    key: &StatePath,
+    canonical_record: &[u8],
+) {
+    let key = kagemusha_operation_outcome_witness_key_v4(key);
+    with_active_slot(|witness| {
+        witness.writes.insert(key, canonical_record.to_vec());
     });
 }
 /// Record a FASTPQ transfer transcript so `ExecWitness` consumers can replay transfers.
@@ -1468,6 +1500,45 @@ mod tests {
         assert_eq!(witness.writes.len(), 1);
         assert_eq!(witness.writes[0].key, expected_key);
         assert_eq!(witness.writes[0].value, 29_u128.to_le_bytes());
+    }
+    #[test]
+    fn kagemusha_operation_outcome_is_an_ordinary_exact_witness_leaf() {
+        let _guard = exec_witness_guard();
+        start_block();
+        let state_key: StatePath = "kagemusha_operation_outcome_v4_fixture_fixture"
+            .parse()
+            .expect("state key");
+        let terminal_record = vec![0xA7; 96];
+        record_read_kagemusha_operation_outcome_v4(&state_key, None);
+        record_write_kagemusha_operation_outcome_v4(&state_key, &terminal_record);
+        let witness = drain_exec_witness();
+        let expected_key = kagemusha_operation_outcome_witness_key_v4(&state_key);
+        assert_eq!(
+            expected_key[0],
+            KAGEMUSHA_OPERATION_OUTCOME_WITNESS_KEY_TAG_V4
+        );
+        assert_ne!(expected_key[0], KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
+        assert_eq!(witness.reads.len(), 1);
+        assert_eq!(witness.reads[0].key, expected_key);
+        assert!(witness.reads[0].value.is_empty());
+        assert_eq!(witness.writes.len(), 1);
+        assert_eq!(witness.writes[0].key, expected_key);
+        assert_eq!(witness.writes[0].value, terminal_record);
+        let reads = witness
+            .reads
+            .iter()
+            .map(|entry| KvPair::new(entry.key.clone(), entry.value.clone()))
+            .collect::<Vec<_>>();
+        let writes = witness
+            .writes
+            .iter()
+            .map(|entry| KvPair::new(entry.key.clone(), entry.value.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            crate::sumeragi::smt::compute_consensus_post_state_root(&reads, &writes)
+                .expect("ordinary outcome commitment"),
+            crate::sumeragi::smt::compute_post_state_root(&reads, &writes)
+        );
     }
     #[test]
     fn recorder_lifecycle_read_write_delete_and_drain_match_formal_gate() {

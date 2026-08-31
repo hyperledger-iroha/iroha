@@ -375,31 +375,28 @@ public final class ContractLifecycleWirePayloadEncoder {
     public void encode(final NoritoEncoder encoder, final OwnerValue value) {
       final boolean parliament = value.accountId == null;
       UINT32.encode(encoder, parliament ? 1L : 0L);
-      final byte[] payload =
-          parliament
-              ? new byte[0]
-              : TransferWirePayloadEncoder.encodeAccountIdPayload(value.accountId);
-      writeLength(encoder, payload.length);
-      encoder.writeBytes(payload);
+      if (!parliament) {
+        final byte[] payload =
+            TransferWirePayloadEncoder.encodeAccountIdPayload(value.accountId);
+        writeLength(encoder, payload.length);
+        encoder.writeBytes(payload);
+      }
     }
 
     @Override
     public OwnerValue decode(final NoritoDecoder decoder) {
       final long discriminant = UINT32.decode(decoder);
-      final byte[] payload = readSizedBytes(decoder, "new_owner variant");
       if (discriminant == 0L) {
         if (chainDiscriminant == null) {
           throw new IllegalArgumentException(
               "chainDiscriminant is required to decode an account owner");
         }
+        final byte[] payload = readSizedBytes(decoder, "new_owner account variant");
         return OwnerValue.account(
             TransferWirePayloadEncoder.decodeAccountIdPayload(
                 payload, chainDiscriminant, decoder.flags()));
       }
       if (discriminant == 1L) {
-        if (payload.length != 0) {
-          throw new IllegalArgumentException("Parliament owner payload must be empty");
-        }
         return OwnerValue.parliament();
       }
       throw new IllegalArgumentException(

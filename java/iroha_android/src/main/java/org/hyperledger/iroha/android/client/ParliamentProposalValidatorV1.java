@@ -60,12 +60,14 @@ final class ParliamentProposalValidatorV1 {
     exact(
         value,
         fields(
+            "proposal_operator",
             "contract_address",
             "code_hash",
             "abi_hash",
             "abi_version",
             "manifest_provenance"),
         "DeployContract");
+    account(value.get("proposal_operator"), "proposal_operator");
     ContractAddressValidator.requireCanonicalV1(
         text(value.get("contract_address"), "contract_address"));
     lowerHex32(value.get("code_hash"), "code_hash");
@@ -88,7 +90,8 @@ final class ParliamentProposalValidatorV1 {
   }
 
   private static void runtimeUpgrade(final Map<String, Object> value) {
-    exact(value, fields("manifest"), "RuntimeUpgrade");
+    exact(value, fields("proposal_operator", "manifest"), "RuntimeUpgrade");
+    account(value.get("proposal_operator"), "RuntimeUpgrade.proposal_operator");
     final Map<String, Object> manifest =
         objectValue(value.get("manifest"), "RuntimeUpgrade.manifest");
     exact(
@@ -527,8 +530,11 @@ final class ParliamentProposalValidatorV1 {
   private static void contractLifecycle(final Map<String, Object> value) {
     exact(
         value,
-        fields("contract_address", "expected_revision", "action"),
+        fields("proposal_operator", "contract_address", "expected_revision", "action"),
         "ContractLifecycleGovernance");
+    account(
+        value.get("proposal_operator"),
+        "ContractLifecycleGovernance.proposal_operator");
     ContractAddressValidator.requireCanonicalV1(
         text(
             value.get("contract_address"),

@@ -691,8 +691,6 @@ fn bind_lifecycle_directory_path(
     path: &Path,
     create_missing: bool,
 ) -> Result<(PathBuf, File), LifecycleLedgerError> {
-    use std::os::unix::fs::MetadataExt as _;
-
     if path.as_os_str().is_empty() {
         return Err(lifecycle_invalid_storage(
             "lifecycle directory path is empty",
@@ -1094,6 +1092,7 @@ pub(in crate::sumeragi) struct LifecycleLedgerStoreV1 {
 impl LifecycleLedgerStoreV1 {
     /// Return the private sibling path reserved for the one lifecycle-owned
     /// Validate merge-sidecar registration at this height.
+    #[cfg(test)]
     pub(super) fn validate_sidecar_registration_path(
         &self,
     ) -> Result<PathBuf, LifecycleLedgerError> {
@@ -1585,6 +1584,7 @@ impl LifecycleLedgerStoreV1 {
         })
     }
     /// Atomically replace the ledger after validating all durable invariants.
+    #[cfg(test)]
     pub(super) fn persist(&self, ledger: &LifecycleLedgerV1) -> Result<(), LifecycleLedgerError> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {

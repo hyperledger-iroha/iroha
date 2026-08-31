@@ -46,8 +46,11 @@ async fn domains_endpoints_exist() {
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
         iroha_torii::MaybeTelemetry::disabled(),
-    );
-    let app = torii.api_router_for_tests();
+    )
+    .expect("valid Torii domain fixture");
+    let app = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     // GET /v1/domains
     let resp = app
         .clone()

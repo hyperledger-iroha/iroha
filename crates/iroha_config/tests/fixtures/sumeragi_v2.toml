@@ -29,6 +29,4 @@ ready_bodies = 48
 activation_lead_blocks = 2
 overlap_grace_blocks = 12
 expiry_grace_blocks = 3
-require_hsm = true
 allowed_algorithms = ["bls_normal"]
-allowed_hsm_providers = ["pkcs11", "pkcs11", "yubihsm"]

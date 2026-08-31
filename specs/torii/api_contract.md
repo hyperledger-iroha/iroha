@@ -97,12 +97,21 @@ exceptions after stream establishment.
 capability document: `GET /v1/mcp` returns `405 Method Not Allowed`. CORS
 preflight remains bodyless and does not require `Content-Type`.
 
-Structured query DTOs accept at most one value for each decoded key. Literal
-duplicates and percent-encoded equivalents such as `limit` and `%6cimit` return
-`400 request_query_invalid`. Percent-decoded keys and values must be exact
-UTF-8; invalid UTF-8 byte sequences are rejected rather than replaced with
-Unicode replacement characters. Only explicitly documented
-protocol parsers may define repeated-key semantics.
+Structured query DTOs accept an absent query as an empty object. A present
+query is limited to 64 KiB and 64 unique, non-empty `key=value` pairs; empty
+segments, additional literal `=` separators, and duplicate decoded keys return
+`400 request_query_invalid`. Components have one canonical HTML-form spelling:
+spaces are `+`, literal plus signs and non-literal bytes use uppercase percent
+escapes, and literal bytes must not be escaped. Decoded keys and values must be
+exact UTF-8 without control characters. Scalar coercion recognizes only
+lowercase `null`, `true`, `false`, and canonical base-10 integers; aliases,
+whitespace, floats, and exponents remain strings. Only explicitly documented
+protocol parsers may define different or repeated-key semantics.
+
+SoraFS readback queries are schema-closed. Their numeric fields use canonical
+unsigned decimal text, page limits must be within the documented range, and
+unknown keys, empty segments, duplicates, and percent-encoded aliases return
+`400` instead of being ignored or clamped.
 
 ## Errors and correlation
 
@@ -505,24 +514,94 @@ consensus/on-chain `operation_id` uniqueness rule is the final guard that
 permits at most one economic effect. This is not a distributed
 idempotency-cache guarantee.
 
-Pending and committed recovery is keyed by the configured Kagemusha submission
-authority together with the signed operation id. A transaction under another
-outer authority therefore cannot shadow a Torii-submitted Kagemusha operation
-merely by copying its signed request body into a transaction that later
-rejects. The submission authority is consequently part of the durable
-operation-status contract; deployments must retain it for as long as they
-promise status recovery.
+Pre-commit ownership and rejected attempts are keyed by the configured
+Kagemusha submission authority together with the signed operation id. A
+transaction under another outer authority therefore cannot shadow a
+Torii-submitted attempt merely by copying its signed request body into a
+transaction that rejects. A rejected attempt is retryable under the same
+authority only when its complete economic request identity is unchanged. Torii
+removes only the exact rejected carrier from its local accepted registry and
+derives the replacement carrier's nonce by checked increment of the rejected
+wire's nonce (`None` becomes `1`). Retry wires therefore remain deterministic
+across replicas without colliding with Queue's committed-hash replay guard. If
+the increment would exceed the transaction nonce space, the command returns
+`409 offline_operation_retry_exhausted`; the caller must authorize a new
+operation id. Rejected is therefore terminal only for one carrier attempt, not
+for the operation-id resource.
 
-After commit, synchronized replicas recover the terminal result through Kura's
-operation-id index while the indexed block body is retained. An index still
-being reconstructed returns typed `503`, and a replica that does not retain the
-indexed block returns the documented history-unavailable `503`. Applied
-results carry non-zero height and server-time values from that exact block;
-Torii never fabricates zero metadata from a local pipeline cache. Missing or
-inconsistent terminal metadata or result state returns
-`503 offline_operation_index_inconsistent`. Deployments that cannot provide
-pre-commit affinity must not expose Offline command routes until shared
-admission coordination exists.
+Queue keeps reciprocal `(authority, operation_id)` and transaction-hash
+ownership indexes. Each hot lookup, claim, or removal verifies equal
+cardinality and the exact reciprocal entry in logarithmic time; the complete
+bijection is scanned once after cold journal reconstruction. A newer exact
+Queue-owned attempt supersedes a stale process-local admitted transaction hash,
+while any logical carrier mismatch remains
+`503 offline_operation_evidence_inconsistent`.
+
+Applied finality is instead unique by operation id across all authorized
+submission authorities. Only the authenticated fresh economic branch may
+stage that global claim, after its balance, anchor, and replay writes have
+succeeded. Finalization promotes exactly one such claim in canonical phase
+order; a rejected or exact-replay branch cannot claim application. Once
+present, the global Applied record supersedes every authority-scoped rejected
+attempt. This keeps the economic uniqueness boundary identical to the signed
+operation-id boundary without allowing an unauthorized or rejected carrier to
+poison it.
+
+Persisted outcome records use fixed canonical digests for both the request and
+outer authorities. Recovery recomputes those digests from the carrier rather
+than storing variable-size `AccountId` values, so even a large valid
+multisignature authority cannot make terminal recording exceed the bounded
+state-value budget after Queue acceptance.
+
+Maintained clients keep the operation id, operation kind, and canonical status
+URI immutable across this lifecycle. They accept a different canonical
+transaction hash for a newer exact Pending or Rejected attempt and for a global
+Applied winner under another authorized outer authority. A Pending response
+must repeat `submitted_at_ms` when its hash is unchanged; a changed hash carries
+and replaces it with a new positive timestamp, and clients promote that pair to
+the reference checked by the next poll. Each command POST is a one-shot
+transport dispatch even when an ambient client policy would retry POST. An
+ambiguous dispatch is reconciled through the canonical status resource; another
+POST is permitted only after an exact Rejected attempt is observed and the same
+request is deliberately retried. Only Applied is globally final.
+
+Before commit, Torii recovers the configured authority's pending attempt
+through Queue's exact composite-key ownership index. If Queue startup recovery
+or an in-flight durability transition prevents a coherent ownership snapshot,
+status lookup and
+idempotent submission reconciliation return
+`503 offline_operation_pending_unavailable` rather than guessing absent or
+pending. Any forward/reverse index or exact-carrier mismatch returns
+`503 offline_operation_evidence_inconsistent`. A terminal consensus outcome,
+when present, takes precedence over process-local admission, Queue, and
+pipeline hints.
+
+After commit, synchronized replicas first recover the global Applied record by
+signed operation id and otherwise recover only the configured authority's
+Rejected attempt. Each record binds the complete request digest, signed
+transaction-wire digest, entrypoint intent hash, terminal result hash, and one
+exact height/phase/index locator. A global Applied record may name a different
+authorized submission authority and transaction hash when a cross-instance
+race committed the same economic request first; the request identity must still
+match exactly. Torii follows the locator directly to the retained ordinary
+block or flattened merge evidence; it never scans history or trusts a
+process-local pipeline hint over terminal consensus state. A replica that does
+not retain the referenced body or merge batch returns
+`503 offline_operation_history_unavailable`. Malformed outcome state or any
+carrier/result mismatch returns
+`503 offline_operation_evidence_inconsistent`. Applied results carry the
+non-zero finalized height from that exact evidence. The result wire deliberately
+omits server time because it is not authenticated by the operation's consensus
+proof. Deployments that cannot provide pre-commit affinity must not expose
+Offline command routes until shared admission coordination exists.
+
+Each command POST performs authoritative recovery before consulting transient
+readiness. Only the elected in-flight leader requires readiness to construct a
+new transaction; accepted replays and followers remain observable during a
+readiness outage. If claiming leadership, preflight, snapshot acquisition,
+amount conversion, signing, Queue admission, or accepted-binding publication
+fails, Torii performs one exact recovery before returning the stale failure, so
+a concurrently committed operation always wins reconciliation.
 
 ## Sharp cutover and release gates
 

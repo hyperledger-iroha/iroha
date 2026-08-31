@@ -80,6 +80,7 @@ fn parliament_runtime_upgrade_enacts_at_the_exact_due_height() {
         let fixture = seed_due_parliament_certificate(
             &mut seed,
             ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+                proposal_operator: ALICE_ID.clone(),
                 manifest: manifest.clone(),
             }),
         );

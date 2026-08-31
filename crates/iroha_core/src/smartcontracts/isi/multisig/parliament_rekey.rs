@@ -28,14 +28,19 @@ fn payout_binding_references_account(
             .any(|recipient| &recipient.account_id == account)
 }
 
-fn validation_fee_proposal_references_account(
+fn operator_bound_proposal_references_account(
     proposal: &ProposalKind,
     account: &AccountId,
 ) -> bool {
+    if proposal
+        .proposal_operator_v1()
+        .is_some_and(|operator| operator == account)
+    {
+        return true;
+    }
     match proposal {
         ProposalKind::ValidationFeePolicy(payload) => {
-            &payload.proposal_operator == account
-                || &payload.policy.treasury_account_id == account
+            &payload.policy.treasury_account_id == account
                 || payload
                     .policy
                     .treasury_payout_binding
@@ -43,15 +48,19 @@ fn validation_fee_proposal_references_account(
                     .is_some_and(|binding| payout_binding_references_account(binding, account))
         }
         ProposalKind::ValidationFeePayoutLifecycle(payload) => {
-            &payload.proposal_operator == account
-                || payout_binding_references_account(&payload.payout_binding, account)
+            payout_binding_references_account(&payload.payout_binding, account)
         }
+        ProposalKind::ContractLifecycleGovernance(payload) => matches!(
+            &payload.action,
+            iroha_data_model::governance::types::ContractLifecycleGovernanceActionV1::OfferOwnership(
+                offer,
+            ) if &offer.new_owner == account
+        ),
         ProposalKind::DeployContract(_)
         | ProposalKind::RuntimeUpgrade(_)
         | ProposalKind::SccpRouteGovernance(_)
         | ProposalKind::SorafsProviderGovernance(_)
         | ProposalKind::MusubiRegistryGovernance(_)
-        | ProposalKind::ContractLifecycleGovernance(_)
         | ProposalKind::ContractEmergencyHold(_)
         | ProposalKind::GlobalDataTriggerPermissionGovernance(_) => false,
     }
@@ -76,27 +85,16 @@ fn terminal_status_matches_attempt(
     )
 }
 
-/// Prove that a terminal fee proposal has no remaining proposal-wide redraw.
+/// Prove that a terminal operator-bound proposal has no remaining proposal-wide redraw.
 ///
 /// This intentionally repeats the canonical history checks at the rekey boundary. A missing,
 /// sparse, malformed, or proposal-mismatched history must not be mistaken for exhausted history.
-fn terminal_validation_fee_retry_budget_is_exhausted(
+fn terminal_operator_bound_retry_budget_is_exhausted(
     state_transaction: &StateTransaction<'_, '_>,
     proposal_id: [u8; 32],
     proposal: &crate::state::GovernanceProposalRecord,
 ) -> bool {
-    let Some(operator) = (match &proposal.kind {
-        ProposalKind::ValidationFeePolicy(payload) => Some(&payload.proposal_operator),
-        ProposalKind::ValidationFeePayoutLifecycle(payload) => Some(&payload.proposal_operator),
-        ProposalKind::DeployContract(_)
-        | ProposalKind::RuntimeUpgrade(_)
-        | ProposalKind::SccpRouteGovernance(_)
-        | ProposalKind::SorafsProviderGovernance(_)
-        | ProposalKind::MusubiRegistryGovernance(_)
-        | ProposalKind::ContractLifecycleGovernance(_)
-        | ProposalKind::ContractEmergencyHold(_)
-        | ProposalKind::GlobalDataTriggerPermissionGovernance(_) => None,
-    }) else {
+    let Some(operator) = proposal.kind.proposal_operator_v1() else {
         return false;
     };
     if proposal.kind.fingerprint() != proposal_id || operator != &proposal.proposer {
@@ -147,26 +145,23 @@ fn terminal_validation_fee_retry_budget_is_exhausted(
     })
 }
 
-/// Return whether the proposal contains one of the validation-fee preimages
-/// whose proposer is part of its immutable fingerprint.
-pub(super) const fn is_validation_fee_proposal(proposal: &ProposalKind) -> bool {
-    matches!(
-        proposal,
-        ProposalKind::ValidationFeePolicy(_) | ProposalKind::ValidationFeePayoutLifecycle(_)
-    )
+/// Return whether the proposal binds its operator into its immutable fingerprint.
+pub(super) const fn is_operator_bound_proposal(proposal: &ProposalKind) -> bool {
+    proposal.proposal_operator_v1().is_some()
 }
 
 /// Reject a controller-derived account-ID change that would strand a hash-bound
-/// Parliament member or invalidate an immutable validation-fee authorization.
+/// Parliament member or invalidate an immutable proposal authorization.
 pub(super) fn ensure_account_rekey_preserves_bindings(
     state_transaction: &StateTransaction<'_, '_>,
     old_account: &AccountId,
 ) -> Result<(), InstructionExecutionError> {
     if state_transaction
         .world
-        .parliament_attempts
-        .iter()
-        .any(|(_, attempt)| attempt.retains_citizenship_bond(old_account))
+        .parliament_member_reference_counts
+        .get(old_account)
+        .copied()
+        .is_some_and(crate::state::ParliamentMemberReferenceCountsV1::retains_citizenship_bond)
     {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
@@ -176,9 +171,9 @@ pub(super) fn ensure_account_rekey_preserves_bindings(
         ));
     }
     for (proposal_id, proposal) in state_transaction.world.governance_proposals.iter() {
-        if !is_validation_fee_proposal(&proposal.kind)
+        if !is_operator_bound_proposal(&proposal.kind)
             || (proposal.proposer != *old_account
-                && !validation_fee_proposal_references_account(&proposal.kind, old_account))
+                && !operator_bound_proposal_references_account(&proposal.kind, old_account))
         {
             continue;
         }
@@ -187,7 +182,7 @@ pub(super) fn ensure_account_rekey_preserves_bindings(
             GovernanceProposalStatus::Rejected
                 | GovernanceProposalStatus::Superseded
                 | GovernanceProposalStatus::ExecutionFailed
-        ) && terminal_validation_fee_retry_budget_is_exhausted(
+        ) && terminal_operator_bound_retry_budget_is_exhausted(
             state_transaction,
             *proposal_id,
             proposal,
@@ -195,7 +190,7 @@ pub(super) fn ensure_account_rekey_preserves_bindings(
         if !rekey_is_safe {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "cannot rekey account {old_account}: it is retained by a live, operational, retryable, or noncanonical validation-fee Parliament authorization"
+                    "cannot rekey account {old_account}: it is retained by a live, operational, retryable, or noncanonical operator-bound Parliament authorization"
                 )
                 .into(),
             ));

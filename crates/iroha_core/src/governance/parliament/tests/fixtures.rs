@@ -437,6 +437,9 @@ fn casting_state_at_height(
         BallotAttemptId::new(lifecycle.ballot_attempt_id()),
         lifecycle,
     );
+    world
+        .rebuild_governance_read_indexes_for_testing()
+        .expect("rebuild casting candidates from the authoritative fixture attempt");
     let mut state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -679,6 +682,7 @@ fn attempt_state_encoded_size_bound_accepts_small_and_rejects_oversized() {
 
 fn deploy_contract_proposal() -> ProposalKind {
     ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: account(40),
         contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
             .parse()
             .expect("canonical contract address"),
@@ -1540,7 +1544,13 @@ fn finalize_policy(
     nay: u32,
     abstain: u32,
 ) -> ParliamentAggregateOutcomeV1 {
-    finalize_policy_with_confirmation_capacity(fixture, aye, nay, abstain, 2)
+    finalize_policy_with_confirmation_capacity(
+        fixture,
+        aye,
+        nay,
+        abstain,
+        MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+    )
 }
 
 fn finalize_policy_with_confirmation_capacity(

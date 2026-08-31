@@ -265,32 +265,29 @@ object ContractLifecycleWirePayloadEncoder {
         override fun encode(encoder: NoritoEncoder, value: OwnerValue) {
             val accountId = value.accountId
             UINT32.encode(encoder, if (accountId == null) 1L else 0L)
-            val payload = if (accountId == null) {
-                ByteArray(0)
-            } else {
-                TransferWirePayloadEncoder.encodeAccountIdPayload(accountId)
+            if (accountId != null) {
+                val payload = TransferWirePayloadEncoder.encodeAccountIdPayload(accountId)
+                writeLength(encoder, payload.size)
+                encoder.writeBytes(payload)
             }
-            writeLength(encoder, payload.size)
-            encoder.writeBytes(payload)
         }
 
         override fun decode(decoder: NoritoDecoder): OwnerValue {
             val discriminant = UINT32.decode(decoder)
-            val payload = readSizedBytes(decoder, "new_owner variant")
             return when (discriminant) {
-                0L -> OwnerValue.account(
-                    TransferWirePayloadEncoder.decodeAccountIdPayload(
-                        payload,
-                        requireNotNull(chainDiscriminant) {
-                            "chainDiscriminant is required to decode an account owner"
-                        },
-                        decoder.flags,
-                    ),
-                )
-                1L -> {
-                    require(payload.isEmpty()) { "Parliament owner payload must be empty" }
-                    OwnerValue.parliament()
+                0L -> {
+                    val payload = readSizedBytes(decoder, "new_owner account variant")
+                    OwnerValue.account(
+                        TransferWirePayloadEncoder.decodeAccountIdPayload(
+                            payload,
+                            requireNotNull(chainDiscriminant) {
+                                "chainDiscriminant is required to decode an account owner"
+                            },
+                            decoder.flags,
+                        ),
+                    )
                 }
+                1L -> OwnerValue.parliament()
                 else -> throw IllegalArgumentException(
                     "unsupported ContractLifecycleOwnerV1 discriminant: $discriminant",
                 )

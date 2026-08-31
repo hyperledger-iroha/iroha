@@ -39,6 +39,10 @@ const REGISTRATION_CORPUS_DOMAIN_V1: &[u8] = b"iroha:parliament:timed-ovn:regist
 const EMPTY_CONTEXT_ROOT_DOMAIN_V1: &[u8] =
     b"iroha:parliament:timed-ovn:casting-contexts:empty:v1\0";
 
+fn is_zero_prehash_sentinel(hash: Hash) -> bool {
+    hash == Hash::prehashed([0; Hash::LENGTH])
+}
+
 /// Cast-capable lifecycle phases admitted to the authenticated context set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -210,12 +214,7 @@ impl ParliamentTimedOvnCastingContextBindingV1 {
             || self.tle_key_session_id.as_bytes() == &[0; 32]
             || self.tle_key_transcript_hash == [0; 32]
             || self.tle_master_public_key == [0; 96]
-            || self
-                .registration_corpus
-                .digest
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
+            || is_zero_prehash_sentinel(self.registration_corpus.digest)
             || self.registration_opened_at_finalized_height == 0
             || !(self.registration_opened_at_finalized_height < self.registration_close_height
                 && self.registration_close_height < self.survivor_freeze_height
@@ -354,7 +353,7 @@ impl ParliamentTimedOvnCastingSnapshotCommitmentV1 {
             && if self.count == 0 {
                 self.root == parliament_timed_ovn_empty_casting_root_v1()
             } else {
-                self.root.as_ref().iter().any(|byte| *byte != 0)
+                !is_zero_prehash_sentinel(self.root)
                     && self.root != parliament_timed_ovn_empty_casting_root_v1()
             }
     }
@@ -557,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_snapshot_uses_fixed_root() {
+    fn empty_snapshot_uses_fixed_root_and_rejects_zero_prehash_sentinel() {
         let snapshot =
             ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(12, &[])
                 .expect("empty commitment");
@@ -567,11 +566,16 @@ mod tests {
         );
         assert!(snapshot.is_valid());
         assert!(!ParliamentTimedOvnCastingSnapshotCommitmentV1::empty(0).is_valid());
+        let zero_prehash_sentinel = Hash::prehashed([0; Hash::LENGTH]);
+        assert!(
+            zero_prehash_sentinel.as_ref().iter().any(|byte| *byte != 0),
+            "the mandatory hash marker makes a generic nonzero-byte check insufficient"
+        );
         assert!(
             !ParliamentTimedOvnCastingSnapshotCommitmentV1 {
                 version: PARLIAMENT_TIMED_OVN_CASTING_COMMITMENT_VERSION_V1,
                 evaluated_height: 12,
-                root: Hash::prehashed([0; Hash::LENGTH]),
+                root: zero_prehash_sentinel,
                 count: 1,
             }
             .is_valid()

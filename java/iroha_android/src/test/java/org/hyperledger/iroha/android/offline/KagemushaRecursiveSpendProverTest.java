@@ -69,7 +69,7 @@ public final class KagemushaRecursiveSpendProverTest {
     toriiLifecycleRoutesAndHeadersAreExact();
     toriiCommandsRejectNoncanonicalRecoveryHeaders();
     toriiOperationIdentityBindingsRejectSubstitutionBeforeCompletion();
-    operationStatusProjectionRejectsZeroTimesAndUnstableCodes();
+    operationStatusProjectionRejectsZeroHeightsAndUnstableCodes();
     offlineCapabilityRejectsRetiredReadinessClaims();
     publicSurfaceIsKagemushaOnly();
   }
@@ -95,8 +95,8 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   @org.junit.Test
-  public void operationStatusProjectionRejectsZeroTimesAndUnstableCodesUnderJUnit() {
-    operationStatusProjectionRejectsZeroTimesAndUnstableCodes();
+  public void operationStatusProjectionRejectsZeroHeightsAndUnstableCodesUnderJUnit() {
+    operationStatusProjectionRejectsZeroHeightsAndUnstableCodes();
   }
 
   @org.junit.Test
@@ -1641,7 +1641,6 @@ public final class KagemushaRecursiveSpendProverTest {
                 projectedOperationId,
                 1L,
                 null,
-                null,
                 null));
 
     final KagemushaRecursiveSpendProver.OfflineStatus status =
@@ -1862,7 +1861,6 @@ public final class KagemushaRecursiveSpendProverTest {
             operationId,
             7L,
             null,
-            null,
             null);
     KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(status, handle);
     assertThrowsIllegalState(() ->
@@ -1904,7 +1902,6 @@ public final class KagemushaRecursiveSpendProverTest {
             operationId,
             null,
             1L,
-            1L,
             null);
     assertThrowsIllegalState(() ->
         KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
@@ -1939,18 +1936,18 @@ public final class KagemushaRecursiveSpendProverTest {
     assert dispatched.get() == null;
   }
 
-  private static void operationStatusProjectionRejectsZeroTimesAndUnstableCodes() {
+  private static void operationStatusProjectionRejectsZeroHeightsAndUnstableCodes() {
     final byte[] digest = new byte[32];
     Arrays.fill(digest, (byte) 1);
     assert operationProjection(
             KagemushaRecursiveSpendProver.OperationState.PENDING,
             KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
-            digest, 1L, null, null, null)
+            digest, 1L, null, null)
         .submittedAtMilliseconds() == 1L;
     assertThrowsIllegalArgument(() -> operationProjection(
         KagemushaRecursiveSpendProver.OperationState.PENDING,
         KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
-        digest, 0L, null, null, null));
+        digest, 0L, null, null));
     final byte[] unmarkedTransactionHash = Arrays.copyOf(digest, digest.length);
     unmarkedTransactionHash[unmarkedTransactionHash.length - 1] = 2;
     assertThrowsIllegalArgument(() -> operationProjectionWithTransactionHash(
@@ -1960,16 +1957,11 @@ public final class KagemushaRecursiveSpendProverTest {
         unmarkedTransactionHash,
         1L,
         null,
-        null,
         null));
     assertThrowsIllegalArgument(() -> operationProjection(
         KagemushaRecursiveSpendProver.OperationState.APPLIED,
         KagemushaRecursiveSpendProver.OperationKind.REDEEM,
-        digest, null, 0L, 1L, null));
-    assertThrowsIllegalArgument(() -> operationProjection(
-        KagemushaRecursiveSpendProver.OperationState.APPLIED,
-        KagemushaRecursiveSpendProver.OperationKind.REDEEM,
-        digest, null, 1L, 0L, null));
+        digest, null, 0L, null));
     for (final String code : Arrays.asList("_invalid", "UPPER", "bad-code", repeat("a", 65))) {
       assertThrowsIllegalArgument(() -> operationRejection(code, "rejected"));
     }
@@ -1983,7 +1975,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert operationProjection(
             KagemushaRecursiveSpendProver.OperationState.REJECTED,
             KagemushaRecursiveSpendProver.OperationKind.REDEEM,
-            digest, null, null, null, rejection)
+            digest, null, null, rejection)
         .rejection() == rejection;
   }
 
@@ -2002,10 +1994,9 @@ public final class KagemushaRecursiveSpendProverTest {
       final byte[] digest,
       final Long submittedAt,
       final Long finalizedHeight,
-      final Long serverTime,
       final KagemushaRecursiveSpendProver.OperationRejection rejection) {
     return operationProjectionWithTransactionHash(
-        state, kind, digest, digest, submittedAt, finalizedHeight, serverTime, rejection);
+        state, kind, digest, digest, submittedAt, finalizedHeight, rejection);
   }
 
   private static KagemushaRecursiveSpendProver.OperationStatusProjection
@@ -2016,7 +2007,6 @@ public final class KagemushaRecursiveSpendProverTest {
       final byte[] transactionHash,
       final Long submittedAt,
       final Long finalizedHeight,
-      final Long serverTime,
       final KagemushaRecursiveSpendProver.OperationRejection rejection) {
     return construct(
         KagemushaRecursiveSpendProver.OperationStatusProjection.class,
@@ -2025,7 +2015,6 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.OperationKind.class,
             byte[].class,
             byte[].class,
-            Long.class,
             Long.class,
             Long.class,
             KagemushaRecursiveSpendProver.FinalizedTopUp.class,
@@ -2037,7 +2026,6 @@ public final class KagemushaRecursiveSpendProverTest {
         transactionHash,
         submittedAt,
         finalizedHeight,
-        serverTime,
         null,
         rejection);
   }

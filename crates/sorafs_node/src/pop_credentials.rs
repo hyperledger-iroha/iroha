@@ -7,7 +7,8 @@
 //! - the issuer checkpoint retains encrypted enrollment and encrypted wallet
 //!   delivery envelopes, plus payload-free approval/outbox metadata;
 //! - the wallet vault retains credential and witness material only inside a
-//!   KMS/PKCS#11-wrapped ChaCha20-Poly1305 envelope.
+//!   ChaCha20-Poly1305 envelope whose DEK is wrapped by a qualified deployment-owned runtime
+//!   provider.
 //!
 //! There is no local-authority fallback. Issuance and verification are bound to
 //! an explicitly supplied finalized policy/root projection, and every registry
@@ -667,7 +668,7 @@ fn map_wallet_recipient_error(error: PopRecipientOpenErrorV1) -> PopCredentialSe
         PopRecipientOpenErrorV1::Rejected => PopCredentialServiceError::Encryption,
     }
 }
-/// Runtime-only KMS/PKCS#11 wrapper used by a wallet vault.
+/// Runtime-only qualified key wrapper used by a wallet vault.
 pub trait PopWalletKeyWrapper: Send + Sync + fmt::Debug {
     /// Return the active non-secret wrapping-key handle.
     fn active_key_id(&self) -> &str;
@@ -4004,7 +4005,7 @@ impl PopWalletVault {
         private.active_revocation_list = revocations;
         self.persist_credential(credential_commitment, &private)
     }
-    /// Rewrap one credential DEK under a replacement KMS/PKCS#11 key without
+    /// Rewrap one credential DEK under a replacement provider-managed key without
     /// changing ciphertext, nonce, or immutable authenticated metadata.
     pub fn rewrap_credential(
         &self,

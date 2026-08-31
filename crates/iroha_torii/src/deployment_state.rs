@@ -333,7 +333,7 @@ pub(crate) async fn handler_contract_deployment_state(
         remote.ip(),
         "v1/contracts/deployment-state",
         "contract_deployment_state",
-        false,
+        None,
     )
     .await?;
     let caller = super::require_signed_account_request(

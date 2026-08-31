@@ -1160,9 +1160,7 @@ fn runtime_queue_reserves_progress_and_completions() {
             activation_lead_blocks: 1,
             overlap_grace_blocks: 1,
             expiry_grace_blocks: 1,
-            require_hsm: false,
             allowed_algorithms: vec![Algorithm::BlsNormal],
-            allowed_hsm_providers: Vec::new(),
         },
     };
     assert!(runtime_queue_config(&config).is_ok());

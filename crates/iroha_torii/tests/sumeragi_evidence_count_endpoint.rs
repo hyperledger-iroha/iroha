@@ -148,7 +148,6 @@ async fn evidence_count_endpoint_reports_increase() {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
-            consensus_admitted_at_height: None,
         };
         insert_evidence_record_for_test(state_mut, record);
     }

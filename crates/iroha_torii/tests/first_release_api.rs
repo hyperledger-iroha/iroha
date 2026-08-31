@@ -428,6 +428,9 @@ fn build_router() -> axum::Router {
         OnlinePeersProvider::new(peers_rx),
         None,
         iroha_torii::MaybeTelemetry::disabled(),
-    );
-    torii.api_router_for_tests()
+    )
+    .expect("valid first-release Torii fixture");
+    torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes")
 }

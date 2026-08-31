@@ -59,6 +59,7 @@ async fn gov_proposal_get_router_mapping() {
     let rec = iroha_core::state::GovernanceProposalRecord {
         proposer: proposer.clone(),
         kind: ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: proposer.clone(),
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),

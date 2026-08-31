@@ -1422,6 +1422,9 @@ fn recovered_wal_test_fixture_publishes_status_last_and_owner_factory_stays_clos
     let authenticated_roots = canonical_factory
         .find("self.open_production_lifecycle_owner_v1_at_authenticated_roots(")
         .expect("factory enters the private implementation after target checks");
+    let serve_target = canonical_factory
+        .find("authority: serve_payload_directory_authority,")
+        .expect("factory consumes the recovery-minted Serve directory authority");
     let kura_binding = canonical_factory
         .find("owner.with_recovered_kura_binding_and_apply_service(")
         .expect("factory retains the Kura and replay service in one owner transition");
@@ -1434,6 +1437,8 @@ fn recovered_wal_test_fixture_publishes_status_last_and_owner_factory_stays_clos
     assert!(apply_service < replay);
     assert!(replay < sealed_parts);
     assert!(sealed_parts < authenticated_roots);
+    assert!(authenticated_roots < serve_target);
+    assert!(serve_target < kura_binding);
     assert!(authenticated_roots < kura_binding);
     for forbidden in [
         "kura: &Kura",
@@ -1460,8 +1465,13 @@ fn recovered_wal_test_fixture_publishes_status_last_and_owner_factory_stays_clos
         .find("into_lifecycle_owner_store")
         .expect("factory consumes the revalidated same-store handoff");
     let serve_open = owner_factory
-        .find("CertifiedServePayloadStoreV1::open(")
-        .expect("factory opens the Serve store");
+        .find("payload_store_target.open(")
+        .expect("factory opens the sealed Serve store target");
+    assert_eq!(
+        owner_factory.matches("payload_store_target.open(").count(),
+        2,
+        "Decision Apply and common non-Apply startup must each consume their target"
+    );
     let owner_open = owner_factory
         .find(".into_owner(registry, payload_store, body_store)")
         .expect("factory constructs the recovered owner");

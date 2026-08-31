@@ -63,7 +63,6 @@ pub(crate) fn trigger_was_registered_before_block(
 /// - adjusting trigger metadata to reflect registration height and block time
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
-    use super::specialized::LoadedActionTrait as _;
     use super::{super::prelude::*, *};
     use iroha_data_model::{
         isi::error::{InvalidParameterError, RepetitionError},
@@ -415,6 +414,16 @@ pub mod isi {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "trigger repeat count must be greater than zero".into(),
+                ),
+            ));
+        }
+        if crate::kagemusha_operation::executable_contains_kagemusha_operation_v4(
+            new_trigger.action().executable(),
+        ) {
+            return Err(Error::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "Kagemusha operations require one direct external signed transaction and cannot be registered in a trigger"
+                        .into(),
                 ),
             ));
         }

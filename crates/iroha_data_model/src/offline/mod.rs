@@ -1,18 +1,21 @@
 //! Canonical Kagemusha offline cash: online top-up, recursive spend, and online redemption.
 mod kagemusha_canary_evidence;
 mod kagemusha_internal_validation_receipt;
+mod kagemusha_operation_carrier;
 mod kagemusha_post_canary_validator_liveness;
 mod kagemusha_promotion_receipt;
 mod kagemusha_release_lifecycle;
 mod kagemusha_runtime_effective_config_projection;
+mod kagemusha_topup_merkle;
 mod offline_cash_release_v1;
 mod offline_cash_v1;
 mod receiver_snapshot;
 mod status;
 pub use self::{
     kagemusha_canary_evidence::*, kagemusha_internal_validation_receipt::*,
-    kagemusha_post_canary_validator_liveness::*, kagemusha_promotion_receipt::*,
-    kagemusha_release_lifecycle::*, kagemusha_runtime_effective_config_projection::*, model::*,
+    kagemusha_operation_carrier::*, kagemusha_post_canary_validator_liveness::*,
+    kagemusha_promotion_receipt::*, kagemusha_release_lifecycle::*,
+    kagemusha_runtime_effective_config_projection::*, kagemusha_topup_merkle::*, model::*,
     offline_cash_release_v1::*, offline_cash_v1::*,
 };
 #[cfg(feature = "json")]
@@ -23,8 +26,9 @@ use crate::{
     asset::{AssetDefinitionId, AssetId},
     block::consensus_v2::{
         ConsensusMode, DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext,
-        HeightContextId, MAX_VALIDATORS_PER_HEIGHT, PROTOCOL_VERSION, QuorumCertificate,
-        SnapshotBootstrapAnchor, ValidatorPower, finality::FinalizedNextEpochSnapshot,
+        HeightContextId, MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK, MAX_VALIDATORS_PER_HEIGHT,
+        PROTOCOL_VERSION, QuorumCertificate, SnapshotBootstrapAnchor, ValidatorPower,
+        finality::FinalizedNextEpochSnapshot,
     },
     confidential::ConfidentialStatus,
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
@@ -115,7 +119,8 @@ pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2: u16 = 1;
 /// Current trusted validator-roster artifact layout.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2: u16 = 1;
 /// Consensus maximum matching the block-local bounded Merkle tree.
-pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2: u32 = 16;
+pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2: u32 =
+    MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK;
 /// Maximum balanced-Merkle siblings for 16 block-local anchors.
 pub const KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2: usize = 4;
 /// Maximum validator count accepted by an offline roster artifact.
@@ -818,16 +823,22 @@ pub struct OfflineDeviceAttestationRegistration {
     /// Account authorized to control the note key.
     pub account_id: AccountId,
     /// Optional asset definition this attestation is intended for.
+    #[norito(required)]
     pub asset_definition_id: Option<AssetDefinitionId>,
     /// Apple Developer Team ID for iOS App Attest registrations.
+    #[norito(required)]
     pub ios_team_id: Option<String>,
     /// iOS bundle identifier for App Attest registrations.
+    #[norito(required)]
     pub ios_bundle_id: Option<String>,
     /// iOS App Attest environment, either `production` or `development`.
+    #[norito(required)]
     pub ios_environment: Option<String>,
     /// Android package name expected in the `KeyMint` attestation application id.
+    #[norito(required)]
     pub android_package_name: Option<String>,
     /// Android signing certificate SHA-256 expected in the `KeyMint` attestation application id.
+    #[norito(required)]
     pub android_signing_certificate_sha256: Option<Vec<u8>>,
     /// Fixed P-256 device authority authenticated by this registration.
     pub public_key: KagemushaDevicePublicKeyV2,
@@ -838,6 +849,7 @@ pub struct OfflineDeviceAttestationRegistration {
     /// Hardware assertion public key bytes, for example SEC1 P-256.
     pub assertion_public_key: Vec<u8>,
     /// Hardware one-use limit when the platform exposes it.
+    #[norito(required)]
     pub assertion_usage_count_limit: Option<u32>,
     /// True when the submitted evidence claims hardware one-use semantics.
     pub one_use: bool,
@@ -2036,6 +2048,22 @@ impl KagemushaRequestAuthorizationV2 {
         registration_hash: [u8; 32],
         platform: &str,
     ) -> Result<Vec<u8>, KagemushaValidationError> {
+        if device_id.is_empty()
+            || device_id.len() > 128
+            || device_id.trim() != device_id
+            || device_id.chars().any(char::is_control)
+            || operation_id == [0; 32]
+            || nonce == [0; 32]
+            || registration_hash == [0; 32]
+            || registration_hash[Hash::LENGTH - 1] & 1 == 0
+            || issued_at_ms == 0
+            || expires_at_ms <= issued_at_ms
+            || expires_at_ms - issued_at_ms > KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "authorization",
+            });
+        }
         let preimage = Self::hardware_assertion_preimage_bytes_for_fields(
             authority,
             device_id,
@@ -2141,6 +2169,7 @@ impl KagemushaRequestAuthorizationV2 {
             || self.operation_id == [0; 32]
             || self.nonce == [0; 32]
             || self.registration_hash == [0; 32]
+            || self.registration_hash[Hash::LENGTH - 1] & 1 == 0
             || self.payload_digest != expected_payload_digest
             || self.issued_at_ms == 0
             || self.expires_at_ms <= self.issued_at_ms
@@ -3502,7 +3531,10 @@ impl KagemushaTopUpAnchorMerkleProofV2 {
         let expected_depth = width.trailing_zeros() as usize;
         if self.siblings.len() != expected_depth
             || self.siblings.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2
-            || self.siblings.contains(&[0; 32])
+            || self
+                .siblings
+                .iter()
+                .any(|sibling| sibling[Hash::LENGTH - 1] & 1 == 0)
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "topup_finality.anchor_path.siblings",
@@ -3512,8 +3544,10 @@ impl KagemushaTopUpAnchorMerkleProofV2 {
     }
 }
 impl KagemushaTopUpFinalityProofV2 {
-    /// Validate the canonical self-contained proof shape. Cryptographic QC and
-    /// Merkle verification are performed by the native verifier.
+    /// Validate the canonical self-contained proof shape. This does not
+    /// authenticate the Merkle path or the QC signature; callers that consume
+    /// finalized value must also call [`Self::validate_anchor_inclusion`] and
+    /// verify the QC against a trusted roster.
     ///
     /// # Errors
     ///
@@ -3541,10 +3575,41 @@ impl KagemushaTopUpFinalityProofV2 {
         Ok(())
     }
 
+    /// Authenticate the anchor leaf against the Commit-QC execution commitment.
+    ///
+    /// This verifies the balanced Merkle path but does not authenticate the QC
+    /// signature or its validator roster.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when the proof structure or any
+    /// leaf, sibling, position, or committed-root binding is invalid.
+    pub fn validate_anchor_inclusion(&self) -> Result<(), KagemushaValidationError> {
+        self.validate_structure()?;
+        let commitment = self.commit_qc.certificate.execution_commitment;
+        let root = commitment.topup_anchor_root.ok_or(
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.anchor_path.inclusion",
+            },
+        )?;
+        if !verify_kagemusha_topup_anchor_merkle_proof_v2(
+            self.anchor.topup_operation_id,
+            self.anchor.anchor_digest,
+            &self.anchor_path,
+            root,
+        ) {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.anchor_path.inclusion",
+            });
+        }
+        Ok(())
+    }
+
     /// Validate the terminal Torii result against one finalized top-up anchor.
     ///
-    /// This keeps the opaque model boundary intact while checking the complete
-    /// operation, transaction, height, network, and compact-anchor binding.
+    /// This authenticates anchor inclusion against the Commit-QC execution
+    /// commitment before checking the complete operation, transaction, height,
+    /// network, and compact-anchor binding.
     ///
     /// # Errors
     ///
@@ -3557,8 +3622,7 @@ impl KagemushaTopUpFinalityProofV2 {
         expected_transaction_hash: [u8; 32],
         expected_height: u64,
     ) -> Result<(), KagemushaValidationError> {
-        self.validate_structure()?;
-        expected_anchor.validate_public_binding()?;
+        self.validate_anchor_inclusion()?;
         let expected_anchor_ref = expected_anchor.compact_ref()?;
         if expected_operation_id != expected_anchor.topup_operation_id
             || expected_transaction_hash != expected_anchor.finalized_tx_hash
@@ -5670,10 +5734,44 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
             || self.shield_verifier_commitment == [0; 32]
             || self.finalized_height == 0
             || self.finalized_tx_hash == [0; 32]
+            || self.finalized_tx_hash[Hash::LENGTH - 1] & 1 == 0
             || self.anchor_digest != self.compute_anchor_digest()?
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "topup_anchor.v4",
+            });
+        }
+        Ok(())
+    }
+    /// Validate every finalized-anchor field derived from an admitted top-up request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when either value is invalid or the
+    /// anchor does not bind the exact signed request.
+    pub fn validate_against_topup_request(
+        &self,
+        request: &KagemushaRecursiveSpendTopUpRequestV4,
+    ) -> Result<(), KagemushaValidationError> {
+        self.validate_public_binding()?;
+        request.validate_public_binding()?;
+        if self.network_id != request.current_note.network_id
+            || self.payer != request.authorization.authority
+            || self.asset != request.asset
+            || self.asset_scale != request.amount.scale
+            || self.amount != request.amount
+            || self.initial_root != request.shield_evidence.initial_root
+            || self.finalized_root != request.shield_evidence.finalized_root
+            || self.shield_leaf_index != request.shield_evidence.leaf_index
+            || self.current_note != request.current_note
+            || self.topup_operation_id != request.operation_id
+            || self.topup_operation_id != request.authorization.operation_id
+            || self.shield_verifier_id != request.shield_evidence.proof.vk_ref
+            || Some(self.shield_verifier_commitment) != request.shield_evidence.proof.vk_commitment
+            || self.artifact_binding != request.artifact_binding
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_anchor.v4.request_binding",
             });
         }
         Ok(())
@@ -5847,7 +5945,7 @@ impl KagemushaRecursiveSpendInitRequestV4 {
     /// Returns [`KagemushaValidationError`] when a required structure, bound, authorization, or contextual binding is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.topup_anchor.validate_public_binding()?;
-        self.topup_finality_proof.validate_structure()?;
+        self.topup_finality_proof.validate_anchor_inclusion()?;
         self.topup_finality_roster_artifact.validate_structure()?;
         self.artifact_binding.validate()?;
         if self.artifact_binding != self.topup_anchor.artifact_binding
@@ -7028,7 +7126,7 @@ impl KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
     /// Returns [`KagemushaValidationError`] when a required structure, bound, authorization, or contextual binding is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.topup_anchor.validate_public_binding()?;
-        self.topup_finality_proof.validate_structure()?;
+        self.topup_finality_proof.validate_anchor_inclusion()?;
         let anchor_ref = self.topup_anchor.compact_ref()?;
         let anchor_len = norito::encode_canonical(&self.topup_anchor)?.len();
         let proof_len = norito::encode_canonical(&self.topup_finality_proof)?.len();

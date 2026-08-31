@@ -301,6 +301,7 @@ pub struct KagemushaV4ReleaseCancellationV1 {
     /// Closed reason for cancelling before enablement.
     pub reason: KagemushaV4ReleaseLifecycleReasonV1,
     /// Optional exact immutable evidence supporting the governance decision.
+    #[norito(required)]
     pub evidence: Option<KagemushaExactBytesDigestV1>,
 }
 
@@ -382,6 +383,7 @@ pub struct KagemushaV4ReleaseDeactivationV1 {
     /// Closed reason for stopping issuance.
     pub reason: KagemushaV4ReleaseLifecycleReasonV1,
     /// Optional exact immutable evidence supporting the governance decision.
+    #[norito(required)]
     pub evidence: Option<KagemushaExactBytesDigestV1>,
 }
 

@@ -220,9 +220,10 @@ impl PartialOrd for Evidence {
 }
 /// Persisted evidence entry annotated with commit metadata.
 ///
-/// Every field belongs to the first-release storage layout; shortened records
-/// are rejected instead of receiving implicit penalty or admission state. The
-/// type is binary-only; endpoint JSON uses a purpose-built audit projection.
+/// Every record has already been admitted by a committed block. Node-local
+/// pending observations use no data-model representation and never enter WSV.
+/// Shortened records are rejected instead of receiving implicit penalty state.
+/// The type is binary-only; endpoint JSON uses a purpose-built audit projection.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct EvidenceRecord {
     /// Slashing material captured for governance processing.
@@ -241,11 +242,6 @@ pub struct EvidenceRecord {
     pub penalty_cancelled_at_height: Option<Height>,
     /// Block height at which the penalty was applied, if any.
     pub penalty_applied_at_height: Option<Height>,
-    /// Block height which first admitted this exact evidence into consensus.
-    ///
-    /// `None` denotes node-local pending diagnostic material. Pending material
-    /// is never eligible for deterministic penalty derivation.
-    pub consensus_admitted_at_height: Option<Height>,
 }
 /// Membership snapshot exported through `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
@@ -2435,15 +2431,9 @@ pub struct SumeragiPeerKeyPolicyStatus {
     /// Total peer-key policy rejects recorded.
     #[norito(default)]
     pub total: u64,
-    /// Rejects due to missing HSM binding when required.
-    #[norito(default)]
-    pub missing_hsm_total: u64,
     /// Rejects due to disallowed public-key algorithm.
     #[norito(default)]
     pub disallowed_algorithm_total: u64,
-    /// Rejects due to disallowed HSM provider.
-    #[norito(default)]
-    pub disallowed_provider_total: u64,
     /// Rejects due to activation height violating lead-time policy.
     #[norito(default)]
     pub lead_time_violation_total: u64,

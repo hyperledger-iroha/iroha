@@ -1756,14 +1756,8 @@ Root {
             activation_lead_blocks: 1,
             overlap_grace_blocks: 8,
             expiry_grace_blocks: 0,
-            require_hsm: false,
             allowed_algorithms: {
                 BlsNormal,
-            },
-            allowed_hsm_providers: {
-                "pkcs11",
-                "softkey",
-                "yubihsm",
             },
         },
     },
@@ -2792,6 +2786,8 @@ Root {
         max_conviction: 6,
         min_enactment_delay: 20,
         window_span: 100,
+        max_active_referenda: 64,
+        max_lock_owners_per_referendum: 1000,
         plain_voting_enabled: true,
         approval_threshold_q_num: 1,
         approval_threshold_q_den: 2,

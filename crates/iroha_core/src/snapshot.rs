@@ -2248,12 +2248,7 @@ fn update_snapshot_wsv_object_hash<'a>(
                 member.value
             };
         let value = canonical_wsv_cell_value(path, &member.key, serialized_value)?;
-        if path == CanonicalWsvPath::Sumeragi
-            && matches!(
-                member.key.as_str(),
-                "key_allowed_algorithms" | "key_allowed_hsm_providers"
-            )
-        {
+        if path == CanonicalWsvPath::Sumeragi && member.key == "key_allowed_algorithms" {
             update_sorted_string_set_hash(hasher, value)?;
         } else {
             update_snapshot_wsv_hash(
@@ -4785,7 +4780,6 @@ fn normalize_set_like_parameter_fields_in_state_value(value: &mut json::Value) {
         return;
     };
     sort_dedup_json_array_field(sumeragi, "key_allowed_algorithms");
-    sort_dedup_json_array_field(sumeragi, "key_allowed_hsm_providers");
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn sort_dedup_json_array_field(map: &mut json::Map, key: &str) {

@@ -2389,11 +2389,8 @@ const fn moderation_panel_notification_receipt_to_wire(
     }
 }
 fn validate_moderation_quarantine_key_id(key_id: &str) -> Result<(), BrokerError> {
-    if key_id.is_empty()
-        || key_id.len() > MAX_MODERATION_QUARANTINE_KEY_ID_BYTES_V1
-        || key_id.trim() != key_id
-        || key_id.chars().any(char::is_control)
-        || !(key_id.starts_with("pkcs11:") || key_id.starts_with("kms:"))
+    if key_id.len() > MAX_MODERATION_QUARANTINE_KEY_ID_BYTES_V1
+        || iroha_config::parameters::validate_production_runtime_handle(key_id).is_err()
     {
         return Err(BrokerError::Rejected);
     }

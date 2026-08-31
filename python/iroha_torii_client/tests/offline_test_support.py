@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 from typing import Any, Dict, List, Mapping, Optional
 
 from iroha_torii_client import KagemushaRedeemRequestV4, KagemushaTopUpRequestV4
@@ -10,13 +11,14 @@ from iroha_torii_client.norito_frame import _crc64_xz, schema_hash_for_type_name
 
 CANONICAL_OWNER = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+CANONICAL_BALANCE_ASSET_ID = f"{CANONICAL_ASSET_ID}#{CANONICAL_OWNER}"
 _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
 )
 
 
-def _canonical_hash(seed: int) -> str:
-    body_bytes = bytearray([seed & 0xFF] * 32)
+def _hash_literal(raw: bytes) -> str:
+    body_bytes = bytearray(raw)
     body_bytes[-1] |= 1
     body = body_bytes.hex().upper()
     crc = 0xFFFF
@@ -29,6 +31,17 @@ def _canonical_hash(seed: int) -> str:
                 else (crc << 1) & 0xFFFF
             )
     return f"hash:{body}#{crc:04X}"
+
+
+def _canonical_hash(seed: int) -> str:
+    body_bytes = bytearray([seed & 0xFF] * 32)
+    return _hash_literal(body_bytes)
+
+
+def _iroha_hash(*chunks: bytes) -> bytes:
+    digest = bytearray(hashlib.blake2b(b"".join(chunks), digest_size=32).digest())
+    digest[-1] |= 1
+    return bytes(digest)
 
 
 def offline_capability_payload(**overrides: Any) -> Dict[str, Any]:
@@ -71,34 +84,67 @@ def offline_norito_frame(type_name: str, payload: bytes = b"\x01") -> bytes:
     )
 
 
+def _compact_length(value: int) -> bytes:
+    encoded = bytearray()
+    while value >= 0x80:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def offline_kagemusha_request_frame(
+    type_name: str,
+    *,
+    field_count: int,
+    operation_id_field_index: int,
+    operation_id: bytes = bytes(OFFLINE_OPERATION_BYTES),
+    version: int = 4,
+    trailing_payload: bytes = b"",
+) -> bytes:
+    """Build the exact top-level compact struct needed for SDK request binding."""
+
+    fields = [b"\x01" for _ in range(field_count)]
+    fields[0] = version.to_bytes(2, "little")
+    fields[operation_id_field_index] = operation_id
+    payload = b"".join(_compact_length(len(field)) + field for field in fields)
+    return offline_norito_frame(type_name, payload + trailing_payload)
+
+
 def offline_top_up_request(
     *,
     norito: Optional[bytes] = None,
-    operation_id: str = OFFLINE_OPERATION_ID,
 ) -> KagemushaTopUpRequestV4:
     """Build one canonical Kagemusha top-up request fixture."""
 
     archive = (
-        offline_norito_frame(OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME)
+        offline_kagemusha_request_frame(
+            OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+            field_count=8,
+            operation_id_field_index=6,
+        )
         if norito is None
         else norito
     )
-    return KagemushaTopUpRequestV4(norito=archive, operation_id=operation_id)
+    return KagemushaTopUpRequestV4(norito=archive)
 
 
 def offline_redeem_request(
     *,
     norito: Optional[bytes] = None,
-    operation_id: str = OFFLINE_OPERATION_ID,
 ) -> KagemushaRedeemRequestV4:
     """Build one canonical Kagemusha redemption request fixture."""
 
     archive = (
-        offline_norito_frame(OFFLINE_REDEEM_REQUEST_SCHEMA_NAME)
+        offline_kagemusha_request_frame(
+            OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+            field_count=10,
+            operation_id_field_index=8,
+        )
         if norito is None
         else norito
     )
-    return KagemushaRedeemRequestV4(norito=archive, operation_id=operation_id)
+    return KagemushaRedeemRequestV4(norito=archive)
 
 
 def offline_operation_reference(**overrides: Any) -> Dict[str, Any]:
@@ -140,7 +186,7 @@ def offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
         "version": 4,
         "network_id": OFFLINE_NETWORK_ID,
         "payer": CANONICAL_OWNER,
-        "asset": CANONICAL_ASSET_ID,
+        "asset": CANONICAL_BALANCE_ASSET_ID,
         "asset_scale": amount["scale"],
         "amount": amount,
         "initial_root": offline_fixed_bytes(0x10),
@@ -178,10 +224,13 @@ def offline_top_up_finality_proof(
     context_id = _canonical_hash(0xA0)
 
     def execution_commitment(*, includes_top_up: bool, seed: int) -> Dict[str, Any]:
+        ordinary_root_bytes = bytearray([(seed + 2) & 0xFF] * 32)
+        ordinary_root_bytes[-1] |= 1
+        ordinary_root = bytes(ordinary_root_bytes)
         commitment = {
             "parent_state_root": _canonical_hash(seed),
             "post_state_root": _canonical_hash(seed + 1),
-            "ordinary_writes_root": _canonical_hash(seed + 2),
+            "ordinary_writes_root": _hash_literal(ordinary_root),
             "topup_anchor_root": None,
             "topup_anchor_count": 0,
             "native_amx_application_manifest_version": 1,
@@ -195,8 +244,25 @@ def offline_top_up_finality_proof(
             "executed_block_wire_hash": _canonical_hash(seed + 3),
         }
         if includes_top_up:
-            commitment["topup_anchor_root"] = _canonical_hash(seed + 4)
+            operation_id = bytes(
+                bound_anchor.get("topup_operation_id", OFFLINE_OPERATION_BYTES)
+            )
+            anchor_digest = bytes(
+                bound_anchor.get("anchor_digest", offline_fixed_bytes(0x71))
+            )
+            key_hash = _iroha_hash(b"\xd2" + operation_id)
+            value_hash = _iroha_hash(anchor_digest)
+            topup_root = _iroha_hash(b"\x00", key_hash, value_hash)
+            commitment["topup_anchor_root"] = _hash_literal(topup_root)
             commitment["topup_anchor_count"] = 1
+            commitment["post_state_root"] = _hash_literal(
+                _iroha_hash(
+                    b"iroha:kagemusha:v2:post-state-root\x00",
+                    (1).to_bytes(4, "little"),
+                    ordinary_root,
+                    topup_root,
+                )
+            )
         return commitment
 
     def certificate(
@@ -300,7 +366,6 @@ def offline_applied_top_up_status(
     result = {
         "transaction_hash": OFFLINE_TRANSACTION_HASH,
         "finalized_block_height": finalized_height,
-        "server_time_ms": 13,
         "anchor": bound_anchor,
         "finality_proof": offline_top_up_finality_proof(
             bound_anchor,

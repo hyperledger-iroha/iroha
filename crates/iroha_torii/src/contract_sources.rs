@@ -17,15 +17,17 @@ use iroha_data_model::{
 };
 use ivm::analysis::ProgramAnalysis;
 use mv::storage::StorageReadOnly;
+#[cfg(unix)]
+use std::path::Component;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
+    ffi::OsString,
     fmt::{self, Write as _},
-    fs,
-    io::{self, Read as _},
+    fs::{self, File},
+    io::{self, Read as _, Write as _},
     num::NonZeroUsize,
     path::{Path, PathBuf},
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{Arc, Mutex, OnceLock, Weak},
 };
 const VERIFIED_SOURCE_VERSION: u32 = 1;
 const VERIFIED_SOURCE_LANGUAGE_KOTODAMA: &str = "kotodama";
@@ -52,6 +54,8 @@ const VERIFIED_SOURCE_RECORD_MAX_BYTES_V1: usize =
     VERIFIED_SOURCE_SUBMISSION_MAX_HTTP_BODY_BYTES_V1 + 256 * 1024;
 const VERIFIED_SOURCE_JOB_MAX_BYTES_V1: usize = 256 * 1024;
 const VERIFIED_SOURCE_JOB_MESSAGE_MAX_BYTES_V1: usize = 16 * 1024;
+const VERIFIED_SOURCE_TIMESTAMP_MAX_BYTES_V1: usize = 64;
+const VERIFIED_SOURCE_SECURE_TEMP_RETRIES_V1: usize = 16;
 const RENDERED_SOURCE_VERIFIED: &str = "verified_source";
 const RENDERED_SOURCE_PSEUDO: &str = "pseudo_source";
 const RENDERED_SOURCE_MANIFEST_STUB: &str = "manifest_stub";
@@ -294,8 +298,11 @@ fn conversion_error(message: impl Into<String>) -> Error {
         message.into(),
     )))
 }
+fn storage_error(message: impl Into<String>) -> Error {
+    Error::Query(ValidationFail::InternalError(message.into()))
+}
 fn map_io_error(error: io::Error, context: &str) -> Error {
-    conversion_error(format!("{context}: {error}"))
+    storage_error(format!("{context}: {error}"))
 }
 fn hash_hex(hash: &Hash) -> String {
     hex::encode(hash.as_ref())
@@ -330,6 +337,11 @@ fn parse_code_hash_hex(raw: &str) -> Result<(Hash, String), Error> {
         .map_err(|err| conversion_error(format!("invalid code hash: {err}")))?;
     let hash = Hash::prehashed(array);
     let canonical = hash_hex(&hash);
+    if canonical != raw {
+        return Err(conversion_error(
+            "code hash must use the exact canonical lowercase hexadecimal spelling",
+        ));
+    }
     Ok((hash, canonical))
 }
 fn canonical_verified_source_job_id(raw: &str) -> Result<String, Error> {
@@ -342,17 +354,16 @@ fn canonical_verified_source_job_id(raw: &str) -> Result<String, Error> {
     let mut bytes = [0_u8; FIXED_HEX_COMPONENT_BYTES_V1];
     hex::decode_to_slice(raw, &mut bytes)
         .map_err(|err| conversion_error(format!("invalid verified-source job id: {err}")))?;
-    Ok(hex::encode(bytes))
+    let canonical = hex::encode(bytes);
+    if canonical != raw {
+        return Err(conversion_error(
+            "verified-source job id must use the exact canonical lowercase hexadecimal spelling",
+        ));
+    }
+    Ok(canonical)
 }
 fn now_rfc3339() -> String {
     crate::explorer::now_rfc3339()
-}
-fn unique_suffix() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    format!("{nanos:x}")
 }
 fn contracts_dir() -> PathBuf {
     data_dir::base_dir().join("contracts")
@@ -368,257 +379,785 @@ fn verified_source_job_path(code_hash: &str, job_id: &str) -> PathBuf {
         .join(code_hash)
         .join(format!("{job_id}.json"))
 }
-fn decimal_u64_encoded_len(mut value: u64) -> usize {
-    let mut digits = 1;
-    while value >= 10 {
-        value /= 10;
-        digits += 1;
+fn verified_source_mutation_locks() -> &'static Mutex<HashMap<String, Weak<Mutex<()>>>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> = OnceLock::new();
+    LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+fn verified_source_mutation_lock(code_hash: &str) -> Arc<Mutex<()>> {
+    let mut locks = verified_source_mutation_locks()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    locks.retain(|_, lock| lock.strong_count() != 0);
+    if let Some(lock) = locks.get(code_hash).and_then(Weak::upgrade) {
+        return lock;
     }
-    digits
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(code_hash.to_owned(), Arc::downgrade(&lock));
+    lock
 }
-fn json_string_encoded_len(value: &str) -> Option<usize> {
-    value.as_bytes().iter().try_fold(2_usize, |length, byte| {
-        let encoded = match *byte {
-            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => 2,
-            byte if byte < 0x20 => 6,
-            _ => 1,
-        };
-        length.checked_add(encoded)
-    })
-}
-fn optional_json_string_encoded_len(value: Option<&str>) -> Option<usize> {
-    value.map_or(Some(4), json_string_encoded_len)
-}
-fn optional_json_u64_encoded_len(value: Option<u64>) -> usize {
-    value.map_or(4, decimal_u64_encoded_len)
-}
-fn json_object_encoded_len(fields: &[(&str, usize)]) -> Option<usize> {
-    let mut length = 2_usize;
-    for (index, (key, value_len)) in fields.iter().enumerate() {
-        if index != 0 {
-            length = length.checked_add(1)?;
-        }
-        length = length
-            .checked_add(json_string_encoded_len(key)?)?
-            .checked_add(1)?
-            .checked_add(*value_len)?;
-    }
-    Some(length)
-}
-fn verified_source_ref_json_encoded_len(value: &ContractVerifiedSourceRefDto) -> Option<usize> {
-    let fields = [
-        ("language", json_string_encoded_len(&value.language)?),
-        (
-            "source_name",
-            optional_json_string_encoded_len(value.source_name.as_deref())?,
-        ),
-        (
-            "submitted_at",
-            json_string_encoded_len(&value.submitted_at)?,
-        ),
-        (
-            "manifest_id_hex",
-            optional_json_string_encoded_len(value.manifest_id_hex.as_deref())?,
-        ),
-        (
-            "payload_digest_hex",
-            optional_json_string_encoded_len(value.payload_digest_hex.as_deref())?,
-        ),
-        (
-            "content_length",
-            optional_json_u64_encoded_len(value.content_length),
-        ),
-    ];
-    json_object_encoded_len(&fields)
-}
-fn optional_verified_source_ref_json_encoded_len(
-    value: Option<&ContractVerifiedSourceRefDto>,
-) -> Option<usize> {
-    value.map_or(Some(4), verified_source_ref_json_encoded_len)
-}
-trait PersistedJsonEncodedLen {
-    fn persisted_json_encoded_len(&self) -> Option<usize>;
-}
-impl PersistedJsonEncodedLen for StoredVerifiedSourceRecord {
-    fn persisted_json_encoded_len(&self) -> Option<usize> {
-        let fields = [
-            ("version", decimal_u64_encoded_len(u64::from(self.version))),
-            ("code_hash", json_string_encoded_len(&self.code_hash)?),
-            (
-                "abi_hash",
-                optional_json_string_encoded_len(self.abi_hash.as_deref())?,
-            ),
-            (
-                "compiler_fingerprint",
-                optional_json_string_encoded_len(self.compiler_fingerprint.as_deref())?,
-            ),
-            ("language", json_string_encoded_len(&self.language)?),
-            (
-                "source_name",
-                optional_json_string_encoded_len(self.source_name.as_deref())?,
-            ),
-            ("source_text", json_string_encoded_len(&self.source_text)?),
-            ("submitted_at", json_string_encoded_len(&self.submitted_at)?),
-            (
-                "manifest_id_hex",
-                optional_json_string_encoded_len(self.manifest_id_hex.as_deref())?,
-            ),
-            (
-                "payload_digest_hex",
-                optional_json_string_encoded_len(self.payload_digest_hex.as_deref())?,
-            ),
-            (
-                "content_length",
-                optional_json_u64_encoded_len(self.content_length),
-            ),
-        ];
-        json_object_encoded_len(&fields)
-    }
-}
-impl PersistedJsonEncodedLen for StoredVerifiedSourceJob {
-    fn persisted_json_encoded_len(&self) -> Option<usize> {
-        let fields = [
-            ("version", decimal_u64_encoded_len(u64::from(self.version))),
-            ("job_id", json_string_encoded_len(&self.job_id)?),
-            ("code_hash", json_string_encoded_len(&self.code_hash)?),
-            ("status", json_string_encoded_len(&self.status)?),
-            ("submitted_at", json_string_encoded_len(&self.submitted_at)?),
-            (
-                "completed_at",
-                optional_json_string_encoded_len(self.completed_at.as_deref())?,
-            ),
-            (
-                "message",
-                optional_json_string_encoded_len(self.message.as_deref())?,
-            ),
-            (
-                "actual_code_hash",
-                optional_json_string_encoded_len(self.actual_code_hash.as_deref())?,
-            ),
-            (
-                "verified_source_ref",
-                optional_verified_source_ref_json_encoded_len(self.verified_source_ref.as_ref())?,
-            ),
-        ];
-        json_object_encoded_len(&fields)
-    }
-}
-fn write_json_file_atomic<T: norito::json::JsonSerialize + PersistedJsonEncodedLen>(
+fn write_json_file_atomic<T: norito::json::JsonSerialize>(
     path: &Path,
     value: &T,
     maximum_bytes: usize,
     label: &str,
 ) -> Result<(), Error> {
-    let encoded_len = value.persisted_json_encoded_len().ok_or_else(|| {
-        conversion_error(format!("failed to size {label}: encoded length overflow"))
-    })?;
-    if encoded_len > maximum_bytes {
-        return Err(conversion_error(format!(
-            "{label} encoding is {} bytes; first-release maximum is {maximum_bytes} bytes",
-            encoded_len
-        )));
-    }
-    let mut encoded = String::new();
-    encoded.try_reserve_exact(encoded_len).map_err(|err| {
-        conversion_error(format!(
-            "failed to reserve bounded {label} encoding ({encoded_len} bytes): {err}"
+    let encoded = crate::utils::encode_json_bounded(value, maximum_bytes).map_err(|error| {
+        storage_error(format!(
+            "failed to encode bounded {label} (maximum {maximum_bytes} bytes): {error}"
         ))
     })?;
-    norito::json::JsonSerialize::json_serialize(value, &mut encoded);
-    if encoded.len() != encoded_len {
+    write_immutable_file(path, encoded.as_bytes(), maximum_bytes, label)
+}
+
+fn storage_parent(path: &Path) -> Result<(&Path, OsString), Error> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = path.file_name().ok_or_else(|| {
+        conversion_error(format!(
+            "contract source path has no file name: {}",
+            path.display()
+        ))
+    })?;
+    Ok((parent, name.to_os_string()))
+}
+
+#[cfg(unix)]
+fn open_storage_parent(
+    path: &Path,
+    create: bool,
+    label: &str,
+) -> Result<Option<(File, OsString)>, Error> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let (parent, name) = storage_parent(path)?;
+    if parent
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
         return Err(conversion_error(format!(
-            "{label} encoded length {} differs from its bounded {encoded_len}-byte preflight",
-            encoded.len()
+            "{label} directory must not contain parent-directory components: {}",
+            parent.display()
         )));
     }
-    let bytes = encoded.into_bytes();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| map_io_error(err, "failed to create contract source directory"))?;
+    let candidate = if parent.is_absolute() {
+        parent.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| map_io_error(error, "failed to resolve contract source directory"))?
+            .join(parent)
+    };
+    let mut absolute = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            Component::RootDir => absolute.push(Path::new("/")),
+            Component::CurDir => {}
+            Component::Normal(component) => absolute.push(component),
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(conversion_error(format!(
+                    "{label} directory is not an absolute normal path: {}",
+                    candidate.display()
+                )));
+            }
+        }
     }
-    let temp_path = path.with_extension(format!("tmp-{}", unique_suffix()));
-    fs::write(&temp_path, bytes)
-        .map_err(|err| map_io_error(err, "failed to write contract source file"))?;
-    fs::rename(&temp_path, path)
-        .map_err(|err| map_io_error(err, "failed to persist contract source file"))?;
-    Ok(())
+    let mut directory = File::from(
+        rustix::fs::open(
+            "/",
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|error| {
+            map_io_error(
+                io::Error::from(error),
+                "failed to open the contract source filesystem root",
+            )
+        })?,
+    );
+    let mut cursor = PathBuf::from("/");
+    for component in absolute
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(component) => Some(component),
+            _ => None,
+        })
+    {
+        cursor.push(component);
+        let named = match rustix::fs::statat(
+            &directory,
+            component,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(metadata) => metadata,
+            Err(rustix::io::Errno::NOENT) if !create => return Ok(None),
+            Err(rustix::io::Errno::NOENT) => {
+                match rustix::fs::mkdirat(
+                    &directory,
+                    component,
+                    rustix::fs::Mode::from_raw_mode(0o700),
+                ) {
+                    Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                    Err(error) => {
+                        return Err(map_io_error(
+                            io::Error::from(error),
+                            "failed to create contract source directory",
+                        ));
+                    }
+                }
+                directory.sync_all().map_err(|error| {
+                    map_io_error(
+                        error,
+                        "failed to sync a new contract source directory entry",
+                    )
+                })?;
+                rustix::fs::statat(&directory, component, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(|error| {
+                        map_io_error(
+                            io::Error::from(error),
+                            "failed to inspect a new contract source directory",
+                        )
+                    })?
+            }
+            Err(error) => {
+                return Err(map_io_error(
+                    io::Error::from(error),
+                    "failed to inspect contract source directory",
+                ));
+            }
+        };
+        let file_type = rustix::fs::FileType::from_raw_mode(named.st_mode);
+        let current = directory.metadata().map_err(|error| {
+            map_io_error(error, "failed to inspect a contract source path ancestor")
+        })?;
+        let trusted_system_symlink = file_type == rustix::fs::FileType::Symlink
+            && named.st_uid == 0
+            && current.uid() == 0
+            && current.mode() & 0o022 == 0;
+        if file_type != rustix::fs::FileType::Directory && !trusted_system_symlink {
+            return Err(conversion_error(format!(
+                "{label} directory contains a non-directory or untrusted symlink: {}",
+                cursor.display()
+            )));
+        }
+        let mut flags = rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC;
+        if !trusted_system_symlink {
+            flags |= rustix::fs::OFlags::NOFOLLOW;
+        }
+        let next = File::from(
+            rustix::fs::openat(&directory, component, flags, rustix::fs::Mode::empty()).map_err(
+                |error| {
+                    map_io_error(
+                        io::Error::from(error),
+                        "failed to pin a contract source directory",
+                    )
+                },
+            )?,
+        );
+        let opened = next.metadata().map_err(|error| {
+            map_io_error(
+                error,
+                "failed to inspect a pinned contract source directory",
+            )
+        })?;
+        if !opened.is_dir()
+            || (!trusted_system_symlink
+                && (named.st_dev as u64 != opened.dev() || named.st_ino as u64 != opened.ino()))
+        {
+            return Err(conversion_error(format!(
+                "{label} directory changed while it was being opened: {}",
+                cursor.display()
+            )));
+        }
+        directory = next;
+    }
+    let opened = directory.metadata().map_err(|error| {
+        map_io_error(error, "failed to inspect opened contract source directory")
+    })?;
+    if !opened.is_dir()
+        || opened.uid() != rustix::process::geteuid().as_raw()
+        || opened.mode() & 0o022 != 0
+    {
+        return Err(conversion_error(format!(
+            "{label} directory must be current-user-owned without group/other write permission: {}",
+            absolute.display()
+        )));
+    }
+    let after = fs::metadata(&absolute)
+        .map_err(|error| map_io_error(error, "failed to re-inspect contract source directory"))?;
+    if !after.is_dir() || opened.dev() != after.dev() || opened.ino() != after.ino() {
+        return Err(conversion_error(format!(
+            "{label} directory changed while it was being opened: {}",
+            absolute.display()
+        )));
+    }
+    Ok(Some((directory, name)))
 }
-fn read_json_file<T: norito::json::JsonDeserializeOwned>(
+
+#[cfg(unix)]
+fn read_bounded_relative(
+    directory: &File,
+    name: &std::ffi::OsStr,
     path: &Path,
     maximum_bytes: usize,
     label: &str,
-) -> Result<Option<T>, Error> {
-    let mut file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(map_io_error(err, "failed to open contract source file")),
+) -> Result<Option<Vec<u8>>, Error> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let maximum_u64 = u64::try_from(maximum_bytes).map_err(|_| {
+        conversion_error(format!(
+            "{label} maximum does not fit the platform: {maximum_bytes}"
+        ))
+    })?;
+    let before = match rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => stat,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => {
+            return Err(map_io_error(
+                io::Error::from(error),
+                "failed to inspect contract source file",
+            ));
+        }
     };
-    let metadata = file
+    if rustix::fs::FileType::from_raw_mode(before.st_mode) != rustix::fs::FileType::RegularFile
+        || before.st_nlink != 1
+        || u64::try_from(before.st_size)
+            .ok()
+            .is_none_or(|size| size > maximum_u64)
+    {
+        return Err(conversion_error(format!(
+            "{label} must be a single-link bounded regular file: {}",
+            path.display()
+        )));
+    }
+    let mut file = File::from(
+        rustix::fs::openat(
+            directory,
+            name,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|error| {
+            map_io_error(
+                io::Error::from(error),
+                "failed to open contract source file",
+            )
+        })?,
+    );
+    let opened = file
         .metadata()
-        .map_err(|err| map_io_error(err, "failed to inspect contract source file"))?;
-    if !metadata.is_file() {
+        .map_err(|error| map_io_error(error, "failed to inspect contract source file"))?;
+    if !opened.is_file()
+        || opened.uid() != rustix::process::geteuid().as_raw()
+        || opened.mode() & 0o7077 != 0
+        || opened.nlink() != 1
+        || u64::try_from(before.st_dev).ok() != Some(opened.dev())
+        || u64::try_from(before.st_ino).ok() != Some(opened.ino())
+        || opened.len() > maximum_u64
+        || u64::try_from(before.st_size).ok() != Some(opened.len())
+    {
         return Err(conversion_error(format!(
-            "{label} path is not a regular file: {}",
+            "{label} is not a private current-user-owned regular file: {}",
             path.display()
         )));
     }
-    if metadata.len() > u64::try_from(maximum_bytes).unwrap_or(u64::MAX) {
-        return Err(conversion_error(format!(
-            "{label} at {} exceeds the first-release {maximum_bytes}-byte maximum",
-            path.display()
-        )));
-    }
-    let file_len = usize::try_from(metadata.len()).map_err(|_| {
+    let initial_capacity = usize::try_from(opened.len()).map_err(|_| {
         conversion_error(format!(
             "{label} at {} has a length that does not fit this platform",
             path.display()
         ))
     })?;
     let mut bytes = Vec::new();
-    bytes.try_reserve_exact(file_len).map_err(|err| {
+    bytes.try_reserve_exact(initial_capacity).map_err(|error| {
         conversion_error(format!(
-            "failed to reserve bounded {label} read ({file_len} bytes): {err}"
+            "failed to reserve bounded {label} read ({initial_capacity} bytes): {error}"
         ))
     })?;
-    bytes.resize(file_len, 0);
-    file.read_exact(&mut bytes)
-        .map_err(|err| map_io_error(err, "failed to read exact contract source file length"))?;
-    let mut growth_probe = [0_u8; 1];
-    if file
-        .read(&mut growth_probe)
-        .map_err(|err| map_io_error(err, "failed to verify contract source file length"))?
-        != 0
-    {
+    (&mut file)
+        .take(maximum_u64.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| map_io_error(error, "failed to read contract source file"))?;
+    if bytes.len() > maximum_bytes {
         return Err(conversion_error(format!(
-            "{label} at {} grew after its bounded length preflight",
+            "{label} at {} exceeds the first-release {maximum_bytes}-byte maximum",
             path.display()
         )));
     }
-    norito::json::from_slice(&bytes)
-        .map(Some)
-        .map_err(|err| conversion_error(format!("failed to decode bounded {label}: {err}")))
+    let after = rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|error| {
+            map_io_error(
+                io::Error::from(error),
+                "failed to re-inspect contract source file",
+            )
+        })?;
+    if after.st_dev != before.st_dev
+        || after.st_ino != before.st_ino
+        || rustix::fs::FileType::from_raw_mode(after.st_mode) != rustix::fs::FileType::RegularFile
+        || after.st_uid != rustix::process::geteuid().as_raw()
+        || after.st_mode & 0o7077 != 0
+        || after.st_nlink != 1
+        || after.st_size != before.st_size
+        || after.st_mtime != before.st_mtime
+        || after.st_mtime_nsec != before.st_mtime_nsec
+        || after.st_ctime != before.st_ctime
+        || after.st_ctime_nsec != before.st_ctime_nsec
+        || u64::try_from(bytes.len()).ok() != Some(opened.len())
+    {
+        return Err(conversion_error(format!(
+            "{label} changed while it was being read: {}",
+            path.display()
+        )));
+    }
+    Ok(Some(bytes))
 }
+
+#[cfg(unix)]
+fn create_secure_temporary(
+    directory: &File,
+    destination: &std::ffi::OsStr,
+) -> io::Result<(File, OsString)> {
+    for _ in 0..VERIFIED_SOURCE_SECURE_TEMP_RETRIES_V1 {
+        let mut suffix = [0_u8; 16];
+        rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut suffix)
+            .map_err(|error| io::Error::other(format!("OS randomness unavailable: {error}")))?;
+        let name = OsString::from(format!(
+            ".{}.{}.tmp",
+            destination.to_string_lossy(),
+            hex::encode(suffix)
+        ));
+        match rustix::fs::openat(
+            directory,
+            &name,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        ) {
+            Ok(file) => {
+                let file = File::from(file);
+                use std::os::unix::fs::PermissionsExt as _;
+                if let Err(error) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
+                    let _ = rustix::fs::unlinkat(directory, &name, rustix::fs::AtFlags::empty());
+                    return Err(error);
+                }
+                return Ok((file, name));
+            }
+            Err(rustix::io::Errno::EXIST) => continue,
+            Err(error) => return Err(io::Error::from(error)),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a collision-free contract-source temporary file",
+    ))
+}
+
+#[cfg(unix)]
+fn publish_noreplace(
+    directory: &File,
+    temporary: &std::ffi::OsStr,
+    destination: &std::ffi::OsStr,
+) -> io::Result<()> {
+    rustix::fs::renameat_with(
+        directory,
+        temporary,
+        directory,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(io::Error::from)
+}
+
+#[cfg(unix)]
+fn write_immutable_file(
+    path: &Path,
+    bytes: &[u8],
+    maximum_bytes: usize,
+    label: &str,
+) -> Result<(), Error> {
+    let Some((directory, name)) = open_storage_parent(path, true, label)? else {
+        return Err(conversion_error(format!(
+            "failed to create {label} directory"
+        )));
+    };
+    if let Some(existing) = read_bounded_relative(&directory, &name, path, maximum_bytes, label)? {
+        if existing != bytes {
+            return Err(conversion_error(format!(
+                "refusing to replace conflicting immutable {label}: {}",
+                path.display()
+            )));
+        }
+        directory.sync_all().map_err(|error| {
+            map_io_error(error, "failed to sync existing contract source directory")
+        })?;
+        return Ok(());
+    }
+    let (mut temporary_file, temporary_name) = create_secure_temporary(&directory, &name)
+        .map_err(|error| map_io_error(error, "failed to create contract source temporary file"))?;
+    let publication = (|| {
+        temporary_file
+            .write_all(bytes)
+            .and_then(|()| temporary_file.sync_all())
+            .map_err(|error| {
+                map_io_error(error, "failed to sync contract source temporary file")
+            })?;
+        let metadata = temporary_file.metadata().map_err(|error| {
+            map_io_error(error, "failed to inspect contract source temporary file")
+        })?;
+        use std::os::unix::fs::MetadataExt as _;
+        if !metadata.is_file()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o7777 != 0o600
+            || metadata.nlink() != 1
+        {
+            return Err(conversion_error(
+                "contract source temporary file failed its private-file invariant",
+            ));
+        }
+        drop(temporary_file);
+        if let Err(error) = publish_noreplace(&directory, &temporary_name, &name) {
+            if error.kind() != io::ErrorKind::AlreadyExists
+                || !read_bounded_relative(&directory, &name, path, maximum_bytes, label)?
+                    .is_some_and(|existing| existing == bytes)
+            {
+                return Err(map_io_error(
+                    error,
+                    "failed no-clobber contract source publication",
+                ));
+            }
+        }
+        directory
+            .sync_all()
+            .map_err(|error| map_io_error(error, "failed to sync contract source directory"))?;
+        let readback = read_bounded_relative(&directory, &name, path, maximum_bytes, label)?
+            .ok_or_else(|| conversion_error(format!("published {label} disappeared")))?;
+        if readback != bytes {
+            return Err(conversion_error(format!(
+                "published {label} differs from its synced temporary file"
+            )));
+        }
+        Ok(())
+    })();
+    let _ = rustix::fs::unlinkat(&directory, &temporary_name, rustix::fs::AtFlags::empty());
+    publication
+}
+
+#[cfg(not(unix))]
+fn write_immutable_file(
+    path: &Path,
+    bytes: &[u8],
+    maximum_bytes: usize,
+    label: &str,
+) -> Result<(), Error> {
+    if bytes.len() > maximum_bytes {
+        return Err(conversion_error(format!(
+            "{label} exceeds the first-release {maximum_bytes}-byte maximum"
+        )));
+    }
+    let (parent, _) = storage_parent(path)?;
+    fs::create_dir_all(parent)
+        .map_err(|error| map_io_error(error, "failed to create contract source directory"))?;
+    if let Some(existing) = read_bounded_file(path, maximum_bytes, label)? {
+        return (existing == bytes).then_some(()).ok_or_else(|| {
+            storage_error(format!(
+                "refusing to replace conflicting immutable {label}: {}",
+                path.display()
+            ))
+        });
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|error| map_io_error(error, "failed to create contract source temporary file"))?;
+    temporary
+        .write_all(bytes)
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|error| map_io_error(error, "failed to sync contract source temporary file"))?;
+    temporary.persist_noclobber(path).map_err(|error| {
+        map_io_error(error.error, "failed no-clobber contract source publication")
+    })?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| map_io_error(error, "failed to sync contract source directory"))
+}
+
+#[cfg(unix)]
+fn read_bounded_file(
+    path: &Path,
+    maximum_bytes: usize,
+    label: &str,
+) -> Result<Option<Vec<u8>>, Error> {
+    let Some((directory, name)) = open_storage_parent(path, false, label)? else {
+        return Ok(None);
+    };
+    read_bounded_relative(&directory, &name, path, maximum_bytes, label)
+}
+
+#[cfg(not(unix))]
+fn read_bounded_file(
+    path: &Path,
+    maximum_bytes: usize,
+    label: &str,
+) -> Result<Option<Vec<u8>>, Error> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(map_io_error(error, "failed to open contract source file")),
+    };
+    let maximum_u64 = u64::try_from(maximum_bytes).unwrap_or(u64::MAX);
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take(maximum_u64.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| map_io_error(error, "failed to read contract source file"))?;
+    if bytes.len() > maximum_bytes {
+        return Err(conversion_error(format!(
+            "{label} at {} exceeds the first-release {maximum_bytes}-byte maximum",
+            path.display()
+        )));
+    }
+    Ok(Some(bytes))
+}
+
+fn read_canonical_json_file<T>(
+    path: &Path,
+    maximum_bytes: usize,
+    label: &str,
+) -> Result<Option<T>, Error>
+where
+    T: norito::json::JsonDeserializeOwned + norito::json::JsonSerialize,
+{
+    let Some(bytes) = read_bounded_file(path, maximum_bytes, label)? else {
+        return Ok(None);
+    };
+    let value: T = norito::json::from_slice(&bytes)
+        .map_err(|error| storage_error(format!("failed to decode bounded {label}: {error}")))?;
+    let canonical = crate::utils::encode_json_bounded(&value, maximum_bytes).map_err(|error| {
+        storage_error(format!(
+            "failed to re-encode bounded decoded {label}: {error}"
+        ))
+    })?;
+    if canonical.as_bytes() != bytes {
+        return Err(storage_error(format!(
+            "stored {label} is not the exact canonical V1 encoding"
+        )));
+    }
+    Ok(Some(value))
+}
+
+fn exact_fixed_hex(value: &str) -> bool {
+    if value.len() != FIXED_HEX_COMPONENT_CHARS_V1 {
+        return false;
+    }
+    let mut decoded = [0_u8; FIXED_HEX_COMPONENT_BYTES_V1];
+    hex::decode_to_slice(value, &mut decoded).is_ok() && hex::encode(decoded) == value
+}
+
+fn exact_persisted_timestamp(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= VERIFIED_SOURCE_TIMESTAMP_MAX_BYTES_V1
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+fn exact_provider_reference_fields(
+    manifest_id_hex: Option<&str>,
+    payload_digest_hex: Option<&str>,
+    content_length: Option<u64>,
+) -> bool {
+    match (manifest_id_hex, payload_digest_hex, content_length) {
+        (None, None, None) => true,
+        (Some(manifest), Some(payload), Some(length)) => {
+            exact_fixed_hex(manifest) && exact_fixed_hex(payload) && length != 0
+        }
+        _ => false,
+    }
+}
+
+fn validate_verified_source_ref(reference: &ContractVerifiedSourceRefDto) -> Result<(), Error> {
+    if reference.language != VERIFIED_SOURCE_LANGUAGE_KOTODAMA
+        || reference.source_name.as_ref().is_some_and(|name| {
+            name.is_empty()
+                || name.len() > VERIFIED_SOURCE_NAME_MAX_BYTES_V1
+                || name.chars().any(char::is_control)
+        })
+        || !exact_persisted_timestamp(&reference.submitted_at)
+        || !exact_provider_reference_fields(
+            reference.manifest_id_hex.as_deref(),
+            reference.payload_digest_hex.as_deref(),
+            reference.content_length,
+        )
+        || reference.manifest_id_hex.is_none()
+    {
+        return Err(storage_error(
+            "stored verified-source reference violates the exact V1 schema",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_verified_source_record_schema(
+    record: &StoredVerifiedSourceRecord,
+    expected_code_hash: &str,
+) -> Result<(), Error> {
+    if record.version != VERIFIED_SOURCE_VERSION {
+        return Err(storage_error(format!(
+            "stored verified-source record advertises unsupported version {}; expected V{VERIFIED_SOURCE_VERSION}",
+            record.version
+        )));
+    }
+    if record.code_hash != expected_code_hash || !exact_fixed_hex(&record.code_hash) {
+        return Err(storage_error(
+            "stored verified-source record identity does not match its canonical path",
+        ));
+    }
+    if record.language != VERIFIED_SOURCE_LANGUAGE_KOTODAMA
+        || record.source_text.trim().is_empty()
+        || record.source_text.len() > VERIFIED_SOURCE_TEXT_MAX_BYTES_V1
+        || record.source_name.as_ref().is_some_and(|name| {
+            name.is_empty()
+                || name.len() > VERIFIED_SOURCE_NAME_MAX_BYTES_V1
+                || name.chars().any(char::is_control)
+        })
+        || !exact_persisted_timestamp(&record.submitted_at)
+        || record
+            .abi_hash
+            .as_deref()
+            .is_none_or(|digest| !exact_fixed_hex(digest))
+        || !exact_provider_reference_fields(
+            record.manifest_id_hex.as_deref(),
+            record.payload_digest_hex.as_deref(),
+            record.content_length,
+        )
+    {
+        return Err(storage_error(
+            "stored verified-source record violates the exact V1 schema",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_verified_source_record(
+    record: &StoredVerifiedSourceRecord,
+    expected_code_hash: &str,
+) -> Result<(), Error> {
+    validate_verified_source_record_schema(record, expected_code_hash)?;
+    let compiled = ivm::kotodama::session::CompilerSession::default()
+        .build(ivm::kotodama::session::CompileRequest {
+            source: &record.source_text,
+            source_name: record.source_name.as_deref(),
+        })
+        .map_err(|_| {
+            storage_error("stored verified-source record no longer compiles under Kotodama V1")
+        })?;
+    let actual_hash = canonical_code_hash(&compiled.artifact)?;
+    if hash_hex(&actual_hash) != expected_code_hash {
+        return Err(storage_error(
+            "stored verified-source record does not compile to its canonical code hash",
+        ));
+    }
+    let verified = ivm::verify_contract_artifact(&compiled.artifact).map_err(|_| {
+        storage_error("stored verified-source record does not produce a valid IVM artifact")
+    })?;
+    let expected_abi_hash = hash_hex(&verified.abi_hash);
+    if record.abi_hash.as_deref() != Some(expected_abi_hash.as_str())
+        || record.compiler_fingerprint != verified.manifest.compiler_fingerprint
+    {
+        return Err(storage_error(
+            "stored verified-source record ABI or compiler identity differs from its recompiled artifact",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_verified_source_job(
+    job: &StoredVerifiedSourceJob,
+    expected_code_hash: &str,
+    expected_job_id: &str,
+) -> Result<(), Error> {
+    if job.version != VERIFIED_SOURCE_VERSION {
+        return Err(storage_error(format!(
+            "stored verified-source job advertises unsupported version {}; expected V{VERIFIED_SOURCE_VERSION}",
+            job.version
+        )));
+    }
+    if job.code_hash != expected_code_hash
+        || job.job_id != expected_job_id
+        || !exact_fixed_hex(&job.code_hash)
+        || !exact_fixed_hex(&job.job_id)
+        || !exact_persisted_timestamp(&job.submitted_at)
+        || job
+            .completed_at
+            .as_deref()
+            .is_none_or(|timestamp| !exact_persisted_timestamp(timestamp))
+        || job.message.as_ref().is_none_or(|message| {
+            message.is_empty() || message.len() > VERIFIED_SOURCE_JOB_MESSAGE_MAX_BYTES_V1
+        })
+        || job
+            .actual_code_hash
+            .as_deref()
+            .is_some_and(|hash| !exact_fixed_hex(hash))
+    {
+        return Err(storage_error(
+            "stored verified-source job violates the exact V1 schema or canonical path identity",
+        ));
+    }
+    match job.status.as_str() {
+        "accepted" | "conflict" if job.actual_code_hash.as_deref() == Some(expected_code_hash) => {}
+        "mismatch"
+            if job
+                .actual_code_hash
+                .as_deref()
+                .is_some_and(|hash| hash != expected_code_hash)
+                && job.verified_source_ref.is_none() => {}
+        "compile_error" | "error"
+            if job.actual_code_hash.is_none() && job.verified_source_ref.is_none() => {}
+        _ => {
+            return Err(storage_error(
+                "stored verified-source job has an inconsistent V1 status projection",
+            ));
+        }
+    }
+    if let Some(reference) = &job.verified_source_ref {
+        validate_verified_source_ref(reference)?;
+    }
+    Ok(())
+}
+
 fn load_verified_source_record(
     code_hash: &str,
 ) -> Result<Option<StoredVerifiedSourceRecord>, Error> {
-    read_json_file(
+    let record = read_canonical_json_file(
         &verified_source_record_path(code_hash),
         VERIFIED_SOURCE_RECORD_MAX_BYTES_V1,
         "verified-source record",
-    )
+    )?;
+    if let Some(record) = &record {
+        validate_verified_source_record(record, code_hash)?;
+    }
+    Ok(record)
 }
 fn load_verified_source_job(
     code_hash: &str,
     job_id: &str,
 ) -> Result<Option<ContractVerifiedSourceJobResponseDto>, Error> {
-    read_json_file::<StoredVerifiedSourceJob>(
+    let job = read_canonical_json_file::<StoredVerifiedSourceJob>(
         &verified_source_job_path(code_hash, job_id),
         VERIFIED_SOURCE_JOB_MAX_BYTES_V1,
         "verified-source job",
-    )
-    .map(|maybe| maybe.map(Into::into))
+    )?;
+    if let Some(job) = &job {
+        validate_verified_source_job(job, code_hash, job_id)?;
+    }
+    Ok(job.map(Into::into))
 }
-fn persist_verified_source_record(record: &StoredVerifiedSourceRecord) -> Result<(), Error> {
+fn persist_verified_source_record_locked(record: &StoredVerifiedSourceRecord) -> Result<(), Error> {
+    validate_verified_source_record_schema(record, &record.code_hash)?;
     write_json_file_atomic(
         &verified_source_record_path(&record.code_hash),
         record,
@@ -626,7 +1165,15 @@ fn persist_verified_source_record(record: &StoredVerifiedSourceRecord) -> Result
         "verified-source record",
     )
 }
+fn persist_verified_source_record(record: &StoredVerifiedSourceRecord) -> Result<(), Error> {
+    let mutation_lock = verified_source_mutation_lock(&record.code_hash);
+    let _guard = mutation_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    persist_verified_source_record_locked(record)
+}
 fn persist_verified_source_job(job: &StoredVerifiedSourceJob) -> Result<(), Error> {
+    validate_verified_source_job(job, &job.code_hash, &job.job_id)?;
     write_json_file_atomic(
         &verified_source_job_path(&job.code_hash, &job.job_id),
         job,
@@ -1102,16 +1649,7 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
             return Err(not_found());
         }
     }
-    let verified_source_record = if let Some(record) = load_verified_source_record(&code_hash)? {
-        Some(record)
-    } else if let Some(declared) = declared_code_hash
-        .as_ref()
-        .filter(|declared| declared.as_str() != code_hash.as_str())
-    {
-        load_verified_source_record(declared)?
-    } else {
-        None
-    };
+    let verified_source_record = load_verified_source_record(&code_hash)?;
     let verified_source_ref = verified_source_record
         .as_ref()
         .and_then(verified_source_ref_from_record);
@@ -1212,15 +1750,16 @@ fn resolve_contract_view_input_for_instruction(
     }
     Err(not_found())
 }
-fn new_job_id(code_hash: &str, source_text: &str) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"iroha.contract.verified-source-job.v1\0");
-    hasher.update(code_hash.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(unique_suffix().as_bytes());
-    hasher.update(b"\0");
-    hasher.update(source_text.as_bytes());
-    hasher.finalize().to_hex().to_string()
+fn new_job_id() -> Result<String, Error> {
+    let mut bytes = [0_u8; FIXED_HEX_COMPONENT_BYTES_V1];
+    rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut bytes).map_err(
+        |error| {
+            storage_error(format!(
+                "failed to generate verified-source job id: {error}"
+            ))
+        },
+    )?;
+    Ok(hex::encode(bytes))
 }
 fn verified_source_request_bound_error(
     request: &SubmitVerifiedContractSourceDto,
@@ -1228,12 +1767,16 @@ fn verified_source_request_bound_error(
     if request.language.len() > VERIFIED_SOURCE_LANGUAGE_MAX_BYTES_V1 {
         return Some("language exceeds the first-release 32-byte maximum");
     }
-    if request
-        .source_name
-        .as_ref()
-        .is_some_and(|name| name.len() > VERIFIED_SOURCE_NAME_MAX_BYTES_V1)
-    {
-        return Some("source_name exceeds the Kotodama V1 4096-byte maximum");
+    if let Some(name) = &request.source_name {
+        if name.is_empty() {
+            return Some("source_name must be omitted instead of empty");
+        }
+        if name.len() > VERIFIED_SOURCE_NAME_MAX_BYTES_V1 {
+            return Some("source_name exceeds the Kotodama V1 4096-byte maximum");
+        }
+        if name.chars().any(char::is_control) {
+            return Some("source_name must not contain control characters");
+        }
     }
     if request.source_text.len() > VERIFIED_SOURCE_TEXT_MAX_BYTES_V1 {
         return Some("source_text exceeds the Kotodama V1 1048576-byte maximum");
@@ -1413,7 +1956,7 @@ pub fn handle_post_verified_source_job(
 ) -> Result<(StatusCode, JsonBody<ContractVerifiedSourceJobResponseDto>), Error> {
     let (requested_hash, code_hash_hex) = parse_code_hash_hex(&code_hash_hex)?;
     let submitted_at = now_rfc3339();
-    let job_id = new_job_id(&code_hash_hex, &request.source_text);
+    let job_id = new_job_id()?;
     if let Some(message) = verified_source_request_bound_error(&request) {
         let response = ContractVerifiedSourceJobResponseDto {
             job_id,
@@ -1428,7 +1971,7 @@ pub fn handle_post_verified_source_job(
         let persisted = persist_job_response(response)?;
         return Ok((StatusCode::BAD_REQUEST, JsonBody(persisted)));
     }
-    let language = request.language.trim().to_ascii_lowercase();
+    let language = request.language;
     if language != VERIFIED_SOURCE_LANGUAGE_KOTODAMA {
         let response = ContractVerifiedSourceJobResponseDto {
             job_id,
@@ -1437,7 +1980,7 @@ pub fn handle_post_verified_source_job(
             submitted_at,
             completed_at: Some(now_rfc3339()),
             message: Some(format!(
-                "unsupported verified source language `{language}`; only `{VERIFIED_SOURCE_LANGUAGE_KOTODAMA}` is accepted"
+                "unsupported verified source language; only the exact `{VERIFIED_SOURCE_LANGUAGE_KOTODAMA}` label is accepted"
             )),
             actual_code_hash: None,
             verified_source_ref: None,
@@ -1496,69 +2039,75 @@ pub fn handle_post_verified_source_job(
                     actual_code_hash: Some(actual_code_hash),
                     verified_source_ref: None,
                 }
-            } else if let Some(existing) = load_verified_source_record(&code_hash_hex)? {
-                if existing.source_text == source_text {
+            } else {
+                let mutation_lock = verified_source_mutation_lock(&code_hash_hex);
+                let _guard = mutation_lock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(existing) = load_verified_source_record(&code_hash_hex)? {
+                    if existing.source_text == source_text {
+                        ContractVerifiedSourceJobResponseDto {
+                            job_id,
+                            code_hash: code_hash_hex.clone(),
+                            status: "accepted".to_owned(),
+                            submitted_at,
+                            completed_at: Some(now_rfc3339()),
+                            message: Some(
+                                "verified source already stored for this code hash".to_owned(),
+                            ),
+                            actual_code_hash: Some(actual_code_hash),
+                            verified_source_ref: verified_source_ref_from_record(&existing),
+                        }
+                    } else {
+                        ContractVerifiedSourceJobResponseDto {
+                            job_id,
+                            code_hash: code_hash_hex.clone(),
+                            status: "conflict".to_owned(),
+                            submitted_at,
+                            completed_at: Some(now_rfc3339()),
+                            message: Some(
+                                "a different verified source is already stored for this code hash"
+                                    .to_owned(),
+                            ),
+                            actual_code_hash: Some(actual_code_hash),
+                            verified_source_ref: verified_source_ref_from_record(&existing),
+                        }
+                    }
+                } else {
+                    // HTTP submission persists only the verified-source job record.
+                    // Provider storage is populated exclusively by the finalized-ledger
+                    // ingest outbox, never as a side effect of this route.
+                    let verified_source_ref: Option<ContractVerifiedSourceRefDto> = None;
+                    let record = StoredVerifiedSourceRecord {
+                        version: VERIFIED_SOURCE_VERSION,
+                        code_hash: code_hash_hex.clone(),
+                        abi_hash: Some(hash_hex(&verified.abi_hash)),
+                        compiler_fingerprint: verified.manifest.compiler_fingerprint.clone(),
+                        language,
+                        source_name: source_name.clone(),
+                        source_text,
+                        submitted_at: submitted_at.clone(),
+                        manifest_id_hex: verified_source_ref
+                            .as_ref()
+                            .and_then(|value| value.manifest_id_hex.clone()),
+                        payload_digest_hex: verified_source_ref
+                            .as_ref()
+                            .and_then(|value| value.payload_digest_hex.clone()),
+                        content_length: verified_source_ref
+                            .as_ref()
+                            .and_then(|value| value.content_length),
+                    };
+                    persist_verified_source_record_locked(&record)?;
                     ContractVerifiedSourceJobResponseDto {
                         job_id,
                         code_hash: code_hash_hex.clone(),
                         status: "accepted".to_owned(),
                         submitted_at,
                         completed_at: Some(now_rfc3339()),
-                        message: Some(
-                            "verified source already stored for this code hash".to_owned(),
-                        ),
+                        message: Some("verified source stored".to_owned()),
                         actual_code_hash: Some(actual_code_hash),
-                        verified_source_ref: verified_source_ref_from_record(&existing),
+                        verified_source_ref,
                     }
-                } else {
-                    ContractVerifiedSourceJobResponseDto {
-                        job_id,
-                        code_hash: code_hash_hex.clone(),
-                        status: "conflict".to_owned(),
-                        submitted_at,
-                        completed_at: Some(now_rfc3339()),
-                        message: Some(
-                            "a different verified source is already stored for this code hash"
-                                .to_owned(),
-                        ),
-                        actual_code_hash: Some(actual_code_hash),
-                        verified_source_ref: verified_source_ref_from_record(&existing),
-                    }
-                }
-            } else {
-                // HTTP submission persists only the verified-source job record.
-                // Provider storage is populated exclusively by the finalized-ledger
-                // ingest outbox, never as a side effect of this route.
-                let verified_source_ref: Option<ContractVerifiedSourceRefDto> = None;
-                let record = StoredVerifiedSourceRecord {
-                    version: VERIFIED_SOURCE_VERSION,
-                    code_hash: code_hash_hex.clone(),
-                    abi_hash: Some(hash_hex(&verified.abi_hash)),
-                    compiler_fingerprint: verified.manifest.compiler_fingerprint.clone(),
-                    language,
-                    source_name: source_name.clone(),
-                    source_text,
-                    submitted_at: submitted_at.clone(),
-                    manifest_id_hex: verified_source_ref
-                        .as_ref()
-                        .and_then(|value| value.manifest_id_hex.clone()),
-                    payload_digest_hex: verified_source_ref
-                        .as_ref()
-                        .and_then(|value| value.payload_digest_hex.clone()),
-                    content_length: verified_source_ref
-                        .as_ref()
-                        .and_then(|value| value.content_length),
-                };
-                persist_verified_source_record(&record)?;
-                ContractVerifiedSourceJobResponseDto {
-                    job_id,
-                    code_hash: code_hash_hex.clone(),
-                    status: "accepted".to_owned(),
-                    submitted_at,
-                    completed_at: Some(now_rfc3339()),
-                    message: Some("verified source stored".to_owned()),
-                    actual_code_hash: Some(actual_code_hash),
-                    verified_source_ref,
                 }
             }
         }
@@ -1608,7 +2157,12 @@ mod tests {
     use iroha_executor_data_model::permission::{
         governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
     };
-    use std::{borrow::Cow, num::NonZeroU64, time::Duration};
+    use std::{
+        borrow::Cow,
+        num::NonZeroU64,
+        sync::{Arc, Barrier},
+        time::Duration,
+    };
     #[test]
     fn verified_source_request_bounds_accept_exact_and_reject_first_overflow() {
         assert_eq!(
@@ -1642,6 +2196,17 @@ mod tests {
             verified_source_request_bound_error(&request),
             Some("language exceeds the first-release 32-byte maximum")
         );
+        request.language.pop();
+        request.source_name = Some(String::new());
+        assert_eq!(
+            verified_source_request_bound_error(&request),
+            Some("source_name must be omitted instead of empty")
+        );
+        request.source_name = Some("bad\nname.ko".to_owned());
+        assert_eq!(
+            verified_source_request_bound_error(&request),
+            Some("source_name must not contain control characters")
+        );
     }
     #[test]
     fn verified_source_diagnostic_message_is_utf8_safe_and_bounded() {
@@ -1670,13 +2235,20 @@ mod tests {
         assert!(bounded.ends_with('…'));
     }
     #[test]
-    fn fixed_hex_path_components_are_validated_before_decode_and_canonicalized() {
+    fn fixed_hex_path_components_require_exact_canonical_spelling() {
         let uppercase = "AB".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
-        let (_, canonical_hash) = parse_code_hash_hex(&uppercase).expect("valid code hash");
-        assert_eq!(canonical_hash, "ab".repeat(FIXED_HEX_COMPONENT_BYTES_V1));
+        assert!(parse_code_hash_hex(&uppercase).is_err());
+        assert!(canonical_verified_source_job_id(&uppercase).is_err());
+        let lowercase = "ab".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
         assert_eq!(
-            canonical_verified_source_job_id(&uppercase).expect("valid job id"),
-            "ab".repeat(FIXED_HEX_COMPONENT_BYTES_V1)
+            parse_code_hash_hex(&lowercase)
+                .expect("canonical code hash")
+                .1,
+            lowercase
+        );
+        assert_eq!(
+            canonical_verified_source_job_id(&lowercase).expect("canonical job id"),
+            lowercase
         );
         for invalid in [
             "a".repeat(FIXED_HEX_COMPONENT_CHARS_V1 - 1),
@@ -1703,13 +2275,40 @@ mod tests {
             content_length: Some(u64::MAX),
         }
     }
+    fn valid_verified_source_record(source: &str, source_name: &str) -> StoredVerifiedSourceRecord {
+        let compiled = ivm::kotodama::session::CompilerSession::default()
+            .build(ivm::kotodama::session::CompileRequest {
+                source,
+                source_name: Some(source_name),
+            })
+            .expect("compile verified-source record fixture");
+        let verified = ivm::verify_contract_artifact(&compiled.artifact)
+            .expect("verify source record fixture");
+        StoredVerifiedSourceRecord {
+            version: VERIFIED_SOURCE_VERSION,
+            code_hash: hash_hex(
+                &canonical_code_hash(&compiled.artifact).expect("hash source record fixture"),
+            ),
+            abi_hash: Some(hash_hex(&verified.abi_hash)),
+            compiler_fingerprint: verified.manifest.compiler_fingerprint,
+            language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
+            source_name: Some(source_name.to_owned()),
+            source_text: source.to_owned(),
+            submitted_at: now_rfc3339(),
+            manifest_id_hex: None,
+            payload_digest_hex: None,
+            content_length: None,
+        }
+    }
     #[test]
-    fn persisted_json_preflight_matches_compact_norito_encoding() {
+    fn bounded_persisted_json_matches_compact_norito_encoding() {
         let record = persisted_json_size_fixture();
         let record_bytes = norito::json::to_vec(&record).expect("encode source record");
         assert_eq!(
-            record.persisted_json_encoded_len(),
-            Some(record_bytes.len())
+            crate::utils::encode_json_bounded(&record, record_bytes.len())
+                .expect("bounded source record")
+                .as_bytes(),
+            record_bytes
         );
         let job = StoredVerifiedSourceJob {
             version: VERIFIED_SOURCE_VERSION,
@@ -1730,15 +2329,20 @@ mod tests {
             }),
         };
         let job_bytes = norito::json::to_vec(&job).expect("encode source job");
-        assert_eq!(job.persisted_json_encoded_len(), Some(job_bytes.len()));
+        assert_eq!(
+            crate::utils::encode_json_bounded(&job, job_bytes.len())
+                .expect("bounded source job")
+                .as_bytes(),
+            job_bytes
+        );
     }
     #[test]
     fn persisted_json_writer_rejects_overflow_before_filesystem_mutation() {
         let directory = tempfile::tempdir().expect("verified-source writer directory");
         let record = persisted_json_size_fixture();
-        let encoded_len = record
-            .persisted_json_encoded_len()
-            .expect("bounded record length");
+        let encoded_len = norito::json::to_vec(&record)
+            .expect("encode source record")
+            .len();
         let exact_path = directory.path().join("exact").join("record.json");
         write_json_file_atomic(&exact_path, &record, encoded_len, "source writer test")
             .expect("exact-size record is admitted");
@@ -1760,26 +2364,217 @@ mod tests {
         assert!(!rejected_parent.exists());
     }
     #[test]
-    fn verified_source_file_reader_rejects_size_before_json_decode() {
+    fn verified_source_file_reader_enforces_its_byte_bound() {
         let directory = tempfile::tempdir().expect("verified-source reader directory");
         let exact_path = directory.path().join("exact.json");
         fs::write(&exact_path, b"null").expect("write exact JSON");
-        let exact =
-            read_json_file::<norito::json::Value>(&exact_path, 4, "verified-source reader test")
-                .expect("exact-size JSON is admitted");
-        assert!(exact.is_some());
+        #[cfg(unix)]
+        fs::set_permissions(
+            &exact_path,
+            <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o600),
+        )
+        .expect("make exact fixture private");
+        let exact = read_bounded_file(&exact_path, 4, "verified-source reader test")
+            .expect("exact-size file is admitted");
+        assert_eq!(exact, Some(b"null".to_vec()));
         let overflow_path = directory.path().join("overflow.json");
         fs::write(&overflow_path, b"null ").expect("write oversized JSON");
+        #[cfg(unix)]
+        fs::set_permissions(
+            &overflow_path,
+            <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o600),
+        )
+        .expect("make overflow fixture private");
+        assert!(read_bounded_file(&overflow_path, 4, "verified-source reader test").is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn verified_source_file_reader_rejects_public_or_multiply_linked_files() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().expect("verified-source reader directory");
+        let public_path = directory.path().join("public.json");
+        fs::write(&public_path, b"null").expect("write public fixture");
+        fs::set_permissions(&public_path, fs::Permissions::from_mode(0o644))
+            .expect("make fixture public");
+        assert!(read_bounded_file(&public_path, 4, "public source record").is_err());
+
+        let linked_path = directory.path().join("linked.json");
+        fs::set_permissions(&public_path, fs::Permissions::from_mode(0o600))
+            .expect("make fixture private");
+        fs::hard_link(&public_path, &linked_path).expect("create second hard link");
+        assert!(read_bounded_file(&public_path, 4, "linked source record").is_err());
+    }
+    #[test]
+    fn verified_source_record_load_rejects_version_identity_and_source_corruption() {
+        let _guard = TestDataDirGuard::new();
+        let source = "seiyaku Exact { kotoage fn main() authorize(\"Run\") {} }";
+        let record = valid_verified_source_record(source, "exact.ko");
+        let path = verified_source_record_path(&record.code_hash);
+        persist_verified_source_record(&record).expect("persist valid source record");
         assert!(
-            read_json_file::<norito::json::Value>(&overflow_path, 4, "verified-source reader test")
-                .is_err()
+            load_verified_source_record(&record.code_hash)
+                .expect("load valid source record")
+                .is_some()
         );
+
+        let mut corrupt = record.clone();
+        corrupt.version = VERIFIED_SOURCE_VERSION + 1;
+        fs::write(
+            &path,
+            norito::json::to_vec(&corrupt).expect("encode wrong-version record"),
+        )
+        .expect("replace record with wrong version");
+        assert!(load_verified_source_record(&record.code_hash).is_err());
+
+        corrupt = record.clone();
+        corrupt.code_hash = "ff".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
+        fs::write(
+            &path,
+            norito::json::to_vec(&corrupt).expect("encode wrong-identity record"),
+        )
+        .expect("replace record with wrong identity");
+        assert!(load_verified_source_record(&record.code_hash).is_err());
+
+        corrupt = record.clone();
+        corrupt.source_text =
+            "seiyaku Different { kotoage fn main() authorize(\"Run\") {} }".to_owned();
+        fs::write(
+            &path,
+            norito::json::to_vec(&corrupt).expect("encode wrong-source record"),
+        )
+        .expect("replace record with wrong source");
+        assert!(load_verified_source_record(&record.code_hash).is_err());
+    }
+    #[test]
+    fn verified_source_job_load_rejects_embedded_identity_corruption() {
+        let _guard = TestDataDirGuard::new();
+        let code_hash = "ab".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
+        let job_id = "cd".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
+        let mut job = StoredVerifiedSourceJob {
+            version: VERIFIED_SOURCE_VERSION,
+            job_id: job_id.clone(),
+            code_hash: code_hash.clone(),
+            status: "error".to_owned(),
+            submitted_at: now_rfc3339(),
+            completed_at: Some(now_rfc3339()),
+            message: Some("bounded validation error".to_owned()),
+            actual_code_hash: None,
+            verified_source_ref: None,
+        };
+        persist_verified_source_job(&job).expect("persist source job");
+        let path = verified_source_job_path(&code_hash, &job_id);
+        job.job_id = "ef".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
+        fs::write(
+            path,
+            norito::json::to_vec(&job).expect("encode wrong-identity source job"),
+        )
+        .expect("replace source job with wrong identity");
+        assert!(load_verified_source_job(&code_hash, &job_id).is_err());
+    }
+    #[test]
+    fn immutable_source_writer_never_replaces_a_concurrent_winner() {
+        let directory = tempfile::tempdir().expect("verified-source writer directory");
+        let path = Arc::new(directory.path().join("records").join("record.json"));
+        let mut first = persisted_json_size_fixture();
+        first.code_hash = "11".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
+        let mut second = persisted_json_size_fixture();
+        second.code_hash = "22".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
+        let first_bytes = norito::json::to_vec(&first).expect("encode first contender");
+        let second_bytes = norito::json::to_vec(&second).expect("encode second contender");
+        let maximum = first_bytes.len().max(second_bytes.len());
+        let barrier = Arc::new(Barrier::new(3));
+        let contenders = [first, second]
+            .into_iter()
+            .map(|record| {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    write_json_file_atomic(
+                        &path,
+                        &record,
+                        maximum,
+                        "concurrent verified-source test record",
+                    )
+                    .is_ok()
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let successes = contenders
+            .into_iter()
+            .filter(|contender| contender.join().expect("source writer thread"))
+            .count();
+        assert_eq!(successes, 1);
+        let published = fs::read(&*path).expect("read immutable winner");
+        assert!(published == first_bytes || published == second_bytes);
+        let residue = fs::read_dir(path.parent().expect("record parent"))
+            .expect("enumerate record parent")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(residue, 0, "failed contenders must clean temporary files");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn immutable_source_writer_rejects_symlinked_destination_and_parent() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("verified-source writer directory");
+        let real_parent = directory.path().join("real");
+        fs::create_dir(&real_parent).expect("create real parent");
+        let outside = directory.path().join("outside.json");
+        fs::write(&outside, b"outside-sentinel").expect("write outside sentinel");
+        let linked_destination = real_parent.join("record.json");
+        symlink(&outside, &linked_destination).expect("link destination to sentinel");
+        let record = persisted_json_size_fixture();
+        assert!(
+            write_json_file_atomic(
+                &linked_destination,
+                &record,
+                VERIFIED_SOURCE_RECORD_MAX_BYTES_V1,
+                "symlinked verified-source test record",
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fs::read(&outside).expect("read outside sentinel"),
+            b"outside-sentinel"
+        );
+
+        let linked_parent = directory.path().join("linked-parent");
+        symlink(&real_parent, &linked_parent).expect("link source parent");
+        assert!(
+            write_json_file_atomic(
+                &linked_parent.join("another.json"),
+                &record,
+                VERIFIED_SOURCE_RECORD_MAX_BYTES_V1,
+                "symlink-parent verified-source test record",
+            )
+            .is_err()
+        );
+        assert!(
+            write_json_file_atomic(
+                &linked_parent.join("nested").join("another.json"),
+                &record,
+                VERIFIED_SOURCE_RECORD_MAX_BYTES_V1,
+                "symlink-ancestor verified-source test record",
+            )
+            .is_err()
+        );
+        assert!(!real_parent.join("nested").exists());
     }
     #[test]
     fn verified_source_job_id_has_fixed_hex_size() {
-        let job_id = new_job_id(&"00".repeat(32), "seiyaku test {}");
+        let job_id = new_job_id().expect("generate job id");
         assert_eq!(job_id.len(), FIXED_HEX_COMPONENT_CHARS_V1);
-        assert!(job_id.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(
+            job_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
+        assert_ne!(job_id, new_job_id().expect("generate a second job id"));
     }
     fn checked_contract_sources_key_fixture(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
@@ -2012,7 +2807,16 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        let code = crate::test_utils::minimal_ivm_program(1);
+        let source = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }";
+        let source_name = "demo.ko";
+        let compiled = ivm::kotodama::session::CompilerSession::default()
+            .build(ivm::kotodama::session::CompileRequest {
+                source,
+                source_name: Some(source_name),
+            })
+            .expect("compile verified-source fixture");
+        let verified = ivm::verify_contract_artifact(&compiled.artifact)
+            .expect("verify compiled source fixture");
         let network_id = *state.network_id_ref();
         let contract_address =
             dm::ContractAddress::derive(&network_id, &authority, 0, dm::DataSpaceId::UNIVERSAL)
@@ -2022,19 +2826,19 @@ mod tests {
             &authority,
             &authority_keypair,
             &contract_address,
-            code,
+            compiled.artifact,
         );
         let code_hash_hex = hash_hex(&code_hash);
         let record = StoredVerifiedSourceRecord {
             version: VERIFIED_SOURCE_VERSION,
             code_hash: code_hash_hex.clone(),
-            abi_hash: None,
-            compiler_fingerprint: Some("torii-tests".to_owned()),
+            abi_hash: Some(hash_hex(&verified.abi_hash)),
+            compiler_fingerprint: verified.manifest.compiler_fingerprint,
             language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
-            source_name: Some("demo.ko".to_owned()),
-            source_text: "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }".to_owned(),
+            source_name: Some(source_name.to_owned()),
+            source_text: source.to_owned(),
             submitted_at: now_rfc3339(),
-            manifest_id_hex: Some("aa".repeat(16)),
+            manifest_id_hex: Some("aa".repeat(32)),
             payload_digest_hex: Some("bb".repeat(32)),
             content_length: Some(24),
         };
@@ -2049,11 +2853,40 @@ mod tests {
         let payload: ContractCodeViewDto =
             norito::json::from_slice(&body).expect("decode contract view");
         assert_eq!(payload.rendered_source_kind, RENDERED_SOURCE_VERIFIED);
-        assert_eq!(
-            payload.rendered_source_text,
-            "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }"
-        );
+        assert_eq!(payload.rendered_source_text, source);
         assert!(payload.verified_source_ref.is_some());
+    }
+    #[test]
+    fn contract_view_never_labels_a_declared_hash_source_as_verified_for_other_code() {
+        let _guard = TestDataDirGuard::new();
+        let declared_source = "seiyaku Declared { kotoage fn main() authorize(\"Declared\") {} }";
+        let declared = valid_verified_source_record(declared_source, "declared.ko");
+        persist_verified_source_record(&declared).expect("persist declared-hash source");
+
+        let actual_source = "seiyaku Actual { kotoage fn main() authorize(\"Actual\") {} }";
+        let actual = ivm::kotodama::session::CompilerSession::default()
+            .build(ivm::kotodama::session::CompileRequest {
+                source: actual_source,
+                source_name: Some("actual.ko"),
+            })
+            .expect("compile different actual contract");
+        let actual_hash = hash_hex(
+            &canonical_code_hash(&actual.artifact).expect("hash different actual contract"),
+        );
+        assert_ne!(declared.code_hash, actual_hash);
+
+        let view = build_contract_view(ContractViewBuildInput {
+            code_hash: Some(declared.code_hash.clone()),
+            declared_code_hash: Some(declared.code_hash),
+            manifest: None,
+            code_bytes: Some(actual.artifact),
+            warnings: Vec::new(),
+        })
+        .expect("build mismatched contract view");
+        assert_eq!(view.code_hash, actual_hash);
+        assert_eq!(view.rendered_source_kind, RENDERED_SOURCE_PSEUDO);
+        assert_ne!(view.rendered_source_text, declared_source);
+        assert!(view.verified_source_ref.is_none());
     }
     #[test]
     fn verified_source_job_accepts_exact_match_and_persists_record() {
@@ -2089,6 +2922,28 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
             .expect("record exists");
         assert_eq!(record.source_text.trim(), source.trim());
         assert_eq!(record.language, VERIFIED_SOURCE_LANGUAGE_KOTODAMA);
+    }
+    #[test]
+    fn verified_source_job_rejects_language_aliases() {
+        let _guard = TestDataDirGuard::new();
+        let code_hash = "11".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
+        let node = sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::default());
+        let (status, JsonBody(response)) = handle_post_verified_source_job(
+            code_hash.clone(),
+            SubmitVerifiedContractSourceDto {
+                language: "Kotodama".to_owned(),
+                source_name: None,
+                source_text: "seiyaku Demo {}".to_owned(),
+            },
+            node,
+        )
+        .expect("reject language alias");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(response.status, "error");
+        let stored = load_verified_source_job(&code_hash, &response.job_id)
+            .expect("load language error job")
+            .expect("language error job exists");
+        assert_eq!(stored.status, "error");
     }
     #[test]
     fn verified_source_job_does_not_mutate_provider_storage() {

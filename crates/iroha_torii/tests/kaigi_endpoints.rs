@@ -214,9 +214,12 @@ fn build_app() -> (
             Some(telemetry_handle),
             iroha_config::parameters::actual::TelemetryProfile::Operator,
         ),
-    );
+    )
+    .expect("valid Torii Kaigi fixture");
     (
-        torii.api_router_for_tests(),
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
         relay_id,
         owner_id,
         operator_key_pair,

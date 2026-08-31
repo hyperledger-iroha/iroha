@@ -2213,8 +2213,6 @@ fn sumeragi_v2_explicit_schema_parses() {
     assert_eq!(cfg.sumeragi.keys.activation_lead_blocks, 2);
     assert_eq!(cfg.sumeragi.keys.overlap_grace_blocks, 12);
     assert_eq!(cfg.sumeragi.keys.expiry_grace_blocks, 3);
-    assert!(cfg.sumeragi.keys.require_hsm);
-    assert_eq!(cfg.sumeragi.keys.allowed_hsm_providers.len(), 2);
     assert_eq!(cfg.kura.lane_history_retention.get(), 8_192);
     let shared = cfg
         .sumeragi
@@ -2244,10 +2242,6 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         (
             "bad.sumeragi_body_bytes_too_small.toml",
             "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum 103809024, configured 103809023)",
-        ),
-        (
-            "bad.sumeragi_empty_hsm_provider.toml",
-            "sumeragi.keys.allowed_hsm_providers must not contain empty names",
         ),
     ] {
         let report = load_config_from_fixtures(fixture)

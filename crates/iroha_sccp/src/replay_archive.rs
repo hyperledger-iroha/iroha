@@ -5,12 +5,13 @@
 //! witnesses. Replica signatures establish availability provenance, never a
 //! substitute safety boundary: every response remains locally verifiable.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use iroha_data_model::NetworkId;
 use iroha_data_model::bridge::{
-    SCCP_REPLAY_SMT_DEPTH_V1, SccpNetworkV1, SccpReplayAccumulatorIdV1, SccpReplayDeltaV1,
-    SccpReplayDomainV1, SccpReplayForestV1, SccpSparseMerkleWitnessV1, sccp_replay_domain_hash_v1,
+    SCCP_REPLAY_SMT_DEPTH_V1, SCCP_REPLAY_SMT_SHARD_COUNT_V1, SccpNetworkV1,
+    SccpReplayAccumulatorError, SccpReplayAccumulatorIdV1, SccpReplayDomainV1, SccpReplayForestV1,
+    SccpReplayRecordV1, SccpSparseMerkleWitnessV1, sccp_replay_domain_hash_v1,
     sccp_replay_empty_hashes_v1,
 };
 use norito::codec::{Decode, Encode};
@@ -23,10 +24,9 @@ const CHECKPOINT_SIGNATURE_DOMAIN_V1: &[u8] = b"SCCP-REPLAY-CHECKPOINT-SIGNATURE
 const REPLICA_AGREEMENT_DOMAIN_V1: &[u8] = b"SCCP-REPLAY-REPLICA-AGREEMENT-V1";
 
 /// Default maximum number of leaves admitted by one decoded snapshot.
-pub const SCCP_REPLAY_ARCHIVE_DEFAULT_MAX_SNAPSHOT_LEAVES_V1: usize = 8 * 1024 * 1024;
-/// Default maximum encoded snapshot size. Deployments may declare a different
-/// finite streaming limit before accepting an artifact.
-pub const SCCP_REPLAY_ARCHIVE_DEFAULT_MAX_SNAPSHOT_BYTES_V1: usize = 1024 * 1024 * 1024;
+pub const SCCP_REPLAY_ARCHIVE_DEFAULT_MAX_SNAPSHOT_LEAVES_V1: usize = 256 * 1024;
+/// Default maximum complete encoded snapshot held by the in-memory validator.
+pub const SCCP_REPLAY_ARCHIVE_DEFAULT_MAX_SNAPSHOT_BYTES_V1: usize = 32 * 1024 * 1024;
 
 /// Explicit finite limits for one untrusted replay-snapshot decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +98,8 @@ pub struct SccpReplayArchiveSnapshotV1 {
 impl SccpReplayArchiveSnapshotV1 {
     /// SHA-256 content address of the canonical Norito snapshot bytes.
     pub fn content_sha256(&self) -> Result<[u8; 32], SccpReplayArchiveError> {
-        let encoded = norito::to_bytes(self).map_err(|_| SccpReplayArchiveError::Malformed)?;
+        let encoded =
+            norito::encode_canonical(self).map_err(|_| SccpReplayArchiveError::Malformed)?;
         Ok(sha256(&[&encoded]))
     }
 }
@@ -162,8 +163,7 @@ impl SccpReplayArchiveCheckpointBodyV1 {
     pub fn from_snapshot(
         snapshot: &SccpReplayArchiveSnapshotV1,
     ) -> Result<Self, SccpReplayArchiveError> {
-        let validated =
-            validate_snapshot(snapshot, SccpReplayArchiveDecodeLimitsV1::default(), None)?;
+        let validated = validate_snapshot(snapshot, SccpReplayArchiveDecodeLimitsV1::default())?;
         Ok(Self {
             version: CHECKPOINT_VERSION_V1,
             snapshot_sha256: validated.content_sha256,
@@ -177,7 +177,8 @@ impl SccpReplayArchiveCheckpointBodyV1 {
     /// Domain-separated digest on which all three replicas must agree.
     pub fn agreement_digest(&self) -> Result<[u8; 32], SccpReplayArchiveError> {
         validate_checkpoint_body(self)?;
-        let encoded = norito::to_bytes(self).map_err(|_| SccpReplayArchiveError::Malformed)?;
+        let encoded =
+            norito::encode_canonical(self).map_err(|_| SccpReplayArchiveError::Malformed)?;
         Ok(sha256(&[
             REPLICA_AGREEMENT_DOMAIN_V1,
             &u64::try_from(encoded.len())
@@ -230,13 +231,11 @@ pub struct SccpReplayArchiveSignedCheckpointV1 {
 /// paths, payloads, keys, signatures, or parser details.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SccpReplayArchiveError {
-    /// Delta, snapshot, checkpoint, or canonical framing is malformed.
+    /// Record, witness, snapshot, checkpoint, or canonical framing is malformed.
     Malformed,
     /// A key was already occupied or leaves were not strictly ordered.
     DuplicateOrUnsortedLeaf,
-    /// The delta does not continue the archive's exact root or counters.
-    NonContiguousDelta,
-    /// Rebuilt roots or counters do not match the claimed forest.
+    /// An authenticated transition or rebuilt state disagrees with stored state.
     RebuildMismatch,
     /// The requested accumulator is absent.
     UnknownAccumulator,
@@ -257,7 +256,6 @@ impl core::fmt::Display for SccpReplayArchiveError {
         formatter.write_str(match self {
             Self::Malformed => "malformed SCCP replay archive input",
             Self::DuplicateOrUnsortedLeaf => "duplicate or unsorted SCCP replay leaf",
-            Self::NonContiguousDelta => "non-contiguous SCCP replay delta",
             Self::RebuildMismatch => "SCCP replay archive rebuild mismatch",
             Self::UnknownAccumulator => "unknown SCCP replay accumulator",
             Self::AccumulatorDomainMismatch => "SCCP replay accumulator domain mismatch",
@@ -336,6 +334,23 @@ struct AccumulatorArchiveV1 {
     snapshot_head: Option<SnapshotHeadV1>,
 }
 
+fn apply_record_error(error: SccpReplayAccumulatorError) -> SccpReplayArchiveError {
+    match error {
+        SccpReplayAccumulatorError::InvalidDomain => {
+            SccpReplayArchiveError::AccumulatorDomainMismatch
+        }
+        SccpReplayAccumulatorError::InvalidPrincipal
+        | SccpReplayAccumulatorError::InvalidRecord
+        | SccpReplayAccumulatorError::WrongBoundary
+        | SccpReplayAccumulatorError::NonCanonicalWitness => SccpReplayArchiveError::Malformed,
+        SccpReplayAccumulatorError::Occupied => SccpReplayArchiveError::DuplicateOrUnsortedLeaf,
+        SccpReplayAccumulatorError::StaleRoot
+        | SccpReplayAccumulatorError::InvalidPath
+        | SccpReplayAccumulatorError::CounterExhausted
+        | SccpReplayAccumulatorError::InvalidForest => SccpReplayArchiveError::RebuildMismatch,
+    }
+}
+
 /// In-memory reference implementation used by independent archive services.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SccpReplayArchiveV1 {
@@ -371,68 +386,53 @@ impl SccpReplayArchiveV1 {
         Ok(())
     }
 
-    /// Apply one authenticated consensus delta only after rebuilding both roots.
-    pub fn apply_delta(
+    /// Apply one replay record against its authenticated consensus witness.
+    ///
+    /// All fallible work occurs against a bounded forest clone. The archive
+    /// commits exactly one leaf insertion and the resulting forest together.
+    pub fn apply_record(
         &mut self,
         accumulator_id: SccpReplayAccumulatorIdV1,
-        delta: SccpReplayDeltaV1,
+        record: &SccpReplayRecordV1,
+        witness: &SccpSparseMerkleWitnessV1,
     ) -> Result<(), SccpReplayArchiveError> {
-        if delta.record_digest == [0; 32]
-            || delta.shard != delta.key[0]
-            || delta.old_root == delta.new_root
-        {
-            return Err(SccpReplayArchiveError::Malformed);
-        }
-        let existing = self
-            .accumulators
-            .get(&accumulator_id)
-            .ok_or(SccpReplayArchiveError::UnknownAccumulator)?;
-        if existing.domain_hash != delta.domain_hash {
-            return Err(SccpReplayArchiveError::AccumulatorDomainMismatch);
-        }
-        if existing.leaves.contains_key(&delta.key) {
-            return Err(SccpReplayArchiveError::DuplicateOrUnsortedLeaf);
-        }
-        let expected_count = existing
-            .forest
-            .leaf_count
-            .checked_add(1)
-            .ok_or(SccpReplayArchiveError::NonContiguousDelta)?;
-        let expected_sequence = existing
-            .forest
-            .update_sequence
-            .checked_add(1)
-            .ok_or(SccpReplayArchiveError::NonContiguousDelta)?;
-        let current_root = shard_root(&existing.leaves, delta.shard, None)?.0;
-        if current_root != delta.old_root
-            || delta.leaf_count != expected_count
-            || delta.update_sequence != expected_sequence
-        {
-            return Err(SccpReplayArchiveError::NonContiguousDelta);
-        }
-
-        let mut next_leaves = existing.leaves.clone();
-        next_leaves.insert(delta.key, delta.record_digest);
-        let next_root = shard_root(&next_leaves, delta.shard, None)?.0;
-        if next_root != delta.new_root {
-            return Err(SccpReplayArchiveError::RebuildMismatch);
-        }
-        let mut next_forest = existing.forest.clone();
-        next_forest
-            .nonempty_shard_roots
-            .insert(delta.shard, next_root);
-        next_forest.leaf_count = expected_count;
-        next_forest.update_sequence = expected_sequence;
-        next_forest
-            .validate()
-            .map_err(|_| SccpReplayArchiveError::RebuildMismatch)?;
         let existing = self
             .accumulators
             .get_mut(&accumulator_id)
-            .expect("checked accumulator remains present");
-        existing.leaves = next_leaves;
-        existing.forest = next_forest;
-        Ok(())
+            .ok_or(SccpReplayArchiveError::UnknownAccumulator)?;
+
+        if u64::try_from(existing.leaves.len()).ok() != Some(existing.forest.leaf_count) {
+            return Err(SccpReplayArchiveError::RebuildMismatch);
+        }
+
+        let mut next_forest = existing.forest.clone();
+        let delta = next_forest
+            .occupy(&existing.domain, record, witness)
+            .map_err(apply_record_error)?;
+
+        if delta.domain_hash != existing.domain_hash
+            || delta.record_digest == [0; 32]
+            || delta.shard != delta.key[0]
+            || delta.old_root == delta.new_root
+            || delta.old_root != existing.forest.shard_root(delta.shard)
+            || delta.new_root != next_forest.shard_root(delta.shard)
+            || delta.leaf_count != next_forest.leaf_count
+            || delta.update_sequence != next_forest.update_sequence
+        {
+            return Err(SccpReplayArchiveError::RebuildMismatch);
+        }
+        next_forest
+            .validate()
+            .map_err(|_| SccpReplayArchiveError::RebuildMismatch)?;
+
+        match existing.leaves.entry(delta.key) {
+            Entry::Occupied(_) => Err(SccpReplayArchiveError::DuplicateOrUnsortedLeaf),
+            Entry::Vacant(entry) => {
+                entry.insert(delta.record_digest);
+                existing.forest = next_forest;
+                Ok(())
+            }
+        }
     }
 
     /// Generate the unique compressed witness for an occupied or empty leaf.
@@ -497,8 +497,7 @@ impl SccpReplayArchiveV1 {
                 })
                 .collect(),
         };
-        let validated =
-            validate_snapshot(&snapshot, SccpReplayArchiveDecodeLimitsV1::default(), None)?;
+        let validated = validate_snapshot(&snapshot, SccpReplayArchiveDecodeLimitsV1::default())?;
         let head = SnapshotHeadV1 {
             content_sha256: validated.content_sha256,
             finality,
@@ -528,7 +527,7 @@ impl SccpReplayArchiveV1 {
         snapshot: SccpReplayArchiveSnapshotV1,
         limits: SccpReplayArchiveDecodeLimitsV1,
     ) -> Result<(), SccpReplayArchiveError> {
-        let validated = validate_snapshot(&snapshot, limits, None)?;
+        let validated = validate_snapshot(&snapshot, limits)?;
         self.restore_validated_snapshot(snapshot, validated)
     }
 
@@ -600,22 +599,40 @@ fn decode_validated_snapshot(
     bytes: &[u8],
     limits: SccpReplayArchiveDecodeLimitsV1,
 ) -> Result<(SccpReplayArchiveSnapshotV1, ValidatedSnapshotV1), SccpReplayArchiveError> {
-    if limits.max_snapshot_bytes == 0
-        || limits.max_snapshot_leaves == 0
-        || bytes.is_empty()
-        || bytes.len() > limits.max_snapshot_bytes
-    {
+    if limits.max_snapshot_bytes == 0 || limits.max_snapshot_leaves == 0 {
         return Err(SccpReplayArchiveError::SnapshotLimit);
     }
-    // Norito's generic sequence/allocation/depth budgets cover every nested
-    // field, including governed route-key strings and fixed digest arrays;
-    // they cannot safely be derived from the replay-leaf cap. Use the standard
-    // finite budget for the already byte-bounded exact frame, then enforce the
-    // independent exact leaf cardinality after decoding.
-    let decode_limits = norito::canonical_decode_limits(bytes.len());
-    let snapshot = norito::decode_canonical_with_limits(bytes, decode_limits)
-        .map_err(|_| SccpReplayArchiveError::Malformed)?;
-    let validated = validate_snapshot(&snapshot, limits, Some(bytes))?;
+    if bytes.is_empty() {
+        return Err(SccpReplayArchiveError::Malformed);
+    }
+    if bytes.len() > limits.max_snapshot_bytes {
+        return Err(SccpReplayArchiveError::SnapshotLimit);
+    }
+    // Reject oversized variable collections before their backing allocations.
+    // A forest can legitimately contain all 256 shard roots independently of
+    // the leaf cap, so that fixed schema maximum is the per-sequence floor.
+    let canonical_limits = norito::canonical_decode_limits(bytes.len());
+    let decode_limits = norito::DecodeLimits::new(
+        limits
+            .max_snapshot_leaves
+            .max(SCCP_REPLAY_SMT_SHARD_COUNT_V1),
+        canonical_limits.max_field_bytes(),
+        canonical_limits.max_total_elements(),
+        canonical_limits.max_total_allocated_bytes(),
+        canonical_limits.max_nesting_depth(),
+    );
+    let snapshot = match norito::decode_canonical_with_limits(bytes, decode_limits) {
+        Ok(snapshot) => snapshot,
+        Err(error) if error.is_decode_resource_limit() => {
+            return Err(SccpReplayArchiveError::SnapshotLimit);
+        }
+        Err(_) => return Err(SccpReplayArchiveError::Malformed),
+    };
+    validate_snapshot_metadata(&snapshot, limits)?;
+    let validated = ValidatedSnapshotV1 {
+        leaves: validate_snapshot_leaves(&snapshot)?,
+        content_sha256: sha256(&[bytes]),
+    };
     Ok((snapshot, validated))
 }
 
@@ -650,7 +667,6 @@ fn provider_error(error: SccpReplayArchiveError) -> SccpReplayArchiveProviderErr
         SccpReplayArchiveError::UnknownAccumulator => SccpReplayArchiveProviderErrorV1::NotFound,
         SccpReplayArchiveError::Malformed
         | SccpReplayArchiveError::DuplicateOrUnsortedLeaf
-        | SccpReplayArchiveError::NonContiguousDelta
         | SccpReplayArchiveError::RebuildMismatch
         | SccpReplayArchiveError::AccumulatorDomainMismatch
         | SccpReplayArchiveError::SnapshotRollback
@@ -711,24 +727,8 @@ fn validate_accumulator_domain(
     domain: &SccpReplayDomainV1,
 ) -> Result<(), SccpReplayArchiveError> {
     accumulator_id
-        .route_key
-        .validate()
-        .map_err(|_| SccpReplayArchiveError::AccumulatorDomainMismatch)?;
-    sccp_replay_domain_hash_v1(domain)
-        .map_err(|_| SccpReplayArchiveError::AccumulatorDomainMismatch)?;
-    let lane = accumulator_id.route_key.lane_id;
-    let networks_match = if domain.source_network == SccpNetworkV1::SoraTaira {
-        lane.source == domain.target_network && lane.target == domain.source_network
-    } else {
-        lane.source == domain.source_network && lane.target == domain.target_network
-    };
-    if accumulator_id.boundary != domain.boundary
-        || accumulator_id.route_key.revision != domain.route_revision
-        || !networks_match
-    {
-        return Err(SccpReplayArchiveError::AccumulatorDomainMismatch);
-    }
-    Ok(())
+        .validate_domain(domain)
+        .map_err(|_| SccpReplayArchiveError::AccumulatorDomainMismatch)
 }
 
 struct ValidatedSnapshotV1 {
@@ -739,28 +739,48 @@ struct ValidatedSnapshotV1 {
 fn validate_snapshot(
     snapshot: &SccpReplayArchiveSnapshotV1,
     limits: SccpReplayArchiveDecodeLimitsV1,
-    expected_canonical_bytes: Option<&[u8]>,
 ) -> Result<ValidatedSnapshotV1, SccpReplayArchiveError> {
-    if limits.max_snapshot_bytes == 0
-        || limits.max_snapshot_leaves == 0
-        || snapshot.version != SNAPSHOT_VERSION_V1
-        || !snapshot.finality.is_well_formed()
-        || snapshot.leaves.len() > limits.max_snapshot_leaves
-    {
-        return Err(SccpReplayArchiveError::SnapshotLimit);
-    }
-    validate_accumulator_domain(&snapshot.accumulator_id, &snapshot.domain)?;
+    validate_snapshot_metadata(snapshot, limits)?;
     let canonical_bytes =
-        norito::to_bytes(snapshot).map_err(|_| SccpReplayArchiveError::Malformed)?;
+        norito::encode_canonical(snapshot).map_err(|_| SccpReplayArchiveError::Malformed)?;
     if canonical_bytes.len() > limits.max_snapshot_bytes {
         return Err(SccpReplayArchiveError::SnapshotLimit);
     }
-    if expected_canonical_bytes.is_some_and(|expected| canonical_bytes.as_slice() != expected) {
-        return Err(SccpReplayArchiveError::Malformed);
-    }
     let content_sha256 = sha256(&[&canonical_bytes]);
     drop(canonical_bytes);
+    Ok(ValidatedSnapshotV1 {
+        leaves: validate_snapshot_leaves(snapshot)?,
+        content_sha256,
+    })
+}
 
+fn validate_snapshot_metadata(
+    snapshot: &SccpReplayArchiveSnapshotV1,
+    limits: SccpReplayArchiveDecodeLimitsV1,
+) -> Result<(), SccpReplayArchiveError> {
+    if limits.max_snapshot_bytes == 0 || limits.max_snapshot_leaves == 0 {
+        return Err(SccpReplayArchiveError::SnapshotLimit);
+    }
+    if snapshot.version != SNAPSHOT_VERSION_V1 || !snapshot.finality.is_well_formed() {
+        return Err(SccpReplayArchiveError::Malformed);
+    }
+    if snapshot.leaves.len() > limits.max_snapshot_leaves {
+        return Err(SccpReplayArchiveError::SnapshotLimit);
+    }
+    validate_accumulator_domain(&snapshot.accumulator_id, &snapshot.domain)?;
+    snapshot
+        .forest
+        .validate()
+        .map_err(|_| SccpReplayArchiveError::RebuildMismatch)?;
+    if u64::try_from(snapshot.leaves.len()).ok() != Some(snapshot.forest.leaf_count) {
+        return Err(SccpReplayArchiveError::RebuildMismatch);
+    }
+    Ok(())
+}
+
+fn validate_snapshot_leaves(
+    snapshot: &SccpReplayArchiveSnapshotV1,
+) -> Result<BTreeMap<[u8; 32], [u8; 32]>, SccpReplayArchiveError> {
     let mut leaves = BTreeMap::new();
     let mut previous = None;
     for leaf in &snapshot.leaves {
@@ -776,10 +796,7 @@ fn validate_snapshot(
     if rebuilt != snapshot.forest {
         return Err(SccpReplayArchiveError::RebuildMismatch);
     }
-    Ok(ValidatedSnapshotV1 {
-        leaves,
-        content_sha256,
-    })
+    Ok(leaves)
 }
 
 fn validate_snapshot_successor(
@@ -817,9 +834,12 @@ fn shard_root(
         return Err(SccpReplayArchiveError::Malformed);
     }
     let empty = sccp_replay_empty_hashes_v1();
+    let mut first = [0_u8; 32];
+    first[0] = shard;
+    let mut last = [u8::MAX; 32];
+    last[0] = shard;
     let mut nodes = leaves
-        .iter()
-        .filter(|(key, _)| key[0] == shard)
+        .range(first..=last)
         .map(|(key, digest)| (*key, occupied_leaf_hash(*key, *digest)))
         .collect::<BTreeMap<_, _>>();
     let mut bitmap = [0_u8; 32];
@@ -934,14 +954,14 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::bridge::{
         SccpLaneIdV1, SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayPrincipalV1,
-        SccpReplayRecordV1, SccpRouteKeyV1, sccp_replay_key_v1,
+        SccpRouteKeyV1, sccp_replay_key_v1,
     };
 
     use super::*;
 
     fn id() -> SccpReplayAccumulatorIdV1 {
-        SccpReplayAccumulatorIdV1 {
-            route_key: SccpRouteKeyV1::new(
+        SccpReplayAccumulatorIdV1::from_domain(
+            SccpRouteKeyV1::new(
                 SccpLaneIdV1 {
                     source: SccpNetworkV1::EthereumMainnet,
                     target: SccpNetworkV1::SoraTaira,
@@ -951,8 +971,9 @@ mod tests {
                 7,
             )
             .expect("valid route key"),
-            boundary: SccpReplayBoundaryV1::SoraOutboundLock,
-        }
+            &domain(),
+        )
+        .expect("valid accumulator identity")
     }
 
     fn domain() -> SccpReplayDomainV1 {
@@ -995,31 +1016,32 @@ mod tests {
     }
 
     #[test]
-    fn archive_rebuilds_deltas_serves_witnesses_and_chains_snapshots() {
+    fn archive_applies_records_serves_witnesses_and_chains_snapshots() {
         let id = id();
         let domain = domain();
         let mut forest = SccpReplayForestV1::default();
         let mut archive = initialized_archive();
 
         let first = record(0x11);
-        let first_delta = forest
-            .occupy(&domain, &first, &SccpSparseMerkleWitnessV1::empty_shard())
+        let first_witness = SccpSparseMerkleWitnessV1::empty_shard();
+        forest
+            .occupy(&domain, &first, &first_witness)
             .expect("first leaf occupies an empty shard");
         archive
-            .apply_delta(id.clone(), first_delta)
-            .expect("archive accepts exact first delta");
+            .apply_record(id.clone(), &first, &first_witness)
+            .expect("archive accepts exact first record");
         assert_eq!(archive.forest(&id).expect("forest exists").1, &forest);
 
         let domain_hash = sccp_replay_domain_hash_v1(&domain).expect("valid domain");
         let second = record(0x12);
         let second_key = sccp_replay_key_v1(domain_hash, second.replay_id);
         let second_witness = archive.witness(&id, second_key).expect("witness is served");
-        let second_delta = forest
+        forest
             .occupy(&domain, &second, &second_witness)
             .expect("second leaf occupies against rebuilt witness");
         archive
-            .apply_delta(id.clone(), second_delta)
-            .expect("archive accepts exact second delta");
+            .apply_record(id.clone(), &second, &second_witness)
+            .expect("archive accepts exact second record");
 
         let membership = archive
             .witness(&id, second_key)
@@ -1061,17 +1083,10 @@ mod tests {
 
     #[test]
     fn accumulator_must_be_preinitialized_with_its_complete_domain() {
-        let mut forest = SccpReplayForestV1::default();
-        let delta = forest
-            .occupy(
-                &domain(),
-                &record(0x21),
-                &SccpSparseMerkleWitnessV1::empty_shard(),
-            )
-            .expect("valid delta");
         let mut archive = SccpReplayArchiveV1::default();
+        let record = record(0x21);
         assert_eq!(
-            archive.apply_delta(id(), delta),
+            archive.apply_record(id(), &record, &SccpSparseMerkleWitnessV1::empty_shard()),
             Err(SccpReplayArchiveError::UnknownAccumulator)
         );
 
@@ -1084,30 +1099,108 @@ mod tests {
     }
 
     #[test]
-    fn all_zero_derived_key_is_archived_and_witnessed() {
-        let mut archive = initialized_archive();
-        let empty_root = sccp_replay_empty_hashes_v1()[SCCP_REPLAY_SMT_DEPTH_V1];
+    fn all_zero_key_is_archived_and_witnessed() {
         let digest = [0x51; 32];
         let mut leaves = BTreeMap::new();
         leaves.insert([0; 32], digest);
-        let new_root = shard_root(&leaves, 0, None).expect("root builds").0;
+        let snapshot = SccpReplayArchiveSnapshotV1 {
+            version: SNAPSHOT_VERSION_V1,
+            accumulator_id: id(),
+            domain: domain(),
+            finality: finality(1, [0; 32]),
+            forest: rebuild_forest(&leaves).expect("forest rebuilds"),
+            leaves: vec![SccpReplayArchiveLeafV1 {
+                key: [0; 32],
+                record_digest: digest,
+            }],
+        };
+        let mut archive = SccpReplayArchiveV1::default();
         archive
-            .apply_delta(
-                id(),
-                SccpReplayDeltaV1 {
-                    domain_hash: sccp_replay_domain_hash_v1(&domain()).expect("valid domain"),
-                    shard: 0,
-                    key: [0; 32],
-                    record_digest: digest,
-                    old_root: empty_root,
-                    new_root,
-                    leaf_count: 1,
-                    update_sequence: 1,
-                },
-            )
+            .restore_snapshot(snapshot, SccpReplayArchiveDecodeLimitsV1::default())
             .expect("zero key is not an archive sentinel");
         let witness = archive.witness(&id(), [0; 32]).expect("witness exists");
         assert_eq!(witness.prior_record_digest, digest);
+    }
+
+    #[test]
+    fn record_application_failures_are_atomic() {
+        let id = id();
+        let domain = domain();
+        let record = record(0x31);
+        let stale_witness = SccpSparseMerkleWitnessV1::empty_shard();
+        let mut archive = initialized_archive();
+        archive
+            .apply_record(id.clone(), &record, &stale_witness)
+            .expect("first record applies");
+
+        let after_success = archive.clone();
+        assert_eq!(
+            archive.apply_record(id.clone(), &record, &stale_witness),
+            Err(SccpReplayArchiveError::RebuildMismatch)
+        );
+        assert_eq!(archive, after_success);
+
+        let domain_hash = sccp_replay_domain_hash_v1(&domain).expect("valid domain");
+        let key = sccp_replay_key_v1(domain_hash, record.replay_id);
+        let membership = archive.witness(&id, key).expect("membership is served");
+        assert_eq!(
+            archive.apply_record(id, &record, &membership),
+            Err(SccpReplayArchiveError::DuplicateOrUnsortedLeaf)
+        );
+        assert_eq!(archive, after_success);
+    }
+
+    #[test]
+    fn snapshot_and_checkpoint_canonical_bytes_ignore_ambient_layout() {
+        let mut archive = initialized_archive();
+        let snapshot = archive
+            .publish_snapshot(&id(), finality(3, [0; 32]))
+            .expect("empty snapshot publishes");
+        let body = SccpReplayArchiveCheckpointBodyV1::from_snapshot(&snapshot)
+            .expect("checkpoint body builds");
+        let canonical_snapshot =
+            norito::encode_canonical(&snapshot).expect("snapshot canonically encodes");
+        let canonical_body =
+            norito::encode_canonical(&body).expect("checkpoint body canonically encodes");
+        let canonical_content_sha256 = sha256(&[&canonical_snapshot]);
+        let canonical_body_len =
+            u64::try_from(canonical_body.len()).expect("fixture length fits u64");
+        let canonical_agreement = sha256(&[
+            REPLICA_AGREEMENT_DOMAIN_V1,
+            &canonical_body_len.to_be_bytes(),
+            &canonical_body,
+        ]);
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let alternate_snapshot =
+            norito::to_bytes(&snapshot).expect("alternate-layout snapshot encodes");
+        let alternate_body =
+            norito::to_bytes(&body).expect("alternate-layout checkpoint body encodes");
+
+        assert_ne!(alternate_snapshot, canonical_snapshot);
+        assert_ne!(alternate_body, canonical_body);
+        assert_eq!(snapshot.content_sha256(), Ok(canonical_content_sha256));
+        assert_eq!(body.agreement_digest(), Ok(canonical_agreement));
+        assert_eq!(
+            SccpReplayArchiveCheckpointBodyV1::from_snapshot(&snapshot),
+            Ok(body)
+        );
+        assert_eq!(
+            decode_sccp_replay_archive_snapshot_v1(
+                &canonical_snapshot,
+                SccpReplayArchiveDecodeLimitsV1::default()
+            ),
+            Ok(snapshot.clone())
+        );
+        assert_eq!(
+            decode_sccp_replay_archive_snapshot_v1(
+                &alternate_snapshot,
+                SccpReplayArchiveDecodeLimitsV1::default()
+            ),
+            Err(SccpReplayArchiveError::Malformed)
+        );
     }
 
     #[test]
@@ -1117,7 +1210,7 @@ mod tests {
         let snapshot = archive
             .publish_snapshot(&id, finality(3, [0; 32]))
             .expect("empty snapshot publishes");
-        let encoded = norito::to_bytes(&snapshot).expect("snapshot encodes");
+        let encoded = norito::encode_canonical(&snapshot).expect("snapshot canonically encodes");
         let below_encoded_limit = SccpReplayArchiveDecodeLimitsV1 {
             max_snapshot_bytes: encoded.len() - 1,
             max_snapshot_leaves: 1,
@@ -1126,6 +1219,17 @@ mod tests {
             max_snapshot_bytes: encoded.len(),
             max_snapshot_leaves: 1,
         };
+        assert_eq!(
+            decode_sccp_replay_archive_snapshot_v1(&[], exact_encoded_limit),
+            Err(SccpReplayArchiveError::Malformed)
+        );
+        let (_, decoded_validation) =
+            decode_validated_snapshot(&encoded, exact_encoded_limit).expect("snapshot validates");
+        assert_eq!(decoded_validation.content_sha256, sha256(&[&encoded]));
+        assert_eq!(
+            decoded_validation.content_sha256,
+            snapshot.content_sha256().expect("typed snapshot hashes")
+        );
         let mut typed_restored = SccpReplayArchiveV1::default();
         assert_eq!(
             typed_restored.restore_snapshot(snapshot.clone(), below_encoded_limit),
@@ -1137,7 +1241,7 @@ mod tests {
         let mut mismatched_encoding = encoded.clone();
         mismatched_encoding[0] ^= 1;
         assert!(matches!(
-            validate_snapshot(&snapshot, exact_encoded_limit, Some(&mismatched_encoding)),
+            decode_sccp_replay_archive_snapshot_v1(&mismatched_encoding, exact_encoded_limit),
             Err(SccpReplayArchiveError::Malformed)
         ));
 
@@ -1149,6 +1253,66 @@ mod tests {
         restored
             .restore_snapshot_bytes(&encoded, exact_encoded_limit)
             .expect("exact bounded canonical snapshot restores");
+        restored
+            .publish_snapshot(&id, finality(4, sha256(&[&encoded])))
+            .expect("byte-derived content hash chains the next snapshot");
+
+        let mut wrong_version = snapshot.clone();
+        wrong_version.version = 2;
+        assert_eq!(
+            restored.restore_snapshot(wrong_version, exact_encoded_limit),
+            Err(SccpReplayArchiveError::Malformed)
+        );
+        let mut zero_finality = snapshot.clone();
+        zero_finality.finality.finalized_height = 0;
+        assert_eq!(
+            restored.restore_snapshot(zero_finality, exact_encoded_limit),
+            Err(SccpReplayArchiveError::Malformed)
+        );
+
+        let zero_digest_leaves = BTreeMap::from([([0x31; 32], [0; 32])]);
+        let mut zero_digest = snapshot.clone();
+        zero_digest.forest = rebuild_forest(&zero_digest_leaves).expect("forest rebuilds");
+        zero_digest.leaves = vec![SccpReplayArchiveLeafV1 {
+            key: [0x31; 32],
+            record_digest: [0; 32],
+        }];
+        let zero_digest_bytes =
+            norito::encode_canonical(&zero_digest).expect("malformed snapshot encodes");
+        assert_eq!(
+            decode_sccp_replay_archive_snapshot_v1(
+                &zero_digest_bytes,
+                SccpReplayArchiveDecodeLimitsV1 {
+                    max_snapshot_bytes: zero_digest_bytes.len(),
+                    max_snapshot_leaves: 1,
+                }
+            ),
+            Err(SccpReplayArchiveError::DuplicateOrUnsortedLeaf)
+        );
+
+        let unsorted_leaves = BTreeMap::from([([0x41; 32], [0x51; 32]), ([0x42; 32], [0x52; 32])]);
+        let mut unsorted = snapshot.clone();
+        unsorted.forest = rebuild_forest(&unsorted_leaves).expect("forest rebuilds");
+        unsorted.leaves = unsorted_leaves
+            .iter()
+            .rev()
+            .map(|(key, record_digest)| SccpReplayArchiveLeafV1 {
+                key: *key,
+                record_digest: *record_digest,
+            })
+            .collect();
+        let unsorted_bytes =
+            norito::encode_canonical(&unsorted).expect("unsorted snapshot encodes");
+        assert_eq!(
+            decode_sccp_replay_archive_snapshot_v1(
+                &unsorted_bytes,
+                SccpReplayArchiveDecodeLimitsV1 {
+                    max_snapshot_bytes: unsorted_bytes.len(),
+                    max_snapshot_leaves: 2,
+                }
+            ),
+            Err(SccpReplayArchiveError::DuplicateOrUnsortedLeaf)
+        );
 
         let over_limit_leaves =
             BTreeMap::from([([0x11; 32], [0x21; 32]), ([0x12; 32], [0x22; 32])]);
@@ -1158,7 +1322,8 @@ mod tests {
             .into_iter()
             .map(|(key, record_digest)| SccpReplayArchiveLeafV1 { key, record_digest })
             .collect();
-        let over_limit_encoded = norito::to_bytes(&over_limit).expect("snapshot encodes");
+        let over_limit_encoded =
+            norito::encode_canonical(&over_limit).expect("snapshot canonically encodes");
         let mut bounded = SccpReplayArchiveV1::default();
         assert_eq!(
             bounded.restore_snapshot_bytes(
@@ -1171,8 +1336,44 @@ mod tests {
             Err(SccpReplayArchiveError::SnapshotLimit)
         );
 
+        let mut allocation_bomb = snapshot.clone();
+        allocation_bomb.leaves = (0_u16..257)
+            .map(|index| {
+                let mut key = [0; 32];
+                key[30..].copy_from_slice(&index.to_be_bytes());
+                SccpReplayArchiveLeafV1 {
+                    key,
+                    record_digest: [0x71; 32],
+                }
+            })
+            .collect();
+        let allocation_bomb_bytes =
+            norito::encode_canonical(&allocation_bomb).expect("oversized sequence encodes");
+        assert_eq!(
+            decode_sccp_replay_archive_snapshot_v1(
+                &allocation_bomb_bytes,
+                SccpReplayArchiveDecodeLimitsV1 {
+                    max_snapshot_bytes: allocation_bomb_bytes.len(),
+                    max_snapshot_leaves: 1,
+                }
+            ),
+            Err(SccpReplayArchiveError::SnapshotLimit)
+        );
+
         let mut tampered = snapshot;
         tampered.forest.leaf_count = 1;
+        let tampered_bytes =
+            norito::encode_canonical(&tampered).expect("tampered snapshot encodes");
+        assert_eq!(
+            decode_sccp_replay_archive_snapshot_v1(
+                &tampered_bytes,
+                SccpReplayArchiveDecodeLimitsV1 {
+                    max_snapshot_bytes: tampered_bytes.len(),
+                    max_snapshot_leaves: 1,
+                }
+            ),
+            Err(SccpReplayArchiveError::RebuildMismatch)
+        );
         assert_eq!(
             restored.restore_snapshot(tampered, SccpReplayArchiveDecodeLimitsV1::default()),
             Err(SccpReplayArchiveError::RebuildMismatch)
@@ -1263,7 +1464,7 @@ mod tests {
 
         // Sign the raw agreement statement so the rejection cannot be caused
         // by missing, mismatched, or forged attestations.
-        let encoded = norito::to_bytes(&body).expect("checkpoint body encodes");
+        let encoded = norito::encode_canonical(&body).expect("checkpoint body canonically encodes");
         let encoded_len = u64::try_from(encoded.len()).expect("fixture length fits u64");
         let agreement = sha256(&[
             REPLICA_AGREEMENT_DOMAIN_V1,

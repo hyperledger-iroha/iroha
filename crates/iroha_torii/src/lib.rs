@@ -173,6 +173,7 @@ pub use json_utils::{json_array, json_entry, json_object, json_value};
 pub mod openapi;
 use iso_profile::from_request as iso_profile_from_request;
 mod content;
+mod durable_fs;
 mod proof_filters;
 pub mod sccp_replay;
 pub mod sorafs;
@@ -196,7 +197,6 @@ use blake3::hash as blake3_hash;
 use dashmap::{DashMap, mapref::entry::Entry as DashEntry};
 use error_stack::{Report, ResultExt};
 use futures::FutureExt as _;
-#[cfg(any(feature = "connect", feature = "app_api"))]
 use futures_util::StreamExt;
 #[cfg(feature = "app_api")]
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
@@ -294,13 +294,9 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetId,
     },
-    block::{BlockHeader, proofs::BlockProofs},
+    block::proofs::BlockProofs,
     domain::DomainId,
-    events::{
-        EventBox,
-        pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
-        trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
-    },
+    events::trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     isi::{
         offline::RegisterOfflineDeviceAttestation,
         settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
@@ -314,9 +310,19 @@ use iroha_data_model::{
     rwa::RwaId,
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{
-        SignedTransaction, TransactionDomain, TransactionPayload, TransactionSubmissionReceipt,
+        TransactionDomain, TransactionPayload, TransactionSubmissionReceipt,
         TransactionSubmissionReceiptPayload,
-        signed::{TransactionAdmissionIntent, TransactionEntrypoint, TransactionResult},
+        signed::{TransactionAdmissionIntent, TransactionResult},
+    },
+};
+use iroha_data_model::{
+    block::BlockHeader,
+    events::{
+        EventBox,
+        pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
+    },
+    transaction::{
+        SignedTransaction, error::TransactionRejectionReason, signed::TransactionEntrypoint,
     },
 };
 use iroha_executor_data_model::permission::account::{
@@ -743,6 +749,22 @@ fn validate_http_transport_config(config: ToriiHttpTransport) -> std::io::Result
     }
     Ok(max_header_bytes)
 }
+
+#[derive(Clone, Copy)]
+struct ValidatedToriiHttpTransport {
+    config: ToriiHttpTransport,
+    max_header_bytes: usize,
+}
+
+impl ValidatedToriiHttpTransport {
+    fn new(config: ToriiHttpTransport) -> std::io::Result<Self> {
+        Ok(Self {
+            config,
+            max_header_bytes: validate_http_transport_config(config)?,
+        })
+    }
+}
+
 async fn serve_torii_http_connection(
     stream: TcpStream,
     remote: std::net::SocketAddr,
@@ -801,13 +823,14 @@ fn observe_torii_connection_completion(
         ))),
     }
 }
-async fn serve_torii_http(
+async fn serve_torii_http_inner(
     listener: TcpListener,
     router: Router,
-    config: ToriiHttpTransport,
+    transport: ValidatedToriiHttpTransport,
     shutdown_signal: ShutdownSignal,
 ) -> std::io::Result<()> {
-    let max_header_bytes = validate_http_transport_config(config)?;
+    let config = transport.config;
+    let max_header_bytes = transport.max_header_bytes;
     let admission = SocketAdmission::new(config.max_connections, config.max_connections_per_ip);
     let mut connections = JoinSet::new();
     enum ServerEvent {
@@ -882,6 +905,160 @@ async fn serve_torii_http(
         }
     }
     Ok(())
+}
+
+async fn serve_torii_http(
+    listener: TcpListener,
+    router: Router,
+    transport: ValidatedToriiHttpTransport,
+    shutdown_signal: ShutdownSignal,
+) -> std::io::Result<()> {
+    let result = serve_torii_http_inner(listener, router, transport, shutdown_signal.clone()).await;
+    if result.is_err() {
+        shutdown_signal.send();
+    }
+    result
+}
+
+struct ShutdownOnDrop(ShutdownSignal);
+
+impl ShutdownOnDrop {
+    fn new(shutdown_signal: ShutdownSignal) -> Self {
+        Self(shutdown_signal)
+    }
+}
+
+impl Drop for ShutdownOnDrop {
+    fn drop(&mut self) {
+        self.0.send();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToriiCriticalWorkerExit {
+    StoppedByShutdown,
+    UnexpectedExit,
+}
+
+struct ToriiCriticalWorker {
+    name: &'static str,
+    task: tokio::task::JoinHandle<ToriiCriticalWorkerExit>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToriiCriticalWorkerFailure {
+    ExitedUnexpectedly(&'static str),
+    Panicked(&'static str),
+    Cancelled(&'static str),
+    ServerExitedUnexpectedly,
+}
+
+impl ToriiCriticalWorkerFailure {
+    fn from_join_error(name: &'static str, error: &tokio::task::JoinError) -> Self {
+        if error.is_panic() {
+            Self::Panicked(name)
+        } else {
+            Self::Cancelled(name)
+        }
+    }
+
+    fn diagnostic(self) -> String {
+        match self {
+            Self::ExitedUnexpectedly(name) => {
+                format!("critical Torii worker `{name}` exited before shutdown")
+            }
+            Self::Panicked(name) => format!("critical Torii worker `{name}` panicked"),
+            Self::Cancelled(name) => format!("critical Torii worker `{name}` was cancelled"),
+            Self::ServerExitedUnexpectedly => "Torii HTTP server exited before shutdown".to_owned(),
+        }
+    }
+}
+
+async fn supervise_torii_critical_workers<F>(
+    shutdown_signal: ShutdownSignal,
+    workers: Vec<ToriiCriticalWorker>,
+    server: F,
+) -> Result<std::io::Result<()>, ToriiCriticalWorkerFailure>
+where
+    F: std::future::IntoFuture<Output = std::io::Result<()>>,
+{
+    let server = server.into_future();
+    tokio::pin!(server);
+    let mut workers = workers
+        .into_iter()
+        .map(|worker| async move { (worker.name, worker.task.await) })
+        .collect::<futures_util::stream::FuturesUnordered<_>>();
+    if workers.is_empty() {
+        return Ok(server.await);
+    }
+
+    tokio::select! {
+        server_result = &mut server => {
+            let shutdown_was_sent = shutdown_signal.is_sent();
+            if !shutdown_was_sent {
+                shutdown_signal.send();
+            }
+            let mut worker_failure = None;
+            while let Some((name, result)) = workers.next().await {
+                let failure = match result {
+                    Ok(ToriiCriticalWorkerExit::StoppedByShutdown) => None,
+                    Ok(ToriiCriticalWorkerExit::UnexpectedExit) => {
+                        Some(ToriiCriticalWorkerFailure::ExitedUnexpectedly(name))
+                    }
+                    Err(error) => {
+                        Some(ToriiCriticalWorkerFailure::from_join_error(name, &error))
+                    }
+                };
+                if worker_failure.is_none() {
+                    worker_failure = failure;
+                }
+            }
+            if let Some(failure) = worker_failure {
+                Err(failure)
+            } else if server_result.is_ok() && !shutdown_was_sent {
+                Err(ToriiCriticalWorkerFailure::ServerExitedUnexpectedly)
+            } else {
+                Ok(server_result)
+            }
+        }
+        Some((name, result)) = workers.next() => {
+            let shutdown_was_sent = shutdown_signal.is_sent();
+            if !shutdown_was_sent {
+                shutdown_signal.send();
+            }
+            let server_result = server.await;
+            let first_failure = match result {
+                Ok(ToriiCriticalWorkerExit::StoppedByShutdown) if shutdown_was_sent => None,
+                Ok(ToriiCriticalWorkerExit::StoppedByShutdown) => {
+                    Some(ToriiCriticalWorkerFailure::ExitedUnexpectedly(name))
+                }
+                Ok(ToriiCriticalWorkerExit::UnexpectedExit) => {
+                    Some(ToriiCriticalWorkerFailure::ExitedUnexpectedly(name))
+                }
+                Err(error) => Some(ToriiCriticalWorkerFailure::from_join_error(name, &error)),
+            };
+            let mut later_failure = None;
+            while let Some((name, result)) = workers.next().await {
+                let failure = match result {
+                    Ok(ToriiCriticalWorkerExit::StoppedByShutdown) => None,
+                    Ok(ToriiCriticalWorkerExit::UnexpectedExit) => {
+                        Some(ToriiCriticalWorkerFailure::ExitedUnexpectedly(name))
+                    }
+                    Err(error) => {
+                        Some(ToriiCriticalWorkerFailure::from_join_error(name, &error))
+                    }
+                };
+                if later_failure.is_none() {
+                    later_failure = failure;
+                }
+            }
+            if let Some(failure) = first_failure.or(later_failure) {
+                Err(failure)
+            } else {
+                Ok(server_result)
+            }
+        }
+    }
 }
 #[cfg(test)]
 #[path = "tests/lib_tcp_listener_bind.rs"]
@@ -2057,10 +2234,7 @@ impl TxHistoryAccessPolicy {
     }
 
     fn is_mandatory_alias(&self, dataspace_id: &str, alias: &str) -> bool {
-        let dataspace = dataspace_id.trim().to_ascii_lowercase();
-        let canonical_alias = normalize_tx_history_alias(alias);
-        self.mandatory_aliases
-            .contains(dataspace.as_str(), canonical_alias.as_str())
+        self.mandatory_aliases.contains(dataspace_id, alias)
     }
 }
 #[cfg(feature = "app_api")]
@@ -2072,6 +2246,15 @@ enum TxHistoryStartupError {
     UnsupportedJwtAlgorithm { algorithm: String },
     #[error("JWT secret is required for `{algorithm}`")]
     MissingJwtSecret { algorithm: String },
+    #[error(
+        "JWT secret for `{algorithm}` must contain {minimum}..={maximum} bytes of non-whitespace key material (got {actual})"
+    )]
+    InvalidJwtSecretLength {
+        algorithm: String,
+        minimum: usize,
+        maximum: usize,
+        actual: usize,
+    },
     #[error("JWT public key is required for `{algorithm}`")]
     MissingJwtPublicKey { algorithm: String },
     #[error("invalid JWT public key for `{algorithm}`: {reason}")]
@@ -2138,20 +2321,36 @@ fn tx_history_jwt_algorithm_name(algorithm: JwtAlgorithm) -> &'static str {
     }
 }
 #[cfg(feature = "app_api")]
-fn normalize_tx_history_alias(alias: &str) -> String {
-    alias.trim().to_ascii_lowercase()
+fn tx_history_hmac_secret_bounds(algorithm: JwtAlgorithm) -> Option<(usize, usize)> {
+    let minimum = match algorithm {
+        JwtAlgorithm::HS256 => 32,
+        JwtAlgorithm::HS384 => 48,
+        JwtAlgorithm::HS512 => 64,
+        _ => return None,
+    };
+    Some((minimum, 4 * 1024))
 }
 #[cfg(feature = "app_api")]
 fn canonical_tx_history_subject_alias(
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     subject: &str,
 ) -> Result<Option<String>, Error> {
-    let normalized_subject = subject.trim().to_ascii_lowercase();
-    if normalized_subject.is_empty() || !normalized_subject.contains('@') {
+    if subject.is_empty() || !subject.contains('@') {
         return Ok(None);
     }
-    let (canonical, _) = parse_account_alias_label_with_catalog(&normalized_subject, catalog)?;
+    let (canonical, _) = parse_exact_account_alias_label_with_catalog(subject, catalog)?;
     Ok(Some(canonical))
+}
+#[cfg(feature = "app_api")]
+fn is_exact_tx_history_dataspace_alias(
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    dataspace: &str,
+) -> bool {
+    !dataspace.is_empty()
+        && !dataspace.contains('.')
+        && iroha_data_model::name::canonicalize_domain_label(dataspace)
+            .is_ok_and(|canonical| canonical == dataspace)
+        && catalog.by_alias(dataspace).is_some()
 }
 #[cfg(feature = "app_api")]
 fn load_tx_history_access_policy(
@@ -2177,44 +2376,62 @@ fn load_tx_history_access_policy(
         })
         .transpose()?
         .unwrap_or_default();
-    let jwt = config.jwt.as_ref().map(|jwt| {
-        let algorithm = parse_tx_history_jwt_algorithm(&jwt.algorithm).ok_or_else(|| {
-            TxHistoryStartupError::UnsupportedJwtAlgorithm {
-                algorithm: jwt.algorithm.clone(),
-            }
-        })?;
-        let key = match algorithm {
-            JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {
-                let secret = jwt.secret.as_ref().ok_or_else(|| {
-                    TxHistoryStartupError::MissingJwtSecret {
-                        algorithm: jwt.algorithm.clone(),
-                    }
-                })?;
-                TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec())
-            }
-            _ => {
-                let pem = jwt.public_key_pem.as_ref().ok_or_else(|| {
-                    TxHistoryStartupError::MissingJwtPublicKey {
-                        algorithm: jwt.algorithm.clone(),
-                    }
-                })?;
-                TxHistoryJwtKey::Pem(pem.clone())
-            }
-        };
-        let cfg = TxHistoryJwtConfig {
-            algorithm,
-            key,
-            issuer: jwt.issuer.clone(),
-            audience: jwt.audience.clone(),
-        };
-        cfg.key
-            .decoding_key(cfg.algorithm)
-            .map_err(|reason| TxHistoryStartupError::InvalidJwtPublicKey {
-                algorithm: jwt.algorithm.clone(),
-                reason,
+    let jwt = config
+        .jwt
+        .as_ref()
+        .map(|jwt| {
+            let algorithm = parse_tx_history_jwt_algorithm(&jwt.algorithm).ok_or_else(|| {
+                TxHistoryStartupError::UnsupportedJwtAlgorithm {
+                    algorithm: jwt.algorithm.clone(),
+                }
             })?;
-        Ok(cfg)
-    }).transpose()?;
+            let key = match algorithm {
+                JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {
+                    let secret = jwt.secret.as_ref().ok_or_else(|| {
+                        TxHistoryStartupError::MissingJwtSecret {
+                            algorithm: jwt.algorithm.clone(),
+                        }
+                    })?;
+                    let (minimum, maximum) =
+                        tx_history_hmac_secret_bounds(algorithm).ok_or_else(|| {
+                            TxHistoryStartupError::UnsupportedJwtAlgorithm {
+                                algorithm: jwt.algorithm.clone(),
+                            }
+                        })?;
+                    if !(minimum..=maximum).contains(&secret.len()) || secret.trim().is_empty() {
+                        return Err(TxHistoryStartupError::InvalidJwtSecretLength {
+                            algorithm: jwt.algorithm.clone(),
+                            minimum,
+                            maximum,
+                            actual: secret.len(),
+                        });
+                    }
+                    TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec())
+                }
+                _ => {
+                    let pem = jwt.public_key_pem.as_ref().ok_or_else(|| {
+                        TxHistoryStartupError::MissingJwtPublicKey {
+                            algorithm: jwt.algorithm.clone(),
+                        }
+                    })?;
+                    TxHistoryJwtKey::Pem(pem.clone())
+                }
+            };
+            let cfg = TxHistoryJwtConfig {
+                algorithm,
+                key,
+                issuer: jwt.issuer.clone(),
+                audience: jwt.audience.clone(),
+            };
+            cfg.key.decoding_key(cfg.algorithm).map_err(|reason| {
+                TxHistoryStartupError::InvalidJwtPublicKey {
+                    algorithm: jwt.algorithm.clone(),
+                    reason,
+                }
+            })?;
+            Ok(cfg)
+        })
+        .transpose()?;
     Ok(TxHistoryAccessPolicy {
         jwt,
         mandatory_aliases,
@@ -2231,64 +2448,99 @@ fn ensure_tx_history_access_policy_ready(policy: &TxHistoryAccessPolicy) -> Resu
     })
 }
 #[cfg(feature = "app_api")]
-fn parse_public_dataspace_upstream_selector(
-    state: &CoreState,
-    selector: &str,
-) -> Option<DataSpaceId> {
-    let selector = selector.trim().trim_start_matches('@');
-    if selector.is_empty() {
-        return None;
-    }
-    if selector.eq_ignore_ascii_case("universal") {
-        return Some(DataSpaceId::UNIVERSAL);
-    }
-    if let Ok(id) = selector.parse::<u64>() {
-        return Some(DataSpaceId::new(id));
-    }
-    state
-        .view()
-        .nexus()
-        .dataspace_catalog
-        .by_alias(selector)
-        .map(|entry| entry.id)
-}
-#[cfg(feature = "app_api")]
-fn load_public_dataspace_upstreams(state: &CoreState) -> BTreeMap<DataSpaceId, String> {
-    let Ok(raw) = std::env::var("IROHA_TORII_PUBLIC_DATASPACE_UPSTREAMS") else {
-        return BTreeMap::new();
-    };
+fn load_public_dataspace_upstreams(
+    configured: &[iroha_config::parameters::actual::ToriiPublicDataspaceUpstream],
+) -> Result<BTreeMap<DataSpaceId, String>, ToriiBuildError> {
     let mut upstreams = BTreeMap::new();
-    for entry in raw.split([',', ';']) {
-        let entry = entry.trim();
-        if entry.is_empty() {
-            continue;
-        }
-        let Some((selector, url)) = entry.split_once('=') else {
-            iroha_logger::warn!(
-                entry,
-                "ignoring malformed IROHA_TORII_PUBLIC_DATASPACE_UPSTREAMS entry"
-            );
-            continue;
+    for route in configured {
+        let url = route.base_url.as_str();
+        let host = route.base_url.host().ok_or_else(|| {
+            ToriiBuildError::invalid_configuration(
+                "public_dataspace_upstreams[].base_url",
+                "base URL must contain a host",
+            )
+        })?;
+        let literal_loopback = match host {
+            url::Host::Ipv4(address) => address.is_loopback(),
+            url::Host::Ipv6(address) => address.is_loopback(),
+            url::Host::Domain(domain) => {
+                if domain.ends_with('.') {
+                    return Err(ToriiBuildError::invalid_configuration(
+                        "public_dataspace_upstreams[].base_url",
+                        "base URL must not use a trailing-dot host alias",
+                    ));
+                }
+                false
+            }
         };
-        let Some(dataspace_id) = parse_public_dataspace_upstream_selector(state, selector) else {
-            iroha_logger::warn!(
-                selector,
-                "ignoring public dataspace upstream with unknown dataspace selector"
-            );
-            continue;
-        };
-        let url = url.trim().trim_end_matches('/').to_owned();
-        if reqwest::Url::parse(&url).is_err() {
-            iroha_logger::warn!(
-                dataspace_id = %dataspace_id,
-                url,
-                "ignoring public dataspace upstream with invalid URL"
-            );
-            continue;
+        if route.base_url.cannot_be_a_base()
+            || (route.base_url.scheme() != "https"
+                && !(route.base_url.scheme() == "http" && literal_loopback))
+            || !route.base_url.username().is_empty()
+            || route.base_url.password().is_some()
+            || route.base_url.query().is_some()
+            || route.base_url.fragment().is_some()
+            || route.base_url.port() == Some(0)
+            || url.len() > 2 * 1024
+            || url.as_bytes().contains(&b'%')
+            || !url.bytes().all(|byte| matches!(byte, 0x21..=0x7e))
+        {
+            return Err(ToriiBuildError::invalid_configuration(
+                "public_dataspace_upstreams[].base_url",
+                "base URL must be a canonical credential-free HTTPS URL (literal-loopback HTTP only) without a query, fragment, or percent alias",
+            ));
         }
-        upstreams.insert(dataspace_id, url);
+        let canonical = url.strip_suffix('/').unwrap_or(url).to_owned();
+        if upstreams.insert(route.dataspace_id, canonical).is_some() {
+            return Err(ToriiBuildError::invalid_configuration(
+                "public_dataspace_upstreams[].dataspace_id",
+                format!(
+                    "dataspace {} has more than one configured upstream",
+                    route.dataspace_id
+                ),
+            ));
+        }
     }
-    upstreams
+    Ok(upstreams)
+}
+#[cfg(all(test, feature = "app_api"))]
+mod public_dataspace_upstream_config_tests {
+    use super::*;
+
+    fn route(
+        dataspace_id: u64,
+        base_url: &str,
+    ) -> iroha_config::parameters::actual::ToriiPublicDataspaceUpstream {
+        iroha_config::parameters::actual::ToriiPublicDataspaceUpstream {
+            dataspace_id: DataSpaceId::new(dataspace_id),
+            base_url: reqwest::Url::parse(base_url).expect("test upstream URL"),
+        }
+    }
+
+    #[test]
+    fn typed_public_dataspace_upstreams_are_exact_and_unique() {
+        let loaded = load_public_dataspace_upstreams(&[
+            route(0, "https://universal.example"),
+            route(7, "http://127.0.0.1:8080/torii"),
+        ])
+        .expect("canonical upstreams");
+        assert_eq!(
+            loaded.get(&DataSpaceId::UNIVERSAL).map(String::as_str),
+            Some("https://universal.example")
+        );
+        assert_eq!(
+            loaded.get(&DataSpaceId::new(7)).map(String::as_str),
+            Some("http://127.0.0.1:8080/torii")
+        );
+        assert!(
+            load_public_dataspace_upstreams(&[
+                route(7, "https://one.example"),
+                route(7, "https://two.example"),
+            ])
+            .is_err()
+        );
+        assert!(load_public_dataspace_upstreams(&[route(8, "http://public.example")]).is_err());
+    }
 }
 #[cfg(test)]
 pub(crate) fn signed_query_test_network_id() -> NetworkId {
@@ -2333,6 +2585,48 @@ pub(crate) fn authorize_query_for_test(
         nonce,
     )
 }
+#[derive(Clone)]
+struct McpDispatchRouterOwner(#[allow(dead_code)] Arc<axum::Router>);
+
+#[derive(Default)]
+struct McpDispatchRouterSlot(std::sync::RwLock<std::sync::Weak<axum::Router>>);
+
+impl McpDispatchRouterSlot {
+    fn install(&self, router: axum::Router) -> McpDispatchRouterOwner {
+        let router = Arc::new(router);
+        *self
+            .0
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::downgrade(&router);
+        McpDispatchRouterOwner(router)
+    }
+
+    fn load(&self) -> Option<axum::Router> {
+        self.0
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .upgrade()
+            .map(|router| (*router).clone())
+    }
+}
+
+#[cfg(test)]
+mod mcp_dispatch_router_lifetime_tests {
+    use super::McpDispatchRouterSlot;
+
+    #[test]
+    fn slot_does_not_keep_dispatch_router_alive() {
+        let slot = McpDispatchRouterSlot::default();
+        assert!(slot.load().is_none());
+
+        let owner = slot.install(axum::Router::new());
+        assert!(slot.load().is_some());
+
+        drop(owner);
+        assert!(slot.load().is_none());
+    }
+}
+
 #[allow(clippy::struct_excessive_bools)]
 struct AppState {
     shutdown_signal: ShutdownSignal,
@@ -2411,7 +2705,7 @@ struct AppState {
     content_config: iroha_config::parameters::actual::Content,
     ws_message_timeout: Duration,
     require_api_token: bool,
-    api_tokens_set: Arc<HashSet<String>>,
+    api_token_digests: Arc<limits::ApiTokenDigestSet>,
     webhooks_enabled: bool,
     zk_attachments_enabled: bool,
     operator_auth: Arc<operator_auth::OperatorAuth>,
@@ -2436,9 +2730,10 @@ struct AppState {
     mcp_long_poll_inflight: Arc<tokio::sync::Semaphore>,
     mcp_inflight_requests: Arc<mcp::McpInflightRegistry>,
     mcp_allowed_origins: Arc<Vec<HeaderValue>>,
-    mcp_dispatch_router: std::sync::RwLock<Option<axum::Router>>,
+    mcp_dispatch_router: McpDispatchRouterSlot,
     fee_policy: FeePolicy,
     norito_rpc: iroha_config::parameters::actual::NoritoRpcTransport,
+    norito_rpc_allowed_client_digests: Arc<limits::ApiTokenDigestSet>,
     online_peers: OnlinePeersProvider,
     iso_bridge: Option<Arc<Iso20022BridgeRuntime>>,
     alias_service: Option<Arc<AliasService>>,
@@ -2784,6 +3079,7 @@ struct PipelineStatusCache {
     last_prune_secs: std::sync::atomic::AtomicU64,
     entry_order_unsorted: AtomicBool,
     pending_order_unsorted: AtomicBool,
+    event_hints_trustworthy: AtomicBool,
     prune_lock: parking_lot::Mutex<()>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2811,6 +3107,7 @@ impl PipelineStatusCache {
             last_prune_secs: std::sync::atomic::AtomicU64::new(0),
             entry_order_unsorted: AtomicBool::new(false),
             pending_order_unsorted: AtomicBool::new(false),
+            event_hints_trustworthy: AtomicBool::new(true),
             prune_lock: parking_lot::Mutex::new(()),
         }
     }
@@ -2818,14 +3115,20 @@ impl PipelineStatusCache {
         &self,
         event: &iroha_data_model::events::pipeline::TransactionEvent,
     ) {
+        if !self.event_hints_trustworthy.load(AtomicOrdering::Acquire) {
+            return;
+        }
         let (kind, rejection) = match event.status() {
             TransactionStatus::Queued => (PipelineStatusKind::Queued, None),
-            TransactionStatus::Expired => (PipelineStatusKind::Expired, None),
+            TransactionStatus::Expired if event.block_height().is_none() => {
+                (PipelineStatusKind::Expired, None)
+            }
+            TransactionStatus::Expired => return,
             TransactionStatus::Approved => (PipelineStatusKind::Approved, None),
-            TransactionStatus::Rejected(reason) => (
-                PipelineStatusKind::Rejected,
-                Some(pipeline_rejection_summary(reason)),
-            ),
+            // Transaction rejection is emitted while executing a candidate
+            // block. Only the later canonical block event/State+Kura evidence
+            // may turn it into a terminal status.
+            TransactionStatus::Rejected(_) => return,
         };
         let now = Instant::now();
         let incoming = PipelineStatusEntry::at_time(kind, event.block_height(), rejection, now);
@@ -2837,6 +3140,9 @@ impl PipelineStatusCache {
         event: &iroha_data_model::events::pipeline::BlockEvent,
         kura: &Kura,
     ) {
+        if !self.event_hints_trustworthy.load(AtomicOrdering::Acquire) {
+            return;
+        }
         let kind = match event.status {
             BlockStatus::Committed => PipelineStatusKind::Committed,
             BlockStatus::Applied => PipelineStatusKind::Applied,
@@ -2865,7 +3171,14 @@ impl PipelineStatusCache {
         }
     }
     fn lookup(&self, hash: &HashOf<SignedTransaction>) -> Option<PipelineStatusEntry> {
+        if !self.event_hints_trustworthy.load(AtomicOrdering::Acquire) {
+            return None;
+        }
         self.entries.get(hash).map(|entry| entry.clone())
+    }
+    fn invalidate_event_hints(&self) {
+        self.event_hints_trustworthy
+            .store(false, AtomicOrdering::Release);
     }
     fn record_entry(&self, hash: HashOf<SignedTransaction>, entry: PipelineStatusEntry) {
         self.record_entry_inner(hash, entry);
@@ -2928,6 +3241,9 @@ impl PipelineStatusCache {
         order.push_back((observed_at, height));
     }
     fn refresh_pending_blocks(&self, kura: &Kura) {
+        if !self.event_hints_trustworthy.load(AtomicOrdering::Acquire) {
+            return;
+        }
         if self.pending_blocks.is_empty() {
             return;
         }
@@ -3258,6 +3574,225 @@ impl PipelineStatusCache {
         BlockRecordOutcome::Recorded
     }
 }
+fn iso_bridge_transition_completed(
+    runtime: &Iso20022BridgeRuntime,
+    transaction_hash: &str,
+    transitioned: bool,
+    transition: &'static str,
+) -> Result<(), Error> {
+    if transitioned || !runtime.has_queued_transaction_hash(transaction_hash) {
+        return Ok(());
+    }
+    Err(pipeline_status_projection_error(format!(
+        "ISO bridge could not durably record canonical transaction {transition} for {transaction_hash}"
+    )))
+}
+fn reconcile_iso_bridge_transactions(
+    runtime: &Iso20022BridgeRuntime,
+    state: &CoreState,
+    kura: &Kura,
+) -> Result<(), Error> {
+    for transaction_hash in runtime.queued_transaction_hashes() {
+        let hash = parse_signed_transaction_hash(&transaction_hash).map_err(|_| {
+            pipeline_status_projection_error(format!(
+                "ISO bridge retained a non-canonical signed transaction hash: {transaction_hash}"
+            ))
+        })?;
+        let Some(outcome) = canonical_transaction_outcome(state, kura, &hash)? else {
+            continue;
+        };
+        match outcome {
+            CanonicalTransactionOutcome::Applied { settled_at, .. } => {
+                let transitioned = runtime.mark_transaction_applied(&transaction_hash, settled_at);
+                iso_bridge_transition_completed(
+                    runtime,
+                    &transaction_hash,
+                    transitioned,
+                    "application",
+                )?;
+            }
+            CanonicalTransactionOutcome::Rejected { reason, .. } => {
+                let transitioned =
+                    runtime.mark_transaction_rejected(&transaction_hash, Some(&reason));
+                iso_bridge_transition_completed(
+                    runtime,
+                    &transaction_hash,
+                    transitioned,
+                    "rejection",
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+fn process_iso_bridge_transaction_event(
+    runtime: &Iso20022BridgeRuntime,
+    event: &iroha_data_model::events::pipeline::TransactionEvent,
+) -> Result<(), Error> {
+    match event.status() {
+        TransactionStatus::Expired if event.block_height().is_none() => {
+            let transaction_hash = event.hash().to_string();
+            let transitioned = runtime.mark_transaction_expired(&transaction_hash);
+            iso_bridge_transition_completed(runtime, &transaction_hash, transitioned, "expiry")
+        }
+        TransactionStatus::Expired => Err(pipeline_status_projection_error(format!(
+            "transaction {} reported queue expiry with a block height",
+            event.hash()
+        ))),
+        // Approved and Rejected describe candidate-block execution. The
+        // canonical State/Kura projection is reconciled on Block::Applied.
+        TransactionStatus::Queued
+        | TransactionStatus::Approved
+        | TransactionStatus::Rejected(_) => Ok(()),
+    }
+}
+fn process_iso_bridge_pipeline_event(
+    runtime: &Iso20022BridgeRuntime,
+    state: &CoreState,
+    kura: &Kura,
+    event: &PipelineEventBox,
+) -> Result<(), Error> {
+    match event {
+        PipelineEventBox::Transaction(event) => {
+            process_iso_bridge_transaction_event(runtime, event)
+        }
+        PipelineEventBox::Block(event) if event.status == BlockStatus::Applied => {
+            reconcile_iso_bridge_transactions(runtime, state, kura)
+        }
+        _ => Ok(()),
+    }
+}
+fn start_iso_bridge_projection_worker(
+    runtime: Arc<Iso20022BridgeRuntime>,
+    state: Arc<CoreState>,
+    kura: Arc<Kura>,
+    events: &EventsSender,
+    shutdown_signal: ShutdownSignal,
+) -> Result<tokio::task::JoinHandle<ToriiCriticalWorkerExit>, Error> {
+    // Subscribe before the startup snapshot so any concurrent commit is either
+    // visible in State or retained for the worker to observe.
+    let mut receiver = events.subscribe();
+    reconcile_iso_bridge_transactions(&runtime, &state, &kura)?;
+    Ok(tokio::spawn(async move {
+        loop {
+            let received = tokio::select! {
+                () = shutdown_signal.receive() => {
+                    return ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
+                received = receiver.recv() => received,
+            };
+            match received {
+                Ok(EventBox::Pipeline(event)) => {
+                    if let Err(error) =
+                        process_iso_bridge_pipeline_event(&runtime, &state, &kura, &event)
+                    {
+                        iroha_logger::error!(
+                            ?error,
+                            "ISO bridge canonical projection failed closed"
+                        );
+                        return ToriiCriticalWorkerExit::UnexpectedExit;
+                    }
+                }
+                Ok(EventBox::PipelineBatch(events)) => {
+                    for event in &events {
+                        if let Err(error) =
+                            process_iso_bridge_pipeline_event(&runtime, &state, &kura, event)
+                        {
+                            iroha_logger::error!(
+                                ?error,
+                                "ISO bridge canonical batch projection failed closed"
+                            );
+                            return ToriiCriticalWorkerExit::UnexpectedExit;
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    // Canonical block outcomes are recoverable, so persist
+                    // those before stopping. Queue expiry is not replayable;
+                    // continuing would silently strand ISO records.
+                    if let Err(error) = reconcile_iso_bridge_transactions(&runtime, &state, &kura) {
+                        iroha_logger::error!(
+                            ?error,
+                            skipped,
+                            "ISO bridge lag reconciliation failed closed"
+                        );
+                    } else {
+                        iroha_logger::error!(
+                            skipped,
+                            "ISO bridge event subscription lagged; queue expiry may have been lost"
+                        );
+                    }
+                    return ToriiCriticalWorkerExit::UnexpectedExit;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return if shutdown_signal.is_sent() {
+                        ToriiCriticalWorkerExit::StoppedByShutdown
+                    } else {
+                        ToriiCriticalWorkerExit::UnexpectedExit
+                    };
+                }
+            }
+        }
+    }))
+}
+fn process_pipeline_status_event(
+    cache: &PipelineStatusCache,
+    kura: &Kura,
+    event: &PipelineEventBox,
+) {
+    match event {
+        PipelineEventBox::Transaction(event) => cache.record_transaction_event(event),
+        PipelineEventBox::Block(event) => cache.record_block_event(event, kura),
+        _ => {}
+    }
+}
+fn start_pipeline_status_projection_worker(
+    cache: Arc<PipelineStatusCache>,
+    kura: Arc<Kura>,
+    events: &EventsSender,
+    shutdown_signal: ShutdownSignal,
+) -> tokio::task::JoinHandle<ToriiCriticalWorkerExit> {
+    let mut receiver = events.subscribe();
+    tokio::spawn(async move {
+        loop {
+            let received = tokio::select! {
+                () = shutdown_signal.receive() => {
+                    return ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
+                received = receiver.recv() => received,
+            };
+            match received {
+                Ok(EventBox::Pipeline(event)) => {
+                    process_pipeline_status_event(&cache, &kura, &event);
+                }
+                Ok(EventBox::PipelineBatch(events)) => {
+                    for event in &events {
+                        process_pipeline_status_event(&cache, &kura, event);
+                    }
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    // State/Kura and the live queue remain query-time
+                    // authorities. Permanently stop trusting this process's
+                    // incomplete best-effort hints after any gap.
+                    cache.invalidate_event_hints();
+                    iroha_logger::warn!(
+                        skipped,
+                        "pipeline-status event hints invalidated after subscription lag"
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return if shutdown_signal.is_sent() {
+                        ToriiCriticalWorkerExit::StoppedByShutdown
+                    } else {
+                        ToriiCriticalWorkerExit::UnexpectedExit
+                    };
+                }
+            }
+        }
+    })
+}
 fn telemetry_unavailable_response(
     endpoint: &'static str,
     telemetry: &routing::MaybeTelemetry,
@@ -3481,12 +4016,12 @@ impl AppState {
     fn norito_rpc_config(&self) -> &NoritoRpcTransport {
         &self.norito_rpc
     }
-    /// Returns whether a validated API token may identify the caller for rate limiting.
-    ///
-    /// Callers must validate the request with [`validate_api_token`] before
-    /// allowing the header value to contribute to a rate-limit key.
-    fn api_token_enforced(&self) -> bool {
-        self.require_api_token && !self.api_tokens_set.is_empty()
+    fn authenticated_api_token_principal(
+        &self,
+        headers: &HeaderMap,
+    ) -> Option<limits::ApiTokenPrincipal> {
+        evaluate_api_token(self.require_api_token, &self.api_token_digests, headers)
+            .authenticated_principal()
     }
     fn check_norito_rpc_allowed(
         &self,
@@ -3496,6 +4031,7 @@ impl AppState {
         let provided_token = norito_rpc_token_from_headers(headers);
         match evaluate_norito_rpc_gate(
             self.norito_rpc_config(),
+            &self.norito_rpc_allowed_client_digests,
             &self.norito_rpc_mtls_trusted_proxy_nets,
             headers,
             remote_ip,
@@ -3693,6 +4229,7 @@ impl From<&NoritoRpcTransport> for RpcNoritoRpcCapability {
 }
 fn evaluate_norito_rpc_gate(
     cfg: &NoritoRpcTransport,
+    allowed_client_digests: &limits::ApiTokenDigestSet,
     trusted_proxy_nets: &[limits::IpNet],
     headers: &HeaderMap,
     remote_ip: Option<IpAddr>,
@@ -3709,7 +4246,7 @@ fn evaluate_norito_rpc_gate(
         NoritoRpcStage::Canary => {
             let token =
                 norito_rpc_token_from_headers(headers).ok_or(NoritoRpcGateFailure::CanaryDenied)?;
-            if cfg.allowed_clients.iter().any(|allowed| allowed == token) {
+            if allowed_client_digests.authenticate(token).is_some() {
                 Ok(())
             } else {
                 Err(NoritoRpcGateFailure::CanaryDenied)
@@ -4083,10 +4620,12 @@ mod preauth_connection_lifetime_tests {
         let mut app = crate::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = require_global_token;
-        state.api_tokens_set = if require_global_token {
-            Arc::new(HashSet::from(["valid-global-token".to_owned()]))
+        state.api_token_digests = if require_global_token {
+            Arc::new(limits::ApiTokenDigestSet::from_tokens([
+                "valid-global-token",
+            ]))
         } else {
-            Arc::new(HashSet::new())
+            Arc::new(limits::ApiTokenDigestSet::default())
         };
         let key_pair = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
             .expect("deterministic onboarding test key");
@@ -4631,7 +5170,7 @@ mod preauth_connection_lifetime_tests {
         let mut app = app_with_scheme_cap("http");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));
         let occupying_guard = app
             .acquire_preauth(None, ConnScheme::Http)
             .await
@@ -4664,7 +5203,7 @@ mod preauth_connection_lifetime_tests {
         let mut app = app_with_scheme_cap("http");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::new());
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
         let router = Router::new()
             .route("/protected", get(|| async { StatusCode::OK }))
             .route("/also-protected", post(|| async { StatusCode::OK }))
@@ -4718,7 +5257,7 @@ mod preauth_connection_lifetime_tests {
         let mut app = app_with_scheme_cap("http");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));
         let router = Router::new()
             .route("/protected", get(|| async { StatusCode::OK }))
             .layer(axum::middleware::from_fn_with_state(
@@ -4751,7 +5290,7 @@ mod preauth_connection_lifetime_tests {
         let mut app = app_with_scheme_cap("http");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));
         let router = Router::new()
             .fallback(|| async {
                 let mut response = StatusCode::OK.into_response();
@@ -4822,7 +5361,7 @@ mod preauth_connection_lifetime_tests {
         let mut app = app_with_scheme_cap("http");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));
         let router = Router::new()
             .route(
                 "/protected",
@@ -4935,7 +5474,7 @@ mod preauth_connection_lifetime_tests {
         let mut app = app_with_scheme_cap("http");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));
         let handler_calls = Arc::new(AtomicUsize::new(0));
         let router = Router::new()
             .route(
@@ -5129,30 +5668,30 @@ mod preauth_connection_lifetime_tests {
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ApiTokenEvaluation<'headers> {
+enum ApiTokenEvaluation {
     Disabled,
     Unavailable,
     Invalid,
-    Authenticated(&'headers str),
+    Authenticated(limits::ApiTokenPrincipal),
 }
-impl<'headers> ApiTokenEvaluation<'headers> {
+impl ApiTokenEvaluation {
     /// Returns a rate-limit principal only after successful authentication.
     ///
     /// A caller-supplied header is deliberately ignored in [`Self::Disabled`]
     /// mode so rotating arbitrary token text cannot evade authority-based
     /// quotas.
-    fn authenticated_token(self) -> Option<&'headers str> {
+    fn authenticated_principal(self) -> Option<limits::ApiTokenPrincipal> {
         match self {
-            Self::Authenticated(token) => Some(token),
+            Self::Authenticated(principal) => Some(principal),
             Self::Disabled | Self::Unavailable | Self::Invalid => None,
         }
     }
 }
-fn evaluate_api_token<'headers>(
+fn evaluate_api_token(
     require_api_token: bool,
-    configured_tokens: &HashSet<String>,
-    headers: &'headers HeaderMap,
-) -> ApiTokenEvaluation<'headers> {
+    configured_tokens: &limits::ApiTokenDigestSet,
+    headers: &HeaderMap,
+) -> ApiTokenEvaluation {
     if !require_api_token {
         return ApiTokenEvaluation::Disabled;
     }
@@ -5166,17 +5705,25 @@ fn evaluate_api_token<'headers>(
     if values.next().is_some() {
         return ApiTokenEvaluation::Invalid;
     }
-    match value.to_str() {
-        Ok(token) if configured_tokens.contains(token) => ApiTokenEvaluation::Authenticated(token),
-        _ => ApiTokenEvaluation::Invalid,
-    }
+    value
+        .to_str()
+        .ok()
+        .and_then(|token| configured_tokens.authenticate(token))
+        .map_or(
+            ApiTokenEvaluation::Invalid,
+            ApiTokenEvaluation::Authenticated,
+        )
 }
 fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
-    api_token_rejection_with_policy(app.require_api_token, app.api_tokens_set.as_ref(), headers)
+    api_token_rejection_with_policy(
+        app.require_api_token,
+        app.api_token_digests.as_ref(),
+        headers,
+    )
 }
 fn api_token_rejection_with_policy(
     require_api_token: bool,
-    configured_tokens: &HashSet<String>,
+    configured_tokens: &limits::ApiTokenDigestSet,
     headers: &HeaderMap,
 ) -> Option<Response> {
     match evaluate_api_token(require_api_token, configured_tokens, headers) {
@@ -5700,7 +6247,7 @@ async fn enforce_sccp_submit_ingress(
         req.headers(),
         remote_ip,
         policy.rate_limit_hint,
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(req.headers()),
     );
     if !app
         .deploy_rate_limiter
@@ -6206,7 +6753,7 @@ mod emergency_fast_surface_tests {
         }
     }
 
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     #[test]
     fn emergency_fast_does_not_attach_the_torii_proxy_control_subscriber() {
         let compact_source: String = include_str!("lib.rs")
@@ -6214,19 +6761,19 @@ mod emergency_fast_surface_tests {
             .filter(|character| !character.is_whitespace())
             .collect();
         assert!(compact_source.contains(
-            "if!app_state.kura.emergency_fast_startup_enabled()&&letSome(network)=app_state.p2p.clone(){attach_torii_proxy_network(app_state.clone(),network);}",
+            "lettorii_proxy_network_worker=ifemergency_fast{None}else{self.p2p.clone().map(|network|{attach_torii_proxy_network(app_state.clone(),network,shutdown_signal.clone(),)})};",
         ));
     }
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn emergency_fast_does_not_resolve_public_dataspace_upstreams_from_state() {
+    fn emergency_fast_does_not_expose_public_dataspace_upstreams() {
         let compact_source: String = include_str!("lib.rs")
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect();
         assert!(compact_source.contains(
-            "letpublic_dataspace_upstreams=Arc::new(ifemergency_fast{BTreeMap::new()}else{load_public_dataspace_upstreams(state.as_ref())});",
+            "letpublic_dataspace_upstreams=Arc::new(ifemergency_fast{BTreeMap::new()}else{configured_public_dataspace_upstreams});",
         ));
     }
 
@@ -6250,18 +6797,10 @@ mod emergency_fast_surface_tests {
             "ifself.kura.emergency_fast_startup_enabled(){iroha_logger::warn!(\"emergencyFastKuramodeleavesToriidetachedfromP2Prelayservices\");returnself;}self.p2p=Some(p2p);",
         ));
 
-        let connect_source: String = include_str!("connect.rs")
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-        let from_config = connect_source
-            .split_once("pubfnfrom_config(")
-            .expect("Connect Bus configuration constructor")
-            .1
-            .split_once("fnstart_cleaner(")
-            .expect("Connect cleaner boundary")
-            .0;
-        assert!(from_config.contains("ifcfg.enabled{bus.start_cleaner();}"));
+        assert!(
+            compact_source
+                .contains("letconnect_runtime_enabled=!emergency_fast&&self.connect_enabled;",)
+        );
     }
 }
 async fn coalesce_accept_headers(
@@ -9916,12 +10455,15 @@ async fn check_access(
     check_access_enforced(app, headers, remote, hint, true).await
 }
 include!("operator_rate_limit_helpers.rs");
-fn validate_api_token<'headers>(
+fn validate_api_token(
     app: &AppState,
-    headers: &'headers axum::http::HeaderMap,
-) -> Result<ApiTokenEvaluation<'headers>, Error> {
-    let evaluation =
-        evaluate_api_token(app.require_api_token, app.api_tokens_set.as_ref(), headers);
+    headers: &axum::http::HeaderMap,
+) -> Result<ApiTokenEvaluation, Error> {
+    let evaluation = evaluate_api_token(
+        app.require_api_token,
+        app.api_token_digests.as_ref(),
+        headers,
+    );
     match evaluation {
         ApiTokenEvaluation::Disabled | ApiTokenEvaluation::Authenticated(_) => Ok(evaluation),
         ApiTokenEvaluation::Unavailable => Err(Error::Query(
@@ -9953,8 +10495,8 @@ async fn check_access_enforced_with_cost(
     enforce_rate: bool,
     cost: u64,
 ) -> Result<(), Error> {
-    validate_api_token(app, headers)?;
-    let key = rate_limit_key(headers, remote, hint, app.api_token_enforced());
+    let principal = validate_api_token(app, headers)?.authenticated_principal();
+    let key = rate_limit_key(headers, remote, hint, principal);
     let cost = cost.max(1);
     if !limits::allow_cost_conditionally(&app.rate_limiter, &key, cost, enforce_rate).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -10033,25 +10575,21 @@ fn rate_limit_key(
     headers: &axum::http::HeaderMap,
     remote: Option<IpAddr>,
     hint: &str,
-    use_api_token: bool,
+    authenticated_api_token: Option<limits::ApiTokenPrincipal>,
 ) -> String {
-    limits::key_from_headers(headers, remote, Some(hint), use_api_token)
+    limits::key_from_headers(headers, remote, Some(hint), authenticated_api_token)
 }
 fn signed_query_preauth_rate_limit_key(
     headers: &axum::http::HeaderMap,
     remote: Option<IpAddr>,
-    use_authenticated_api_token: bool,
+    authenticated_api_token: Option<limits::ApiTokenPrincipal>,
 ) -> String {
     // API-token text is attacker-controlled unless token authentication is
     // enabled and validated. Otherwise ingress middleware has already replaced
     // the internal remote-address header with the accepted socket address or a
     // value from a configured trusted proxy.
-    let caller = limits::key_from_headers(
-        headers,
-        remote,
-        Some("unknown"),
-        use_authenticated_api_token,
-    );
+    let caller =
+        limits::key_from_headers(headers, remote, Some("unknown"), authenticated_api_token);
     format!("v1/query:preauth:{caller}")
 }
 fn signed_query_authority_rate_limit_key(authority: &AccountId) -> String {
@@ -10073,8 +10611,8 @@ async fn admit_signed_query_preauth(
     headers: &axum::http::HeaderMap,
     remote: Option<IpAddr>,
 ) -> Result<(), Error> {
-    validate_api_token(app, headers)?;
-    let key = signed_query_preauth_rate_limit_key(headers, remote, app.api_token_enforced());
+    let principal = validate_api_token(app, headers)?.authenticated_principal();
+    let key = signed_query_preauth_rate_limit_key(headers, remote, principal);
     consume_signed_query_rate(&app.query_preauth_rate_limiter, &key).await
 }
 async fn admit_signed_query_authority(app: &AppState, authority: &AccountId) -> Result<(), Error> {
@@ -10228,9 +10766,9 @@ fn route_scoped_rate_limit_key(
     headers: &axum::http::HeaderMap,
     remote: Option<IpAddr>,
     endpoint: &str,
-    use_api_token: bool,
+    authenticated_api_token: Option<limits::ApiTokenPrincipal>,
 ) -> String {
-    let caller = limits::key_from_headers(headers, remote, None, use_api_token);
+    let caller = limits::key_from_headers(headers, remote, None, authenticated_api_token);
     format!("app-read:{endpoint}:{caller}")
 }
 async fn rate_limit_requests(app: &SharedAppState, key: &str) -> Result<(), Error> {
@@ -10473,6 +11011,26 @@ async fn handler_push_register_device(
             "empty_token",
             "token must not be empty",
         ),
+        Err(push::PushError::InvalidToken) => push_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_token",
+            "token is not valid for the selected push platform",
+        ),
+        Err(push::PushError::InvalidTopic { index }) => push_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_topic",
+            format!("topic at index {index} is invalid"),
+        ),
+        Err(push::PushError::DuplicateTopic { index }) => push_error_response(
+            StatusCode::BAD_REQUEST,
+            "duplicate_topic",
+            format!("topic at index {index} duplicates an earlier topic"),
+        ),
+        Err(push::PushError::TopicsTooLarge { max_bytes }) => push_error_response(
+            StatusCode::BAD_REQUEST,
+            "topics_too_large",
+            format!("topic payload exceeds the hard limit ({max_bytes} bytes)"),
+        ),
         Err(push::PushError::InvalidEnvironment(value)) => push_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "push_invalid_environment",
@@ -10540,6 +11098,11 @@ async fn handler_push_unregister_device(
             "empty_token",
             "token must not be empty",
         ),
+        Err(push::PushError::InvalidToken) => push_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_token",
+            "token is not valid for the selected push platform",
+        ),
         Err(push::PushError::Storage(value)) => push_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "push_storage_error",
@@ -10547,6 +11110,9 @@ async fn handler_push_unregister_device(
         ),
         Err(push::PushError::MissingCredentials { .. })
         | Err(push::PushError::TooManyTopics { .. })
+        | Err(push::PushError::InvalidTopic { .. })
+        | Err(push::PushError::DuplicateTopic { .. })
+        | Err(push::PushError::TopicsTooLarge { .. })
         | Err(push::PushError::InvalidEnvironment(_)) => StatusCode::ACCEPTED.into_response(),
     }
 }
@@ -10635,7 +11201,12 @@ async fn check_proof_access(
     enforce_rate: bool,
 ) -> Result<(), Error> {
     check_access_enforced(app, headers, remote, hint, enforce_rate).await?;
-    let key = rate_limit_key(headers, remote, hint, app.api_token_enforced());
+    let key = rate_limit_key(
+        headers,
+        remote,
+        hint,
+        app.authenticated_api_token_principal(headers),
+    );
     if limits::allow_cost_conditionally(&app.proof_rate_limiter, &key, cost, enforce_rate).await {
         return Ok(());
     }
@@ -10648,7 +11219,6 @@ async fn check_proof_access(
     iroha_logger::warn!(
         %hint,
         %retry_after_secs,
-        %key,
         "proof endpoint throttled request"
     );
     Err(Error::ProofRateLimited {
@@ -10981,7 +11551,7 @@ fn proof_post_router_with_body_limits(
     router: Router<SharedAppState>,
     state: SharedAppState,
 ) -> Router<SharedAppState> {
-    let max_body_bytes = usize::try_from(state.proof_limits.max_body_bytes).unwrap_or(usize::MAX);
+    let max_body_bytes = state.proof_limits.max_body_bytes;
     let body_limit = DefaultBodyLimit::max(max_body_bytes);
     let admission = axum::middleware::from_fn_with_state(
         ProofBodyAdmissionState::new(state, max_body_bytes),
@@ -10993,7 +11563,7 @@ fn proof_post_router_with_body_limits(
 }
 fn enforce_proof_body_limit(app: &AppState, len: usize, hint: &'static str) -> Result<(), Error> {
     let max = app.proof_limits.max_body_bytes;
-    if (len as u64) <= max {
+    if len <= max {
         return Ok(());
     }
     app.telemetry
@@ -11033,7 +11603,12 @@ async fn enforce_proof_egress(
     if bytes == 0 {
         return Ok(());
     }
-    let key = rate_limit_key(headers, remote, hint, app.api_token_enforced());
+    let key = rate_limit_key(
+        headers,
+        remote,
+        hint,
+        app.authenticated_api_token_principal(headers),
+    );
     if limits::allow_cost_conditionally(&app.proof_egress_limiter, &key, bytes, enforce_rate).await
     {
         return Ok(());
@@ -11044,7 +11619,6 @@ async fn enforce_proof_egress(
     iroha_logger::warn!(
         %hint,
         %retry_after_secs,
-        %key,
         bytes,
         "proof endpoint egress throttled request"
     );
@@ -11159,7 +11733,7 @@ async fn handler_gov_contract_get(
         remote.ip(),
         "v1/gov/contracts/{contract_address}",
         "governed_contract_read",
-        false,
+        None,
     )
     .await?;
     crate::gov::handle_gov_contract_get(app.state.clone(), contract_address).await
@@ -11504,6 +12078,7 @@ async fn handler_gov_referendum_get(
 #[cfg(feature = "app_api")]
 async fn handler_gov_propose_deploy(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<
@@ -11521,6 +12096,11 @@ async fn handler_gov_propose_deploy(
         "v1/gov/proposals/deploy-contract",
     )
     .await?;
+    require_runtime_governance_account(
+        &body.0.proposal_operator,
+        &verified.account,
+        "deploy-contract proposal draft",
+    )?;
     crate::gov::handle_gov_propose_deploy(app.state.clone(), body).await
 }
 #[cfg(feature = "app_api")]
@@ -12880,7 +13460,7 @@ async fn handler_proof_tags(
         &headers,
         Some(remote_ip),
         "v1/zk/proof-tags/{backend}/{hash}",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -13997,11 +14577,9 @@ mod universal_offline_capability_tests {
     use tower::ServiceExt as _;
 
     fn configured_offline_command_runtime() -> Arc<offline_commands::OfflineCommandRuntime> {
-        let key_pair = iroha_crypto::KeyPair::try_from_seed(
-            vec![0x4f; 32],
-            iroha_crypto::Algorithm::Ed25519,
-        )
-        .expect("derive offline command admission fixture key");
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x4f; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("derive offline command admission fixture key");
         Arc::new(offline_commands::OfflineCommandRuntime::from_config(
             iroha_config::parameters::actual::ToriiKagemushaCommands {
                 authority: iroha_data_model::account::AccountId::new(
@@ -14125,9 +14703,9 @@ mod universal_offline_capability_tests {
                 enforce_offline_command_prebody_admission,
             ));
         let body = Body::from_stream(futures::stream::poll_fn(
-            |_context| -> std::task::Poll<
-                Option<Result<Bytes, std::convert::Infallible>>,
-            > { panic!("disabled offline command admission polled the request body") },
+            |_context| -> std::task::Poll<Option<Result<Bytes, std::convert::Infallible>>> {
+                panic!("disabled offline command admission polled the request body")
+            },
         ));
         let mut request = Request::builder()
             .method(axum::http::Method::POST)
@@ -14236,9 +14814,9 @@ mod universal_offline_capability_tests {
 
         let body_that_must_not_be_polled = || {
             Body::from_stream(futures::stream::poll_fn(
-                |_context| -> std::task::Poll<
-                    Option<Result<Bytes, std::convert::Infallible>>,
-                > { panic!("saturated offline command admission polled the request body") },
+                |_context| -> std::task::Poll<Option<Result<Bytes, std::convert::Infallible>>> {
+                    panic!("saturated offline command admission polled the request body")
+                },
             ))
         };
         let saturated = router
@@ -14323,16 +14901,12 @@ async fn enforce_offline_command_prebody_admission(
         .extensions()
         .get::<MatchedRouteMetadata>()
         .and_then(|route| match route.stable_route_id() {
-            id if id == route_catalog::offline::TOP_UP.stable_route_id() => {
-                Some(OfflineCommandBodyPolicy::top_up(
-                    app.transaction_max_content_len,
-                ))
-            }
-            id if id == route_catalog::offline::REDEEM.stable_route_id() => {
-                Some(OfflineCommandBodyPolicy::redeem(
-                    app.transaction_max_content_len,
-                ))
-            }
+            id if id == route_catalog::offline::TOP_UP.stable_route_id() => Some(
+                OfflineCommandBodyPolicy::top_up(app.transaction_max_content_len),
+            ),
+            id if id == route_catalog::offline::REDEEM.stable_route_id() => Some(
+                OfflineCommandBodyPolicy::redeem(app.transaction_max_content_len),
+            ),
             _ => None,
         });
     let Some(policy) = policy else {
@@ -14358,26 +14932,27 @@ async fn enforce_offline_command_prebody_admission(
     if let Err(error) = offline_commands::validate_command_headers_before_body(&headers) {
         return Ok(error.into_response());
     }
-    let declared_content_length = match validate_bounded_content_length(&headers, policy.max_body_bytes) {
-        Ok(declared) => declared,
-        Err(BoundedContentLengthError::TooLarge) => {
-            return Ok((
-                StatusCode::PAYLOAD_TOO_LARGE,
-                format!(
-                    "offline command request body exceeds the {}-byte route limit",
-                    policy.max_body_bytes
-                ),
-            )
-                .into_response());
-        }
-        Err(BoundedContentLengthError::Invalid) => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                "invalid or ambiguous offline command Content-Length",
-            )
-                .into_response());
-        }
-    };
+    let declared_content_length =
+        match validate_bounded_content_length(&headers, policy.max_body_bytes) {
+            Ok(declared) => declared,
+            Err(BoundedContentLengthError::TooLarge) => {
+                return Ok((
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    format!(
+                        "offline command request body exceeds the {}-byte route limit",
+                        policy.max_body_bytes
+                    ),
+                )
+                    .into_response());
+            }
+            Err(BoundedContentLengthError::Invalid) => {
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    "invalid or ambiguous offline command Content-Length",
+                )
+                    .into_response());
+            }
+        };
     use axum::body::HttpBody as _;
     let exact_body_hint = req
         .body()
@@ -15074,8 +15649,9 @@ fn resolve_tx_history_allowed_asset_definition_id(
     if app.tx_history_access_policy.startup_error.is_some() {
         return Err(Error::AppServiceUnavailable {
             code: "tx_history_configuration_invalid",
-            message: "transaction history is unavailable because its runtime configuration is invalid"
-                .to_owned(),
+            message:
+                "transaction history is unavailable because its runtime configuration is invalid"
+                    .to_owned(),
         });
     }
     app.tx_history_access_policy
@@ -17439,6 +18015,17 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
         )
             .into_response();
     }
+    if app
+        .iso_bridge
+        .as_ref()
+        .is_some_and(|runtime| !runtime.audit_persistence_is_healthy())
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ISO bridge audit persistence is unavailable",
+        )
+            .into_response();
+    }
     (StatusCode::OK, "Ready").into_response()
 }
 /// GET `/livez` — process-only liveness; never claims protocol readiness.
@@ -17482,7 +18069,7 @@ async fn handler_schema(
         &headers,
         Some(remote.ip()),
         "schema",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -17826,7 +18413,7 @@ async fn handler_zk_verify_batch(
     }
     let limits = routing::ZkVerifyBatchLimits {
         open: iroha_zkp_halo2::OpenVerifyLimits::new(halo2.max_k, halo2.max_transcript_label_len),
-        max_body_bytes: usize::try_from(app.proof_limits.max_body_bytes).unwrap_or(usize::MAX),
+        max_body_bytes: app.proof_limits.max_body_bytes,
         max_batch: halo2.verifier_max_batch.max(1) as usize,
         max_envelope_bytes: halo2.max_envelope_bytes,
         enforce_transcript_label_ascii: halo2.enforce_transcript_label_ascii,
@@ -19872,7 +20459,7 @@ async fn check_status_access(
         headers,
         Some(remote),
         route_hint,
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -19960,7 +20547,7 @@ async fn handler_metrics(
         &headers,
         Some(remote.ip()),
         "metrics",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -28773,7 +29360,19 @@ async fn execute_torii_read_via_public_dataspace_upstream(
         url.push_str(query_string);
     }
     let method = torii_read_http_method(request.endpoint);
-    let client = reqwest::Client::new();
+    let client = match reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            return torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                format!("failed to initialize public dataspace HTTP client: {error}"),
+            );
+        }
+    };
     let mut builder = client
         .request(method.clone(), url.clone())
         .header(
@@ -31646,7 +32245,11 @@ async fn handle_torii_proxy_network_message(
     }
 }
 #[cfg(feature = "connect")]
-fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNetwork) {
+fn attach_torii_proxy_network(
+    app: SharedAppState,
+    network: iroha_core::IrohaNetwork,
+    shutdown_signal: ShutdownSignal,
+) -> tokio::task::JoinHandle<ToriiCriticalWorkerExit> {
     tokio::spawn(async move {
         use iroha_p2p::network::{
             SubscriberFilter,
@@ -31657,6 +32260,9 @@ fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNet
             SubscriberFilter::topics_for_route([Topic::Control], SubscriberRoute::ToriiProxy);
         let mut tx = tx;
         loop {
+            if shutdown_signal.is_sent() {
+                return ToriiCriticalWorkerExit::StoppedByShutdown;
+            }
             match network.subscribe_to_peers_messages_with_filter(tx, filter.clone()) {
                 Ok(()) => break,
                 Err(returned) => {
@@ -31664,7 +32270,12 @@ fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNet
                         "retrying Torii control-plane proxy subscription to the P2P bus"
                     );
                     tx = returned;
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    tokio::select! {
+                        () = shutdown_signal.receive() => {
+                            return ToriiCriticalWorkerExit::StoppedByShutdown;
+                        },
+                        () = tokio::time::sleep(Duration::from_millis(50)) => {}
+                    }
                 }
             }
         }
@@ -31675,19 +32286,55 @@ fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNet
         let (request_tx, mut request_rx) = tokio::sync::mpsc::channel(1);
         let request_app = app.clone();
         let request_network = network.clone();
-        tokio::spawn(async move {
-            while let Some((peer, request, proxy_memory, _p2p_memory)) = request_rx.recv().await {
-                process_incoming_torii_proxy_request(
-                    request_app.clone(),
-                    request_network.clone(),
-                    peer,
-                    request,
-                    proxy_memory,
-                )
-                .await;
+        let request_shutdown = shutdown_signal.clone();
+        let request_worker = async move {
+            loop {
+                let next = tokio::select! {
+                    () = request_shutdown.receive() => break,
+                    next = request_rx.recv() => next,
+                };
+                let Some((peer, request, proxy_memory, _p2p_memory)) = next else {
+                    break;
+                };
+                tokio::select! {
+                    () = request_shutdown.receive() => break,
+                    () = process_incoming_torii_proxy_request(
+                        request_app.clone(),
+                        request_network.clone(),
+                        peer,
+                        request,
+                        proxy_memory,
+                    ) => {}
+                }
             }
-        });
-        while let Some(msg) = rx.recv().await {
+        };
+        tokio::pin!(request_worker);
+        let exit = loop {
+            let msg = tokio::select! {
+                biased;
+                () = shutdown_signal.receive() => {
+                    break ToriiCriticalWorkerExit::StoppedByShutdown;
+                },
+                worker_result = &mut request_worker => {
+                    let () = worker_result;
+                    if shutdown_signal.is_sent() {
+                        break ToriiCriticalWorkerExit::StoppedByShutdown;
+                    } else {
+                        iroha_logger::warn!(
+                            "Torii proxy request worker exited before network subscription"
+                        );
+                        break ToriiCriticalWorkerExit::UnexpectedExit;
+                    }
+                }
+                msg = rx.recv() => msg,
+            };
+            let Some(msg) = msg else {
+                break if shutdown_signal.is_sent() {
+                    ToriiCriticalWorkerExit::StoppedByShutdown
+                } else {
+                    ToriiCriticalWorkerExit::UnexpectedExit
+                };
+            };
             if msg.payload.is_torii_proxy_control_message() {
                 let (peer, _authenticated_via, payload, _payload_bytes, p2p_memory) =
                     msg.into_parts();
@@ -31731,8 +32378,17 @@ fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNet
                     }
                 }
             }
+        };
+        if exit == ToriiCriticalWorkerExit::UnexpectedExit {
+            // Fail closed before joining the request worker. It may currently
+            // be waiting on downstream proxy I/O and otherwise delay the
+            // supervisor from learning that the control subscription died.
+            shutdown_signal.send();
         }
-    });
+        drop(request_tx);
+        request_worker.await;
+        exit
+    })
 }
 #[cfg(feature = "app_api")]
 fn soracloud_local_read_response(
@@ -33094,7 +33750,7 @@ async fn execute_soracloud_public_runtime_request(
         &headers,
         Some(remote_ip),
         Some("v1/soracloud/public-runtime"),
-        false,
+        None,
     );
     if !app.soracloud_public_rate_limiter.allow(&rate_key).await {
         return Response::builder()
@@ -33302,7 +33958,7 @@ async fn handler_soracloud_status(
         &headers,
         Some(remote_ip),
         "v1/soracloud/status",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -33403,7 +34059,7 @@ async fn handler_kaigi_relays(
         &headers,
         Some(remote_ip),
         "v1/kaigi/relays",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -33499,7 +34155,7 @@ async fn handler_kaigi_call_events_sse(
         &headers,
         Some(remote_ip),
         "v1/kaigi/calls/{call_id}/events",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -33525,7 +34181,7 @@ async fn handler_kaigi_relay_detail(
         &headers,
         Some(remote_ip),
         "v1/kaigi/relays/{relay_id}",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -33575,7 +34231,7 @@ async fn handler_kaigi_relays_health(
         &headers,
         Some(remote_ip),
         "v1/kaigi/relays/health",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -33638,7 +34294,7 @@ async fn handler_kaigi_relays_sse(
         &headers,
         Some(remote_ip),
         "v1/kaigi/relays/events",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -33658,7 +34314,7 @@ async fn handler_soradns_directory_latest(
         &headers,
         Some(remote_ip),
         "v1/soradns/directory/latest",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -33685,7 +34341,7 @@ async fn handler_soradns_directory_events(
         &headers,
         Some(remote_ip),
         "v1/soradns/directory/events",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -33708,9 +34364,9 @@ fn canonical_stream_rate_limit_key(
     headers: &axum::http::HeaderMap,
     remote_ip: Option<IpAddr>,
     route: iroha_torii_shared::route_catalog::RouteDescriptor,
-    use_api_token: bool,
+    authenticated_api_token: Option<limits::ApiTokenPrincipal>,
 ) -> String {
-    let principal = limits::key_from_headers(headers, remote_ip, None, use_api_token);
+    let principal = limits::key_from_headers(headers, remote_ip, None, authenticated_api_token);
     format!("stream:{}:{principal}", route.stable_route_id())
 }
 #[cfg(feature = "app_api")]
@@ -33766,7 +34422,9 @@ async fn enforce_canonical_stream_admission(
             req.headers(),
             remote_ip,
             admission.route,
-            admission.app.api_token_enforced(),
+            admission
+                .app
+                .authenticated_api_token_principal(req.headers()),
         );
         if !admission.app.rate_limiter.allow(&key).await {
             return Ok(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34034,7 +34692,8 @@ mod canonical_stream_handshake_tests {
         let mut app = crate::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["stream-secret".to_owned()]));
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["stream-secret"]));
         let calls = Arc::new(AtomicUsize::new(0));
         let handler_calls = Arc::clone(&calls);
         let router = Router::new()
@@ -34088,7 +34747,8 @@ mod canonical_stream_handshake_tests {
         let mut unauthorized_app = crate::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut unauthorized_app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["stream-secret".to_owned()]));
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["stream-secret"]));
         let receivers_before = unauthorized_app.events.receiver_count();
         let syntax_calls = Arc::new(AtomicUsize::new(0));
         let router = gated_syntax_router(
@@ -34196,7 +34856,8 @@ mod canonical_stream_handshake_tests {
         let mut app = crate::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["stream-secret".to_owned()]));
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["stream-secret"]));
         state.rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(1));
         let events_route = route_catalog::streaming::EVENTS_SSE;
         let contracts_route = route_catalog::streaming::CONTRACT_EVENTS_SSE;
@@ -34322,7 +34983,8 @@ mod canonical_stream_handshake_tests {
         let mut unauthorized_app = crate::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut unauthorized_app).expect("unique app state");
         state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::from(["stream-secret".to_owned()]));
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["stream-secret"]));
         let receivers_before = unauthorized_app.events.receiver_count();
         let response = gated_event_websocket_router(Arc::clone(&unauthorized_app))
             .oneshot(
@@ -34427,7 +35089,7 @@ async fn handler_gov_stream(
         &headers,
         Some(remote_ip),
         "v1/gov/stream",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34458,7 +35120,7 @@ async fn handler_telemetry_live(
         &headers,
         Some(remote_ip),
         "v1/telemetry/live",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34503,7 +35165,7 @@ async fn handler_explorer_transactions_stream(
         &headers,
         Some(remote_ip),
         "v1/explorer/transactions/stream",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34546,7 +35208,7 @@ async fn handler_explorer_blocks_stream(
         &headers,
         Some(remote_ip),
         "v1/explorer/blocks/stream",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34587,7 +35249,7 @@ async fn handler_explorer_instructions_stream(
         &headers,
         Some(remote_ip),
         "v1/explorer/instructions/stream",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34723,7 +35385,7 @@ async fn handler_sumeragi_params(
         &headers,
         Some(remote_ip),
         "v1/sumeragi/params",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34751,7 +35413,7 @@ async fn handler_sumeragi_bls_keys(
         &headers,
         Some(remote_ip),
         "v1/sumeragi/bls-keys",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34782,7 +35444,7 @@ async fn handler_get_contract_code_bytes(
         &headers,
         Some(remote_ip),
         "v1/contracts/code-bytes/{code_hash}",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34826,7 +35488,7 @@ async fn handler_get_contract_code(
         &headers,
         Some(remote_ip),
         "v1/contracts/code:get",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -34869,7 +35531,7 @@ async fn handler_get_contract_code_view(
         &headers,
         Some(remote_ip),
         "v1/contracts/code/{code_hash}/contract-view:get",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -34955,7 +35617,7 @@ async fn handler_get_contract_state(
         remote.ip(),
         "v1/contracts/state",
         "state",
-        false,
+        None,
     )
     .await?;
     let contract_address = q
@@ -35104,7 +35766,7 @@ async fn handler_get_mint_requests(
         remote.ip(),
         "v1/mint-requests",
         "state",
-        false,
+        None,
     )
     .await?;
     let state_query = mint_requests_contract_state_query(query, None);
@@ -35124,7 +35786,7 @@ async fn handler_get_mint_request(
         remote.ip(),
         "v1/mint-requests/{request_id}",
         "state",
-        false,
+        None,
     )
     .await?;
     let state_query = mint_requests_contract_state_query(query, Some(request_id));
@@ -35151,7 +35813,7 @@ async fn handler_get_vk_by_backend_name(
         &headers,
         Some(remote_ip),
         "v1/zk/vk/{backend}/{name}",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -35230,7 +35892,7 @@ async fn handler_list_vk(
         &headers,
         Some(remote_ip),
         "v1/zk/vk",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -35339,7 +36001,7 @@ async fn handler_debug_axt_cache(
         &headers,
         Some(remote_ip),
         "v1/debug/axt/cache",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -35443,7 +36105,7 @@ async fn handler_debug_witness(
         &headers,
         Some(remote_ip),
         "v1/debug/witness",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -35482,7 +36144,7 @@ async fn handler_sumeragi_evidence(
         &headers,
         Some(remote_ip),
         "v1/sumeragi/evidence",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -35522,7 +36184,7 @@ async fn handler_sumeragi_status(
         &headers,
         Some(remote_ip),
         "v1/sumeragi/status",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -35555,7 +36217,7 @@ async fn handler_sumeragi_diagnostics(
         &headers,
         Some(remote.ip()),
         "v1/sumeragi/diagnostics",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -35589,7 +36251,7 @@ async fn handler_sumeragi_status_sse(
         &headers,
         Some(remote_ip),
         "v1/sumeragi/status/sse",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -35623,7 +36285,7 @@ async fn handler_sumeragi_leader(
         &headers,
         Some(remote_ip),
         "v1/sumeragi/leader",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -35651,7 +36313,7 @@ async fn handler_sumeragi_qc(
         &headers,
         Some(remote_ip),
         "v1/sumeragi/qc",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -35676,11 +36338,8 @@ async fn handler_bridge_finality_proof(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let _token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
+    let _api_token_principal =
+        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     let format = match negotiate_heavy_query_response_format(&headers) {
         Ok(format) => format,
         Err(response) => return Ok(response),
@@ -35689,13 +36348,13 @@ async fn handler_bridge_finality_proof(
         &headers,
         Some(remote_ip),
         "/v1/bridge/finality/{height}",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = _token_hdr {
-        crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/bridge/finality");
+    if _api_token_principal.is_some() {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/bridge/finality");
     }
     let response =
         routing::handle_v1_bridge_finality(app.state.clone(), height, format, query_permit)
@@ -35727,12 +36386,9 @@ async fn handler_bridge_finality_attestation_inner(
     remote: std::net::SocketAddr,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
+    let _api_token_principal =
+        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     let challenge = bridge_finality_challenge(&headers)?;
-    let _token_hdr = headers
-        .get("x-api-token")
-        .and_then(|value| value.to_str().ok())
-        .map(ToString::to_string);
     let format = match negotiate_heavy_query_response_format(&headers) {
         Ok(format) => format,
         Err(response) => return Ok(response),
@@ -35741,7 +36397,7 @@ async fn handler_bridge_finality_attestation_inner(
         &headers,
         Some(remote_ip),
         "/v1/bridge/finality/attestation/{height}",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let query_permit = acquire_query_admission(app.as_ref(), true).await?;
@@ -35762,12 +36418,8 @@ async fn handler_bridge_finality_attestation_inner(
         return Ok(response);
     }
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = _token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            &api_token,
-            "v1/bridge/finality/attestation",
-        );
+    if _api_token_principal.is_some() {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/bridge/finality/attestation");
     }
     let mut response = routing::handle_v1_bridge_finality_attestation(
         app.state.clone(),
@@ -35800,11 +36452,8 @@ async fn handler_bridge_finality_bundle(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let _token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
+    let _api_token_principal =
+        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     let format = match negotiate_heavy_query_response_format(&headers) {
         Ok(format) => format,
         Err(response) => return Ok(response),
@@ -35813,17 +36462,13 @@ async fn handler_bridge_finality_bundle(
         &headers,
         Some(remote_ip),
         "/v1/bridge/finality/bundle/{height}",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = _token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            &api_token,
-            "v1/bridge/finality/bundle",
-        );
+    if _api_token_principal.is_some() {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/bridge/finality/bundle");
     }
     let response =
         routing::handle_v1_bridge_finality_bundle(app.state.clone(), height, format, query_permit)
@@ -35847,12 +36492,9 @@ async fn handler_sccp_message_proof(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
+    let _api_token_principal =
+        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     routing::reject_sccp_query(raw_query.as_deref())?;
-    let _token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
     let format = match negotiate_heavy_query_response_format(&headers) {
         Ok(format) => format,
         Err(response) => return Ok(response),
@@ -35861,17 +36503,13 @@ async fn handler_sccp_message_proof(
         &headers,
         Some(remote_ip),
         "/v1/sccp/proofs/message/{message_id}",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = _token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            &api_token,
-            "v1/sccp/proofs/message",
-        );
+    if _api_token_principal.is_some() {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/proofs/message");
     }
     let response = routing::handle_v1_sccp_message_bundle(
         Arc::clone(&app.state),
@@ -35898,22 +36536,19 @@ async fn handler_sccp_registry(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
+    let _api_token_principal =
+        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     routing::reject_sccp_query(raw_query.as_deref())?;
-    let _token_hdr = headers
-        .get("x-api-token")
-        .and_then(|value| value.to_str().ok())
-        .map(ToString::to_string);
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
         "/v1/sccp/registry",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     rate_limit_requests(&app, &key).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = _token_hdr {
-        crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/registry");
+    if _api_token_principal.is_some() {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/registry");
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     Ok(routing::handle_v1_sccp_registry(app.state.as_ref(), accept)
@@ -35933,12 +36568,9 @@ async fn handler_sccp_sora_outbound_material(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
+    let _api_token_principal =
+        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     routing::reject_sccp_query(raw_query.as_deref())?;
-    let _token_hdr = headers
-        .get("x-api-token")
-        .and_then(|value| value.to_str().ok())
-        .map(ToString::to_string);
     let format = match negotiate_heavy_query_response_format(&headers) {
         Ok(format) => format,
         Err(response) => return Ok(response),
@@ -35947,17 +36579,13 @@ async fn handler_sccp_sora_outbound_material(
         &headers,
         Some(remote_ip),
         "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = _token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            &api_token,
-            "v1/sccp/sora-outbound-material",
-        );
+    if _api_token_principal.is_some() {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/sora-outbound-material");
     }
     let response = routing::handle_v1_sccp_sora_outbound_material(
         Arc::clone(&app.state),
@@ -35988,12 +36616,9 @@ async fn handler_sccp_proof_request(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
+    let _api_token_principal =
+        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     routing::reject_sccp_query(raw_query.as_deref())?;
-    let _token_hdr = headers
-        .get("x-api-token")
-        .and_then(|value| value.to_str().ok())
-        .map(ToString::to_string);
     let format = match negotiate_heavy_query_response_format(&headers) {
         Ok(format) => format,
         Err(response) => return Ok(response),
@@ -36002,17 +36627,13 @@ async fn handler_sccp_proof_request(
         &headers,
         Some(remote_ip),
         "/v1/sccp/proof-requests/{message_id}",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = _token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            &api_token,
-            "v1/sccp/proof-requests",
-        );
+    if _api_token_principal.is_some() {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/proof-requests");
     }
     let response = routing::handle_v1_sccp_proof_request(
         Arc::clone(&app.state),
@@ -36039,22 +36660,19 @@ async fn handler_sccp_capabilities(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
+    let _api_token_principal =
+        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     routing::reject_sccp_query(raw_query.as_deref())?;
-    let _token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
         "/v1/sccp/capabilities",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     rate_limit_requests(&app, &key).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = _token_hdr {
-        crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/capabilities");
+    if _api_token_principal.is_some() {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/capabilities");
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     Ok(routing::handle_v1_sccp_capabilities(&app.state, accept)
@@ -36068,12 +36686,9 @@ async fn handler_sccp_messages_recent(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
+    let _api_token_principal =
+        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     let window = routing::parse_sccp_recent_query(raw_query.as_deref())?;
-    let _token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
     let format = match negotiate_heavy_query_response_format(&headers) {
         Ok(format) => format,
         Err(response) => return Ok(response),
@@ -36082,17 +36697,13 @@ async fn handler_sccp_messages_recent(
         &headers,
         Some(remote_ip),
         "/v1/sccp/messages/recent",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     rate_limit_requests_with_cost(&app, &key, SCCP_RECENT_QUERY_RATE_COST).await?;
     let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = _token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            &api_token,
-            "v1/sccp/messages/recent",
-        );
+    if _api_token_principal.is_some() {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/messages/recent");
     }
     let response = routing::handle_v1_sccp_messages_recent(
         Arc::clone(&app.state),
@@ -36119,20 +36730,16 @@ async fn handler_sumeragi_consensus_keys(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
+    let token_principal = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
         "/v1/sumeragi/consensus-keys",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    if let Some(api_token) = token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            api_token,
-            "v1/sumeragi/consensus-keys",
-        );
+    if token_principal.is_some() {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sumeragi/consensus-keys");
     }
     rate_limit_requests(&app, &key).await?;
     Ok(routing::handle_v1_sumeragi_consensus_keys(&app, accept)
@@ -36152,7 +36759,7 @@ async fn check_public_contract_route_rate_limit(
     endpoint: &'static str,
     metric_label: &'static str,
 ) -> Result<(), Error> {
-    let key = rate_limit_key(headers, Some(remote_ip), endpoint, false);
+    let key = rate_limit_key(headers, Some(remote_ip), endpoint, None);
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
             .with_metrics(|tel| tel.inc_torii_contract_throttle(metric_label));
@@ -36169,9 +36776,10 @@ async fn check_public_contract_read_route_rate_limit(
     remote_ip: std::net::IpAddr,
     endpoint: &str,
     metric_label: &'static str,
-    use_api_token_key: bool,
+    authenticated_api_token: Option<limits::ApiTokenPrincipal>,
 ) -> Result<(), Error> {
-    let key = route_scoped_rate_limit_key(headers, Some(remote_ip), endpoint, use_api_token_key);
+    let key =
+        route_scoped_rate_limit_key(headers, Some(remote_ip), endpoint, authenticated_api_token);
     if !app.rate_limiter.allow(&key).await {
         app.telemetry
             .with_metrics(|tel| tel.inc_torii_contract_throttle(metric_label));
@@ -36621,7 +37229,7 @@ async fn handler_post_contract_call_multisig_propose(
         &headers,
         Some(remote_ip),
         "v1/contracts/call/multisig/propose",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -36663,7 +37271,7 @@ async fn handler_post_contract_call_multisig_approve(
         &headers,
         Some(remote_ip),
         "v1/contracts/call/multisig/approve",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -36709,7 +37317,7 @@ async fn handler_post_multisig_spec(
         remote_ip,
         "v1/multisig/spec",
         "multisig_spec",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     )
     .await?;
     let resolve_authority = multisig_alias_resolve_authority(
@@ -36757,7 +37365,7 @@ async fn handler_post_multisig_propose(
         &headers,
         Some(remote_ip),
         "v1/multisig/propose",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -36799,7 +37407,7 @@ async fn handler_post_multisig_approve(
         &headers,
         Some(remote_ip),
         "v1/multisig/approve",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -36841,7 +37449,7 @@ async fn handler_post_multisig_cancel(
         &headers,
         Some(remote_ip),
         "v1/multisig/cancel",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -36887,7 +37495,7 @@ async fn handler_post_multisig_proposals_query(
         remote_ip,
         "v1/multisig/proposals/query",
         "multisig_proposals_query",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     )
     .await?;
     let resolve_authority = multisig_alias_resolve_authority(
@@ -36942,7 +37550,7 @@ async fn handler_post_multisig_proposals_resolve(
         remote_ip,
         "v1/multisig/proposals/resolve",
         "multisig_proposals_resolve",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     )
     .await?;
     let resolve_authority = multisig_alias_resolve_authority(
@@ -36989,7 +37597,12 @@ async fn check_account_recovery_route_admission(
             .with_metrics(|telemetry| telemetry.inc_torii_contract_error(metric));
         return Err(error);
     }
-    let key = rate_limit_key(headers, Some(remote_ip), route, app.api_token_enforced());
+    let key = rate_limit_key(
+        headers,
+        Some(remote_ip),
+        route,
+        app.authenticated_api_token_principal(headers),
+    );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
             .with_metrics(|telemetry| telemetry.inc_torii_contract_throttle(metric));
@@ -37109,7 +37722,7 @@ async fn handler_post_asset_transfer_control_get(
         &headers,
         Some(remote_ip),
         &format!("v1/controls/asset-transfer/query:{}", viewer.subject),
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -37151,7 +37764,7 @@ async fn handler_post_sorafs_register_manifest(
         &headers,
         Some(remote_ip),
         "v1/sorafs/pin/register",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -37195,7 +37808,7 @@ async fn handler_post_sorafs_capacity_declare(
         &headers,
         Some(remote_ip),
         "v1/sorafs/capacity/declare",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -37238,7 +37851,7 @@ async fn handler_post_sorafs_capacity_telemetry(
         &headers,
         Some(remote_ip),
         "v1/sorafs/capacity/telemetry",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -37348,7 +37961,7 @@ async fn handler_post_sorafs_capacity_por_proof(
         &headers,
         Some(remote_ip),
         "v1/sorafs/capacity/por-proof",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -37397,7 +38010,7 @@ async fn handler_post_sorafs_capacity_por_verdict(
         &headers,
         Some(remote_ip),
         "v1/sorafs/capacity/por-verdict",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -37501,7 +38114,7 @@ async fn handler_post_sorafs_por_vrf(
         )
             .into_response();
     }
-    let ip_key = rate_limit_key(&headers, Some(remote.ip()), "v1/sorafs/por/vrf", false);
+    let ip_key = rate_limit_key(&headers, Some(remote.ip()), "v1/sorafs/por/vrf", None);
     if !app.deploy_rate_limiter.allow(&ip_key).await {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -39167,7 +39780,7 @@ async fn handler_post_vk_register(
         &headers,
         Some(remote_ip),
         "v1/zk/vk/register",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -39202,7 +39815,7 @@ async fn handler_post_vk_update(
         &headers,
         Some(remote_ip),
         "v1/zk/vk/update",
-        app.api_token_enforced(),
+        app.authenticated_api_token_principal(&headers),
     );
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -39232,12 +39845,8 @@ fn transaction_rate_limit_error() -> Error {
     ))
 }
 
-fn transaction_api_token_preauth_key(token: &str) -> String {
-    // Never retain an operator API token as a rate-limiter map key.
-    format!(
-        "v1/transaction:preauth:api-token:{}",
-        Hash::new(token.as_bytes())
-    )
+fn transaction_api_token_preauth_key(principal: limits::ApiTokenPrincipal) -> String {
+    format!("v1/transaction:preauth:{}", principal.rate_limit_key())
 }
 
 fn transaction_verified_authority_key(authority: &AccountId) -> String {
@@ -39246,15 +39855,15 @@ fn transaction_verified_authority_key(authority: &AccountId) -> String {
 
 async fn admit_transaction_api_token_preauth(
     limiter: &limits::RateLimiter,
-    token: Option<&str>,
+    principal: Option<limits::ApiTokenPrincipal>,
     cost: usize,
 ) -> Result<(), Error> {
-    let Some(token) = token else {
+    let Some(principal) = principal else {
         // The global pre-auth middleware has already charged the accepted
         // socket/trusted-proxy IP bucket.
         return Ok(());
     };
-    let key = transaction_api_token_preauth_key(token);
+    let key = transaction_api_token_preauth_key(principal);
     limiter
         .allow_repeated(&key, cost)
         .await
@@ -39313,7 +39922,7 @@ async fn handler_post_kagemusha_lifecycle_transaction(
             Ok(format) => format,
             Err(response) => return Ok(response),
         };
-    let token = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
+    let token = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     admit_transaction_api_token_preauth(&app.tx_preauth_rate_limiter, token, 1).await?;
     routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     let compute_permit =
@@ -39477,7 +40086,7 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
         Ok(format) => format,
         Err(resp) => return Ok(resp),
     };
-    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     admit_transaction_api_token_preauth(&app.tx_preauth_rate_limiter, token_hdr, 1).await?;
     routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     let compute_permit =
@@ -39575,7 +40184,7 @@ async fn handler_post_transaction_entrypoint(
         Ok(format) => format,
         Err(resp) => return Ok(resp),
     };
-    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     admit_transaction_api_token_preauth(&app.tx_preauth_rate_limiter, token_hdr, 1).await?;
     routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     let compute_permit =
@@ -41425,7 +42034,7 @@ async fn handler_alias_setup_plan(
         remote.ip(),
         "v1/aliases/setup/plan",
         "alias_setup_plan",
-        false,
+        None,
     )
     .await?;
     let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
@@ -41824,7 +42433,7 @@ async fn handler_alias_lease_renew_plan(
         remote.ip(),
         "v1/aliases/lease/renew/plan",
         "alias_lease_renew_plan",
-        false,
+        None,
     )
     .await?;
     let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
@@ -41962,7 +42571,7 @@ async fn handler_alias_auto_renew_plan(
         remote.ip(),
         "v1/aliases/auto-renew/plan",
         "alias_auto_renew_plan",
-        false,
+        None,
     )
     .await?;
     let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
@@ -42068,7 +42677,7 @@ async fn handler_public_alias_lookup_by_account(
         remote.ip(),
         "v1/aliases/by-account",
         "alias_lookup_by_account",
-        false,
+        None,
     )
     .await?;
     handler_alias_lookup_by_account(State(app), method, uri, headers, body).await
@@ -42088,7 +42697,7 @@ async fn handler_alias_resolve(
         remote.ip(),
         "v1/aliases/resolve",
         "alias_resolve",
-        false,
+        None,
     )
     .await?;
     let request: routing::AliasResolveRequestDto = decode_admitted_app_routed_read_json!(
@@ -43307,7 +43916,20 @@ async fn handler_retail_recipient_lookup(
             err.to_string(),
         ))
     })?;
-    let mut upstream = match reqwest::Client::new()
+    let client = match reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            return Ok(torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "recipient_lookup_unavailable",
+                format!("failed to initialize recipient lookup HTTP client: {err}"),
+            ));
+        }
+    };
+    let mut upstream = match client
         .post(endpoint)
         .header("accept", "application/json")
         .header("content-type", "application/json")
@@ -43486,7 +44108,7 @@ async fn handler_contract_alias_resolve(
         remote.ip(),
         "v1/contracts/aliases/resolve",
         "contract_alias_resolve",
-        false,
+        None,
     )
     .await?;
     require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
@@ -43878,7 +44500,26 @@ fn decode_tx_history_jwt_json_part(encoded: &str, error: &'static str) -> Result
     let bytes = URL_SAFE_NO_PAD
         .decode(encoded.as_bytes())
         .map_err(|_| error.to_string())?;
+    if URL_SAFE_NO_PAD.encode(&bytes) != encoded {
+        return Err(error.to_string());
+    }
     norito::json::from_slice(&bytes).map_err(|_| error.to_string())
+}
+#[cfg(feature = "app_api")]
+fn tx_history_bearer_token(auth_header: &str) -> Result<&str, String> {
+    let Some((scheme, token)) = auth_header.split_once(' ') else {
+        return Err("Authorization header must use Bearer token".to_string());
+    };
+    if !scheme.eq_ignore_ascii_case("bearer")
+        || token.is_empty()
+        || token.bytes().any(|byte| byte.is_ascii_whitespace())
+    {
+        return Err(
+            "Authorization header must contain one Bearer scheme and token separated by one ASCII space"
+                .to_string(),
+        );
+    }
+    Ok(token)
 }
 #[cfg(feature = "app_api")]
 fn tx_history_jwt_string_claim(
@@ -43931,32 +44572,42 @@ fn decode_tx_history_jwt_claims(
     auth_header: &str,
     jwt: &TxHistoryJwtConfig,
 ) -> Result<TxHistoryJwtClaims, String> {
-    let mut authorization = auth_header.split_whitespace();
-    let scheme = authorization.next().unwrap_or_default();
-    let token = authorization.next().unwrap_or_default();
-    if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() || authorization.next().is_some()
-    {
-        return Err("Authorization header must use Bearer token".to_string());
-    }
+    let token = tx_history_bearer_token(auth_header)?;
     let key = jwt.key.decoding_key(jwt.algorithm)?;
     let mut parts = token.split('.');
-    let header_part = parts.next().filter(|part| !part.is_empty());
-    let claims_part = parts.next().filter(|part| !part.is_empty());
-    let signature_part = parts.next().filter(|part| !part.is_empty());
-    if header_part.is_none()
-        || claims_part.is_none()
-        || signature_part.is_none()
-        || parts.next().is_some()
-    {
+    let Some(header_part) = parts.next().filter(|part| !part.is_empty()) else {
+        return Err("invalid JWT".to_string());
+    };
+    let Some(claims_part) = parts.next().filter(|part| !part.is_empty()) else {
+        return Err("invalid JWT".to_string());
+    };
+    let Some(signature_part) = parts.next().filter(|part| !part.is_empty()) else {
+        return Err("invalid JWT".to_string());
+    };
+    if parts.next().is_some() {
         return Err("invalid JWT".to_string());
     }
-    let header_part = header_part.expect("checked above");
-    let claims_part = claims_part.expect("checked above");
-    let signature_part = signature_part.expect("checked above");
+    let signature = URL_SAFE_NO_PAD
+        .decode(signature_part.as_bytes())
+        .map_err(|_| "invalid JWT".to_string())?;
+    if URL_SAFE_NO_PAD.encode(signature) != signature_part {
+        return Err("invalid JWT".to_string());
+    }
     let header = decode_tx_history_jwt_json_part(header_part, "invalid JWT payload")?;
     let header_object = header
         .as_object()
         .ok_or_else(|| "invalid JWT payload".to_string())?;
+    if header_object
+        .keys()
+        .any(|field| !matches!(field.as_str(), "alg" | "typ"))
+    {
+        return Err("unsupported JWT header parameter".to_string());
+    }
+    if let Some(token_type) = header_object.get("typ")
+        && token_type.as_str() != Some("JWT")
+    {
+        return Err("JWT typ header must use the exact `JWT` spelling".to_string());
+    }
     let header_algorithm = header_object
         .get("alg")
         .and_then(Value::as_str)
@@ -44006,15 +44657,15 @@ fn decode_tx_history_jwt_claims(
             .iss
             .as_deref()
             .ok_or_else(|| "missing iss claim".to_string())?;
-        if actual_issuer.trim() != expected_issuer {
+        if actual_issuer != expected_issuer {
             return Err("invalid JWT issuer".to_string());
         }
     }
     if let Some(expected_audience) = jwt.audience.as_deref() {
         let matches = claims.aud.as_ref().is_some_and(|audience| match audience {
-            TxHistoryAudienceClaim::Single(value) => value.trim() == expected_audience,
+            TxHistoryAudienceClaim::Single(value) => value == expected_audience,
             TxHistoryAudienceClaim::Multiple(values) => {
-                values.iter().any(|value| value.trim() == expected_audience)
+                values.iter().any(|value| value == expected_audience)
             }
         });
         if !matches {
@@ -44078,45 +44729,48 @@ fn tx_history_viewer_from_headers(
             message,
         )
     })?;
-    let subject = claims
-        .sub
-        .as_deref()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            tx_history_reject(
-                StatusCode::UNAUTHORIZED,
-                "tx_history_subject_missing",
-                "missing sub claim",
-            )
-        })?;
-    let dataspace_id = claims
-        .dataspace_id
-        .as_deref()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            tx_history_reject(
-                StatusCode::UNAUTHORIZED,
-                "tx_history_dataspace_missing",
-                "missing dataspace_id claim",
-            )
-        })?;
-    let canonical_account_id = AccountId::parse_encoded(subject.trim()).ok();
+    let subject = claims.sub.ok_or_else(|| {
+        tx_history_reject(
+            StatusCode::UNAUTHORIZED,
+            "tx_history_subject_missing",
+            "missing sub claim",
+        )
+    })?;
+    if subject.is_empty() {
+        return Err(tx_history_reject(
+            StatusCode::UNAUTHORIZED,
+            "tx_history_subject_invalid",
+            "sub claim must be a canonical account id or account alias literal",
+        ));
+    }
+    let dataspace_id = claims.dataspace_id.ok_or_else(|| {
+        tx_history_reject(
+            StatusCode::UNAUTHORIZED,
+            "tx_history_dataspace_missing",
+            "missing dataspace_id claim",
+        )
+    })?;
+    let nexus = app.state.nexus_snapshot();
+    if !is_exact_tx_history_dataspace_alias(&nexus.dataspace_catalog, &dataspace_id) {
+        return Err(tx_history_reject(
+            StatusCode::UNAUTHORIZED,
+            "tx_history_dataspace_invalid",
+            "dataspace_id claim must name one exact configured dataspace alias",
+        ));
+    }
+    let canonical_account_id = AccountId::parse_encoded(&subject).ok();
     let alias_candidates = if canonical_account_id.is_some() {
         Vec::new()
     } else {
-        let nexus = app.state.nexus_snapshot();
         match canonical_tx_history_subject_alias(&nexus.dataspace_catalog, &subject) {
             Ok(Some(alias)) => vec![alias],
-            Ok(None) => {
+            Ok(None) | Err(_) => {
                 return Err(tx_history_reject(
                     StatusCode::UNAUTHORIZED,
                     "tx_history_subject_invalid",
                     "sub claim must be a canonical account id or account alias literal",
                 ));
             }
-            Err(err) => return Err(tx_history_alias_resolution_reject(err)),
         }
     };
     let mut dedupe = HashSet::new();
@@ -44805,7 +45459,7 @@ impl SoraFsAppealSettlementSubmitter {
         checkpoint_runtime: Arc<
             dyn sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceCheckpointRuntime,
         >,
-    ) -> Self {
+    ) -> Result<Self, ToriiBuildError> {
         use sorafs_node::appeal_finance_transaction_forwarder::{
             APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
             APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
@@ -44818,21 +45472,26 @@ impl SoraFsAppealSettlementSubmitter {
             runtime_signers.as_deref(),
             finalized_startup_height,
         )
-        .unwrap_or_else(|error| {
-            panic!("SoraFS appeal-finance runtime signer inventory is invalid: {error:?}")
-        });
-        let checkpoint_binding = config.checkpoint_provider.as_ref().unwrap_or_else(|| {
-            panic!(
-                "SoraFS appeal-finance submitters require an independent configured checkpoint HSM/KMS binding"
+        .map_err(|error| {
+            ToriiBuildError::invalid_runtime_dependency(
+                "sorafs.appeal_finance.submitter_signers",
+                format!("{error:?}"),
             )
-        });
+        })?;
+        let checkpoint_binding = config.checkpoint_provider.as_ref().ok_or_else(|| {
+            ToriiBuildError::invalid_configuration(
+                "sorafs.appeal_finance.checkpoint_provider",
+                "submitters require an independent configured checkpoint signer binding",
+            )
+        })?;
         if config.submitter_signers.iter().any(|binding| {
             binding.handle == checkpoint_binding.handle
                 || binding.public_key == checkpoint_binding.public_key
         }) {
-            panic!(
-                "SoraFS appeal-finance checkpoint and transaction signer bindings must be independently administered"
-            );
+            return Err(ToriiBuildError::invalid_configuration(
+                "sorafs.appeal_finance.checkpoint_provider",
+                "checkpoint and transaction signer bindings must be independently administered",
+            ));
         }
         let checkpoint_public_key = checkpoint_binding
             .public_key
@@ -44844,11 +45503,12 @@ impl SoraFsAppealSettlementSubmitter {
                 }
                 <[u8; 32]>::try_from(bytes).ok()
             })
-            .unwrap_or_else(|| {
-                panic!(
-                    "SoraFS appeal-finance checkpoint binding must carry a strict Ed25519 public key"
+            .ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "sorafs.appeal_finance.checkpoint_provider.public_key",
+                    "checkpoint binding must carry a strict Ed25519 public key",
                 )
-            });
+            })?;
         let expected_checkpoint_qualification = AppealFinanceRuntimeProviderQualificationV1::new(
             checkpoint_binding.revision,
             checkpoint_binding.policy_digest,
@@ -44860,17 +45520,26 @@ impl SoraFsAppealSettlementSubmitter {
             revision: checkpoint_binding.revision,
             policy_digest: checkpoint_binding.policy_digest,
         };
-        authentication_policy.validate().unwrap_or_else(|error| {
-            panic!("SoraFS appeal-finance checkpoint HSM/KMS binding is invalid: {error}")
-        });
-        let checkpoint_identity = checkpoint_runtime.identity().unwrap_or_else(|_| {
-            panic!("SoraFS appeal-finance checkpoint HSM/KMS identity is unavailable")
-        });
+        authentication_policy.validate().map_err(|error| {
+            ToriiBuildError::invalid_configuration(
+                "sorafs.appeal_finance.checkpoint_provider",
+                error,
+            )
+        })?;
+        let checkpoint_identity = checkpoint_runtime.identity().map_err(|error| {
+            ToriiBuildError::invalid_runtime_dependency(
+                "sorafs.appeal_finance.checkpoint_provider",
+                format!("checkpoint identity is unavailable: {error:?}"),
+            )
+        })?;
         if checkpoint_identity.provider_handle != checkpoint_binding.handle
             || checkpoint_identity.public_key != checkpoint_public_key
             || checkpoint_identity.qualification != expected_checkpoint_qualification
         {
-            panic!("SoraFS appeal-finance checkpoint HSM/KMS binding is substituted or stale");
+            return Err(ToriiBuildError::invalid_runtime_dependency(
+                "sorafs.appeal_finance.checkpoint_provider",
+                "checkpoint binding is substituted or stale",
+            ));
         }
         let state_dir = storage_data_dir.join("appeal-finance-transaction-forwarder");
         let policy = AppealFinanceTransactionForwarderPolicyV1 {
@@ -44887,18 +45556,21 @@ impl SoraFsAppealSettlementSubmitter {
             authentication_policy,
             checkpoint_runtime,
         )
-        .unwrap_or_else(|error| {
-            panic!(
-                "failed to open durable SoraFS appeal-finance transaction forwarder at {}: {error}",
-                state_dir.display()
+        .map_err(|error| {
+            ToriiBuildError::component_initialization(
+                "sorafs.appeal_finance.transaction_forwarder",
+                format!(
+                    "failed to open durable state at {}: {error}",
+                    state_dir.display()
+                ),
             )
-        });
-        Self {
+        })?;
+        Ok(Self {
             bindings: config.submitter_signers.clone(),
             runtime_signers,
             forwarder,
             worker_scan_interval: config.worker_scan_interval,
-        }
+        })
     }
     fn active_binding_for<'a>(
         &'a self,
@@ -44964,7 +45636,7 @@ impl SoraFsAppealSettlementSubmitter {
 /// Runtime-only signer for durable appeal-finance asset-lock transactions.
 ///
 /// Implementations are expected to delegate to an independently administered
-/// PKCS#11/HSM/KMS service. They receive only a fully constructed fee-quoted
+/// external signing service. They receive only a fully constructed fee-quoted
 /// payload and have no queue or outbox capability.
 #[cfg(feature = "app_api")]
 pub trait SoraFsAppealFinanceTransactionSigner: Send + Sync {
@@ -44989,7 +45661,7 @@ pub trait SoraFsAppealFinanceTransactionSigner: Send + Sync {
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsAppealFinanceSigningError {
-    /// HSM/KMS service is temporarily unavailable.
+    /// External signing service is temporarily unavailable.
     Unavailable,
     /// Provider refused or failed the signing operation.
     Refused,
@@ -45634,19 +46306,22 @@ mod appeal_finance_runtime_signer_tests {
         ];
         let storage_dir = tempfile::tempdir().expect("temporary storage directory");
         let checkpoint_runtime = Arc::new(UnexpectedCheckpointRuntime::default());
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
-            let checkpoint_runtime = checkpoint_runtime.clone();
-            || {
-                SoraFsAppealSettlementSubmitter::from_config(
-                    &config,
-                    storage_dir.path(),
-                    None,
-                    1,
-                    checkpoint_runtime,
-                )
+        let error = SoraFsAppealSettlementSubmitter::from_config(
+            &config,
+            storage_dir.path(),
+            None,
+            1,
+            checkpoint_runtime.clone(),
+        )
+        .err()
+        .expect("missing registry must reject construction");
+        assert!(matches!(
+            error,
+            ToriiBuildError::InvalidRuntimeDependency {
+                component: "sorafs.appeal_finance.submitter_signers",
+                ..
             }
-        }));
-        assert!(result.is_err(), "missing registry must reject construction");
+        ));
         assert!(
             !checkpoint_runtime.identity_called.load(Ordering::SeqCst),
             "checkpoint runtime must remain untouched"
@@ -45709,16 +46384,22 @@ mod appeal_finance_runtime_signer_tests {
             },
         });
         let storage_dir = tempfile::tempdir().expect("temporary storage directory");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            SoraFsAppealSettlementSubmitter::from_config(
-                &config,
-                storage_dir.path(),
-                Some(runtime_signers),
-                1,
-                checkpoint_runtime,
-            )
-        }));
-        assert!(result.is_err(), "substituted checkpoint must fail startup");
+        let error = SoraFsAppealSettlementSubmitter::from_config(
+            &config,
+            storage_dir.path(),
+            Some(runtime_signers),
+            1,
+            checkpoint_runtime,
+        )
+        .err()
+        .expect("substituted checkpoint must fail construction");
+        assert!(matches!(
+            error,
+            ToriiBuildError::InvalidRuntimeDependency {
+                component: "sorafs.appeal_finance.checkpoint_provider",
+                ..
+            }
+        ));
         assert!(
             !storage_dir
                 .path()
@@ -46342,9 +47023,9 @@ fn select_initial_musubi_search_index(
     match rebuilt {
         Ok(index) => index,
         Err(error) => {
-            // Rich discovery is rebuildable and deliberately non-authoritative. Keep exact
-            // resolver and registry routes available while the subscribed worker retries from
-            // finalized state; search itself returns its explicit unavailable response.
+            // Keep construction side-effect free and leave exact registry state intact. The
+            // supervised projection worker retries this rebuild when `Torii::start` runs and
+            // terminates the server visibly if finalized state remains inconsistent.
             iroha_logger::error!(
                 %error,
                 "failed to initialize finalized Musubi search projection; search is unavailable until rebuild"
@@ -46399,7 +47080,135 @@ mod musubi_search_initialization_tests {
         assert_eq!(available.snapshot(), Some(snapshot));
     }
 }
-/// Main network handler and the only entrypoint of the Iroha.
+/// Failure to construct a [`Torii`] runtime.
+///
+/// Construction validates every externally supplied configuration value and
+/// runtime dependency before installing process-wide policy or starting a
+/// background worker. Callers can therefore report startup failures without
+/// unwinding or leaving a partially active Torii behind.
+#[derive(Debug, thiserror::Error)]
+pub enum ToriiBuildError {
+    /// A resolved Torii configuration value is invalid for `component`.
+    #[error("invalid Torii configuration for `{component}`: {reason}")]
+    InvalidConfiguration {
+        /// Exact configuration component that rejected the value.
+        component: &'static str,
+        /// Operator-facing explanation that does not contain secret material.
+        reason: String,
+    },
+    /// A runtime-only dependency is missing, unexpected, or does not match its configured pin.
+    #[error("invalid Torii runtime dependency for `{component}`: {reason}")]
+    InvalidRuntimeDependency {
+        /// Exact runtime component that rejected the dependency set.
+        component: &'static str,
+        /// Operator-facing explanation that does not contain secret material.
+        reason: String,
+    },
+    /// A durable or cryptographic component could not be initialized.
+    #[error("failed to initialize Torii component `{component}`: {reason}")]
+    ComponentInitialization {
+        /// Exact component that failed initialization.
+        component: &'static str,
+        /// Operator-facing failure description.
+        reason: String,
+    },
+}
+
+impl ToriiBuildError {
+    fn invalid_configuration(component: &'static str, reason: impl ToString) -> Self {
+        Self::InvalidConfiguration {
+            component,
+            reason: reason.to_string(),
+        }
+    }
+
+    fn invalid_runtime_dependency(component: &'static str, reason: impl ToString) -> Self {
+        Self::InvalidRuntimeDependency {
+            component,
+            reason: reason.to_string(),
+        }
+    }
+
+    fn component_initialization(component: &'static str, reason: impl ToString) -> Self {
+        Self::ComponentInitialization {
+            component,
+            reason: reason.to_string(),
+        }
+    }
+}
+
+fn validate_semaphore_permits(
+    component: &'static str,
+    permits: usize,
+) -> core::result::Result<usize, ToriiBuildError> {
+    if permits > tokio::sync::Semaphore::MAX_PERMITS {
+        return Err(ToriiBuildError::invalid_configuration(
+            component,
+            format!(
+                "configured concurrency {permits} exceeds Tokio's semaphore limit {}",
+                tokio::sync::Semaphore::MAX_PERMITS
+            ),
+        ));
+    }
+    Ok(permits)
+}
+
+fn checked_semaphore_permit_sum(
+    component: &'static str,
+    left: usize,
+    right: usize,
+) -> core::result::Result<usize, ToriiBuildError> {
+    let permits = left.checked_add(right).ok_or_else(|| {
+        ToriiBuildError::invalid_configuration(component, "configured concurrency overflows usize")
+    })?;
+    validate_semaphore_permits(component, permits)
+}
+
+#[cfg(test)]
+mod semaphore_capacity_validation_tests {
+    use super::{ToriiBuildError, checked_semaphore_permit_sum, validate_semaphore_permits};
+
+    #[test]
+    fn accepts_exact_runtime_limit_and_rejects_larger_values() {
+        let limit = tokio::sync::Semaphore::MAX_PERMITS;
+        assert_eq!(
+            validate_semaphore_permits("test", limit).expect("exact limit is valid"),
+            limit
+        );
+        assert!(matches!(
+            validate_semaphore_permits("test", limit + 1),
+            Err(ToriiBuildError::InvalidConfiguration {
+                component: "test",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_overflow_before_constructing_a_semaphore() {
+        assert!(matches!(
+            checked_semaphore_permit_sum("test.sum", usize::MAX, 1),
+            Err(ToriiBuildError::InvalidConfiguration {
+                component: "test.sum",
+                ..
+            })
+        ));
+    }
+}
+
+/// Test-only router runtime that keeps its background services alive.
+struct TestApiRouterRuntime {
+    router: axum::Router,
+    shutdown_signal: ShutdownSignal,
+}
+
+impl Drop for TestApiRouterRuntime {
+    fn drop(&mut self) {
+        self.shutdown_signal.send();
+    }
+}
+
+/// Main network handler and the only entrypoint of Iroha's HTTP API.
 pub struct Torii {
     chain_id: Arc<ChainId>,
     signed_query_admission: Arc<routing::SignedQueryAdmission>,
@@ -46409,7 +47218,7 @@ pub struct Torii {
     events: EventsSender,
     query_service: LiveQueryStoreHandle,
     kura: Arc<Kura>,
-    transaction_max_content_len: ConfigBytes,
+    transaction_max_content_len: usize,
     iso_bridge_max_body_bytes: ConfigBytes,
     transaction_ingress_max_concurrent_compute_jobs: usize,
     #[cfg(feature = "app_api")]
@@ -46487,7 +47296,7 @@ pub struct Torii {
     cors: iroha_config::parameters::actual::ToriiCors,
     mcp_rate_limiter: limits::RateLimiter,
     require_api_token: bool,
-    api_tokens_set: std::sync::Arc<std::collections::HashSet<String>>,
+    api_token_digests: Arc<limits::ApiTokenDigestSet>,
     webhooks_enabled: bool,
     zk_attachments_enabled: bool,
     operator_auth: Arc<operator_auth::OperatorAuth>,
@@ -46509,6 +47318,7 @@ pub struct Torii {
     push: Option<push::PushBridge>,
     #[cfg(feature = "push")]
     push_rate_limiter: limits::RateLimiter,
+    test_api_router: parking_lot::Mutex<Option<TestApiRouterRuntime>>,
     iso_bridge: Option<Arc<Iso20022BridgeRuntime>>,
     alias_service: Option<Arc<AliasService>>,
     #[cfg(feature = "app_api")]
@@ -46551,8 +47361,6 @@ pub struct Torii {
     sorafs_moderation_orchestrator_worker:
         Option<iroha_config::parameters::actual::SorafsModerationOrchestrator>,
     #[cfg(feature = "app_api")]
-    sorafs_moderation_startup_error: Option<&'static str>,
-    #[cfg(feature = "app_api")]
     sorafs_evidence_viewer: Option<Arc<sorafs_node::evidence_viewer::EvidenceViewerServiceV1>>,
     #[cfg(feature = "app_api")]
     sorafs_evidence_viewer_transparency_producer: Option<
@@ -46561,8 +47369,6 @@ pub struct Torii {
                 EvidenceViewerTransparencyProducerV1,
         >,
     >,
-    #[cfg(feature = "app_api")]
-    sorafs_evidence_viewer_startup_error: Option<&'static str>,
     #[cfg(feature = "app_api")]
     sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
@@ -46996,7 +47802,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_appeal_finance_runtime_signers = Some(signers);
         self
     }
-    /// Attach the runtime-only HSM/KMS signer and monotonic sealed head used
+    /// Attach the runtime-only checkpoint signer and monotonic sealed head used
     /// to authenticate appeal-finance forwarder checkpoints.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -47024,7 +47830,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_potr_runtime_signer_roles = Some(roles);
         self
     }
-    /// Attach the runtime-only HSM service for exact Torii-built moderation payloads.
+    /// Attach the runtime-only signer for exact Torii-built moderation payloads.
     #[cfg(feature = "app_api")]
     #[must_use]
     pub fn with_sorafs_moderation_transaction_signer(
@@ -47178,7 +47984,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_pop_credentials = Some(runtime);
         self
     }
-    /// Attach the runtime-only PKCS#11/KMS wrapper used for SoraFS moderation
+    /// Attach the runtime-only deployment-owned wrapper used for SoraFS moderation
     /// quarantine object data keys.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -47247,7 +48053,7 @@ impl ToriiRuntimeDeps {
         self.sorafs_fenced_transparency_head_reader = Some(reader);
         self
     }
-    /// Attach the runtime-only HSM signer for the signed Governance DAG root.
+    /// Attach the runtime-only signer for the signed Governance DAG root.
     ///
     /// Standalone node construction requires this role whenever
     /// `governance_dag_dir` is configured. It must match the exact peer,
@@ -47426,7 +48232,7 @@ fn emergency_fast_does_not_configure_or_start_the_background_zk_prover() {
         .rfind("crate::zk_attachments::init_persistence()")
         .expect("attachment persistence recovery");
     let refusal = source
-        .rfind("refusing to start Torii before attachment quota recovery")
+        .rfind("failed to initialize direct durable ZK attachment storage")
         .expect("failed-recovery startup refusal");
     let start = source
         .rfind("crate::zk_prover::start_worker(shutdown_signal.clone())")
@@ -47448,10 +48254,16 @@ fn torii_start_binds_before_launching_background_workers() {
     let attachment_recovery = start
         .find("crate::zk_attachments::init_persistence()")
         .expect("attachment recovery preflight");
+    let prover_recovery = start
+        .find("crate::zk_prover::init_persistence()")
+        .expect("prover storage preflight");
+    let webhook_recovery = start
+        .find("crate::webhook::init_persistence()")
+        .expect("webhook persistence preflight");
     let bind = start
         .find("bind_torii_tcp_listener(torii_address.clone())")
         .expect("Torii listener bind");
-    assert!(attachment_recovery < bind);
+    assert!(attachment_recovery < bind && prover_recovery < bind && webhook_recovery < bind);
     for worker in [
         "crate::webhook::start_delivery_worker(",
         "self.spawn_musubi_search_projection_worker(",
@@ -47460,6 +48272,16 @@ fn torii_start_binds_before_launching_background_workers() {
     ] {
         let worker_start = start.find(worker).expect("background worker start");
         assert!(bind < worker_start, "{worker} must start only after bind");
+    }
+    for critical_name in [
+        "name: \"musubi_search_projection\"",
+        "name: \"zk_attachment_gc\"",
+        "name: \"zk_prover\"",
+    ] {
+        assert!(
+            start.contains(critical_name),
+            "{critical_name} must be owned by critical-worker supervision"
+        );
     }
 }
 
@@ -47764,10 +48586,7 @@ fn preflight_sorafs_governance_dag_signer(
     let configured = storage_config.governance_dir().is_some();
     let Some(signer) = signer else {
         return if configured {
-            Err(
-                "configured signed SoraFS Governance DAG requires a raw runtime HSM signer"
-                    .to_owned(),
-            )
+            Err("configured signed SoraFS Governance DAG requires a raw runtime signer".to_owned())
         } else {
             Ok(())
         };
@@ -48000,19 +48819,21 @@ fn preflight_sorafs_fenced_privacy_runtime(
     Ok(())
 }
 #[cfg(feature = "app_api")]
-fn assert_prebuilt_sorafs_quarantine_key_provider_binding(
+fn validate_prebuilt_sorafs_quarantine_key_provider_binding(
     node: &sorafs_node::NodeHandle,
     storage_config: &sorafs_node::config::StorageConfig,
-) {
-    assert!(
-        node.matches_moderation_quarantine_key_provider_binding(
-            storage_config.moderation_quarantine_key_provider(),
-        ),
-        "injected SoraFS node quarantine-key provider binding does not match torii.sorafs.storage"
-    );
+) -> Result<(), &'static str> {
+    if !node.matches_moderation_quarantine_key_provider_binding(
+        storage_config.moderation_quarantine_key_provider(),
+    ) {
+        return Err(
+            "injected SoraFS node quarantine-key provider binding does not match configuration",
+        );
+    }
+    Ok(())
 }
 #[cfg(feature = "app_api")]
-fn assert_prebuilt_sorafs_privacy_provider_bindings(
+fn validate_prebuilt_sorafs_privacy_provider_bindings(
     node: &sorafs_node::NodeHandle,
     storage_config: &sorafs_node::config::StorageConfig,
     raw_cycle_prf_provider_injected: bool,
@@ -48020,51 +48841,66 @@ fn assert_prebuilt_sorafs_privacy_provider_bindings(
     raw_leader_lease_provider_injected: bool,
     raw_fenced_publisher_injected: bool,
     raw_fenced_head_reader_injected: bool,
-) {
-    assert!(
-        sorafs_signed_governance_binding_matches(node.config(), storage_config),
-        "injected SoraFS node signed Governance root and signer binding does not match torii.sorafs.storage"
-    );
-    assert_eq!(
-        node.privacy_cycle_prf_provider_binding(),
-        storage_config.privacy_cycle_prf_provider_binding(),
-        "injected SoraFS node threshold-PRF provider binding does not match torii.sorafs.storage"
-    );
-    assert_eq!(
-        node.privacy_release_anchor_provider_binding(),
-        storage_config.privacy_release_anchor_provider_binding(),
-        "injected SoraFS node release-anchor provider binding does not match torii.sorafs.storage"
-    );
-    assert_eq!(
-        node.transparency_leader_lease_provider_binding(),
-        storage_config.privacy_leader_lease_provider_binding(),
-        "injected SoraFS node leader-lease provider binding does not match torii.sorafs.storage"
-    );
-    assert_eq!(
-        node.config().privacy_fenced_publisher_binding(),
-        storage_config.privacy_fenced_publisher_binding(),
-        "injected SoraFS node fused privacy publisher binding does not match torii.sorafs.storage"
-    );
-    assert!(
-        !raw_cycle_prf_provider_injected,
-        "a prebuilt SoraFS node must not also receive a raw threshold-PRF provider through Torii"
-    );
-    assert!(
-        !raw_release_anchor_injected,
-        "a prebuilt SoraFS node must not also receive a raw finalized release anchor through Torii"
-    );
-    assert!(
-        !raw_leader_lease_provider_injected,
-        "a prebuilt SoraFS node must not also receive a raw leader-lease provider through Torii"
-    );
-    assert!(
-        !raw_fenced_publisher_injected,
-        "a prebuilt SoraFS node must not also receive a raw fused privacy publisher through Torii"
-    );
-    assert!(
-        !raw_fenced_head_reader_injected,
-        "a prebuilt SoraFS node must not also receive a raw authenticated privacy-head reader through Torii"
-    );
+) -> Result<(), &'static str> {
+    if !sorafs_signed_governance_binding_matches(node.config(), storage_config) {
+        return Err(
+            "injected SoraFS node signed Governance root and signer binding does not match configuration",
+        );
+    }
+    if node.privacy_cycle_prf_provider_binding()
+        != storage_config.privacy_cycle_prf_provider_binding()
+    {
+        return Err(
+            "injected SoraFS node threshold-PRF provider binding does not match configuration",
+        );
+    }
+    if node.privacy_release_anchor_provider_binding()
+        != storage_config.privacy_release_anchor_provider_binding()
+    {
+        return Err(
+            "injected SoraFS node release-anchor provider binding does not match configuration",
+        );
+    }
+    if node.transparency_leader_lease_provider_binding()
+        != storage_config.privacy_leader_lease_provider_binding()
+    {
+        return Err(
+            "injected SoraFS node leader-lease provider binding does not match configuration",
+        );
+    }
+    if node.config().privacy_fenced_publisher_binding()
+        != storage_config.privacy_fenced_publisher_binding()
+    {
+        return Err(
+            "injected SoraFS node fused privacy publisher binding does not match configuration",
+        );
+    }
+    if raw_cycle_prf_provider_injected {
+        return Err(
+            "a prebuilt SoraFS node must not also receive a raw threshold-PRF provider through Torii",
+        );
+    }
+    if raw_release_anchor_injected {
+        return Err(
+            "a prebuilt SoraFS node must not also receive a raw finalized release anchor through Torii",
+        );
+    }
+    if raw_leader_lease_provider_injected {
+        return Err(
+            "a prebuilt SoraFS node must not also receive a raw leader-lease provider through Torii",
+        );
+    }
+    if raw_fenced_publisher_injected {
+        return Err(
+            "a prebuilt SoraFS node must not also receive a raw fused privacy publisher through Torii",
+        );
+    }
+    if raw_fenced_head_reader_injected {
+        return Err(
+            "a prebuilt SoraFS node must not also receive a raw authenticated privacy-head reader through Torii",
+        );
+    }
+    Ok(())
 }
 #[cfg(feature = "app_api")]
 struct EvidenceViewerCompactionWorkerHandle {
@@ -48274,10 +49110,6 @@ macro_rules! catalog_route_policy {
         catalog_get($handler)
             .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature)
     };
-    (optional_canonical_signature_post($handler:path)) => {
-        catalog_post($handler)
-            .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature)
-    };
     (canonical_signature_post($handler:path)) => {
         catalog_post($handler)
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
@@ -48394,9 +49226,6 @@ macro_rules! catalog_route_policy {
     (operator_post($handler:path, $state:ident)) => {
         catalog_post($handler).authenticated_operator($state.clone())
     };
-    (protocol_handshake_get($handler:path)) => {
-        catalog_get($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
-    };
     (protocol_handshake_post($handler:path)) => {
         catalog_post($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
     };
@@ -48442,15 +49271,95 @@ macro_rules! mount_local_catalog_route_rows {
     };
 }
 
+#[cfg(feature = "app_api")]
+enum MusubiSearchProjectionInput {
+    Event(EventBox),
+    Lagged(u64),
+    Exit(ToriiCriticalWorkerExit),
+}
+
+#[cfg(feature = "app_api")]
+fn musubi_search_projection_failure_exit(
+    shutdown_signal: &ShutdownSignal,
+) -> ToriiCriticalWorkerExit {
+    if shutdown_signal.is_sent() {
+        ToriiCriticalWorkerExit::StoppedByShutdown
+    } else {
+        ToriiCriticalWorkerExit::UnexpectedExit
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn next_musubi_search_projection_input(
+    shutdown_signal: &ShutdownSignal,
+    events: &mut tokio::sync::broadcast::Receiver<EventBox>,
+) -> MusubiSearchProjectionInput {
+    tokio::select! {
+        biased;
+        () = shutdown_signal.receive() => {
+            MusubiSearchProjectionInput::Exit(ToriiCriticalWorkerExit::StoppedByShutdown)
+        }
+        received = events.recv() => match received {
+            Ok(event) => MusubiSearchProjectionInput::Event(event),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                MusubiSearchProjectionInput::Lagged(skipped)
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                MusubiSearchProjectionInput::Exit(
+                    musubi_search_projection_failure_exit(shutdown_signal),
+                )
+            }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod musubi_search_projection_worker_lifecycle_tests {
+    use super::{
+        MusubiSearchProjectionInput, ShutdownSignal, ToriiCriticalWorkerExit,
+        next_musubi_search_projection_input,
+    };
+
+    #[tokio::test]
+    async fn closed_feed_is_an_unexpected_worker_exit() {
+        let (sender, mut events) = tokio::sync::broadcast::channel(1);
+        let shutdown = ShutdownSignal::new();
+        drop(sender);
+
+        assert!(matches!(
+            next_musubi_search_projection_input(&shutdown, &mut events).await,
+            MusubiSearchProjectionInput::Exit(ToriiCriticalWorkerExit::UnexpectedExit)
+        ));
+    }
+
+    #[tokio::test]
+    async fn shutdown_wins_when_the_feed_is_also_closed() {
+        let (sender, mut events) = tokio::sync::broadcast::channel(1);
+        let shutdown = ShutdownSignal::new();
+        drop(sender);
+        shutdown.send();
+
+        assert!(matches!(
+            next_musubi_search_projection_input(&shutdown, &mut events).await,
+            MusubiSearchProjectionInput::Exit(ToriiCriticalWorkerExit::StoppedByShutdown)
+        ));
+    }
+}
+
 impl Torii {
     #[cfg(feature = "app_api")]
-    fn spawn_musubi_search_projection_worker(&self, shutdown_signal: ShutdownSignal) {
+    fn spawn_musubi_search_projection_worker(
+        &self,
+        shutdown_signal: ShutdownSignal,
+    ) -> tokio::task::JoinHandle<ToriiCriticalWorkerExit> {
         use iroha_core::musubi_search::search_event_height;
         let mut events = self.events.subscribe();
         let state = self.state.clone();
         let search = self.musubi_search.clone();
         tokio::spawn(async move {
-            let mut ignore_through_height = 0_u64;
+            if shutdown_signal.is_sent() {
+                return ToriiCriticalWorkerExit::StoppedByShutdown;
+            }
             // The subscription is opened before this rebuild, so events committed
             // concurrently are queued. `ignore_through_height` discards only the
             // prefix already represented by the rebuilt finalized state.
@@ -48459,12 +49368,17 @@ impl Torii {
                 .await
                 .snapshot()
                 .map(|snapshot| snapshot.projection_revision);
-            match rebuild_musubi_search_index(state.as_ref(), previous_revision) {
+            let rebuilt = rebuild_musubi_search_index(state.as_ref(), previous_revision);
+            if shutdown_signal.is_sent() {
+                return ToriiCriticalWorkerExit::StoppedByShutdown;
+            }
+            let mut ignore_through_height = match rebuilt {
                 Ok(rebuilt) => {
-                    ignore_through_height = rebuilt
+                    let finalized_height = rebuilt
                         .snapshot()
                         .map_or(0, |snapshot| snapshot.finalized_height);
                     *search.write().await = rebuilt;
+                    finalized_height
                 }
                 Err(error) => {
                     iroha_logger::error!(
@@ -48473,117 +49387,134 @@ impl Torii {
                     );
                     *search.write().await =
                         iroha_core::musubi_search::MusubiSearchIndexV1::default();
+                    return musubi_search_projection_failure_exit(&shutdown_signal);
                 }
-            }
+            };
             loop {
-                tokio::select! {
-                    _ = shutdown_signal.receive() => break,
-                    received = events.recv() => match received {
-                        Ok(EventBox::Data(data)) => {
-                            let DataEvent::Musubi(event) = data.as_ref() else {
-                                continue;
-                            };
-                            let Some(height) = search_event_height(event) else {
-                                continue;
-                            };
-                            if height <= ignore_through_height {
-                                continue;
+                match next_musubi_search_projection_input(&shutdown_signal, &mut events).await {
+                    MusubiSearchProjectionInput::Exit(exit) => return exit,
+                    MusubiSearchProjectionInput::Event(EventBox::Data(data)) => {
+                        let DataEvent::Musubi(event) = data.as_ref() else {
+                            continue;
+                        };
+                        let Some(height) = search_event_height(event) else {
+                            continue;
+                        };
+                        if height <= ignore_through_height {
+                            continue;
+                        }
+                        if search.read().await.snapshot().is_none() {
+                            let rebuilt = rebuild_musubi_search_index(state.as_ref(), None);
+                            if shutdown_signal.is_sent() {
+                                return ToriiCriticalWorkerExit::StoppedByShutdown;
                             }
-                            if search.read().await.snapshot().is_none() {
-                                match rebuild_musubi_search_index(state.as_ref(), None) {
-                                    Ok(rebuilt) => {
-                                        ignore_through_height = rebuilt
-                                            .snapshot()
-                                            .map_or(0, |snapshot| snapshot.finalized_height);
-                                        *search.write().await = rebuilt;
-                                        if height <= ignore_through_height {
-                                            continue;
-                                        }
-                                    }
-                                    Err(error) => {
-                                        iroha_logger::error!(
-                                            %error,
-                                            "finalized Musubi search projection remains unavailable"
-                                        );
+                            match rebuilt {
+                                Ok(rebuilt) => {
+                                    ignore_through_height = rebuilt
+                                        .snapshot()
+                                        .map_or(0, |snapshot| snapshot.finalized_height);
+                                    *search.write().await = rebuilt;
+                                    if height <= ignore_through_height {
                                         continue;
                                     }
                                 }
-                            }
-                            let Some(block_hash) = finalized_block_hash_at(state.as_ref(), height) else {
-                                iroha_logger::error!(
-                                    height,
-                                    "finalized Musubi search event has no matching block hash"
-                                );
-                                *search.write().await =
-                                    iroha_core::musubi_search::MusubiSearchIndexV1::default();
-                                continue;
-                            };
-                            let result = search
-                                .write()
-                                .await
-                                .apply_finalized(event, height, block_hash);
-                            if let Err(error) = result {
-                                iroha_logger::error!(
-                                    %error,
-                                    height,
-                                    "failed to apply finalized Musubi search event; rebuilding projection"
-                                );
-                                let previous_revision = search
-                                    .read()
-                                    .await
-                                    .snapshot()
-                                    .map(|snapshot| snapshot.projection_revision);
-                                match rebuild_musubi_search_index(state.as_ref(), previous_revision) {
-                                    Ok(rebuilt) => {
-                                        ignore_through_height = rebuilt
-                                            .snapshot()
-                                            .map_or(0, |snapshot| snapshot.finalized_height);
-                                        *search.write().await = rebuilt;
-                                    }
-                                    Err(rebuild_error) => {
-                                        iroha_logger::error!(
-                                            %rebuild_error,
-                                            "failed to recover finalized Musubi search projection"
-                                        );
-                                        *search.write().await =
-                                            iroha_core::musubi_search::MusubiSearchIndexV1::default();
-                                    }
+                                Err(error) => {
+                                    iroha_logger::error!(
+                                        %error,
+                                        "finalized Musubi search projection remains unavailable"
+                                    );
+                                    *search.write().await =
+                                        iroha_core::musubi_search::MusubiSearchIndexV1::default();
+                                    return musubi_search_projection_failure_exit(&shutdown_signal);
                                 }
                             }
                         }
-                        Ok(_) => {}
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            iroha_logger::warn!(
-                                skipped,
-                                "Musubi search projection event stream lagged; rebuilding from finalized state"
+                        let Some(block_hash) = finalized_block_hash_at(state.as_ref(), height)
+                        else {
+                            iroha_logger::error!(
+                                height,
+                                "finalized Musubi search event has no matching block hash"
+                            );
+                            *search.write().await =
+                                iroha_core::musubi_search::MusubiSearchIndexV1::default();
+                            return musubi_search_projection_failure_exit(&shutdown_signal);
+                        };
+                        let result = search
+                            .write()
+                            .await
+                            .apply_finalized(event, height, block_hash);
+                        if let Err(error) = result {
+                            iroha_logger::error!(
+                                %error,
+                                height,
+                                "failed to apply finalized Musubi search event; rebuilding projection"
                             );
                             let previous_revision = search
                                 .read()
                                 .await
                                 .snapshot()
                                 .map(|snapshot| snapshot.projection_revision);
-                            match rebuild_musubi_search_index(state.as_ref(), previous_revision) {
+                            let rebuilt =
+                                rebuild_musubi_search_index(state.as_ref(), previous_revision);
+                            if shutdown_signal.is_sent() {
+                                return ToriiCriticalWorkerExit::StoppedByShutdown;
+                            }
+                            match rebuilt {
                                 Ok(rebuilt) => {
                                     ignore_through_height = rebuilt
                                         .snapshot()
                                         .map_or(0, |snapshot| snapshot.finalized_height);
                                     *search.write().await = rebuilt;
                                 }
-                                Err(error) => {
+                                Err(rebuild_error) => {
                                     iroha_logger::error!(
-                                        %error,
-                                        "failed to rebuild lagged finalized Musubi search projection"
+                                        %rebuild_error,
+                                        "failed to recover finalized Musubi search projection"
                                     );
                                     *search.write().await =
                                         iroha_core::musubi_search::MusubiSearchIndexV1::default();
+                                    return musubi_search_projection_failure_exit(&shutdown_signal);
                                 }
                             }
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                    MusubiSearchProjectionInput::Event(_) => {}
+                    MusubiSearchProjectionInput::Lagged(skipped) => {
+                        iroha_logger::warn!(
+                            skipped,
+                            "Musubi search projection event stream lagged; rebuilding from finalized state"
+                        );
+                        let previous_revision = search
+                            .read()
+                            .await
+                            .snapshot()
+                            .map(|snapshot| snapshot.projection_revision);
+                        let rebuilt =
+                            rebuild_musubi_search_index(state.as_ref(), previous_revision);
+                        if shutdown_signal.is_sent() {
+                            return ToriiCriticalWorkerExit::StoppedByShutdown;
+                        }
+                        match rebuilt {
+                            Ok(rebuilt) => {
+                                ignore_through_height = rebuilt
+                                    .snapshot()
+                                    .map_or(0, |snapshot| snapshot.finalized_height);
+                                *search.write().await = rebuilt;
+                            }
+                            Err(error) => {
+                                iroha_logger::error!(
+                                    %error,
+                                    "failed to rebuild lagged finalized Musubi search projection"
+                                );
+                                *search.write().await =
+                                    iroha_core::musubi_search::MusubiSearchIndexV1::default();
+                                return musubi_search_projection_failure_exit(&shutdown_signal);
+                            }
+                        }
                     }
                 }
             }
-        });
+        })
     }
     #[cfg(feature = "telemetry")]
     #[allow(clippy::unused_self)]
@@ -48933,11 +49864,7 @@ impl Torii {
     }
     #[cfg(feature = "app_api")]
     fn add_fee_routes(&self, builder: &mut RouterBuilder) {
-        let quote_body_limit: usize = self
-            .transaction_max_content_len
-            .get()
-            .try_into()
-            .expect("transaction body limit should fit usize");
+        let quote_body_limit = self.transaction_max_content_len;
         mount_catalog_route_rows!(
             builder, fees;
             QUOTE => limited_canonical_signature_post(handler_fee_quote, quote_body_limit);
@@ -49006,11 +49933,7 @@ impl Torii {
     }
     /// Transactions (binary Norito) endpoint
     fn add_transaction_routes(&self, builder: &mut RouterBuilder) {
-        let body_limit: usize = self
-            .transaction_max_content_len
-            .get()
-            .try_into()
-            .expect("shouldn't exceed usize");
+        let body_limit = self.transaction_max_content_len;
         let iso_body_limit =
             iso_bridge_body_limit(self.iso_bridge_max_body_bytes.get(), body_limit);
         let app_state = builder.state().clone();
@@ -49049,11 +49972,7 @@ impl Torii {
         let app_state = builder.state().clone();
         #[cfg(feature = "app_api")]
         {
-            let body_limit: usize = self
-                .transaction_max_content_len
-                .get()
-                .try_into()
-                .expect("DA body limit should fit usize");
+            let body_limit = self.transaction_max_content_len;
             mount_catalog_route_rows!(
                 builder, data_availability;
                 INGEST => limited_canonical_account_post(da::handler_post_da_ingest, app_state, body_limit, body_limit);
@@ -49093,11 +50012,7 @@ impl Torii {
     #[cfg(feature = "app_api")]
     fn add_musubi_routes(&self, builder: &mut RouterBuilder) {
         let app_state = builder.state().clone();
-        let body_limit: usize = self
-            .transaction_max_content_len
-            .get()
-            .try_into()
-            .expect("Musubi body limit should fit usize");
+        let body_limit = self.transaction_max_content_len;
         mount_catalog_route_rows!(
             builder, musubi;
             EXACT_PACKAGE => limited_canonical_account_post(musubi::handler_find_exact_package, app_state, body_limit, body_limit);
@@ -49144,11 +50059,7 @@ impl Torii {
     #[cfg(feature = "app_api")]
     fn add_contracts_and_vk_routes(&self, builder: &mut RouterBuilder) {
         let app_state = builder.state().clone();
-        let transaction_max_content_len: usize = self
-            .transaction_max_content_len
-            .get()
-            .try_into()
-            .expect("transaction content limit should fit usize");
+        let transaction_max_content_len = self.transaction_max_content_len;
         let por_proof_body_limit = transaction_max_content_len
             .min(crate::routing::POR_PROOF_SUBMISSION_MAX_HTTP_BODY_BYTES_V1);
         let por_verdict_body_limit = transaction_max_content_len
@@ -49517,11 +50428,7 @@ impl Torii {
     #[cfg(feature = "app_api")]
     fn add_app_api_routes(&self, builder: &mut RouterBuilder) {
         let app_state = builder.state().clone();
-        let transaction_max_content_len: usize = self
-            .transaction_max_content_len
-            .get()
-            .try_into()
-            .expect("shouldn't exceed usize");
+        let transaction_max_content_len = self.transaction_max_content_len;
         let offline_top_up_body_limit_bytes =
             offline_top_up_body_limit(transaction_max_content_len);
         let offline_redeem_body_limit_bytes =
@@ -49953,11 +50860,7 @@ impl Torii {
         );
     }
     fn add_sorafs_public_gateway_routes(&self, builder: &mut RouterBuilder) {
-        let body_limit: usize = self
-            .transaction_max_content_len
-            .get()
-            .try_into()
-            .expect("shouldn't exceed usize");
+        let body_limit = self.transaction_max_content_len;
         mount_catalog_route_rows!(
             builder, sorafs;
             CID_LOOKUP => limited_unauthenticated_get(sorafs::public_gateway::handle_get_sorafs_cid_lookup, body_limit);
@@ -49978,11 +50881,7 @@ impl Torii {
             ROUTING_PROVIDERS => public_get(sorafs::delegated_routing::handle_get_routing_providers);
             ROUTING_PEERS => public_get(sorafs::delegated_routing::handle_get_routing_peers);
         );
-        let sorafs_body_limit: usize = self
-            .transaction_max_content_len
-            .get()
-            .try_into()
-            .expect("shouldn't exceed usize");
+        let sorafs_body_limit = self.transaction_max_content_len;
         let sorafs_operator_state = builder.state().clone();
         mount_catalog_route_rows!(
             builder, sorafs;
@@ -50128,13 +51027,8 @@ impl Torii {
         use route_catalog::runtime_governance as routes;
         let app_state = builder.state().clone();
         #[cfg(feature = "app_api")]
-        let runtime_governance_body_limit: usize = self
-            .transaction_max_content_len
-            .get()
-            .try_into()
-            .expect("transaction content limit should fit usize");
-        let proof_body_limit =
-            usize::try_from(app_state.proof_limits.max_body_bytes).unwrap_or(usize::MAX);
+        let runtime_governance_body_limit = self.transaction_max_content_len;
+        let proof_body_limit = app_state.proof_limits.max_body_bytes;
         mount_local_catalog_route_rows!(
             builder, routes;
             ZK_ROOTS => canonical_account_proof_post(handler_zk_roots, app_state, proof_body_limit);
@@ -50238,14 +51132,22 @@ impl Torii {
         self.add_cataloged_runtime_governance_routes(builder);
     }
     #[cfg(feature = "app_api")]
-    fn add_private_settlement_routes(&self, builder: &mut RouterBuilder) {
+    fn add_private_settlement_routes(
+        &self,
+        builder: &mut RouterBuilder,
+    ) -> core::result::Result<(), ToriiBuildError> {
         use iroha_core::private_settlement::PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1;
         use route_catalog::private_settlement as routes;
 
         let app_state = builder.state().clone();
         let runtime = self.private_settlement_runtime.clone();
         let upload_limit = usize::try_from(PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1)
-            .expect("private-settlement sidecar limit fits usize");
+            .map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "private_settlement.sidecar_max_record_bytes",
+                    "sidecar record limit does not fit the platform address space",
+                )
+            })?;
         builder.route(
             &routes::AVAILABILITY_SHARE,
             catalog_post(private_settlement::handler_availability_share)
@@ -50329,6 +51231,7 @@ impl Torii {
                 .layer(axum::Extension(self.private_settlement_runtime.clone()))
                 .authenticated_identity_bound(app_state),
         );
+        Ok(())
     }
     /// Construct `Torii` with telemetry disabled.
     ///
@@ -50347,7 +51250,7 @@ impl Torii {
         state: Arc<CoreState>,
         da_receipt_signer: KeyPair,
         online_peers: OnlinePeersProvider,
-    ) -> Self {
+    ) -> Result<Self, ToriiBuildError> {
         Self::new_with_handle(
             chain_id,
             network_id,
@@ -50357,7 +51260,7 @@ impl Torii {
             events,
             query_service,
             kura,
-            state,
+            state.clone(),
             da_receipt_signer,
             online_peers,
             None,
@@ -50366,12 +51269,11 @@ impl Torii {
     }
     /// Construct `Torii`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics before global configuration or background-worker startup when
-    /// native SoraFS transaction signers, signed Governance producer roles, or
-    /// fused-privacy runtime roles are incomplete, ambiguous, unexpected,
-    /// substituted, stale, or do not match their exact configured binding.
+    /// Returns a component-qualified error when configuration, runtime-only
+    /// dependencies, or durable component initialization is invalid. No Torii
+    /// process-global policy or background worker is installed on failure.
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_handle(
         chain_id: ChainId,
@@ -50387,11 +51289,20 @@ impl Torii {
         online_peers: OnlinePeersProvider,
         sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
         runtime_deps: impl Into<ToriiRuntimeDeps>,
-    ) -> Self {
-        assert_eq!(
-            state.network_id, network_id,
-            "Torii network id must match the genesis-derived Core state identity"
-        );
+    ) -> Result<Self, ToriiBuildError> {
+        if state.network_id != network_id {
+            return Err(ToriiBuildError::invalid_configuration(
+                "network_id",
+                "Torii network id does not match the genesis-derived Core state identity",
+            ));
+        }
+        let transaction_max_content_len =
+            usize::try_from(config.max_content_len.get()).map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "max_content_len",
+                    "transaction content limit does not fit the platform address space",
+                )
+            })?;
         let emergency_fast = kura.emergency_fast_startup_enabled();
         if emergency_fast {
             // Keep emergency startup independent of every optional durable
@@ -50442,22 +51353,29 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let mut runtime_deps = runtime_deps;
         #[cfg(feature = "app_api")]
-        preflight_sorafs_native_transaction_signers(&config, &mut runtime_deps).unwrap_or_else(
-            |error| panic!("invalid SoraFS native signer runtime preflight: {error}"),
-        );
+        preflight_sorafs_native_transaction_signers(&config, &mut runtime_deps).map_err(
+            |error| {
+                ToriiBuildError::invalid_runtime_dependency(
+                    "sorafs.native_transaction_signers",
+                    error,
+                )
+            },
+        )?;
         #[cfg(feature = "app_api")]
         sorafs::stream_token_runtime::preflight_admission_capture(
             &network_id,
             &config,
             &runtime_deps,
         )
-        .unwrap_or_else(|error| panic!("invalid SoraFS stream-token runtime preflight: {error}"));
+        .map_err(|error| {
+            ToriiBuildError::invalid_runtime_dependency("sorafs.stream_tokens", error)
+        })?;
         #[cfg(feature = "app_api")]
         preflight_sorafs_fenced_privacy_runtime(
             &sorafs_node::config::StorageConfig::from(&config.sorafs_storage),
             &runtime_deps,
         )
-        .unwrap_or_else(|error| panic!("invalid SoraFS node runtime preflight: {error}"));
+        .map_err(|error| ToriiBuildError::invalid_runtime_dependency("sorafs.storage", error))?;
         let bootle_lantern_issuance_provider_registry = runtime_deps
             .bootle_lantern_issuance_provider_registry
             .clone();
@@ -50468,15 +51386,20 @@ impl Torii {
                     Arc::clone(&state),
                     bootle_lantern_issuance_provider_registry,
                 )
-                .unwrap_or_else(|error| {
-                    panic!("invalid Bootle/Lantern issuance runtime preflight: {error}")
-                }),
+                .map_err(|error| {
+                    ToriiBuildError::component_initialization(
+                        "privacy_bootle_lantern_issuer",
+                        error,
+                    )
+                })?,
             )),
             None => {
-                assert!(
-                    bootle_lantern_issuance_provider_registry.is_none(),
-                    "Bootle/Lantern issuance provider registry supplied while the runtime is disabled"
-                );
+                if bootle_lantern_issuance_provider_registry.is_some() {
+                    return Err(ToriiBuildError::invalid_runtime_dependency(
+                        "privacy_bootle_lantern_issuer",
+                        "provider registry supplied while the runtime is disabled",
+                    ));
+                }
                 None
             }
         };
@@ -50600,25 +51523,25 @@ impl Torii {
         let sorafs_gateway = config.sorafs_gateway.clone();
         let sorafs_site_bindings =
             sorafs::site::load_configured_site_bindings(&config.sorafs_gateway.site_bindings)
-                .unwrap_or_else(|err| panic!("invalid SoraFS static-site bindings: {err}"))
+                .map_err(|error| {
+                    ToriiBuildError::invalid_configuration("sorafs.gateway.site_bindings", error)
+                })?
                 .map(Arc::new);
         let vpn_relay_trust = runtime_deps.vpn_relay_trust;
         let torii_proxy_bridge_signer = runtime_deps
             .torii_proxy_bridge_signer
             .unwrap_or_else(|| da_receipt_signer.clone());
         let vpn_operator_signer = runtime_deps.vpn_operator_signer;
-        routing::debug_match_flag::set_from_config(config.debug_match_filters);
         let app_query_limits = routing::AppQueryLimits::new(
             config.app_api.default_list_limit.get().into(),
             config.app_api.max_list_limit.get().into(),
             config.app_api.max_fetch_size.get().into(),
             config.app_api.rate_limit_cost_per_row.get().into(),
         );
-        routing::set_app_query_limits(app_query_limits);
-        crate::app_auth::configure(crate::app_auth::CanonicalRequestAuthConfig::from(
-            &config.app_api,
-        ))
-        .expect("validated Torii app-auth replay window");
+        let app_auth_config = crate::app_auth::CanonicalRequestAuthConfig::from(&config.app_api);
+        app_auth_config.validate().map_err(|error| {
+            ToriiBuildError::invalid_configuration("app_api.request_auth", error)
+        })?;
         let signed_query_admission = Arc::new(
             routing::SignedQueryAdmission::new(
                 network_id,
@@ -50626,16 +51549,19 @@ impl Torii {
                 config.app_api.request_signature_nonce_ttl,
                 config.app_api.request_signature_replay_cache_capacity,
             )
-            .expect("validated Torii signed-query replay window"),
+            .map_err(|error| {
+                ToriiBuildError::invalid_configuration("app_api.signed_query_admission", error)
+            })?,
         );
-        #[cfg(feature = "app_api")]
-        crate::data_dir::set_base_dir(config.data_dir.clone());
         #[cfg(feature = "push")]
         let (push_bridge, push_rate_limiter) = {
             let bridge = if config.push.enabled {
-                let bridge = push::PushBridge::new(config.push.clone());
-                bridge.start_event_worker(kura.clone(), events.clone());
-                Some(bridge)
+                Some(
+                    push::PushBridge::new_in(config.push.clone(), config.data_dir.clone())
+                        .map_err(|error| {
+                            ToriiBuildError::component_initialization("push", format!("{error:?}"))
+                        })?,
+                )
             } else {
                 None
             };
@@ -50646,62 +51572,6 @@ impl Torii {
             let burst = config.push.burst.map(std::num::NonZeroU32::get);
             (bridge, limits::RateLimiter::new(per_sec, burst))
         };
-        // Configure app API subsystems (attachments) from Torii config
-        #[cfg(feature = "app_api")]
-        {
-            if config.webhooks_enabled {
-                crate::webhook::set_webhook_policy(crate::webhook::WebhookPolicy {
-                    queue_capacity: config.webhook.queue_capacity,
-                    max_attempts: config.webhook.max_attempts,
-                    backoff_initial: config.webhook.backoff_initial,
-                    backoff_max: config.webhook.backoff_max,
-                    connect_timeout: config.webhook.connect_timeout,
-                    write_timeout: config.webhook.write_timeout,
-                    read_timeout: config.webhook.read_timeout,
-                });
-                crate::webhook::set_webhook_security_policy(
-                    crate::webhook::WebhookSecurityPolicy {
-                        enabled: config.webhook_security.enabled,
-                        allow_nets: limits::parse_cidrs(&config.webhook_security.allow_cidrs),
-                    },
-                );
-            }
-            if config.zk_attachments_enabled {
-                crate::zk_attachments::configure(
-                    config.attachments_ttl_secs,
-                    config.attachments_max_bytes,
-                    config.attachments_per_tenant_max_count,
-                    config.attachments_per_tenant_max_bytes,
-                    config.attachments_global_max_count,
-                    config.attachments_global_max_bytes,
-                    config.attachments_allowed_mime_types.clone(),
-                    config.attachments_max_expanded_bytes,
-                    config.attachments_max_archive_depth,
-                    config.attachments_sanitizer_mode,
-                    config.attachments_sanitize_timeout_ms,
-                    None,
-                    telemetry.clone(),
-                );
-            }
-            if !emergency_fast {
-                // Non-consensus background prover hook; emergency Fast mode skips it.
-                crate::zk_prover::configure(
-                    config.zk_prover_enabled,
-                    config.zk_prover_scan_period_secs,
-                    config.zk_prover_reports_ttl_secs,
-                    config.zk_prover_reports_max_count,
-                    config.zk_prover_reports_max_bytes,
-                    config.zk_prover_max_inflight,
-                    config.zk_prover_max_scan_bytes,
-                    config.zk_prover_max_scan_millis,
-                    config.zk_prover_keys_dir.clone(),
-                    config.zk_prover_allowed_backends.clone(),
-                    config.zk_prover_allowed_circuits.clone(),
-                    Some(state.clone()),
-                    telemetry.clone(),
-                );
-            }
-        }
         let query_rate = config
             .query_rate_per_authority_per_sec
             .map(std::num::NonZeroU32::get);
@@ -50783,12 +51653,19 @@ impl Torii {
                 .soracloud_mutation_burst_per_account_origin
                 .map(std::num::NonZeroU32::get),
         );
+        let proof_max_body_bytes =
+            usize::try_from(config.proof_api.max_body_bytes.get()).map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "proof_api.max_body_bytes",
+                    "proof body limit does not fit the platform address space",
+                )
+            })?;
         let proof_limits = routing::ProofApiLimits::new(
             config.proof_api.max_list_limit.get(),
             config.proof_api.request_timeout,
             config.proof_api.cache_max_age,
             config.proof_api.retry_after,
-            config.proof_api.max_body_bytes.get(),
+            proof_max_body_bytes,
             config.proof_api.body_read_timeout,
         );
         let content_snapshot = state.content_snapshot();
@@ -50863,7 +51740,9 @@ impl Torii {
                 .collect(),
         }));
         let iso_bridge_runtime = Iso20022BridgeRuntime::from_config(&config.iso_bridge)
-            .unwrap_or_else(|err| panic!("invalid ISO 20022 bridge configuration: {err:?}"))
+            .map_err(|error| {
+                ToriiBuildError::invalid_configuration("iso_bridge", format!("{error:?}"))
+            })?
             .map(Arc::new);
         let alias_service = alias_service_from_iso_config(
             &config.iso_bridge,
@@ -50894,7 +51773,12 @@ impl Torii {
                 .unwrap_or(0)
                 / 4,
         )
-        .unwrap_or(usize::MAX);
+        .map_err(|_| {
+            ToriiBuildError::invalid_configuration(
+                "queue.max_retained_bytes",
+                "derived high-load transaction threshold does not fit this platform",
+            )
+        })?;
         let default_high_load_tx_threshold = std::cmp::max(
             1,
             count_based_high_load_threshold.min(byte_based_high_load_threshold),
@@ -50909,15 +51793,16 @@ impl Torii {
             .api_high_load_subscription_threshold
             .unwrap_or(high_load_stream_tx_threshold);
         let telemetry_profile = telemetry.profile();
-        let api_tokens_set: Arc<HashSet<String>> =
-            Arc::new(config.api_tokens.iter().cloned().collect());
+        let api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(
+            config.api_tokens.iter().map(String::as_str),
+        ));
         let operator_auth = Arc::new(
             operator_auth::OperatorAuth::new(
                 config.operator_auth.clone(),
                 config.data_dir.clone(),
                 telemetry.clone(),
             )
-            .unwrap_or_else(|err| panic!("invalid torii.operator_auth configuration: {err}")),
+            .map_err(|error| ToriiBuildError::invalid_configuration("operator_auth", error))?,
         );
         let operator_signatures = Arc::new(
             operator_signatures::OperatorSignatures::new(
@@ -50927,21 +51812,29 @@ impl Torii {
                 config.max_content_len.get(),
                 telemetry.clone(),
             )
-            .expect("validated Torii operator-signature replay window"),
+            .map_err(|error| {
+                ToriiBuildError::invalid_configuration("operator_signatures", error)
+            })?,
         );
         #[cfg(feature = "app_api")]
         if config.sorafs_por.enabled {
-            assert_por_runtime_ready(&config.sorafs_por);
-            assert!(
-                config.operator_signatures.enabled,
-                "torii.sorafs_por.enabled requires torii.operator_signatures.enabled"
-            );
+            validate_por_runtime_ready(&config.sorafs_por)?;
+            if !config.operator_signatures.enabled {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "sorafs.por",
+                    "enabled PoR requires operator_signatures.enabled",
+                ));
+            }
             let trusted_auditors = operator_signatures.trusted_ed25519_key_bytes().len();
             let threshold = usize::from(config.sorafs_por.auditor_signature_threshold.get());
-            assert!(
-                threshold <= trusted_auditors,
-                "torii.sorafs_por.auditor_signature_threshold ({threshold}) exceeds the configured trusted Ed25519 operator/auditor set ({trusted_auditors})"
-            );
+            if threshold > trusted_auditors {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "sorafs.por.auditor_signature_threshold",
+                    format!(
+                        "threshold {threshold} exceeds the configured trusted Ed25519 operator/auditor set of {trusted_auditors}"
+                    ),
+                ));
+            }
         }
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_telemetry_urls = config
@@ -50952,19 +51845,7 @@ impl Torii {
             .collect::<Vec<_>>();
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_geo = telemetry::peers::GeoLookupConfig::from(&config.peer_geo);
-        #[cfg(all(feature = "telemetry", feature = "app_api"))]
-        telemetry.with_metrics(|tel| {
-            let metadata = sorafs_gateway_fixture_telemetry();
-            if !metadata.fixtures_digest.is_empty() {
-                tel.set_sorafs_gateway_fixture_metadata(
-                    metadata.version.as_str(),
-                    metadata.profile_version.as_str(),
-                    metadata.fixtures_digest.as_str(),
-                    metadata.released_at_unix,
-                );
-            }
-        });
-        let sorafs_admission = load_sorafs_admission(&config);
+        let sorafs_admission = load_sorafs_admission(&config)?;
         #[cfg(feature = "app_api")]
         let sorafs_potr_runtime_signers = require_sorafs_potr_finalized_reader_inputs(
             config.sorafs_por.enabled,
@@ -50972,34 +51853,37 @@ impl Torii {
             shared_sorafs_potr_runtime_signer_roles,
             sorafs_admission.clone(),
         )
-        .unwrap_or_else(|error| {
-            panic!("invalid production PoTR runtime configuration: {error}")
-        })
+        .map_err(|error| {
+            ToriiBuildError::invalid_runtime_dependency("sorafs.por.potr_runtime", error)
+        })?
         .map(|(roles, admission_registry)| {
-            Arc::new(
-                roles
-                    .bind_finalized_reader(Arc::clone(&state), admission_registry)
-                    .unwrap_or_else(|_| {
-                        panic!(
-                            "failed to bind PoTR runtime signer roles to authoritative finalized state"
-                        )
-                    }),
-            )
-        });
+            roles
+                .bind_finalized_reader(Arc::clone(&state), admission_registry)
+                .map(Arc::new)
+                .map_err(|error| {
+                    ToriiBuildError::component_initialization(
+                        "sorafs.por.potr_runtime.finalized_reader",
+                        format!("{error:?}"),
+                    )
+                })
+        })
+        .transpose()?;
         #[cfg(feature = "app_api")]
         let sorafs_cache = if emergency_fast {
             None
+        } else if let Some(cache) = shared_sorafs_cache {
+            Some(cache)
         } else {
-            shared_sorafs_cache.or_else(|| build_sorafs_cache(&config, sorafs_admission.clone()))
+            build_sorafs_cache(&config, sorafs_admission.clone())?
         };
         #[cfg(feature = "app_api")]
         let sorafs_node = if emergency_fast {
             let data_dir = sorafs_node::config::StorageConfig::from(&config.sorafs_storage)
                 .data_dir()
                 .clone();
-            sorafs_node::NodeHandle::try_new_emergency_disabled(data_dir).unwrap_or_else(|err| {
-                panic!("failed to initialise emergency-disabled SoraFS facade: {err}")
-            })
+            sorafs_node::NodeHandle::try_new_emergency_disabled(data_dir).map_err(|error| {
+                ToriiBuildError::component_initialization("sorafs.storage.emergency_facade", error)
+            })?
         } else {
             let storage_config = sorafs_node::config::StorageConfig::from(&config.sorafs_storage);
             let repair_config = sorafs_node::config::RepairConfig::from(&config.sorafs_repair);
@@ -51014,23 +51898,36 @@ impl Torii {
                 .zip(storage_config.governance_dag_checkpoint_store_qualification());
             match shared_sorafs_node {
                 Some(node) => {
-                    assert_prebuilt_sorafs_quarantine_key_provider_binding(&node, &storage_config);
-                    assert_eq!(
-                        node.moderation_screening_enabled(),
-                        storage_config.moderation_screening_enabled(),
-                        "injected SoraFS node moderation-screening enablement does not match torii.sorafs.storage"
-                    );
-                    assert_eq!(
-                        node.moderation_screening_authority_bundle_digest(),
-                        storage_config.moderation_screening_authority_bundle_digest(),
-                        "injected SoraFS node moderation-screening authority digest does not match torii.sorafs.storage"
-                    );
-                    assert_eq!(
-                        node.privacy_cycle_prf_required(),
-                        privacy_cycle_prf_required,
-                        "injected SoraFS node privacy-cycle PRF requirement does not match torii.sorafs.storage"
-                    );
-                    assert_prebuilt_sorafs_privacy_provider_bindings(
+                    validate_prebuilt_sorafs_quarantine_key_provider_binding(
+                        &node,
+                        &storage_config,
+                    )
+                    .map_err(|error| {
+                        ToriiBuildError::invalid_runtime_dependency("sorafs.storage", error)
+                    })?;
+                    if node.moderation_screening_enabled()
+                        != storage_config.moderation_screening_enabled()
+                    {
+                        return Err(ToriiBuildError::invalid_runtime_dependency(
+                            "sorafs.storage.moderation_screening",
+                            "injected node enablement does not match configuration",
+                        ));
+                    }
+                    if node.moderation_screening_authority_bundle_digest()
+                        != storage_config.moderation_screening_authority_bundle_digest()
+                    {
+                        return Err(ToriiBuildError::invalid_runtime_dependency(
+                            "sorafs.storage.moderation_screening",
+                            "injected node authority bundle digest does not match configuration",
+                        ));
+                    }
+                    if node.privacy_cycle_prf_required() != privacy_cycle_prf_required {
+                        return Err(ToriiBuildError::invalid_runtime_dependency(
+                            "sorafs.storage.privacy_cycle_prf",
+                            "injected node requirement does not match configuration",
+                        ));
+                    }
+                    validate_prebuilt_sorafs_privacy_provider_bindings(
                         &node,
                         &storage_config,
                         shared_sorafs_privacy_cycle_prf_provider.is_some(),
@@ -51038,26 +51935,30 @@ impl Torii {
                         shared_sorafs_transparency_leader_lease_provider.is_some(),
                         shared_sorafs_fenced_transparency_publisher.is_some(),
                         shared_sorafs_fenced_transparency_head_reader.is_some(),
-                    );
+                    )
+                    .map_err(|error| {
+                        ToriiBuildError::invalid_runtime_dependency("sorafs.storage.privacy", error)
+                    })?;
                     if storage_config.moderation_screening_enabled()
                         && shared_sorafs_moderation_quarantine_key_wrapper.is_none()
                     {
-                        panic!(
-                            "torii.sorafs.storage moderation screening is enabled but its runtime-only PKCS#11/KMS quarantine key wrapper was not injected"
-                        );
+                        return Err(ToriiBuildError::invalid_runtime_dependency(
+                            "sorafs.storage.moderation_screening",
+                            "enabled moderation screening requires a runtime-only quarantine key wrapper",
+                        ));
                     }
                     if let Some(key_wrapper) =
                         shared_sorafs_moderation_quarantine_key_wrapper.as_ref()
                     {
-                        assert!(
-                            node.uses_moderation_quarantine_key_wrapper(key_wrapper),
-                            "injected SoraFS node does not retain the exact Torii quarantine key wrapper runtime dependency"
-                        );
-                        assert_eq!(
-                            node.moderation_quarantine_key_id(),
-                            Some(key_wrapper.active_key_id()),
-                            "injected SoraFS node quarantine key wrapper does not match the Torii runtime dependency"
-                        );
+                        if !node.uses_moderation_quarantine_key_wrapper(key_wrapper)
+                            || node.moderation_quarantine_key_id()
+                                != Some(key_wrapper.active_key_id())
+                        {
+                            return Err(ToriiBuildError::invalid_runtime_dependency(
+                                "sorafs.storage.moderation_screening",
+                                "injected node does not retain the exact quarantine key wrapper",
+                            ));
+                        }
                     }
                     node
                 }
@@ -51119,21 +52020,22 @@ impl Torii {
                         gc_config,
                         node_runtime_deps,
                     )
-                    .unwrap_or_else(|err| {
-                        panic!("failed to initialise embedded SoraFS runtime: {err}")
-                    });
-                    assert_eq!(
-                        node.governance_dag_checkpoint_store_binding(),
-                        expected_governance_checkpoint_store_binding
+                    .map_err(|error| {
+                        ToriiBuildError::component_initialization("sorafs.storage", error)
+                    })?;
+                    if node.governance_dag_checkpoint_store_binding()
+                        != expected_governance_checkpoint_store_binding
                             .as_ref()
-                            .map(|(handle, qualification)| { (handle.as_str(), *qualification) }),
-                        "Torii-built SoraFS node did not retain the exact configured Governance DAG checkpoint-store binding"
-                    );
-                    node.revalidate_fenced_privacy_runtime().unwrap_or_else(|error| {
-                        panic!(
-                            "Torii-built SoraFS node failed live Governance/privacy runtime revalidation: {error}"
-                        )
-                    });
+                            .map(|(handle, qualification)| (handle.as_str(), *qualification))
+                    {
+                        return Err(ToriiBuildError::invalid_runtime_dependency(
+                            "sorafs.storage.governance_dag_checkpoint_store",
+                            "constructed node did not retain the exact configured binding",
+                        ));
+                    }
+                    node.revalidate_fenced_privacy_runtime().map_err(|error| {
+                        ToriiBuildError::component_initialization("sorafs.storage.privacy", error)
+                    })?;
                     node
                 }
             }
@@ -51143,18 +52045,19 @@ impl Torii {
             let data_dir = sorafs_node::config::StorageConfig::from(&config.sorafs_storage)
                 .data_dir()
                 .clone();
-            sorafs_node::NodeHandle::try_new_emergency_disabled(data_dir).unwrap_or_else(|err| {
-                panic!("failed to initialise emergency-disabled SoraFS facade: {err}")
-            })
+            sorafs_node::NodeHandle::try_new_emergency_disabled(data_dir).map_err(|error| {
+                ToriiBuildError::component_initialization("sorafs.storage.emergency_facade", error)
+            })?
         } else {
             let storage_config = sorafs_node::config::StorageConfig::from(&config.sorafs_storage);
             match shared_sorafs_node {
                 Some(node) => {
-                    assert_eq!(
-                        node.is_enabled(),
-                        storage_config.enabled(),
-                        "injected SoraFS node enablement does not match torii.sorafs.storage"
-                    );
+                    if node.is_enabled() != storage_config.enabled() {
+                        return Err(ToriiBuildError::invalid_runtime_dependency(
+                            "sorafs.storage",
+                            "injected node enablement does not match configuration",
+                        ));
+                    }
                     node
                 }
                 None => sorafs_node::NodeHandle::try_new_with_policies(
@@ -51162,9 +52065,9 @@ impl Torii {
                     sorafs_node::config::RepairConfig::from(&config.sorafs_repair),
                     sorafs_node::config::GcConfig::from(&config.sorafs_gc),
                 )
-                .unwrap_or_else(|err| {
-                    panic!("failed to initialise embedded SoraFS runtime: {err}")
-                }),
+                .map_err(|error| {
+                    ToriiBuildError::component_initialization("sorafs.storage", error)
+                })?,
             }
         };
         #[cfg(feature = "app_api")]
@@ -51179,11 +52082,7 @@ impl Torii {
             shared_sorafs_evidence_viewer_transparency_publisher.is_some(),
         );
         #[cfg(feature = "app_api")]
-        let (
-            sorafs_evidence_viewer,
-            sorafs_evidence_viewer_transparency_producer,
-            sorafs_evidence_viewer_startup_error,
-        ) = match (
+        let (sorafs_evidence_viewer, sorafs_evidence_viewer_transparency_producer) = match (
             config.sorafs_storage.evidence_viewer.as_ref(),
             shared_sorafs_evidence_viewer_webauthn,
             shared_sorafs_evidence_viewer_grants,
@@ -51193,7 +52092,7 @@ impl Torii {
             shared_sorafs_evidence_viewer_compaction_archive,
             shared_sorafs_evidence_viewer_transparency_publisher,
         ) {
-            (None, None, None, None, None, None, None, None) => (None, None, None),
+            (None, None, None, None, None, None, None, None) => (None, None),
             (
                 Some(policy),
                 Some(webauthn),
@@ -51299,7 +52198,7 @@ impl Torii {
                                 ),
                         publisher_public_key: policy.transparency_publisher_public_key,
                     };
-                match sorafs_node::evidence_viewer::EvidenceViewerServiceV1::open_with_checkpoint_store(
+                let service = sorafs_node::evidence_viewer::EvidenceViewerServiceV1::open_with_checkpoint_store(
                     service_config,
                     service_deps,
                     sorafs_node.clone(),
@@ -51310,37 +52209,42 @@ impl Torii {
                             policy.checkpoint_store_policy_digest,
                         ),
                     checkpoint_store,
-                ) {
-                    Ok(service) => {
-                        match sorafs_node::evidence_viewer::transparency_producer::
-                            EvidenceViewerTransparencyProducerV1::try_new(
-                                producer_config,
-                                transparency_publisher,
-                            )
-                        {
-                            Ok(producer) if producer.reconcile().is_ok() => (
-                                Some(Arc::new(service)),
-                                Some(Arc::new(producer)),
-                                None,
-                            ),
-                            Ok(_) | Err(_) => (
-                                None,
-                                None,
-                                Some(SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED),
-                            ),
-                        }
-                    }
-                    Err(_) => (
-                        None,
-                        None,
-                        Some(SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED),
-                    ),
-                }
+                )
+                .map_err(|error| {
+                    ToriiBuildError::component_initialization(
+                        "sorafs.storage.evidence_viewer",
+                        error,
+                    )
+                })?;
+                let producer = sorafs_node::evidence_viewer::transparency_producer::
+                    EvidenceViewerTransparencyProducerV1::try_new(
+                        producer_config,
+                        transparency_publisher,
+                    )
+                    .map_err(|error| {
+                        ToriiBuildError::component_initialization(
+                            "sorafs.storage.evidence_viewer.transparency_producer",
+                            error,
+                        )
+                    })?;
+                producer.reconcile().map_err(|error| {
+                    ToriiBuildError::component_initialization(
+                        "sorafs.storage.evidence_viewer.transparency_producer",
+                        error,
+                    )
+                })?;
+                (Some(Arc::new(service)), Some(Arc::new(producer)))
             }
-            _ => (None, None, sorafs_evidence_viewer_dependency_error),
+            _ => {
+                return Err(ToriiBuildError::invalid_runtime_dependency(
+                    "sorafs.storage.evidence_viewer",
+                    sorafs_evidence_viewer_dependency_error
+                        .unwrap_or("inconsistent runtime dependency set"),
+                ));
+            }
         };
         #[cfg(feature = "app_api")]
-        let (sorafs_moderation_orchestrator, sorafs_moderation_startup_error) = match (
+        let sorafs_moderation_orchestrator = match (
             config.sorafs_storage.moderation_orchestrator.as_ref(),
             shared_sorafs_moderation_transaction_signer,
             shared_sorafs_moderation_settlement_handoff,
@@ -51349,7 +52253,7 @@ impl Torii {
             shared_sorafs_moderation_panel_notification_archive,
             shared_sorafs_moderation_checkpoint_store,
         ) {
-            (None, None, None, None, None, None, None) => (None, None),
+            (None, None, None, None, None, None, None) => None,
             (
                 Some(config),
                 Some(transaction_signer),
@@ -51524,13 +52428,25 @@ impl Torii {
                         ),
                     ))
                 })();
-                match runtime {
-                    Ok(runtime) => (Some(runtime), None),
-                    Err(()) => (None, Some("initialization_failed")),
-                }
+                Some(runtime.map_err(|()| {
+                    ToriiBuildError::component_initialization(
+                        "sorafs.storage.moderation_orchestrator",
+                        "runtime provider qualification or durable checkpoint initialization failed",
+                    )
+                })?)
             }
-            (Some(_), _, _, _, _, _, _) => (None, Some("missing_runtime_dependencies")),
-            (None, _, _, _, _, _, _) => (None, Some("unexpected_runtime_dependencies")),
+            (Some(_), _, _, _, _, _, _) => {
+                return Err(ToriiBuildError::invalid_runtime_dependency(
+                    "sorafs.storage.moderation_orchestrator",
+                    "missing runtime dependencies",
+                ));
+            }
+            (None, _, _, _, _, _, _) => {
+                return Err(ToriiBuildError::invalid_runtime_dependency(
+                    "sorafs.storage.moderation_orchestrator",
+                    "runtime dependencies supplied while the service is disabled",
+                ));
+            }
         };
         #[cfg(feature = "app_api")]
         let sorafs_pop_credentials = match (
@@ -51540,22 +52456,25 @@ impl Torii {
             (None, None) => None,
             (Some(config), Some(runtime)) => {
                 let expected = sorafs::pop_api::PopCredentialRuntimeConfigV1::from(config);
-                assert_eq!(
-                    runtime.config(),
-                    &expected,
-                    "injected SoraFS PoP runtime does not match torii.sorafs.storage.pop_credentials"
-                );
+                if runtime.config() != &expected {
+                    return Err(ToriiBuildError::invalid_runtime_dependency(
+                        "sorafs.storage.pop_credentials",
+                        "injected runtime does not match configuration",
+                    ));
+                }
                 Some(runtime)
             }
             (Some(_), None) => {
-                panic!(
-                    "torii.sorafs.storage.pop_credentials is enabled but runtime-only enrollment/external-software-signer/KMS/authentication dependencies were not injected"
-                )
+                return Err(ToriiBuildError::invalid_runtime_dependency(
+                    "sorafs.storage.pop_credentials",
+                    "enabled service requires enrollment, external signer, qualified key wrapping, and authentication dependencies",
+                ));
             }
             (None, Some(_)) => {
-                panic!(
-                    "a SoraFS PoP runtime was injected without enabling torii.sorafs.storage.pop_credentials"
-                )
+                return Err(ToriiBuildError::invalid_runtime_dependency(
+                    "sorafs.storage.pop_credentials",
+                    "runtime supplied while the service is disabled",
+                ));
             }
         };
         #[cfg(feature = "app_api")]
@@ -51574,14 +52493,16 @@ impl Torii {
                 || shared_sorafs_gateway_acme_client.is_some()
                 || shared_sorafs_gateway_compliance_feed_transport.is_some())
         {
-            panic!(
-                "SoraFS gateway ACME/compliance runtime dependencies require torii.sorafs.storage.enabled"
-            );
+            return Err(ToriiBuildError::invalid_runtime_dependency(
+                "sorafs.gateway",
+                "ACME and compliance runtime dependencies require sorafs.storage.enabled",
+            ));
         }
         if sorafs_node.is_enabled() && config.sorafs_gateway.compliance.is_none() {
-            panic!(
-                "torii.sorafs.storage.enabled requires the governed torii.sorafs.gateway.compliance controller"
-            );
+            return Err(ToriiBuildError::invalid_configuration(
+                "sorafs.gateway.compliance",
+                "sorafs.storage.enabled requires a governed compliance controller",
+            ));
         }
         let sorafs_gateway_security = if sorafs_node.is_enabled() {
             Some(build_sorafs_gateway_security(
@@ -51589,21 +52510,32 @@ impl Torii {
                 sorafs_admission.clone(),
                 shared_sorafs_gateway_acme_client,
                 shared_sorafs_gateway_compliance_feed_transport,
-            ))
+            )?)
         } else {
             None
         };
         #[cfg(feature = "app_api")]
-        let stream_token_issuer = sorafs::stream_token_runtime::build_issuer(
-            &config.sorafs_storage.stream_tokens,
-            operator_signatures.is_enabled(),
-            shared_sorafs_stream_token_signer,
-        );
+        let stream_token_issuer = {
+            if config.sorafs_storage.stream_tokens.enabled && !operator_signatures.is_enabled() {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "sorafs.storage.stream_tokens",
+                    "enabled stream-token issuance requires operator_signatures.enabled",
+                ));
+            }
+            sorafs::StreamTokenIssuer::from_config(
+                &config.sorafs_storage.stream_tokens,
+                shared_sorafs_stream_token_signer,
+            )
+            .map_err(|error| {
+                ToriiBuildError::invalid_runtime_dependency("sorafs.storage.stream_tokens", error)
+            })?
+            .map(Arc::new)
+        };
         #[cfg(feature = "app_api")]
         let (por_coordinator, por_runtime) = if emergency_fast {
             (Arc::new(sorafs::PorCoordinator::with_record_limit(1)), None)
         } else {
-            build_por_components(&config, &network_id, &sorafs_node, sorafs_admission.clone())
+            build_por_components(&config, &network_id, &sorafs_node, sorafs_admission.clone())?
         };
         #[cfg(feature = "app_api")]
         let gc_runtime = if emergency_fast {
@@ -51678,7 +52610,9 @@ impl Torii {
             sorafs::api::AppealFinanceRuntimePolicy::from_config(
                 &config.sorafs_appeal_finance_settlement,
             )
-            .unwrap_or_else(|err| panic!("invalid SoraFS appeal-finance policy: {err}")),
+            .map_err(|error| {
+                ToriiBuildError::invalid_configuration("sorafs.appeal_finance", error)
+            })?,
         );
         #[cfg(feature = "app_api")]
         let sorafs_appeal_settlement_submitter = (config.sorafs_storage.enabled
@@ -51686,15 +52620,21 @@ impl Torii {
                 .sorafs_appeal_finance_settlement
                 .submitter_signers
                 .is_empty())
-        .then(|| {
-            let checkpoint_runtime = shared_sorafs_appeal_finance_checkpoint_runtime
-                .unwrap_or_else(|| {
-                    panic!(
-                        "SoraFS appeal-finance submitters require a runtime checkpoint HSM/KMS provider"
+        .then(|| -> Result<_, ToriiBuildError> {
+            let checkpoint_runtime =
+                shared_sorafs_appeal_finance_checkpoint_runtime.ok_or_else(|| {
+                    ToriiBuildError::invalid_runtime_dependency(
+                        "sorafs.appeal_finance.checkpoint_provider",
+                        "configured submitters require a runtime checkpoint signer provider",
                     )
-            });
-            let finalized_startup_height = u64::try_from(state.committed_height())
-                .expect("committed block height must fit the finalized u64 height domain");
+                })?;
+            let finalized_startup_height =
+                u64::try_from(state.committed_height()).map_err(|_| {
+                    ToriiBuildError::component_initialization(
+                        "sorafs.appeal_finance",
+                        "committed block height does not fit the finalized u64 height domain",
+                    )
+                })?;
             SoraFsAppealSettlementSubmitter::from_config(
                 &config.sorafs_appeal_finance_settlement,
                 &config.sorafs_storage.data_dir,
@@ -51702,7 +52642,8 @@ impl Torii {
                 finalized_startup_height,
                 checkpoint_runtime,
             )
-        });
+        })
+        .transpose()?;
         #[cfg(feature = "app_api")]
         let offline_commands = config
             .kagemusha_commands
@@ -51710,47 +52651,56 @@ impl Torii {
             .map(offline_commands::OfflineCommandRuntime::from_config)
             .map(Arc::new);
         #[cfg(feature = "app_api")]
-        let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
-            if cfg.programs.is_empty() {
-                iroha_logger::warn!("torii.ram_lfe is enabled but no programs are configured");
-                return None;
-            }
-            let service = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-            for (index, program_cfg) in cfg.programs.iter().enumerate() {
-                let signer = KeyPair::from_private_key(program_cfg.signer_private_key.clone())
-                    .unwrap_or_else(|err| {
-                        panic!("invalid torii.ram_lfe.programs[{index}].signer_private_key: {err}")
-                    });
-                service.register_program_runtime(
-                    program_cfg.program_id.clone(),
-                    program_cfg.secret.clone(),
-                    program_cfg.hidden_program.clone(),
-                    signer,
-                    program_cfg
-                        .receipt_ttl
-                        .and_then(|ttl| u64::try_from(ttl.as_millis()).ok()),
-                );
-            }
-            Some(service)
-        });
+        let identifier_resolver = config
+            .ram_lfe
+            .as_ref()
+            .map(|cfg| -> Result<_, ToriiBuildError> {
+                if cfg.programs.is_empty() {
+                    iroha_logger::warn!("torii.ram_lfe is enabled but no programs are configured");
+                    return Ok(None);
+                }
+                let service = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+                for (index, program_cfg) in cfg.programs.iter().enumerate() {
+                    let signer = KeyPair::from_private_key(program_cfg.signer_private_key.clone())
+                        .map_err(|error| {
+                            ToriiBuildError::invalid_configuration(
+                                "ram_lfe.programs[].signer_private_key",
+                                format!("program at index {index}: {error}"),
+                            )
+                        })?;
+                    service.register_program_runtime(
+                        program_cfg.program_id.clone(),
+                        program_cfg.secret.clone(),
+                        program_cfg.hidden_program.clone(),
+                        signer,
+                        program_cfg
+                            .receipt_ttl
+                            .and_then(|ttl| u64::try_from(ttl.as_millis()).ok()),
+                    );
+                }
+                Ok(Some(service))
+            })
+            .transpose()?
+            .flatten();
         #[cfg(feature = "app_api")]
-        let tx_history_access_policy = Arc::new(if let Some(tx_history) = config.tx_history.as_ref() {
-            let result = {
-                let nexus = state.nexus_snapshot();
-                load_tx_history_access_policy(Some(tx_history), &nexus.dataspace_catalog)
-            };
-            match result {
-                Ok(policy) => policy,
-                Err(error) => TxHistoryAccessPolicy::with_startup_error(error),
-            }
-        } else {
-            TxHistoryAccessPolicy::default()
-        });
+        let tx_history_access_policy =
+            Arc::new(if let Some(tx_history) = config.tx_history.as_ref() {
+                {
+                    let nexus = state.nexus_snapshot();
+                    load_tx_history_access_policy(Some(tx_history), &nexus.dataspace_catalog)
+                }
+                .map_err(|error| ToriiBuildError::invalid_configuration("tx_history", error))?
+            } else {
+                TxHistoryAccessPolicy::default()
+            });
+        #[cfg(feature = "app_api")]
+        let configured_public_dataspace_upstreams =
+            load_public_dataspace_upstreams(&config.public_dataspace_upstreams)?;
         #[cfg(feature = "app_api")]
         let public_dataspace_upstreams = Arc::new(if emergency_fast {
             BTreeMap::new()
         } else {
-            load_public_dataspace_upstreams(state.as_ref())
+            configured_public_dataspace_upstreams
         });
         #[cfg(feature = "app_api")]
         let recipient_lookup = Arc::new(config.recipient_lookup.clone());
@@ -51765,16 +52715,20 @@ impl Torii {
         } else {
             select_initial_musubi_search_index(rebuild_musubi_search_index(state.as_ref(), None))
         }));
-        let sccp_replay_archive = config.sccp_replay_archive.clone().map(|archive_config| {
-            sccp_replay::ToriiSccpReplayArchiveServiceV1::bootstrap(
-                archive_config,
-                Arc::clone(&state),
-                Arc::clone(&kura),
-            )
-            .unwrap_or_else(|error| {
-                panic!("SCCP replay archive failed closed during startup: {error}")
+        let sccp_replay_archive = config
+            .sccp_replay_archive
+            .clone()
+            .map(|archive_config| {
+                sccp_replay::ToriiSccpReplayArchiveServiceV1::bootstrap(
+                    archive_config,
+                    Arc::clone(&state),
+                    Arc::clone(&kura),
+                )
+                .map_err(|error| {
+                    ToriiBuildError::component_initialization("sccp_replay_archive", error)
+                })
             })
-        });
+            .transpose()?;
         #[cfg(feature = "app_api")]
         let private_settlement_runtime = private_settlement::PrivateSettlementToriiRuntimeV1::open(
             state.as_ref(),
@@ -51783,10 +52737,55 @@ impl Torii {
             runtime_deps.private_settlement_availability_signer.clone(),
             runtime_deps.private_settlement_phase_signer.clone(),
         )
-        .unwrap_or_else(|error| {
-            panic!("invalid atomic private-settlement sidecar runtime: {error}")
-        });
-        Self {
+        .map_err(|error| ToriiBuildError::component_initialization("private_settlement", error))?;
+        let query_fanout_max_retained_bytes =
+            usize::try_from(config.query_fanout_max_retained_bytes.get()).map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "query_fanout_max_retained_bytes",
+                    "retention budget does not fit the platform address space",
+                )
+            })?;
+        let soracloud_public_max_response_bytes =
+            usize::try_from(config.soracloud_public_max_response_bytes.get()).map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "soracloud.public_max_response_bytes",
+                    "response limit does not fit the platform address space",
+                )
+            })?;
+        let soracloud_mutation_max_body_bytes =
+            usize::try_from(config.soracloud_mutation_max_body_bytes.get()).map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "soracloud.mutation_max_body_bytes",
+                    "request body limit does not fit the platform address space",
+                )
+            })?;
+        let zk_ivm_prove_job_max_retained_bytes =
+            usize::try_from(config.zk_ivm_prove_job_max_retained_bytes.get()).map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "zk.ivm_prove.job_max_retained_bytes",
+                    "retained job budget does not fit the platform address space",
+                )
+            })?;
+        let zk_ivm_prove_job_max_retained_bytes_per_owner = usize::try_from(
+            config.zk_ivm_prove_job_max_retained_bytes_per_owner.get(),
+        )
+        .map_err(|_| {
+            ToriiBuildError::invalid_configuration(
+                "zk.ivm_prove.job_max_retained_bytes_per_owner",
+                "per-owner retained job budget does not fit the platform address space",
+            )
+        })?;
+        let zk_ivm_prove_job_ttl_ms = config
+            .zk_ivm_prove_job_ttl_secs
+            .checked_mul(1_000)
+            .ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "zk.ivm_prove.job_ttl_secs",
+                    "job TTL does not fit millisecond precision",
+                )
+            })?;
+
+        let torii = Self {
             chain_id: Arc::new(chain_id),
             signed_query_admission,
             kiso,
@@ -51795,7 +52794,7 @@ impl Torii {
             events,
             query_service,
             kura,
-            state,
+            state: state.clone(),
             sccp_replay_archive,
             #[cfg(feature = "app_api")]
             parliament_tle_release_coordinator,
@@ -51810,11 +52809,11 @@ impl Torii {
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_geo,
             sumeragi,
-            telemetry,
+            telemetry: telemetry.clone(),
             telemetry_profile,
             content_config: content_snapshot,
             address: config.address,
-            transaction_max_content_len: config.max_content_len,
+            transaction_max_content_len,
             iso_bridge_max_body_bytes: config.iso_bridge.max_body_bytes,
             transaction_ingress_max_concurrent_compute_jobs: config
                 .transaction_ingress
@@ -51840,24 +52839,15 @@ impl Torii {
             local_peer_id: None,
             query_max_inflight: config.query_max_inflight.get(),
             query_heavy_max_inflight: config.query_heavy_max_inflight.get(),
-            query_fanout_max_retained_bytes: usize::try_from(
-                config.query_fanout_max_retained_bytes.get(),
-            )
-            .expect("validated Torii fanout retention budget must fit usize"),
+            query_fanout_max_retained_bytes,
             #[cfg(feature = "app_api")]
             app_api_routed_read_body_read_timeout: config.app_api_routed_read_body_read_timeout,
             app_query_limits,
             query_queue_timeout: config.query_queue_timeout,
             soracloud_public_max_inflight: config.soracloud_public_max_inflight.get(),
-            soracloud_public_max_response_bytes: usize::try_from(
-                config.soracloud_public_max_response_bytes.get(),
-            )
-            .unwrap_or(usize::MAX),
+            soracloud_public_max_response_bytes,
             soracloud_mutation_max_inflight: config.soracloud_mutation_max_inflight.get(),
-            soracloud_mutation_max_body_bytes: usize::try_from(
-                config.soracloud_mutation_max_body_bytes.get(),
-            )
-            .unwrap_or(usize::MAX),
+            soracloud_mutation_max_body_bytes,
             rate_limiter: rl,
             query_preauth_rate_limiter: query_preauth_rl,
             query_authority_rate_limiter: query_authority_rl,
@@ -51877,18 +52867,11 @@ impl Torii {
             zk_ivm_prove_max_inflight: config.zk_ivm_prove_max_inflight,
             zk_ivm_prove_max_queue: config.zk_ivm_prove_max_queue,
             ivm_tooling_timeout: Duration::from_millis(config.zk_ivm_tooling_timeout_ms.max(1)),
-            zk_ivm_prove_job_ttl_ms: config.zk_ivm_prove_job_ttl_secs.saturating_mul(1_000),
+            zk_ivm_prove_job_ttl_ms,
             zk_ivm_prove_job_max_entries: config.zk_ivm_prove_job_max_entries,
-            zk_ivm_prove_job_max_retained_bytes: usize::try_from(
-                config.zk_ivm_prove_job_max_retained_bytes.get(),
-            )
-            .unwrap_or(usize::MAX)
-            .max(1),
+            zk_ivm_prove_job_max_retained_bytes,
             zk_ivm_prove_job_max_entries_per_owner: config.zk_ivm_prove_job_max_entries_per_owner,
-            zk_ivm_prove_job_max_retained_bytes_per_owner: usize::try_from(
-                config.zk_ivm_prove_job_max_retained_bytes_per_owner.get(),
-            )
-            .unwrap_or(usize::MAX),
+            zk_ivm_prove_job_max_retained_bytes_per_owner,
             preauth_gate,
             fee_policy,
             http_transport: config.transport.http,
@@ -51897,7 +52880,7 @@ impl Torii {
             cors: config.cors,
             mcp_rate_limiter,
             require_api_token: config.require_api_token,
-            api_tokens_set: api_tokens_set.clone(),
+            api_token_digests: api_token_digests.clone(),
             webhooks_enabled: config.webhooks_enabled,
             zk_attachments_enabled: config.zk_attachments_enabled,
             operator_auth,
@@ -51937,6 +52920,7 @@ impl Torii {
             push: push_bridge,
             #[cfg(feature = "push")]
             push_rate_limiter,
+            test_api_router: parking_lot::Mutex::new(None),
             #[cfg(feature = "app_api")]
             sorafs_cache,
             sorafs_node,
@@ -51957,13 +52941,9 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_moderation_orchestrator,
             #[cfg(feature = "app_api")]
-            sorafs_moderation_startup_error,
-            #[cfg(feature = "app_api")]
             sorafs_evidence_viewer,
             #[cfg(feature = "app_api")]
             sorafs_evidence_viewer_transparency_producer,
-            #[cfg(feature = "app_api")]
-            sorafs_evidence_viewer_startup_error,
             #[cfg(feature = "app_api")]
             sorafs_moderation_orchestrator_worker: config
                 .sorafs_storage
@@ -52010,9 +52990,92 @@ impl Torii {
             account_onboarding,
             vpn_relay_trust,
             soracloud_runtime,
+        };
+
+        torii.validate_startup_configuration()?;
+
+        // Commit process-wide Torii policy only after every configuration value and durable
+        // component above has been validated successfully.
+        crate::app_auth::configure(app_auth_config).map_err(|error| {
+            ToriiBuildError::invalid_configuration("app_api.request_auth", error)
+        })?;
+        routing::debug_match_flag::set_from_config(config.debug_match_filters);
+        routing::set_app_query_limits(app_query_limits);
+        #[cfg(feature = "app_api")]
+        crate::data_dir::set_base_dir(config.data_dir.clone());
+        #[cfg(feature = "app_api")]
+        {
+            if config.webhooks_enabled {
+                crate::webhook::set_webhook_policy(crate::webhook::WebhookPolicy {
+                    queue_capacity: config.webhook.queue_capacity,
+                    max_attempts: config.webhook.max_attempts,
+                    backoff_initial: config.webhook.backoff_initial,
+                    backoff_max: config.webhook.backoff_max,
+                    connect_timeout: config.webhook.connect_timeout,
+                    write_timeout: config.webhook.write_timeout,
+                    read_timeout: config.webhook.read_timeout,
+                });
+                crate::webhook::set_webhook_security_policy(
+                    crate::webhook::WebhookSecurityPolicy {
+                        enabled: config.webhook_security.enabled,
+                        allow_nets: limits::parse_cidrs(&config.webhook_security.allow_cidrs),
+                    },
+                );
+            }
+            if config.zk_attachments_enabled {
+                crate::zk_attachments::configure(
+                    config.attachments_ttl_secs,
+                    config.attachments_max_bytes,
+                    config.attachments_per_tenant_max_count,
+                    config.attachments_per_tenant_max_bytes,
+                    config.attachments_global_max_count,
+                    config.attachments_global_max_bytes,
+                    config.attachments_allowed_mime_types.clone(),
+                    config.attachments_max_expanded_bytes,
+                    config.attachments_max_archive_depth,
+                    config.attachments_sanitizer_mode,
+                    config.attachments_sanitize_timeout_ms,
+                    None,
+                    telemetry.clone(),
+                );
+            }
+            if !emergency_fast {
+                crate::zk_prover::configure(
+                    config.zk_prover_enabled,
+                    config.zk_prover_scan_period_secs,
+                    config.zk_prover_reports_ttl_secs,
+                    config.zk_prover_reports_max_count,
+                    config.zk_prover_reports_max_bytes,
+                    config.zk_prover_max_inflight,
+                    config.zk_prover_max_scan_bytes,
+                    config.zk_prover_max_scan_millis,
+                    config.zk_prover_keys_dir.clone(),
+                    config.zk_prover_allowed_backends.clone(),
+                    config.zk_prover_allowed_circuits.clone(),
+                    Some(state),
+                    telemetry.clone(),
+                );
+            }
         }
+        #[cfg(all(feature = "telemetry", feature = "app_api"))]
+        telemetry.with_metrics(|tel| {
+            let metadata = sorafs_gateway_fixture_telemetry();
+            if !metadata.fixtures_digest.is_empty() {
+                tel.set_sorafs_gateway_fixture_metadata(
+                    metadata.version.as_str(),
+                    metadata.profile_version.as_str(),
+                    metadata.fixtures_digest.as_str(),
+                    metadata.released_at_unix,
+                );
+            }
+        });
+        Ok(torii)
     }
-    /// Wire a P2P handle for authenticated network services.
+    /// Store a P2P handle for authenticated network services.
+    ///
+    /// The Connect subscription is activated by [`Self::start`] only after the
+    /// HTTP listener and router have been prepared; this builder method never
+    /// starts a detached task.
     #[cfg(any(feature = "app_api", feature = "connect"))]
     pub fn with_p2p(mut self, p2p: iroha_core::IrohaNetwork) -> Self {
         if self.kura.emergency_fast_startup_enabled() {
@@ -52022,13 +53085,6 @@ impl Torii {
             return self;
         }
         self.p2p = Some(p2p);
-        #[cfg(feature = "connect")]
-        {
-            // Attach network to the Connect Bus for P2P relay and subscription.
-            if let Some(net) = &self.p2p {
-                self.connect_bus.attach_network(net.clone());
-            }
-        }
         self
     }
     /// No-op when application and Connect P2P services are disabled.
@@ -52047,74 +53103,312 @@ impl Torii {
     pub fn with_local_peer_id(self, _peer_id: PeerId) -> Self {
         self
     }
-    fn parse_cors_origins(origins: &[String]) -> Vec<HeaderValue> {
-        origins
-            .iter()
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|origin| !origin.is_empty())
-            .map(|origin| {
-                if origin == "*" {
-                    panic!(
-                        "invalid torii.cors.allowed_origins entry `*`; configure explicit origins"
+    fn validate_startup_configuration(&self) -> core::result::Result<(), ToriiBuildError> {
+        ValidatedToriiHttpTransport::new(self.http_transport)
+            .map_err(|error| ToriiBuildError::invalid_configuration("transport.http", error))?;
+        let _ = self.build_cors_layer()?;
+        if self.cors.enabled {
+            let _ = Self::parse_cors_origins(&self.cors.allowed_origins)?;
+        }
+
+        validate_semaphore_permits(
+            "soracloud.public_max_inflight",
+            self.soracloud_public_max_inflight.max(1),
+        )?;
+        validate_semaphore_permits(
+            "soracloud.mutation_max_inflight",
+            self.soracloud_mutation_max_inflight.max(1),
+        )?;
+        let zk_ivm_prove_max_inflight = validate_semaphore_permits(
+            "zk.ivm_prove.max_inflight",
+            self.zk_ivm_prove_max_inflight.max(1),
+        )?;
+        checked_semaphore_permit_sum(
+            "zk.ivm_prove.max_inflight_plus_queue",
+            zk_ivm_prove_max_inflight,
+            self.zk_ivm_prove_max_queue,
+        )?;
+        validate_semaphore_permits("query.max_inflight", self.query_max_inflight.max(1))?;
+        validate_semaphore_permits(
+            "proof.body_max_inflight",
+            self.proof_body_max_inflight.max(1),
+        )?;
+        let query_heavy_max_inflight = validate_semaphore_permits(
+            "query.heavy_max_inflight",
+            self.query_heavy_max_inflight.max(1),
+        )?;
+        validate_semaphore_permits(
+            "transaction_ingress.max_concurrent_compute_jobs",
+            self.transaction_ingress_max_concurrent_compute_jobs,
+        )?;
+        #[cfg(feature = "app_api")]
+        validate_semaphore_permits(
+            "verified_source.max_concurrent_compiles",
+            self.verified_source_max_concurrent_compiles,
+        )?;
+        validate_semaphore_permits(
+            "da_ingest.max_concurrent_compute_jobs",
+            self.da_ingest.max_concurrent_compute_jobs.get(),
+        )?;
+        let mcp_max_inflight_dispatches = validate_semaphore_permits(
+            "mcp.max_inflight_dispatches",
+            self.mcp.max_inflight_dispatches.get(),
+        )?;
+        validate_semaphore_permits(
+            "mcp.long_poll_dispatches",
+            mcp::long_poll_dispatch_capacity(mcp_max_inflight_dispatches),
+        )?;
+
+        let torii_proxy_max_response_bytes = self.transaction_max_content_len;
+        let query_memory = query_memory_geometry(
+            self.query_fanout_max_retained_bytes,
+            torii_proxy_max_response_bytes,
+            query_heavy_max_inflight,
+        )
+        .ok_or_else(|| {
+            ToriiBuildError::invalid_configuration(
+                "query_fanout_max_retained_bytes",
+                "query memory pool cannot admit the configured ingress and fanout reservations",
+            )
+        })?;
+        validate_semaphore_permits("query.ingress_slots", query_memory.ingress_slots.get())?;
+        let torii_proxy_request_frame_bytes = torii_proxy_max_response_bytes
+            .checked_add(TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1)
+            .filter(|bytes| *bytes <= TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1)
+            .ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "max_content_len",
+                    "transaction content limit exceeds the first-release proxy frame bound",
+                )
+            })?;
+        ToriiProxyHttpIngressEnvelope::from_max_content_bytes(torii_proxy_request_frame_bytes)
+            .ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "max_content_len",
+                    "transaction content limit cannot admit internal proxy HTTP ingress",
+                )
+            })?;
+        let query_fanout_inflight = ByteWeightedMemoryPool::new(query_memory.fanout_pool_bytes)
+            .ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "query_fanout_max_retained_bytes",
+                    "query memory pool does not fit weighted semaphore geometry",
+                )
+            })?;
+        #[cfg(feature = "app_api")]
+        {
+            let offline_command_memory_inflight = ByteWeightedMemoryPool::new(
+                offline_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(
+                    || {
+                        ToriiBuildError::invalid_configuration(
+                            "max_content_len",
+                            "offline command body limits do not fit the platform address space",
+                        )
+                    },
+                )?,
+            )
+            .ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "max_content_len",
+                    "offline command memory pool does not fit weighted semaphore geometry",
+                )
+            })?;
+            let redemption_parts = OfflineCommandBodyPolicy::redeem(torii_proxy_max_response_bytes)
+                .working_set_parts(offline_redeem_body_limit(torii_proxy_max_response_bytes))
+                .ok_or_else(|| {
+                    ToriiBuildError::invalid_configuration(
+                        "max_content_len",
+                        "offline redemption working set does not fit the platform address space",
                     )
-                }
-                HeaderValue::from_str(origin).unwrap_or_else(|err| {
-                    panic!("invalid torii.cors.allowed_origins entry `{origin}`: {err}")
-                })
-            })
-            .collect()
+                })?;
+            if !offline_command_memory_inflight.can_reserve_parts(redemption_parts) {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "max_content_len",
+                    "offline command memory pool cannot admit one maximum-size redemption",
+                ));
+            }
+        }
+        let query_fanout_working_set_bytes = query_memory.fanout_working_set_bytes.min(
+            usize::try_from(query_fanout_inflight.capacity_bytes()).map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "query_fanout_max_retained_bytes",
+                    "weighted query pool capacity does not fit the platform address space",
+                )
+            })?,
+        );
+        let ordinary_query_policy = OrdinaryQueryServerPolicy::new(
+            self.app_query_limits,
+            query_memory.ingress,
+            QueryFanoutMemoryEnvelope::for_body_admission(query_fanout_working_set_bytes).map_err(
+                |_| {
+                    ToriiBuildError::invalid_configuration(
+                        "query_fanout_max_retained_bytes",
+                        "query memory pool cannot admit ordinary response geometry",
+                    )
+                },
+            )?,
+        )
+        .ok_or_else(|| {
+            ToriiBuildError::invalid_configuration(
+                "query_fanout_max_retained_bytes",
+                "query memory pool cannot admit ordinary query limits",
+            )
+        })?;
+        if !query_fanout_inflight.can_reserve_parts(ordinary_query_policy.start_reservation_parts())
+        {
+            return Err(ToriiBuildError::invalid_configuration(
+                "query_fanout_max_retained_bytes",
+                "query memory pool cannot admit one stored ordinary query",
+            ));
+        }
+        Ok(())
     }
-    fn parse_cors_methods(methods: &[String]) -> Vec<HttpMethod> {
-        methods
-            .iter()
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|method| !method.is_empty())
-            .map(|method| {
-                HttpMethod::from_bytes(method.as_bytes()).unwrap_or_else(|err| {
-                    panic!("invalid torii.cors.allowed_methods entry `{method}`: {err}")
-                })
-            })
-            .collect()
+    fn parse_cors_origins(
+        origins: &[String],
+    ) -> core::result::Result<Vec<HeaderValue>, ToriiBuildError> {
+        let mut parsed_origins = Vec::with_capacity(origins.len());
+        let mut seen = BTreeSet::new();
+        for origin in origins.iter().map(String::as_str) {
+            if origin.is_empty() || origin.trim() != origin {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "cors.allowed_origins",
+                    "origin entries must be non-empty and contain no surrounding whitespace",
+                ));
+            }
+            if !seen.insert(origin) {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "cors.allowed_origins",
+                    format!("duplicate origin `{origin}`"),
+                ));
+            }
+            if origin == "*" {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "cors.allowed_origins",
+                    "wildcard origins are not permitted; configure explicit origins",
+                ));
+            }
+            let url = url::Url::parse(origin).map_err(|error| {
+                ToriiBuildError::invalid_configuration(
+                    "cors.allowed_origins",
+                    format!("invalid origin `{origin}`: {error}"),
+                )
+            })?;
+            if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "cors.allowed_origins",
+                    format!("origin `{origin}` must use http(s) and include a host"),
+                ));
+            }
+            if url.origin().ascii_serialization() != origin {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "cors.allowed_origins",
+                    format!(
+                        "origin `{origin}` is not canonical; configure only scheme, host, and optional non-default port"
+                    ),
+                ));
+            }
+            parsed_origins.push(HeaderValue::from_str(origin).map_err(|error| {
+                ToriiBuildError::invalid_configuration(
+                    "cors.allowed_origins",
+                    format!("invalid origin `{origin}`: {error}"),
+                )
+            })?);
+        }
+        Ok(parsed_origins)
     }
-    fn parse_cors_headers(config_path: &str, headers: &[String]) -> Vec<HeaderName> {
-        headers
-            .iter()
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|header| !header.is_empty())
-            .map(|header| {
-                HeaderName::from_bytes(header.as_bytes())
-                    .unwrap_or_else(|err| panic!("invalid {config_path} entry `{header}`: {err}"))
-            })
-            .collect()
+    fn parse_cors_methods(
+        methods: &[String],
+    ) -> core::result::Result<Vec<HttpMethod>, ToriiBuildError> {
+        let mut parsed_methods = Vec::with_capacity(methods.len());
+        let mut seen = BTreeSet::new();
+        for method in methods.iter().map(String::as_str) {
+            if method.is_empty() || method.trim() != method {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "cors.allowed_methods",
+                    "HTTP method entries must be non-empty and contain no surrounding whitespace",
+                ));
+            }
+            if !matches!(
+                method,
+                "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "HEAD"
+            ) {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "cors.allowed_methods",
+                    format!("unsupported or non-canonical HTTP method `{method}`"),
+                ));
+            }
+            if !seen.insert(method) {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "cors.allowed_methods",
+                    format!("duplicate HTTP method `{method}`"),
+                ));
+            }
+            parsed_methods.push(HttpMethod::from_bytes(method.as_bytes()).map_err(|error| {
+                ToriiBuildError::invalid_configuration(
+                    "cors.allowed_methods",
+                    format!("invalid HTTP method `{method}`: {error}"),
+                )
+            })?);
+        }
+        Ok(parsed_methods)
     }
-    fn build_cors_layer(&self) -> Option<CorsLayer> {
+    fn parse_cors_headers(
+        config_path: &'static str,
+        headers: &[String],
+    ) -> core::result::Result<Vec<HeaderName>, ToriiBuildError> {
+        let mut parsed_headers = Vec::with_capacity(headers.len());
+        let mut seen = BTreeSet::new();
+        for header in headers.iter().map(String::as_str) {
+            if header.is_empty() || header.trim() != header {
+                return Err(ToriiBuildError::invalid_configuration(
+                    config_path,
+                    "HTTP header entries must be non-empty and contain no surrounding whitespace",
+                ));
+            }
+            if !seen.insert(header) {
+                return Err(ToriiBuildError::invalid_configuration(
+                    config_path,
+                    format!("duplicate HTTP header name `{header}`"),
+                ));
+            }
+            let parsed = HeaderName::from_bytes(header.as_bytes()).map_err(|error| {
+                ToriiBuildError::invalid_configuration(
+                    config_path,
+                    format!("invalid HTTP header name `{header}`: {error}"),
+                )
+            })?;
+            if parsed.as_str() != header {
+                return Err(ToriiBuildError::invalid_configuration(
+                    config_path,
+                    format!("HTTP header name `{header}` must use canonical lowercase spelling"),
+                ));
+            }
+            parsed_headers.push(parsed);
+        }
+        Ok(parsed_headers)
+    }
+    fn build_cors_layer(&self) -> core::result::Result<Option<CorsLayer>, ToriiBuildError> {
         if !self.cors.enabled {
-            return None;
+            return Ok(None);
         }
-        let origins = Self::parse_cors_origins(&self.cors.allowed_origins);
+        let origins = Self::parse_cors_origins(&self.cors.allowed_origins)?;
         if origins.is_empty() {
-            panic!(
-                "torii.cors.enabled=true requires at least one torii.cors.allowed_origins entry"
-            );
+            return Err(ToriiBuildError::invalid_configuration(
+                "cors.allowed_origins",
+                "CORS is enabled but no explicit origin is configured",
+            ));
         }
-        let methods = Self::parse_cors_methods(&self.cors.allowed_methods);
+        let methods = Self::parse_cors_methods(&self.cors.allowed_methods)?;
         if methods.is_empty() {
-            panic!(
-                "torii.cors.enabled=true requires at least one torii.cors.allowed_methods entry"
-            );
+            return Err(ToriiBuildError::invalid_configuration(
+                "cors.allowed_methods",
+                "CORS is enabled but no HTTP method is configured",
+            ));
         }
         let allowed_headers =
-            Self::parse_cors_headers("torii.cors.allowed_headers", &self.cors.allowed_headers);
-        if allowed_headers.is_empty() {
-            panic!(
-                "torii.cors.enabled=true requires at least one torii.cors.allowed_headers entry"
-            );
-        }
+            Self::parse_cors_headers("cors.allowed_headers", &self.cors.allowed_headers)?;
         let exposed_headers =
-            Self::parse_cors_headers("torii.cors.exposed_headers", &self.cors.exposed_headers);
+            Self::parse_cors_headers("cors.exposed_headers", &self.cors.exposed_headers)?;
         let mut layer = CorsLayer::new()
             .allow_origin(origins)
             .max_age(Duration::from_secs(self.cors.max_age_secs));
@@ -52127,9 +53421,11 @@ impl Torii {
         if !exposed_headers.is_empty() {
             layer = layer.expose_headers(exposed_headers);
         }
-        Some(layer)
+        Ok(Some(layer))
     }
-    fn prepare_da_runtime_services(&self) -> DaRuntimeServices {
+    fn prepare_da_runtime_services(
+        &self,
+    ) -> core::result::Result<DaRuntimeServices, ToriiBuildError> {
         let replay_cache_config = iroha_core::da::ReplayCacheConfig::new()
             .with_max_entries_per_lane(self.da_ingest.replay_cache_capacity)
             .with_max_lane_epochs(self.da_ingest.replay_cache_max_lane_epochs)
@@ -52147,32 +53443,33 @@ impl Torii {
                 Arc::clone(&replay_store),
                 self.da_receipt_signer.public_key().clone(),
             ));
-            return DaRuntimeServices {
+            return Ok(DaRuntimeServices {
                 replay_cache,
                 replay_store,
                 receipt_log,
                 replay_lifecycle_lock: Arc::new(parking_lot::Mutex::new(())),
                 spooler: None,
-            };
+            });
         }
         let replay_store_dir = self.da_ingest.replay_cache_store_dir.clone();
         let replay_cursor_store = da::ReplayCursorStore::open_with_max_lane_epochs(
             replay_store_dir.clone(),
             self.da_ingest.replay_cache_max_lane_epochs,
         )
-        .unwrap_or_else(|err| {
-            panic!(
-                "failed to open bounded DA replay cursor store at {}: {err:?}",
-                replay_store_dir.display()
+        .map_err(|error| {
+            ToriiBuildError::component_initialization(
+                "da.replay_cursor_store",
+                format!(
+                    "failed to open bounded store at {}: {error:?}",
+                    replay_store_dir.display()
+                ),
             )
-        });
+        })?;
         let replay_store = Arc::new(replay_cursor_store);
-        let admission_snapshot = da::committed_da_ingest_admission_snapshot(&self.state)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "failed to decode committed DA ingest admission policy; refusing to start Torii: {error}"
-                )
-            });
+        let admission_snapshot =
+            da::committed_da_ingest_admission_snapshot(&self.state).map_err(|error| {
+                ToriiBuildError::component_initialization("da.admission_policy", error)
+            })?;
         let receipt_log = Arc::new(if admission_snapshot.is_configured() {
             da::DaReceiptLog::open_with_lane_epoch_filter(
                 self.da_ingest.manifest_store_dir.clone(),
@@ -52180,41 +53477,55 @@ impl Torii {
                 self.da_receipt_signer.public_key().clone(),
                 |lane_epoch| admission_snapshot.retains(lane_epoch.lane_id, lane_epoch.epoch),
             )
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to open durable DA receipt log at {}; refusing to start Torii: {err:?}",
-                    self.da_ingest.manifest_store_dir.display()
+            .map_err(|error| {
+                ToriiBuildError::component_initialization(
+                    "da.receipt_log",
+                    format!(
+                        "failed to open durable log at {}: {error:?}",
+                        self.da_ingest.manifest_store_dir.display()
+                    ),
                 )
-            })
+            })?
         } else {
             da::DaReceiptLog::open(
                 self.da_ingest.manifest_store_dir.clone(),
                 Arc::clone(&replay_store),
                 self.da_receipt_signer.public_key().clone(),
             )
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to open durable DA receipt log at {}; refusing to start Torii: {err:?}",
-                    self.da_ingest.manifest_store_dir.display()
+            .map_err(|error| {
+                ToriiBuildError::component_initialization(
+                    "da.receipt_log",
+                    format!(
+                        "failed to open durable log at {}: {error:?}",
+                        self.da_ingest.manifest_store_dir.display()
+                    ),
                 )
-            })
+            })?
         });
         #[cfg(feature = "app_api")]
         da::recover_pending_taikai_lineages(
             &self.da_ingest.manifest_store_dir,
             receipt_log.as_ref(),
         )
-        .unwrap_or_else(|(_, error)| {
-            panic!(
-                "failed to recover pending Taikai routing lineage at {}; refusing to start Torii: {error}",
-                self.da_ingest.manifest_store_dir.display()
+        .map_err(|(_, error)| {
+            ToriiBuildError::component_initialization(
+                "da.taikai_lineage",
+                format!(
+                    "failed to recover pending routing lineage at {}: {error}",
+                    self.da_ingest.manifest_store_dir.display()
+                ),
             )
-        });
+        })?;
         let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
         for (lane_epoch, highest) in replay_store.highest_sequences() {
             replay_cache
                 .prime_lane_epoch(lane_epoch, highest)
-                .expect("bounded replay cursor store must fit the matching replay cache capacity");
+                .map_err(|error| {
+                    ToriiBuildError::component_initialization(
+                        "da.replay_cache",
+                        format!("durable cursor does not fit the configured cache: {error:?}"),
+                    )
+                })?;
         }
         #[cfg(feature = "telemetry")]
         self.telemetry.with_metrics(|metrics| {
@@ -52231,22 +53542,27 @@ impl Torii {
             self.da_ingest.spool_batch_max,
             self.telemetry.clone(),
         ));
-        DaRuntimeServices {
+        Ok(DaRuntimeServices {
             replay_cache,
             replay_store,
             receipt_log,
             replay_lifecycle_lock: Arc::new(parking_lot::Mutex::new(())),
             spooler,
-        }
+        })
     }
     /// Helper function to create router and shared runtime state.
     #[allow(clippy::too_many_lines)]
     fn create_api_router_with_state(
         &self,
         shutdown_signal: ShutdownSignal,
-    ) -> (axum::Router, SharedAppState) {
+    ) -> core::result::Result<(axum::Router, SharedAppState), ToriiBuildError> {
+        let cors_layer = self.build_cors_layer()?;
+        let mcp_allowed_origins = Arc::new(if self.cors.enabled {
+            Self::parse_cors_origins(&self.cors.allowed_origins)?
+        } else {
+            Vec::new()
+        });
         let gateway_components = self.sorafs_gateway_security.clone();
-        let da_runtime = self.prepare_da_runtime_services();
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
             collect_peer_urls(&self.online_peers, &self.peer_telemetry_urls),
@@ -52258,109 +53574,191 @@ impl Torii {
         let zk_ivm_prove_job_budget = Arc::new(ZkIvmProveJobBudget::new(
             self.zk_ivm_prove_job_max_retained_bytes,
         ));
-        let soracloud_public_inflight_total = self.soracloud_public_max_inflight.max(1);
+        let soracloud_public_inflight_total = validate_semaphore_permits(
+            "soracloud.public_max_inflight",
+            self.soracloud_public_max_inflight.max(1),
+        )?;
         let soracloud_public_inflight =
             Arc::new(tokio::sync::Semaphore::new(soracloud_public_inflight_total));
-        let soracloud_mutation_inflight_total = self.soracloud_mutation_max_inflight.max(1);
+        let soracloud_mutation_inflight_total = validate_semaphore_permits(
+            "soracloud.mutation_max_inflight",
+            self.soracloud_mutation_max_inflight.max(1),
+        )?;
         let soracloud_mutation_inflight = Arc::new(tokio::sync::Semaphore::new(
             soracloud_mutation_inflight_total,
         ));
-        let zk_ivm_prove_max_inflight = self.zk_ivm_prove_max_inflight.max(1);
-        let zk_ivm_prove_slots_total =
-            zk_ivm_prove_max_inflight.saturating_add(self.zk_ivm_prove_max_queue);
+        let zk_ivm_prove_max_inflight = validate_semaphore_permits(
+            "zk.ivm_prove.max_inflight",
+            self.zk_ivm_prove_max_inflight.max(1),
+        )?;
+        let zk_ivm_prove_slots_total = checked_semaphore_permit_sum(
+            "zk.ivm_prove.max_inflight_plus_queue",
+            zk_ivm_prove_max_inflight,
+            self.zk_ivm_prove_max_queue,
+        )?;
         let zk_ivm_prove_slots = Arc::new(tokio::sync::Semaphore::new(zk_ivm_prove_slots_total));
         let zk_ivm_prove_inflight =
             Arc::new(tokio::sync::Semaphore::new(zk_ivm_prove_max_inflight));
         let zk_ivm_prove_inflight_total = zk_ivm_prove_max_inflight;
-        let query_inflight = Arc::new(tokio::sync::Semaphore::new(self.query_max_inflight.max(1)));
-        let proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(
+        let query_max_inflight =
+            validate_semaphore_permits("query.max_inflight", self.query_max_inflight.max(1))?;
+        let query_inflight = Arc::new(tokio::sync::Semaphore::new(query_max_inflight));
+        let proof_body_max_inflight = validate_semaphore_permits(
+            "proof.body_max_inflight",
             self.proof_body_max_inflight.max(1),
-        ));
-        let query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(
+        )?;
+        let proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(proof_body_max_inflight));
+        let query_heavy_max_inflight = validate_semaphore_permits(
+            "query.heavy_max_inflight",
             self.query_heavy_max_inflight.max(1),
-        ));
-        let torii_proxy_max_response_bytes =
-            usize::try_from(self.transaction_max_content_len.get())
-                .expect("validated Torii max_content_len must fit usize");
+        )?;
+        let query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(query_heavy_max_inflight));
+        let torii_proxy_max_response_bytes = self.transaction_max_content_len;
         let query_memory = query_memory_geometry(
             self.query_fanout_max_retained_bytes,
             torii_proxy_max_response_bytes,
-            self.query_heavy_max_inflight,
+            query_heavy_max_inflight,
         )
-        .expect("validated Torii query memory pool must admit ingress and fanout reservations");
+        .ok_or_else(|| {
+            ToriiBuildError::invalid_configuration(
+                "query_fanout_max_retained_bytes",
+                "query memory pool cannot admit the configured ingress and fanout reservations",
+            )
+        })?;
         let torii_proxy_request_frame_bytes = torii_proxy_max_response_bytes
             .checked_add(TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1)
             .filter(|bytes| *bytes <= TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1)
-            .expect("validated Torii max_content_len must fit the first-release proxy frame bound");
+            .ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "max_content_len",
+                    "transaction content limit exceeds the first-release proxy frame bound",
+                )
+            })?;
         let torii_proxy_http_ingress_envelope =
             ToriiProxyHttpIngressEnvelope::from_max_content_bytes(torii_proxy_request_frame_bytes)
-                .expect("validated Torii max_content_len must admit internal proxy HTTP ingress");
+                .ok_or_else(|| {
+                    ToriiBuildError::invalid_configuration(
+                        "max_content_len",
+                        "transaction content limit cannot admit internal proxy HTTP ingress",
+                    )
+                })?;
         let torii_proxy_memory_inflight = Arc::new(tokio::sync::Semaphore::new(1));
-        let query_ingress_inflight = Arc::new(tokio::sync::Semaphore::new(
-            query_memory.ingress_slots.get(),
-        ));
+        let query_ingress_slots =
+            validate_semaphore_permits("query.ingress_slots", query_memory.ingress_slots.get())?;
+        let query_ingress_inflight = Arc::new(tokio::sync::Semaphore::new(query_ingress_slots));
         let query_fanout_inflight = ByteWeightedMemoryPool::new(query_memory.fanout_pool_bytes)
-            .expect("validated Torii query memory pool must fit weighted semaphore geometry");
+            .ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "query_fanout_max_retained_bytes",
+                    "query memory pool does not fit weighted semaphore geometry",
+                )
+            })?;
         #[cfg(feature = "app_api")]
         let offline_command_memory_inflight = ByteWeightedMemoryPool::new(
-            offline_command_memory_pool_bytes(torii_proxy_max_response_bytes)
-                .expect("validated offline command body limits must fit the platform address space"),
+            offline_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "max_content_len",
+                    "offline command body limits do not fit the platform address space",
+                )
+            })?,
         )
-        .expect("offline command memory pool must fit weighted semaphore geometry");
+        .ok_or_else(|| {
+            ToriiBuildError::invalid_configuration(
+                "max_content_len",
+                "offline command memory pool does not fit weighted semaphore geometry",
+            )
+        })?;
         #[cfg(feature = "app_api")]
-        assert!(
-            offline_command_memory_inflight.can_reserve_parts(
-                OfflineCommandBodyPolicy::redeem(torii_proxy_max_response_bytes)
-                    .working_set_parts(
-                        offline_redeem_body_limit(torii_proxy_max_response_bytes),
+        if !offline_command_memory_inflight.can_reserve_parts(
+            OfflineCommandBodyPolicy::redeem(torii_proxy_max_response_bytes)
+                .working_set_parts(offline_redeem_body_limit(torii_proxy_max_response_bytes))
+                .ok_or_else(|| {
+                    ToriiBuildError::invalid_configuration(
+                        "max_content_len",
+                        "offline redemption working set does not fit the platform address space",
                     )
-                    .expect("validated offline redeem working set must fit u64"),
-            ),
-            "offline command memory pool must admit one maximum-size redemption"
-        );
+                })?,
+        ) {
+            return Err(ToriiBuildError::invalid_configuration(
+                "max_content_len",
+                "offline command memory pool cannot admit one maximum-size redemption",
+            ));
+        }
         let query_fanout_working_set_bytes = query_memory.fanout_working_set_bytes.min(
-            usize::try_from(query_fanout_inflight.capacity_bytes())
-                .expect("weighted Torii query pool capacity must fit usize"),
+            usize::try_from(query_fanout_inflight.capacity_bytes()).map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "query_fanout_max_retained_bytes",
+                    "weighted query pool capacity does not fit the platform address space",
+                )
+            })?,
         );
         let ordinary_query_policy = OrdinaryQueryServerPolicy::new(
             self.app_query_limits,
             query_memory.ingress,
-            QueryFanoutMemoryEnvelope::for_body_admission(query_fanout_working_set_bytes)
-                .expect("validated Torii query memory pool must admit ordinary response geometry"),
+            QueryFanoutMemoryEnvelope::for_body_admission(query_fanout_working_set_bytes).map_err(
+                |_| {
+                    ToriiBuildError::invalid_configuration(
+                        "query_fanout_max_retained_bytes",
+                        "query memory pool cannot admit ordinary response geometry",
+                    )
+                },
+            )?,
         )
-        .expect("validated Torii query memory pool must admit ordinary query limits");
-        assert!(
-            query_fanout_inflight
-                .can_reserve_parts(ordinary_query_policy.start_reservation_parts()),
-            "validated Torii query memory pool must admit one stored ordinary query"
-        );
-        let transaction_ingress_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
+        .ok_or_else(|| {
+            ToriiBuildError::invalid_configuration(
+                "query_fanout_max_retained_bytes",
+                "query memory pool cannot admit ordinary query limits",
+            )
+        })?;
+        if !query_fanout_inflight.can_reserve_parts(ordinary_query_policy.start_reservation_parts())
+        {
+            return Err(ToriiBuildError::invalid_configuration(
+                "query_fanout_max_retained_bytes",
+                "query memory pool cannot admit one stored ordinary query",
+            ));
+        }
+        let transaction_ingress_max_concurrent_compute_jobs = validate_semaphore_permits(
+            "transaction_ingress.max_concurrent_compute_jobs",
             self.transaction_ingress_max_concurrent_compute_jobs,
+        )?;
+        let transaction_ingress_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
+            transaction_ingress_max_concurrent_compute_jobs,
         ));
         #[cfg(feature = "app_api")]
-        let verified_source_compile_inflight = Arc::new(tokio::sync::Semaphore::new(
+        let verified_source_max_concurrent_compiles = validate_semaphore_permits(
+            "verified_source.max_concurrent_compiles",
             self.verified_source_max_concurrent_compiles,
+        )?;
+        #[cfg(feature = "app_api")]
+        let verified_source_compile_inflight = Arc::new(tokio::sync::Semaphore::new(
+            verified_source_max_concurrent_compiles,
         ));
-        let da_ingest_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
+        let da_ingest_max_concurrent_compute_jobs = validate_semaphore_permits(
+            "da_ingest.max_concurrent_compute_jobs",
             self.da_ingest.max_concurrent_compute_jobs.get(),
+        )?;
+        let da_ingest_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
+            da_ingest_max_concurrent_compute_jobs,
         ));
         let mcp_tools = Arc::new(if self.mcp.enabled {
             mcp::build_tool_specs(&self.mcp)
         } else {
             Vec::new()
         });
-        let mcp_dispatch_inflight = Arc::new(tokio::sync::Semaphore::new(
+        let mcp_max_inflight_dispatches = validate_semaphore_permits(
+            "mcp.max_inflight_dispatches",
             self.mcp.max_inflight_dispatches.get(),
-        ));
-        let mcp_long_poll_inflight = Arc::new(tokio::sync::Semaphore::new(
-            mcp::long_poll_dispatch_capacity(self.mcp.max_inflight_dispatches.get()),
-        ));
+        )?;
+        let mcp_dispatch_inflight =
+            Arc::new(tokio::sync::Semaphore::new(mcp_max_inflight_dispatches));
+        let mcp_long_poll_dispatches = validate_semaphore_permits(
+            "mcp.long_poll_dispatches",
+            mcp::long_poll_dispatch_capacity(mcp_max_inflight_dispatches),
+        )?;
+        let mcp_long_poll_inflight =
+            Arc::new(tokio::sync::Semaphore::new(mcp_long_poll_dispatches));
+        let da_runtime = self.prepare_da_runtime_services()?;
         let mcp_inflight_requests = Arc::new(mcp::McpInflightRegistry::default());
-        let mcp_allowed_origins = Arc::new(if self.cors.enabled {
-            Self::parse_cors_origins(&self.cors.allowed_origins)
-        } else {
-            Vec::new()
-        });
         let app_state: SharedAppState = Arc::new(AppState {
             shutdown_signal,
             events: self.events.clone(),
@@ -52368,11 +53766,7 @@ impl Torii {
             chain_id: self.chain_id.clone(),
             signed_query_admission: self.signed_query_admission.clone(),
             #[cfg(feature = "app_api")]
-            transaction_max_content_len: self
-                .transaction_max_content_len
-                .get()
-                .try_into()
-                .unwrap_or(usize::MAX),
+            transaction_max_content_len: self.transaction_max_content_len,
             torii_proxy_max_response_bytes,
             query_fanout_working_set_bytes,
             query_ingress_envelope: query_memory.ingress,
@@ -52389,11 +53783,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             verified_source_body_read_timeout: self.verified_source_body_read_timeout,
             transaction_batch_max_transactions: self.transaction_batch_max_transactions,
-            transaction_batch_max_bytes: self
-                .transaction_max_content_len
-                .get()
-                .try_into()
-                .unwrap_or(usize::MAX),
+            transaction_batch_max_bytes: self.transaction_max_content_len,
             state: self.state.clone(),
             sccp_replay_archive: self.sccp_replay_archive.clone(),
             #[cfg(feature = "app_api")]
@@ -52429,7 +53819,7 @@ impl Torii {
             content_config: self.content_config.clone(),
             ws_message_timeout: self.ws_message_timeout,
             require_api_token: self.require_api_token,
-            api_tokens_set: self.api_tokens_set.clone(),
+            api_token_digests: self.api_token_digests.clone(),
             webhooks_enabled: self.webhooks_enabled,
             zk_attachments_enabled: self.zk_attachments_enabled,
             operator_auth: self.operator_auth.clone(),
@@ -52453,9 +53843,12 @@ impl Torii {
             mcp_long_poll_inflight,
             mcp_inflight_requests,
             mcp_allowed_origins,
-            mcp_dispatch_router: std::sync::RwLock::new(None),
+            mcp_dispatch_router: McpDispatchRouterSlot::default(),
             fee_policy: self.fee_policy.clone(),
             norito_rpc: self.norito_rpc.clone(),
+            norito_rpc_allowed_client_digests: Arc::new(limits::ApiTokenDigestSet::from_tokens(
+                self.norito_rpc.allowed_clients.iter().map(String::as_str),
+            )),
             high_load_tx_threshold: self.high_load_tx_threshold,
             high_load_stream_tx_threshold: self.high_load_stream_tx_threshold,
             high_load_subscription_tx_threshold: self.high_load_subscription_tx_threshold,
@@ -52680,28 +54073,27 @@ impl Torii {
                 )
             });
         }
-        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-        if !app_state.kura.emergency_fast_startup_enabled()
-            && let Some(network) = app_state.p2p.clone()
-        {
-            attach_torii_proxy_network(app_state.clone(), network);
-        }
-        let router = self.compose_api_router(app_state.clone());
-        (router, app_state)
-    }
-    /// Helper function to create router. This router can be tested without starting up an HTTP server
-    fn create_api_router(&self) -> axum::Router {
-        self.create_api_router_with_state(ShutdownSignal::new()).0
+        let router = self.compose_api_router(app_state.clone(), cors_layer)?;
+        Ok((router, app_state))
     }
     /// Compose the HTTP router from prepared runtime state.
     #[allow(clippy::too_many_lines)]
-    fn compose_api_router(&self, app_state: SharedAppState) -> axum::Router {
+    fn compose_api_router(
+        &self,
+        app_state: SharedAppState,
+        cors_layer: Option<CorsLayer>,
+    ) -> core::result::Result<axum::Router, ToriiBuildError> {
         let mut builder = RouterBuilder::new(
             app_state.clone(),
             RouteCatalog::new(route_catalog::CATALOGED_ROUTES),
             compiled_route_features(),
         )
-        .unwrap_or_else(|error| panic!("invalid Torii route catalog: {error:?}"));
+        .map_err(|error| {
+            ToriiBuildError::component_initialization(
+                "route_catalog",
+                format!("invalid catalog: {error:?}"),
+            )
+        })?;
         self.add_sumeragi_routes(&mut builder);
         // Core info and introspection
         self.add_telemetry_routes(&mut builder);
@@ -52716,7 +54108,7 @@ impl Torii {
         // Runtime/Governance routes that require state
         self.add_runtime_governance_routes(&mut builder);
         #[cfg(feature = "app_api")]
-        self.add_private_settlement_routes(&mut builder);
+        self.add_private_settlement_routes(&mut builder)?;
         // Transaction, Contracts, VK
         self.add_transaction_routes(&mut builder);
         self.add_da_routes(&mut builder);
@@ -52745,9 +54137,12 @@ impl Torii {
         self.add_app_api_routes(&mut builder);
         #[cfg(feature = "app_api")]
         self.add_soracloud_public_runtime_routes(&mut builder);
-        let (router, mounted_manifest) = builder
-            .finish()
-            .unwrap_or_else(|errors| panic!("Torii route assembly failed: {errors:?}"));
+        let (router, mounted_manifest) = builder.finish().map_err(|errors| {
+            ToriiBuildError::component_initialization(
+                "route_catalog",
+                format!("route assembly failed: {errors:?}"),
+            )
+        })?;
         let route_index = mounted_manifest.route_index();
         let mut router = router
             .fallback(handler_route_not_found)
@@ -52802,7 +54197,7 @@ impl Torii {
                 app_state.clone(),
                 inject_remote_addr_header,
             ));
-        if let Some(cors_layer) = self.build_cors_layer() {
+        if let Some(cors_layer) = cors_layer {
             router = router.layer(cors_layer);
         }
         // A global CORS layer must not manufacture OPTIONS routes which the
@@ -52889,24 +54284,36 @@ impl Torii {
             enforce_required_api_token_private_no_store,
         ));
         let router = router.with_state(app_state.clone());
-        {
-            let mut guard = app_state
-                .mcp_dispatch_router
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *guard = Some(router.clone());
-        }
-        router
+        let mcp_dispatch_router_owner = app_state.mcp_dispatch_router.install(router.clone());
+        Ok(router.layer(Extension(mcp_dispatch_router_owner)))
     }
     /// Public helper to get the API router for integration tests without starting an HTTP server.
     ///
     /// This keeps test code decoupled from server start and avoids binding to a TCP port.
     /// Requests that do not supply `ConnectInfo` receive a loopback socket address so handlers
     /// that depend on transport metadata behave like the bound server path.
-    pub fn api_router_for_tests(&self) -> axum::Router {
-        self.create_api_router().layer(axum::middleware::from_fn(
+    ///
+    /// Successful preparation is cached so repeated handles share one durable runtime rather than
+    /// opening duplicate stores or spawning duplicate DA spoolers.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed configuration or component-initialization error as server startup.
+    pub fn api_router_for_tests(&self) -> core::result::Result<axum::Router, ToriiBuildError> {
+        let mut runtime = self.test_api_router.lock();
+        if let Some(runtime) = runtime.as_ref() {
+            return Ok(runtime.router.clone());
+        }
+        let shutdown_signal = ShutdownSignal::new();
+        let (router, _) = self.create_api_router_with_state(shutdown_signal.clone())?;
+        let router = router.layer(axum::middleware::from_fn(
             inject_loopback_connect_info_when_missing,
-        ))
+        ));
+        *runtime = Some(TestApiRouterRuntime {
+            router: router.clone(),
+            shutdown_signal,
+        });
+        Ok(router)
     }
     /// Expose the push bridge to tests so registration side effects can be inspected.
     #[cfg(feature = "push")]
@@ -52923,26 +54330,30 @@ impl Torii {
         self,
         shutdown_signal: ShutdownSignal,
     ) -> core::result::Result<(), Report<Error>> {
+        let _shutdown_on_drop = ShutdownOnDrop::new(shutdown_signal.clone());
         let emergency_fast = self.kura.emergency_fast_startup_enabled();
-        #[cfg(feature = "app_api")]
-        ensure_tx_history_access_policy_ready(self.tx_history_access_policy.as_ref())
-            .map_err(Report::new)?;
-        #[cfg(feature = "app_api")]
-        if let Some(code) = self.sorafs_moderation_startup_error {
-            return Err(Report::new(Error::SorafsModerationStartup { code }));
-        }
-        #[cfg(feature = "app_api")]
-        if let Some(code) = self.sorafs_evidence_viewer_startup_error {
-            return Err(Report::new(Error::SorafsEvidenceViewerStartup { code }));
-        }
+        let http_transport = ValidatedToriiHttpTransport::new(self.http_transport)
+            .change_context(Error::StartServer)
+            .attach("invalid Torii HTTP transport configuration")?;
         #[cfg(feature = "app_api")]
         let zk_prover_enabled = !emergency_fast && crate::zk_prover::cfg_enabled();
         #[cfg(feature = "app_api")]
-        if (self.zk_attachments_enabled || zk_prover_enabled)
-            && !crate::zk_attachments::init_persistence()
-        {
-            iroha_logger::error!("refusing to start Torii before attachment quota recovery");
-            return Err(Report::new(Error::StartServer));
+        if self.zk_attachments_enabled || zk_prover_enabled {
+            crate::zk_attachments::init_persistence()
+                .change_context(Error::StartServer)
+                .attach("failed to initialize direct durable ZK attachment storage")?;
+        }
+        #[cfg(feature = "app_api")]
+        if zk_prover_enabled {
+            crate::zk_prover::init_persistence()
+                .change_context(Error::StartServer)
+                .attach("failed to initialize direct durable ZK prover storage")?;
+        }
+        #[cfg(feature = "app_api")]
+        if self.webhooks_enabled {
+            crate::webhook::init_persistence()
+                .change_context(Error::StartServer)
+                .attach("failed to initialize durable webhook storage")?;
         }
         let torii_address = self.address.value().clone();
         iroha_logger::info!(addr = %torii_address, "starting Torii HTTP server");
@@ -52953,25 +54364,145 @@ impl Torii {
             .change_context(Error::StartServer)
             .attach("failed to bind to the specified address")
             .attach_with(|| self.address.clone().into_attachment())?;
-        let (api_router, app_state) = self.create_api_router_with_state(shutdown_signal.clone());
-        // Initialize optional app-facing subsystems.
+        let (api_router, app_state) = self
+            .create_api_router_with_state(shutdown_signal.clone())
+            .change_context(Error::StartServer)
+            .attach("failed to initialize Torii runtime services")?;
+        let iso_bridge_projection_worker = if emergency_fast {
+            None
+        } else {
+            self.iso_bridge
+                .clone()
+                .map(|runtime| {
+                    start_iso_bridge_projection_worker(
+                        runtime,
+                        self.state.clone(),
+                        self.kura.clone(),
+                        &self.events,
+                        shutdown_signal.clone(),
+                    )
+                })
+                .transpose()
+                .change_context(Error::StartServer)
+                .attach("failed to reconcile the durable ISO bridge projection")?
+        };
+        let pipeline_status_projection_worker = (!emergency_fast).then(|| {
+            start_pipeline_status_projection_worker(
+                self.pipeline_status_cache.clone(),
+                self.kura.clone(),
+                &self.events,
+                shutdown_signal.clone(),
+            )
+        });
+        let iso_audit_persistence_worker = self
+            .iso_bridge
+            .as_ref()
+            .map(|runtime| runtime.start_audit_persistence_worker(shutdown_signal.clone()));
+        #[cfg(feature = "connect")]
+        let connect_runtime_enabled = !emergency_fast && self.connect_enabled;
+        #[cfg(feature = "connect")]
+        let connect_cleaner_worker = connect_runtime_enabled
+            .then(|| self.connect_bus.start_cleaner(shutdown_signal.clone()));
+        #[cfg(feature = "connect")]
+        let connect_network_worker = if connect_runtime_enabled {
+            if let Some(network) = self.p2p.as_ref() {
+                Some(
+                    self.connect_bus
+                        .attach_network(network.clone(), shutdown_signal.clone())
+                        .await,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        #[cfg(feature = "connect")]
+        let torii_proxy_network_worker = if emergency_fast {
+            None
+        } else {
+            self.p2p.clone().map(|network| {
+                attach_torii_proxy_network(app_state.clone(), network, shutdown_signal.clone())
+            })
+        };
+        #[cfg(feature = "push")]
+        let push_event_worker = self.push.as_ref().and_then(|bridge| {
+            bridge.start_event_worker(
+                self.kura.clone(),
+                self.events.clone(),
+                shutdown_signal.clone(),
+            )
+        });
+        let mut critical_workers = Vec::new();
+        if let Some(task) = iso_bridge_projection_worker {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "iso_bridge_projection",
+                task,
+            });
+        }
+        if let Some(task) = pipeline_status_projection_worker {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "pipeline_status_projection",
+                task,
+            });
+        }
+        if let Some(task) = iso_audit_persistence_worker {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "iso_audit_persistence",
+                task,
+            });
+        }
+        #[cfg(all(feature = "app_api", feature = "telemetry"))]
+        if let Some(task) = app_state.peer_telemetry.start(shutdown_signal.clone()) {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "peer_telemetry",
+                task,
+            });
+        }
+        #[cfg(feature = "connect")]
+        if let Some(task) = connect_cleaner_worker {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "connect_cleaner",
+                task,
+            });
+        }
+        #[cfg(feature = "connect")]
+        if let Some(task) = connect_network_worker {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "connect_network",
+                task,
+            });
+        }
+        #[cfg(feature = "connect")]
+        if let Some(task) = torii_proxy_network_worker {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "torii_proxy_network",
+                task,
+            });
+        }
+        #[cfg(feature = "push")]
+        if let Some(task) = push_event_worker {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "push_event",
+                task,
+            });
+        }
         #[cfg(feature = "app_api")]
-        {
-            if self.webhooks_enabled {
-                // Best-effort load/persist registry and spawn delivery worker.
-                // If the data dir isn't writable, errors are logged and the in-memory
-                // registry still functions.
-                crate::webhook::init_persistence();
-                crate::webhook::start_delivery_worker(shutdown_signal.clone());
-                // Spawn a single event enqueuer that subscribes to core events and
-                // pushes JSON payloads into the webhook delivery queue. This is separate
-                // from SSE/WS consumers to avoid duplicate deliveries per connection.
-                let mut rx = self.events.subscribe();
-                let worker_shutdown = shutdown_signal.clone();
-                tokio::spawn(async move {
+        if self.webhooks_enabled {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "webhook_delivery",
+                task: crate::webhook::start_delivery_worker(shutdown_signal.clone()),
+            });
+            let mut rx = self.events.subscribe();
+            let worker_shutdown = shutdown_signal.clone();
+            critical_workers.push(ToriiCriticalWorker {
+                name: "webhook_event_ingest",
+                task: tokio::spawn(async move {
                     loop {
                         let received = tokio::select! {
-                            () = worker_shutdown.receive() => break,
+                            () = worker_shutdown.receive() => {
+                                return ToriiCriticalWorkerExit::StoppedByShutdown;
+                            }
                             received = rx.recv() => received,
                         };
                         match received {
@@ -52981,132 +54512,69 @@ impl Torii {
                                     "application/json",
                                 );
                             }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                // Skip ahead on lag; webhook delivery is best-effort
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                return if worker_shutdown.is_sent() {
+                                    ToriiCriticalWorkerExit::StoppedByShutdown
+                                } else {
+                                    ToriiCriticalWorkerExit::UnexpectedExit
+                                };
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                iroha_logger::error!(
+                                    skipped,
+                                    "webhook event ingestion lagged; failing closed rather than skipping deliveries"
+                                );
+                                return ToriiCriticalWorkerExit::UnexpectedExit;
                             }
                         }
                     }
+                }),
+            });
+        }
+        // Initialize optional app-facing subsystems.
+        #[cfg(feature = "app_api")]
+        {
+            if self.zk_attachments_enabled {
+                // The supervised GC fails visibly on storage or quota-recovery errors.
+                let task = crate::zk_attachments::start_gc_worker(shutdown_signal.clone())
+                    .change_context(Error::StartServer)
+                    .attach("failed to start ZK attachment garbage collector")?;
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "zk_attachment_gc",
+                    task,
                 });
             }
-            if self.zk_attachments_enabled {
-                // Initialize attachments store and background GC. Every GC pass
-                // retries and fails closed on a pending quota transaction.
-                crate::zk_attachments::start_gc_worker(shutdown_signal.clone());
-            }
             if zk_prover_enabled {
-                crate::zk_prover::start_worker(shutdown_signal.clone());
+                let task = crate::zk_prover::start_worker(shutdown_signal.clone())
+                    .change_context(Error::StartServer)
+                    .attach("failed to start ZK prover worker")?;
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "zk_prover",
+                    task,
+                });
             }
         }
         #[cfg(feature = "app_api")]
         if !emergency_fast {
-            self.spawn_musubi_search_projection_worker(shutdown_signal.clone());
-        }
-        if let Some(runtime) = self.iso_bridge.clone() {
-            let mut rx = self.events.subscribe();
-            let worker_shutdown = shutdown_signal.clone();
-            tokio::spawn(async move {
-                loop {
-                    let received = tokio::select! {
-                        () = worker_shutdown.receive() => break,
-                        received = rx.recv() => received,
-                    };
-                    match received {
-                        Ok(EventBox::Pipeline(PipelineEventBox::Transaction(event))) => {
-                            let tx_hash = event.hash().to_string();
-                            match *event.status() {
-                                TransactionStatus::Approved => {
-                                    runtime.mark_transaction_applied(&tx_hash, SystemTime::now());
-                                }
-                                TransactionStatus::Rejected(ref reason) => {
-                                    runtime.mark_transaction_rejected(&tx_hash, Some(reason));
-                                }
-                                TransactionStatus::Expired => {
-                                    runtime.mark_transaction_expired(&tx_hash);
-                                }
-                                TransactionStatus::Queued => {}
-                            }
-                        }
-                        Ok(EventBox::PipelineBatch(events)) => {
-                            for event in events {
-                                if let PipelineEventBox::Transaction(event) = event {
-                                    let tx_hash = event.hash().to_string();
-                                    match *event.status() {
-                                        TransactionStatus::Approved => {
-                                            runtime.mark_transaction_applied(
-                                                &tx_hash,
-                                                SystemTime::now(),
-                                            );
-                                        }
-                                        TransactionStatus::Rejected(ref reason) => {
-                                            runtime
-                                                .mark_transaction_rejected(&tx_hash, Some(reason));
-                                        }
-                                        TransactionStatus::Expired => {
-                                            runtime.mark_transaction_expired(&tx_hash);
-                                        }
-                                        TransactionStatus::Queued => {}
-                                    }
-                                }
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            // Skip on lag to catch up with the latest events
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-        }
-        if !emergency_fast {
-            let mut rx = self.events.subscribe();
-            let cache = self.pipeline_status_cache.clone();
-            let kura = self.kura.clone();
-            let worker_shutdown = shutdown_signal.clone();
-            tokio::spawn(async move {
-                loop {
-                    let received = tokio::select! {
-                        () = worker_shutdown.receive() => break,
-                        received = rx.recv() => received,
-                    };
-                    match received {
-                        Ok(EventBox::Pipeline(PipelineEventBox::Transaction(event))) => {
-                            cache.record_transaction_event(&event);
-                        }
-                        Ok(EventBox::Pipeline(PipelineEventBox::Block(event))) => {
-                            cache.record_block_event(&event, &kura);
-                        }
-                        Ok(EventBox::PipelineBatch(events)) => {
-                            for event in events {
-                                match event {
-                                    PipelineEventBox::Transaction(event) => {
-                                        cache.record_transaction_event(&event);
-                                    }
-                                    PipelineEventBox::Block(event) => {
-                                        cache.record_block_event(&event, &kura);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            // Skip on lag to catch up with the latest events
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
+            critical_workers.push(ToriiCriticalWorker {
+                name: "musubi_search_projection",
+                task: self.spawn_musubi_search_projection_worker(shutdown_signal.clone()),
             });
         }
         #[cfg(feature = "app_api")]
         {
             if !emergency_fast && let Some(anchor_cfg) = self.da_ingest.taikai_anchor.clone() {
-                crate::da::spawn_anchor_worker(
+                let task = crate::da::spawn_anchor_worker(
                     self.da_ingest.manifest_store_dir.clone(),
                     anchor_cfg,
                     shutdown_signal.clone(),
-                );
+                )
+                .await
+                .map_err(|reason| Report::new(Error::StartServer).attach(reason))?;
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "taikai_anchor",
+                    task,
+                });
             }
         }
         #[cfg(feature = "app_api")]
@@ -53185,12 +54653,23 @@ impl Torii {
         let server = serve_torii_http(
             listener,
             api_router,
-            self.http_transport,
+            http_transport,
             shutdown_signal.clone(),
         );
+        let server = async {
+            supervise_torii_critical_workers(shutdown_signal.clone(), critical_workers, server)
+                .await
+                .unwrap_or_else(|failure| {
+                    iroha_logger::error!(
+                        diagnostic = failure.diagnostic(),
+                        "critical Torii runtime lifecycle failed closed"
+                    );
+                    Err(std::io::Error::other(failure.diagnostic()))
+                })
+        };
         #[cfg(feature = "app_api")]
         let server_result = supervise_evidence_viewer_compaction_worker(
-            shutdown_signal,
+            shutdown_signal.clone(),
             evidence_viewer_compaction_worker,
             server,
         )
@@ -53204,9 +54683,83 @@ impl Torii {
         })?;
         #[cfg(not(feature = "app_api"))]
         let server_result = server.await;
+        shutdown_signal.send();
         server_result
             .map_err(Report::from)
             .change_context(Error::FailedExit)
+    }
+}
+#[cfg(test)]
+mod cors_runtime_validation_tests {
+    use super::{Torii, ToriiBuildError};
+
+    fn owned(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn cors_origins_require_unique_canonical_http_origins() {
+        let parsed = Torii::parse_cors_origins(&owned(&["https://wallet.example:8443"]))
+            .expect("canonical explicit origin");
+        assert_eq!(parsed[0], "https://wallet.example:8443");
+
+        for origins in [
+            owned(&["*"]),
+            owned(&[""]),
+            owned(&[" https://wallet.example"]),
+            owned(&["https://wallet.example/path"]),
+            owned(&["https://wallet.example", "https://wallet.example"]),
+        ] {
+            assert!(matches!(
+                Torii::parse_cors_origins(&origins),
+                Err(ToriiBuildError::InvalidConfiguration {
+                    component: "cors.allowed_origins",
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn cors_methods_require_unique_canonical_standard_methods() {
+        let parsed =
+            Torii::parse_cors_methods(&owned(&["GET", "POST"])).expect("canonical methods");
+        assert_eq!(parsed, [axum::http::Method::GET, axum::http::Method::POST]);
+
+        for methods in [
+            owned(&[""]),
+            owned(&[" GET"]),
+            owned(&["get"]),
+            owned(&["TRACE"]),
+            owned(&["GET", "GET"]),
+        ] {
+            assert!(Torii::parse_cors_methods(&methods).is_err());
+        }
+    }
+
+    #[test]
+    fn cors_headers_require_unique_lowercase_names() {
+        assert!(
+            Torii::parse_cors_headers("cors.allowed_headers", &[])
+                .expect("simple CORS needs no allowed request headers")
+                .is_empty()
+        );
+        let parsed = Torii::parse_cors_headers(
+            "cors.allowed_headers",
+            &owned(&["content-type", "authorization"]),
+        )
+        .expect("canonical header names");
+        assert_eq!(parsed[0].as_str(), "content-type");
+
+        for headers in [
+            owned(&[""]),
+            owned(&["content-type "]),
+            owned(&["Content-Type"]),
+            owned(&["content type"]),
+            owned(&["content-type", "content-type"]),
+        ] {
+            assert!(Torii::parse_cors_headers("cors.allowed_headers", &headers).is_err());
+        }
     }
 }
 /// GET /openapi.json — expose the OpenAPI descriptor subject to Torii access policy.
@@ -53242,13 +54795,8 @@ async fn handler_mcp_jsonrpc(
         ));
     }
     let remote_ip = remote.ip();
-    let rate_key = limits::key_from_validated_headers(
-        &headers,
-        Some(remote_ip),
-        Some("mcp"),
-        app.require_api_token,
-        app.api_tokens_set.as_ref(),
-    );
+    let principal = app.authenticated_api_token_principal(&headers);
+    let rate_key = limits::key_from_headers(&headers, Some(remote_ip), Some("mcp"), principal);
     if !app.mcp_rate_limiter.allow(&rate_key).await {
         return mcp::jsonrpc_transport_error_response(
             ReviewedMcpJsonRpcError::RateLimited,
@@ -53339,27 +54887,32 @@ async fn handler_mcp_jsonrpc(
 fn build_sorafs_cache(
     config: &iroha_config::parameters::actual::Torii,
     admission: Option<Arc<sorafs::AdmissionRegistry>>,
-) -> Option<Arc<RwLock<sorafs::ProviderAdvertCache>>> {
+) -> Result<Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>, ToriiBuildError> {
     if !config.sorafs_discovery.discovery_enabled {
-        return None;
+        return Ok(None);
     }
     let Some(admission_registry) = admission else {
         iroha_logger::warn!("SoraFS discovery cache disabled: admission registry not available");
-        return None;
+        return Ok(None);
     };
     let mut capabilities = Vec::new();
     for name in &config.sorafs_discovery.known_capabilities {
         match sorafs::parse_capability_name(name) {
             Some(capability) => capabilities.push(capability),
             None => {
-                panic!("unknown SoraFS capability `{name}` in torii.sorafs.known_capabilities");
+                return Err(ToriiBuildError::invalid_configuration(
+                    "sorafs.discovery.known_capabilities",
+                    format!("unknown capability at index {}", capabilities.len()),
+                ));
             }
         }
     }
-    assert!(
-        !capabilities.is_empty(),
-        "torii.sorafs.known_capabilities must include at least one capability"
-    );
+    if capabilities.is_empty() {
+        return Err(ToriiBuildError::invalid_configuration(
+            "sorafs.discovery.known_capabilities",
+            "at least one capability is required when discovery is enabled",
+        ));
+    }
     let known_capabilities = capabilities
         .iter()
         .map(|cap| sorafs::capability_name(*cap))
@@ -53382,7 +54935,7 @@ fn build_sorafs_cache(
     if cache.is_some() {
         iroha_logger::info!(known = known_capabilities, "SoraFS discovery API enabled");
     }
-    cache
+    Ok(cache)
 }
 #[cfg(feature = "app_api")]
 fn sorafs_potr_runtime_roles_match_config(
@@ -53459,45 +55012,57 @@ fn require_sorafs_potr_finalized_reader_inputs(
 }
 fn load_sorafs_admission(
     config: &iroha_config::parameters::actual::Torii,
-) -> Option<Arc<sorafs::AdmissionRegistry>> {
+) -> Result<Option<Arc<sorafs::AdmissionRegistry>>, ToriiBuildError> {
     let Some(admission_cfg) = config.sorafs_discovery.admission.as_ref() else {
         if config.sorafs_discovery.discovery_enabled {
-            panic!(
-                "SoraFS discovery/admission enforcement requires sorafs.discovery.admission.envelopes_dir, trusted_council_keys, and signature_threshold"
-            );
+            return Err(ToriiBuildError::invalid_configuration(
+                "sorafs.discovery.admission",
+                "discovery requires envelopes_dir, trusted_council_keys, and signature_threshold",
+            ));
         }
-        return None;
+        return Ok(None);
     };
     let trusted_council_keys = admission_cfg
         .trusted_council_keys
         .iter()
-        .map(|key| {
-            let (algorithm, payload) = key.try_to_bytes().unwrap_or_else(|err| {
-                panic!("invalid SoraFS provider admission council key: {err}")
-            });
-            assert_eq!(
-                algorithm,
-                iroha_crypto::Algorithm::Ed25519,
-                "SoraFS provider admission council keys must use Ed25519"
-            );
-            <[u8; 32]>::try_from(payload).unwrap_or_else(|_| {
-                panic!("SoraFS provider admission Ed25519 council keys must be 32 bytes")
+        .enumerate()
+        .map(|(index, key)| {
+            let (algorithm, payload) = key.try_to_bytes().map_err(|error| {
+                ToriiBuildError::invalid_configuration(
+                    "sorafs.discovery.admission.trusted_council_keys",
+                    format!("key at index {index} is invalid: {error}"),
+                )
+            })?;
+            if algorithm != iroha_crypto::Algorithm::Ed25519 {
+                return Err(ToriiBuildError::invalid_configuration(
+                    "sorafs.discovery.admission.trusted_council_keys",
+                    format!("key at index {index} must use Ed25519"),
+                ));
+            }
+            <[u8; 32]>::try_from(payload).map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "sorafs.discovery.admission.trusted_council_keys",
+                    format!("Ed25519 key at index {index} must contain 32 bytes"),
+                )
             })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let policy = sorafs_manifest::ProviderAdmissionCouncilPolicy::new(
         trusted_council_keys,
         admission_cfg.signature_threshold.get(),
     )
-    .unwrap_or_else(|err| panic!("invalid SoraFS provider admission council policy: {err}"));
+    .map_err(|error| ToriiBuildError::invalid_configuration("sorafs.discovery.admission", error))?;
     let registry = sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
-        .unwrap_or_else(|err| {
-            panic!(
-                "failed to load SoraFS provider admission registry {}: {err}",
+        .map_err(|error| {
+        ToriiBuildError::component_initialization(
+            "sorafs.discovery.admission.registry",
+            format!(
+                "failed to load registry from {}: {error}",
                 admission_cfg.envelopes_dir.display()
-            )
-        });
-    Some(Arc::new(registry))
+            ),
+        )
+    })?;
+    Ok(Some(Arc::new(registry)))
 }
 #[derive(Clone)]
 struct GatewaySecurityComponents {
@@ -53528,19 +55093,22 @@ fn gateway_acme_config(
 }
 fn gateway_runtime_provider_binding(
     config: &iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding,
-) -> sorafs::gateway::GatewayProviderBindingV1 {
+) -> Result<sorafs::gateway::GatewayProviderBindingV1, ToriiBuildError> {
     sorafs::gateway::GatewayProviderBindingV1::try_new(
         config.provider_handle.clone(),
         config.revision,
         config.policy_digest,
     )
-    .unwrap_or_else(|_| {
-        panic!("invalid non-secret SoraFS gateway runtime provider binding in iroha_config")
+    .map_err(|error| {
+        ToriiBuildError::invalid_configuration(
+            "sorafs.gateway.runtime_provider",
+            format!("invalid provider binding: {error:?}"),
+        )
     })
 }
 fn gateway_compliance_controller_config(
     config: &iroha_config::parameters::actual::SorafsGatewayCompliance,
-) -> sorafs::gateway::GatewayComplianceControllerConfig {
+) -> Result<sorafs::gateway::GatewayComplianceControllerConfig, ToriiBuildError> {
     use sorafs::gateway::{
         GatewayComplianceFeedHostPolicy, GatewayComplianceFeedPolicy, GatewayComplianceFetchLimits,
         GatewayComplianceTrustPolicyV1, GatewayComplianceTrustedSignerV1,
@@ -53578,21 +55146,27 @@ fn gateway_compliance_controller_config(
                 .collect(),
         })
         .collect();
-    sorafs::gateway::GatewayComplianceControllerConfig {
+    Ok(sorafs::gateway::GatewayComplianceControllerConfig {
         trust_policy,
         region_scope: format!("region:{}", config.region_id),
         gateway_scope: format!("gateway:{}", config.gateway_id),
         feeds,
         feed_transport_provider: Some(gateway_runtime_provider_binding(
             &config.feed_transport_provider,
-        )),
+        )?),
         fetch_limits: GatewayComplianceFetchLimits {
-            max_encoded_bytes: usize::try_from(config.max_encoded_bytes.0).unwrap_or_else(|_| {
-                panic!("torii.sorafs.gateway.compliance.max_encoded_bytes exceeds platform usize")
-            }),
-            max_decoded_bytes: usize::try_from(config.max_decoded_bytes.0).unwrap_or_else(|_| {
-                panic!("torii.sorafs.gateway.compliance.max_decoded_bytes exceeds platform usize")
-            }),
+            max_encoded_bytes: usize::try_from(config.max_encoded_bytes.0).map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "sorafs.gateway.compliance.max_encoded_bytes",
+                    "value exceeds the platform address space",
+                )
+            })?,
+            max_decoded_bytes: usize::try_from(config.max_decoded_bytes.0).map_err(|_| {
+                ToriiBuildError::invalid_configuration(
+                    "sorafs.gateway.compliance.max_decoded_bytes",
+                    "value exceeds the platform address space",
+                )
+            })?,
             max_redirects: config.max_redirects,
             max_dns_addresses: config.max_dns_addresses,
             connect_timeout: config.connect_timeout,
@@ -53602,14 +55176,14 @@ fn gateway_compliance_controller_config(
         max_feed_age_secs: config.max_feed_age.as_secs(),
         max_catalog_validity_secs: config.max_catalog_validity.as_secs(),
         max_history_entries: config.max_history_entries,
-    }
+    })
 }
 fn build_sorafs_gateway_security(
     config: &iroha_config::parameters::actual::SorafsGateway,
     admission: Option<Arc<sorafs::AdmissionRegistry>>,
     acme_client: Option<Arc<dyn sorafs::gateway::AcmeClient>>,
     compliance_feed_transport: Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
-) -> GatewaySecurityComponents {
+) -> Result<GatewaySecurityComponents, ToriiBuildError> {
     use sorafs::gateway::{
         FileGatewayComplianceStore, GatewayComplianceController, GatewayPolicy,
         GatewayPolicyConfig, GatewayRateLimitConfig, GatewayRateLimiter, TlsAutomationHandle,
@@ -53629,19 +55203,20 @@ fn build_sorafs_gateway_security(
     let policy = Arc::new(GatewayPolicy::new(policy_config, admission, rate_limiter));
     let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(config.acme.ech_enabled)));
     if config.acme.enabled != config.acme.provider.is_some() {
-        panic!(
-            "torii.sorafs.gateway.acme provider binding must be present exactly when ACME is enabled"
-        );
+        return Err(ToriiBuildError::invalid_configuration(
+            "sorafs.gateway.acme.provider",
+            "provider binding must be present exactly when ACME is enabled",
+        ));
     }
     let tls_automation = match (config.acme.enabled, acme_client) {
         (true, Some(client)) => {
-            let binding = gateway_runtime_provider_binding(
-                config
-                    .acme
-                    .provider
-                    .as_ref()
-                    .expect("ACME provider presence was checked"),
-            );
+            let provider = config.acme.provider.as_ref().ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "sorafs.gateway.acme.provider",
+                    "ACME is enabled but no provider binding was configured",
+                )
+            })?;
+            let binding = gateway_runtime_provider_binding(provider)?;
             Some(Arc::new(
                 TlsAutomationHandle::try_new(
                     gateway_acme_config(&config.acme),
@@ -53649,78 +55224,81 @@ fn build_sorafs_gateway_security(
                     client,
                     Arc::clone(&tls_state),
                 )
-                .unwrap_or_else(|_| {
-                    panic!("injected SoraFS gateway ACME client failed exact startup qualification")
-                }),
+                .map_err(|error| {
+                    ToriiBuildError::invalid_runtime_dependency(
+                        "sorafs.gateway.acme",
+                        format!("client failed exact startup qualification: {error:?}"),
+                    )
+                })?,
             ))
         }
         (true, None) => {
-            panic!("torii.sorafs.gateway.acme is enabled but no runtime ACME client was injected")
+            return Err(ToriiBuildError::invalid_runtime_dependency(
+                "sorafs.gateway.acme",
+                "ACME is enabled but no runtime client was supplied",
+            ));
         }
         (false, Some(_)) => {
-            panic!(
-                "a SoraFS gateway ACME client was injected without enabling torii.sorafs.gateway.acme"
-            )
+            return Err(ToriiBuildError::invalid_runtime_dependency(
+                "sorafs.gateway.acme",
+                "runtime client supplied while ACME is disabled",
+            ));
         }
         (false, None) => None,
     };
-    let (compliance_controller, compliance_feed_transport) = match (
-        config.compliance.as_ref(),
-        compliance_feed_transport,
-    ) {
-        (Some(config), Some(transport)) => {
-            let store = FileGatewayComplianceStore::new(config.checkpoint_path.clone())
-                .unwrap_or_else(|err| {
-                    panic!("invalid torii.sorafs.gateway.compliance checkpoint storage: {err}")
-                });
-            let controller = GatewayComplianceController::new_with_feed_transport(
-                gateway_compliance_controller_config(config),
-                Arc::new(store),
-                transport.as_ref(),
-            )
-            .unwrap_or_else(|err| {
-                panic!(
-                    "invalid torii.sorafs.gateway.compliance runtime provider/policy/checkpoint: {err}"
+    let (compliance_controller, compliance_feed_transport) =
+        match (config.compliance.as_ref(), compliance_feed_transport) {
+            (Some(config), Some(transport)) => {
+                let store = FileGatewayComplianceStore::new(config.checkpoint_path.clone())
+                    .map_err(|error| {
+                        ToriiBuildError::component_initialization(
+                            "sorafs.gateway.compliance.checkpoint",
+                            error,
+                        )
+                    })?;
+                let controller = GatewayComplianceController::new_with_feed_transport(
+                    gateway_compliance_controller_config(config)?,
+                    Arc::new(store),
+                    transport.as_ref(),
                 )
-            });
-            (Some(Arc::new(controller)), Some(transport))
-        }
-        (Some(_), None) => {
-            panic!(
-                "torii.sorafs.gateway.compliance is enabled but no runtime authenticated feed transport was injected"
-            )
-        }
-        (None, Some(_)) => {
-            panic!(
-                "a SoraFS gateway compliance feed transport was injected without enabling torii.sorafs.gateway.compliance"
-            )
-        }
-        (None, None) => (None, None),
-    };
-    let blinded_resolver = config.salt_schedule_dir.as_ref().map_or_else(
-        || None,
-        |dir| match sorafs::SaltSchedule::load_from_dir(dir) {
-            Ok(schedule) => {
-                let schedule = Arc::new(schedule);
-                Some(Arc::new(sorafs::BlindedCidResolver::new(schedule)))
+                .map_err(|error| {
+                    ToriiBuildError::invalid_runtime_dependency("sorafs.gateway.compliance", error)
+                })?;
+                (Some(Arc::new(controller)), Some(transport))
             }
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    "failed to load SoraNet salt schedule; blinded CID support disabled"
-                );
-                None
+            (Some(_), None) => {
+                return Err(ToriiBuildError::invalid_runtime_dependency(
+                    "sorafs.gateway.compliance",
+                    "compliance is enabled but no authenticated feed transport was supplied",
+                ));
             }
-        },
-    );
-    GatewaySecurityComponents {
+            (None, Some(_)) => {
+                return Err(ToriiBuildError::invalid_runtime_dependency(
+                    "sorafs.gateway.compliance",
+                    "feed transport supplied while compliance is disabled",
+                ));
+            }
+            (None, None) => (None, None),
+        };
+    let blinded_resolver = config
+        .salt_schedule_dir
+        .as_ref()
+        .map(|dir| {
+            sorafs::SaltSchedule::load_from_dir(dir)
+                .map(|schedule| Arc::new(sorafs::BlindedCidResolver::new(Arc::new(schedule))))
+                .map_err(|error| {
+                    ToriiBuildError::component_initialization("sorafs.gateway.salt_schedule", error)
+                })
+        })
+        .transpose()?;
+    Ok(GatewaySecurityComponents {
         policy,
         tls_state,
         tls_automation,
         compliance_controller,
         compliance_feed_transport,
         blinded_resolver,
-    }
+    })
 }
 #[cfg(all(test, feature = "app_api"))]
 mod gateway_runtime_config_tests {
@@ -54117,7 +55695,8 @@ mod gateway_runtime_config_tests {
             None,
             Some(acme_client),
             Some(Arc::clone(&compliance_transport)),
-        );
+        )
+        .expect("valid gateway security runtime");
         assert!(components.tls_automation.is_some());
         assert!(
             components
@@ -54137,46 +55716,72 @@ mod gateway_runtime_config_tests {
         ));
     }
     #[test]
-    #[should_panic(
-        expected = "torii.sorafs.gateway.acme is enabled but no runtime ACME client was injected"
-    )]
     fn acme_enabled_without_runtime_client_fails_closed() {
         let mut config = iroha_config::parameters::actual::SorafsGateway::default();
         config.acme.enabled = true;
         config.acme.provider = Some(acme_provider_binding());
-        let _ = build_sorafs_gateway_security(&config, None, None, None);
+        let error = build_sorafs_gateway_security(&config, None, None, None)
+            .err()
+            .expect("missing ACME runtime client must reject construction");
+        assert!(matches!(
+            error,
+            ToriiBuildError::InvalidRuntimeDependency {
+                component: "sorafs.gateway.acme",
+                ..
+            }
+        ));
     }
     #[test]
-    #[should_panic(
-        expected = "torii.sorafs.gateway.acme provider binding must be present exactly when ACME is enabled"
-    )]
     fn acme_enabled_without_configured_provider_binding_fails_closed() {
         let mut config = iroha_config::parameters::actual::SorafsGateway::default();
         config.acme.enabled = true;
-        let _ = build_sorafs_gateway_security(&config, None, Some(Arc::new(TestAcmeClient)), None);
+        let error =
+            build_sorafs_gateway_security(&config, None, Some(Arc::new(TestAcmeClient)), None)
+                .err()
+                .expect("missing ACME provider binding must reject construction");
+        assert!(matches!(
+            error,
+            ToriiBuildError::InvalidConfiguration {
+                component: "sorafs.gateway.acme.provider",
+                ..
+            }
+        ));
     }
     #[test]
-    #[should_panic(
-        expected = "injected SoraFS gateway ACME client failed exact startup qualification"
-    )]
     fn stale_acme_runtime_provider_fails_closed_without_provider_details() {
         let mut config = iroha_config::parameters::actual::SorafsGateway::default();
         config.acme.enabled = true;
         let mut provider = acme_provider_binding();
         provider.revision += 1;
         config.acme.provider = Some(provider);
-        let _ = build_sorafs_gateway_security(&config, None, Some(Arc::new(TestAcmeClient)), None);
+        let error =
+            build_sorafs_gateway_security(&config, None, Some(Arc::new(TestAcmeClient)), None)
+                .err()
+                .expect("stale ACME runtime provider must reject construction");
+        assert!(matches!(
+            error,
+            ToriiBuildError::InvalidRuntimeDependency {
+                component: "sorafs.gateway.acme",
+                ..
+            }
+        ));
     }
     #[test]
-    #[should_panic(
-        expected = "torii.sorafs.gateway.compliance is enabled but no runtime authenticated feed transport was injected"
-    )]
     fn compliance_enabled_without_runtime_transport_fails_closed() {
         let mut config = iroha_config::parameters::actual::SorafsGateway::default();
         config.compliance = Some(compliance_config(
             std::env::temp_dir().join("unused-compliance-checkpoint.norito"),
         ));
-        let _ = build_sorafs_gateway_security(&config, None, None, None);
+        let error = build_sorafs_gateway_security(&config, None, None, None)
+            .err()
+            .expect("missing compliance transport must reject construction");
+        assert!(matches!(
+            error,
+            ToriiBuildError::InvalidRuntimeDependency {
+                component: "sorafs.gateway.compliance",
+                ..
+            }
+        ));
     }
 }
 #[cfg(feature = "app_api")]
@@ -54237,12 +55842,18 @@ fn por_runtime_readiness_error(
     None
 }
 #[cfg(feature = "app_api")]
-fn assert_por_runtime_ready(config: &iroha_config::parameters::actual::SorafsPor) {
+fn validate_por_runtime_ready(
+    config: &iroha_config::parameters::actual::SorafsPor,
+) -> Result<(), ToriiBuildError> {
     if let Some(detail) = por_runtime_readiness_error(config) {
-        panic!(
-            "torii.sorafs_por.enabled cannot start safely: {detail}; configure complete pinned drand trust, quorum, persistence, and provider VRF policy"
-        );
+        return Err(ToriiBuildError::invalid_configuration(
+            "sorafs.por",
+            format!(
+                "{detail}; configure complete pinned drand trust, quorum, persistence, and provider VRF policy"
+            ),
+        ));
     }
+    Ok(())
 }
 #[cfg(feature = "app_api")]
 fn build_por_components(
@@ -54250,12 +55861,15 @@ fn build_por_components(
     network_id: &NetworkId,
     sorafs_node: &sorafs_node::NodeHandle,
     admission: Option<Arc<sorafs::AdmissionRegistry>>,
-) -> (
-    Arc<sorafs::PorCoordinator>,
-    Option<Arc<sorafs::PorCoordinatorRuntime>>,
-) {
+) -> Result<
+    (
+        Arc<sorafs::PorCoordinator>,
+        Option<Arc<sorafs::PorCoordinatorRuntime>>,
+    ),
+    ToriiBuildError,
+> {
     let por_cfg = &config.sorafs_por;
-    assert_por_runtime_ready(por_cfg);
+    validate_por_runtime_ready(por_cfg)?;
     let snapshot_path = por_cfg
         .state_dir
         .join(iroha_config::parameters::defaults::sorafs::por::COORDINATOR_STATE_FILE);
@@ -54276,47 +55890,64 @@ fn build_por_components(
                 status_record_limit,
             ))
         }
-        Err(err) => panic!(
-            "torii.sorafs_por.enabled failed to load durable coordinator state at {}: {err}",
-            snapshot_path.display()
-        ),
+        Err(error) => {
+            return Err(ToriiBuildError::component_initialization(
+                "sorafs.por.coordinator_state",
+                format!("failed to load {}: {error}", snapshot_path.display()),
+            ));
+        }
     };
     if !por_cfg.enabled {
-        return (coordinator, None);
+        return Ok((coordinator, None));
     }
-    assert!(
-        sorafs_node.is_enabled(),
-        "torii.sorafs_por.enabled requires embedded SoraFS storage"
-    );
-    let authoritative_snapshot =
-        sorafs_node
-            .por_status_authority_snapshot()
-            .unwrap_or_else(|err| {
-                panic!("failed to load authoritative PoR status checkpoint projection: {err}")
-            });
+    if !sorafs_node.is_enabled() {
+        return Err(ToriiBuildError::invalid_configuration(
+            "sorafs.por",
+            "enabled PoR requires embedded SoraFS storage",
+        ));
+    }
+    let authoritative_snapshot = sorafs_node
+        .por_status_authority_snapshot()
+        .map_err(|error| {
+            ToriiBuildError::component_initialization(
+                "sorafs.por.authoritative_projection",
+                format!("failed to load checkpoint projection: {error}"),
+            )
+        })?;
     coordinator
         .install_authoritative_projection(authoritative_snapshot)
-        .unwrap_or_else(|err| {
-            panic!("failed to install authoritative PoR status checkpoint projection: {err}")
-        });
+        .map_err(|error| {
+            ToriiBuildError::component_initialization(
+                "sorafs.por.authoritative_projection",
+                format!("failed to install checkpoint projection: {error}"),
+            )
+        })?;
     coordinator
         .retire_lifecycle_persistence()
-        .unwrap_or_else(|err| {
-            panic!("failed to retire duplicate PoR coordinator lifecycle state: {err}")
-        });
-    let admission = admission.unwrap_or_else(|| {
-        panic!("torii.sorafs_por.enabled requires the council-verified provider admission registry")
-    });
-    assert!(
-        !admission.is_empty(),
-        "torii.sorafs_por.enabled requires at least one admitted provider"
-    );
+        .map_err(|error| {
+            ToriiBuildError::component_initialization(
+                "sorafs.por.coordinator_state",
+                format!("failed to retire duplicate lifecycle state: {error}"),
+            )
+        })?;
+    let admission = admission.ok_or_else(|| {
+        ToriiBuildError::invalid_runtime_dependency(
+            "sorafs.por.admission",
+            "enabled PoR requires the council-verified provider admission registry",
+        )
+    })?;
+    if admission.is_empty() {
+        return Err(ToriiBuildError::invalid_runtime_dependency(
+            "sorafs.por.admission",
+            "enabled PoR requires at least one admitted provider",
+        ));
+    }
     let randomness = Arc::new(
         sorafs::DrandHttpRandomnessProvider::from_config(
             &por_cfg.drand,
             por_cfg.epoch_interval_secs,
         )
-        .unwrap_or_else(|err| panic!("invalid torii.sorafs_por.drand configuration/state: {err}")),
+        .map_err(|error| ToriiBuildError::component_initialization("sorafs.por.drand", error))?,
     );
     let vrf_provider = Arc::new(
         sorafs::VerifiedVrfProvider::with_persistence(
@@ -54327,7 +55958,9 @@ fn build_por_components(
             por_cfg.vrf_retention_epochs,
             por_cfg.vrf_max_clock_skew_secs,
         )
-        .unwrap_or_else(|err| panic!("invalid torii.sorafs_por provider VRF state: {err}")),
+        .map_err(|error| {
+            ToriiBuildError::component_initialization("sorafs.por.vrf_state", error)
+        })?,
     );
     let runtime = sorafs::PorCoordinatorRuntime::new(
         Arc::new(sorafs_node.clone()),
@@ -54340,11 +55973,11 @@ fn build_por_components(
         por_cfg.vrf_submission_deadline_secs,
     )
     .with_verified_vrf_provider(vrf_provider);
-    (coordinator, Some(Arc::new(runtime)))
+    Ok((coordinator, Some(Arc::new(runtime))))
 }
 #[cfg(all(test, feature = "app_api"))]
 mod por_runtime_readiness_tests {
-    use super::{assert_por_runtime_ready, por_runtime_readiness_error};
+    use super::{por_runtime_readiness_error, validate_por_runtime_ready};
     fn configured_por() -> iroha_config::parameters::actual::SorafsPor {
         let mut config = iroha_config::parameters::actual::SorafsPor {
             enabled: true,
@@ -54380,17 +56013,18 @@ mod por_runtime_readiness_tests {
         assert_eq!(por_runtime_readiness_error(&config), None);
         config.enabled = true;
         assert!(por_runtime_readiness_error(&config).is_some());
-        let panic = std::panic::catch_unwind(|| assert_por_runtime_ready(&config))
-            .expect_err("enabled incomplete PoR runtime must fail startup");
-        let message = panic
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| panic.downcast_ref::<&str>().copied())
-            .expect("readiness panic must carry a message");
-        assert!(message.contains("pinned drand"));
+        let error = validate_por_runtime_ready(&config)
+            .expect_err("enabled incomplete PoR runtime must fail construction");
+        assert!(matches!(
+            error,
+            ToriiBuildError::InvalidConfiguration {
+                component: "sorafs.por",
+                ..
+            }
+        ));
         let configured = configured_por();
         assert_eq!(por_runtime_readiness_error(&configured), None);
-        assert_por_runtime_ready(&configured);
+        validate_por_runtime_ready(&configured).expect("complete PoR configuration");
         let mut missing_key = configured.clone();
         missing_key.drand.public_key = [0; 96];
         assert!(por_runtime_readiness_error(&missing_key).is_some());

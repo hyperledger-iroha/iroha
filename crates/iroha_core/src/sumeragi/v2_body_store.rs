@@ -40,10 +40,12 @@ use iroha_data_model::block::{
     CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire, decode_framed_signed_block,
 };
 use norito::codec::{Decode, DecodeAll as _, Encode};
+#[cfg(test)]
+use std::fs::OpenOptions;
 use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Write},
     mem::size_of,
     path::{Path, PathBuf},
@@ -1580,6 +1582,17 @@ impl BoundV2BodyContextDirectory {
         Ok(())
     }
 
+    fn is_linked(&self) -> bool {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.verify_linked().is_ok()
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            false
+        }
+    }
+
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn fresh_context_handle(&self) -> Result<File, V2BodyStoreError> {
         self.verify_linked()?;
@@ -1736,16 +1749,6 @@ impl BoundV2BodyContextDirectory {
         self.verify_leaf(&file, &leaf.name, Some(leaf))?;
         self.verify_linked()?;
         Ok(file)
-    }
-
-    #[cfg(all(unix, not(target_os = "espidf")))]
-    fn open_named_leaf(
-        &self,
-        name: &OsStr,
-        kind: FramePayloadKind,
-    ) -> Result<File, V2BodyStoreError> {
-        let leaf = self.inspect_leaf(name, kind)?;
-        self.open_leaf(&leaf, kind)
     }
 
     #[cfg(all(unix, not(target_os = "espidf")))]
@@ -2618,6 +2621,11 @@ impl V2BodyStore {
         &self.context == context
             && &self.signature_policy == signature_policy
             && self.directory == root.join(hex::encode(context.id().0.as_ref()))
+            && (self.emergency_read_only
+                || self
+                    .bound_directory
+                    .as_ref()
+                    .is_some_and(BoundV2BodyContextDirectory::is_linked))
     }
     /// Compare a receipt with the exact in-memory entry owned by this open store.
     ///

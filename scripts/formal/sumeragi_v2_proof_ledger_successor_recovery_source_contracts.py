@@ -158,7 +158,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "fn authorizes_predecessor_storage_inputs(",
                 "self.lifecycle_storage.body_store_root == body_store_root",
                 "&self.predecessor_signature_policy == signature_policy",
-                "fn into_canonical_predecessor_storage(",
+                "fn into_kura_bound_canonical_predecessor_storage(",
+                "fn authorizes_predecessor_kura(",
                 "fn authorizes_verified_successor(",
                 "verified.context().parent_commit_qc.as_ref() == Some(&self.artifact.commit_qc)",
                 "verified.verified_predecessor_context() == Some(&self.artifact.height_context)",
@@ -322,8 +323,11 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "complete_tip.authorizes_predecessor_lifecycle_root(root)",
                     "self.path == root.join(LEDGER_FILE)",
                     "pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(",
+                    "payload_store_target: CompleteTipPayloadStoreOpenTargetV1<'_>",
+                    "payload_store_target.authorizes(&complete_tip)",
                     "complete_tip.authorizes_predecessor_storage_inputs(",
-                    "CertifiedServePayloadStoreV1::open( predecessor_root, verified_predecessor.context() )?",
+                    "Self::Kura(kura) => CertifiedServePayloadStoreV1::open_with_kura(kura, context)",
+                    "payload_store_target.open(predecessor_root, verified_predecessor.context())?",
                     "recovered.authenticate_for_complete_tip_retirement( &verified_predecessor, local_signer )?",
                     "authenticate_complete_tip_serve_census( &terminal.ledger, &serve_payloads )?",
                     "payload_store.retire_authenticated_cut(serve_payloads, &retained_serve_payloads)?",
@@ -583,6 +587,24 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "body_store: super::v2_body_store::V2BodyStore",
                     "body_store: super::v2_body_store::RevalidatedV2BodyStore",
                     "state.sumeragi_block_cadence()",
+                ),
+            )
+            storage_mint = _require_qualified_rust_item(
+                adapter_path,
+                adapter_source,
+                "RecoveredLifecycleStorageAuthorityV1",
+                "mint_from_recovered_height",
+                errors,
+                "side-effect-free recovered lifecycle storage mint",
+            )
+            reject_tokens(
+                adapter_path,
+                "side-effect-free recovered lifecycle storage mint",
+                storage_mint.source if storage_mint is not None else "",
+                (
+                    "mint_v2_certified_serve_payload_directory_authority",
+                    "CertifiedServePayloadStoreV1::open",
+                    "create_dir",
                 ),
             )
             require_tokens(
@@ -1047,15 +1069,11 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "CompleteTip Serve payload directory census",
                 payload_census,
                 (
-                    "fs::symlink_metadata(&self.directory)",
-                    "directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir()",
                     "self.max_entries.checked_mul(2)",
-                    "fs::read_dir(&self.directory)",
-                    "fs::symlink_metadata(&path)",
-                    "metadata.file_type().is_symlink() || !metadata.is_file()",
+                    "self.bound_directory()?.inventory(traversal_capacity)?",
                     "!has_canonical_hash_name(name, FILE_SUFFIX)",
                     "payloads.len() >= self.max_entries",
-                    "self.load_path(&path, metadata.len())?",
+                    "self.load_leaf(&leaf)?",
                     "self.path_for(payload.id()) != path",
                     "payloads.insert(payload.id(), payload).is_some()",
                     "Ok(payloads)",
@@ -1074,8 +1092,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "fn reload_payload_census_strict(",
                     "let observed = self.reload_payload_census_strict()?",
                     "observed_ids != self.indexed || cut_ids != observed_ids",
-                    "fn authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner()",
-                    "fn authenticated_cut_rejects_store_directory_symlink_replacement()",
+                    "fn authenticated_cut_has_one_exclusive_store_owner()",
+                    "fn authenticated_cut_rejects_store_directory_inode_replacement()",
                 ),
             )
             payload_authentication = _require_rust_item(

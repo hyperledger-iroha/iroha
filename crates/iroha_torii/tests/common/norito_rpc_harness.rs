@@ -99,9 +99,12 @@ impl NoritoRpcHarness {
             OnlinePeersProvider::new(peers_rx),
             None,
             iroha_torii::MaybeTelemetry::disabled(),
-        );
+        )
+        .expect("valid Torii Norito-RPC fixture");
         Self {
-            app: torii.api_router_for_tests(),
+            app: torii
+                .api_router_for_tests()
+                .expect("test Torii router initializes"),
             cfg,
             network_id,
         }

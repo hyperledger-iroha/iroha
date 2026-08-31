@@ -296,15 +296,9 @@ mod model {
         /// Expiry grace window (blocks) after declared expiry.
         #[norito(default = "defaults::sumeragi::key_expiry_grace_blocks")]
         pub key_expiry_grace_blocks: u64,
-        /// Require HSM binding for consensus/committee keys.
-        #[norito(default = "defaults::sumeragi::key_require_hsm")]
-        pub key_require_hsm: bool,
         /// Allowed algorithms for consensus/committee keys.
         #[norito(default = "defaults::sumeragi::key_allowed_algorithms")]
         pub key_allowed_algorithms: Vec<iroha_crypto::Algorithm>,
-        /// Allowed HSM providers for consensus/committee keys.
-        #[norito(default = "defaults::sumeragi::key_allowed_hsm_providers")]
-        pub key_allowed_hsm_providers: Vec<String>,
     }
     /// NPoS-specific consensus parameters persisted as a custom parameter payload.
     #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1092,18 +1086,11 @@ impl JsonSerialize for SumeragiParameters {
             "key_expiry_grace_blocks",
             &self.key_expiry_grace_blocks,
         );
-        json_support::write_field(out, &mut first, "key_require_hsm", &self.key_require_hsm);
         json_support::write_field(
             out,
             &mut first,
             "key_allowed_algorithms",
             &self.key_allowed_algorithms,
-        );
-        json_support::write_field(
-            out,
-            &mut first,
-            "key_allowed_hsm_providers",
-            &self.key_allowed_hsm_providers,
         );
         out.push('}');
     }
@@ -1139,18 +1126,11 @@ impl JsonSerialize for SumeragiParameters {
             "key_expiry_grace_blocks",
             &self.key_expiry_grace_blocks,
         )?;
-        json_support::write_field_to(out, &mut first, "key_require_hsm", &self.key_require_hsm)?;
         json_support::write_field_to(
             out,
             &mut first,
             "key_allowed_algorithms",
             &self.key_allowed_algorithms,
-        )?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "key_allowed_hsm_providers",
-            &self.key_allowed_hsm_providers,
         )?;
         out.push('}')?;
         out.end_container();
@@ -1187,21 +1167,11 @@ impl JsonDeserialize for SumeragiParameters {
             .map(|value| json_support::expect_u64(&value, "key_expiry_grace_blocks"))
             .transpose()?
             .unwrap_or_else(defaults::sumeragi::key_expiry_grace_blocks);
-        let key_require_hsm = map
-            .remove("key_require_hsm")
-            .map(|value| json_support::expect_bool(&value, "key_require_hsm"))
-            .transpose()?
-            .unwrap_or_else(defaults::sumeragi::key_require_hsm);
         let key_allowed_algorithms = map
             .remove("key_allowed_algorithms")
             .map(|value| json_support::parse_value_as::<Vec<Algorithm>>(&value))
             .transpose()?
             .unwrap_or_else(defaults::sumeragi::key_allowed_algorithms);
-        let key_allowed_hsm_providers = map
-            .remove("key_allowed_hsm_providers")
-            .map(|value| json_support::parse_value_as::<Vec<String>>(&value))
-            .transpose()?
-            .unwrap_or_else(defaults::sumeragi::key_allowed_hsm_providers);
         json_support::ensure_no_extra(map)?;
         let params = Self {
             block_cadence_ms,
@@ -1209,9 +1179,7 @@ impl JsonDeserialize for SumeragiParameters {
             key_activation_lead_blocks,
             key_overlap_grace_blocks,
             key_expiry_grace_blocks,
-            key_require_hsm,
             key_allowed_algorithms,
-            key_allowed_hsm_providers,
         };
         Ok(params)
     }
@@ -1235,14 +1203,8 @@ mod defaults {
         pub const fn key_expiry_grace_blocks() -> u64 {
             0
         }
-        pub const fn key_require_hsm() -> bool {
-            false
-        }
         pub fn key_allowed_algorithms() -> Vec<Algorithm> {
             vec![Algorithm::BlsNormal]
-        }
-        pub fn key_allowed_hsm_providers() -> Vec<String> {
-            vec!["pkcs11".into(), "softkey".into(), "yubihsm".into()]
         }
         pub mod npos {
             use core::num::NonZeroU64;
@@ -1350,9 +1312,7 @@ impl Default for SumeragiParameters {
             key_activation_lead_blocks: key_activation_lead_blocks(),
             key_overlap_grace_blocks: key_overlap_grace_blocks(),
             key_expiry_grace_blocks: key_expiry_grace_blocks(),
-            key_require_hsm: key_require_hsm(),
             key_allowed_algorithms: key_allowed_algorithms(),
-            key_allowed_hsm_providers: key_allowed_hsm_providers(),
         }
     }
 }
@@ -1646,9 +1606,7 @@ impl SumeragiParameters {
             key_activation_lead_blocks: defaults::sumeragi::key_activation_lead_blocks(),
             key_overlap_grace_blocks: defaults::sumeragi::key_overlap_grace_blocks(),
             key_expiry_grace_blocks: defaults::sumeragi::key_expiry_grace_blocks(),
-            key_require_hsm: defaults::sumeragi::key_require_hsm(),
             key_allowed_algorithms: defaults::sumeragi::key_allowed_algorithms(),
-            key_allowed_hsm_providers: defaults::sumeragi::key_allowed_hsm_providers(),
         }
     }
     /// Convert [`Self`] into iterator of individual parameters

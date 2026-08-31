@@ -1028,7 +1028,7 @@ mod tests {
                 soracloud_mutation_max_body_bytes:
                     iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES,
                 require_api_token: false,
-                api_tokens: Vec::new(),
+                api_tokens: Vec::new().into(),
                 api_fee_asset_id: None,
                 api_fee_amount: None,
                 api_fee_receiver: None,
@@ -1061,6 +1061,7 @@ mod tests {
                 ram_lfe: None,
                 tx_history: None,
                 recipient_lookup: iroha_config::parameters::actual::ToriiRecipientLookup::default(),
+                public_dataspace_upstreams: Vec::new(),
                 events_buffer_capacity: NonZeroUsize::new(
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
                 )
@@ -1282,20 +1283,21 @@ mod tests {
                 webhook_security: iroha_config::parameters::actual::WebhookSecurity::default(),
                 push: iroha_config::parameters::actual::Push {
                     enabled: iroha_config::parameters::defaults::torii::PUSH_ENABLED,
-                    rate_per_minute: iroha_config::parameters::defaults::torii::PUSH_RATE_PER_MINUTE
-                        .and_then(NonZeroU32::new),
-                    burst: iroha_config::parameters::defaults::torii::PUSH_BURST
-                        .and_then(NonZeroU32::new),
+                    rate_per_minute:
+                        iroha_config::parameters::defaults::torii::PUSH_RATE_LIMIT_ENABLED
+                            .then_some(
+                                iroha_config::parameters::defaults::torii::PUSH_RATE_PER_MINUTE,
+                            ),
+                    burst: iroha_config::parameters::defaults::torii::PUSH_RATE_LIMIT_ENABLED
+                        .then_some(iroha_config::parameters::defaults::torii::PUSH_BURST),
                     connect_timeout: Duration::from_millis(
                         iroha_config::parameters::defaults::torii::PUSH_CONNECT_TIMEOUT_MS,
                     ),
                     request_timeout: Duration::from_millis(
                         iroha_config::parameters::defaults::torii::PUSH_REQUEST_TIMEOUT_MS,
                     ),
-                    max_topics_per_device: NonZeroUsize::new(
-                        iroha_config::parameters::defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE.max(1),
-                    )
-                    .expect("non-zero push topics cap"),
+                    max_topics_per_device:
+                        iroha_config::parameters::defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE,
                     fcm_project_id: None,
                     fcm_service_account_path: None,
                     apns_environment:
@@ -1756,6 +1758,10 @@ mod tests {
                 max_conviction: 6,
                 min_enactment_delay: 20,
                 window_span: 100,
+                max_active_referenda:
+                    iroha_config::parameters::defaults::governance::MAX_ACTIVE_REFERENDA,
+                max_lock_owners_per_referendum:
+                    iroha_config::parameters::defaults::governance::MAX_LOCK_OWNERS_PER_REFERENDUM,
                 plain_voting_enabled:
                     iroha_config::parameters::defaults::governance::PLAIN_VOTING_ENABLED,
                 approval_threshold_q_num: 1,

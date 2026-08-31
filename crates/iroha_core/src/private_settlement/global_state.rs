@@ -1527,7 +1527,6 @@ pub(crate) mod tests {
                 ),
                 activation_height: 0,
                 expiry_height: None,
-                hsm: None,
                 replaces: None,
                 status: ConsensusKeyStatus::Active,
             };

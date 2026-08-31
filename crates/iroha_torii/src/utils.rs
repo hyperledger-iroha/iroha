@@ -1478,6 +1478,49 @@ pub mod extractors {
         json::{self, JsonDeserializeOwned, Number, Value},
     };
     use urlencoding::decode;
+
+    /// Maximum raw query text accepted by the generic V1 query extractors.
+    ///
+    /// This matches the authenticated request and routed-read ceilings. The
+    /// bound is checked before percent decoding or allocating decoded fields.
+    const TORII_QUERY_MAX_RAW_BYTES_V1: usize = 64 * 1024;
+    /// Maximum number of fields accepted by the generic V1 query extractors.
+    const TORII_QUERY_MAX_PAIRS_V1: usize = 64;
+
+    #[derive(Debug)]
+    enum QueryDecodeError {
+        Capacity {
+            resource: &'static str,
+            attempted: usize,
+            limit: usize,
+        },
+        Invalid(&'static str),
+        Schema,
+    }
+
+    fn query_rejection(error: QueryDecodeError) -> Response {
+        match error {
+            QueryDecodeError::Capacity {
+                resource,
+                attempted,
+                limit,
+            } => typed_request_rejection(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "query_capacity_exceeded",
+                format!(
+                    "Query parameters exceed the V1 {resource} bound (attempted {attempted}, limit {limit})."
+                ),
+            ),
+            QueryDecodeError::Invalid(message) => {
+                typed_request_rejection(StatusCode::BAD_REQUEST, "request_query_invalid", message)
+            }
+            QueryDecodeError::Schema => typed_request_rejection(
+                StatusCode::BAD_REQUEST,
+                "request_query_invalid",
+                "Query parameters do not match the endpoint schema.",
+            ),
+        }
+    }
     fn typed_request_rejection(
         status: StatusCode,
         code: &'static str,
@@ -2269,7 +2312,15 @@ pub mod extractors {
             decode_as_json::<T>(&body).map(JsonOnly)
         }
     }
-    /// Extractor for URL query strings decoded into `JsonDeserialize` types.
+    /// Extractor for canonical form-encoded URL queries decoded into
+    /// `JsonDeserialize` types.
+    ///
+    /// An absent query decodes as an empty object. A present query must contain
+    /// one to 64 unique, non-empty `key=value` pairs and at most 64 KiB of raw
+    /// text. Components must use the one canonical
+    /// `application/x-www-form-urlencoded` spelling: spaces are `+`, literal
+    /// plus signs and all other escaped bytes use uppercase percent escapes,
+    /// and bytes that can be written literally are not escaped.
     #[derive(Clone, Debug)]
     pub struct NoritoQuery<T>(pub T);
     impl<S, T> FromRequestParts<S> for NoritoQuery<T>
@@ -2282,23 +2333,26 @@ pub mod extractors {
             parts: &mut axum::http::request::Parts,
             _state: &S,
         ) -> Result<Self, Self::Rejection> {
-            let query = parts.uri.query().unwrap_or("");
+            let query = parts.uri.query();
+            if query == Some("") {
+                return Err(query_rejection(QueryDecodeError::Invalid(
+                    "A present query string must contain at least one key=value pair.",
+                )));
+            }
             #[cfg(feature = "app_api")]
-            if let Some(decoded) = crate::decode_current_app_routed_read_query::<T>(query, true) {
+            if let Some(decoded) =
+                crate::decode_current_app_routed_read_query::<T>(query.unwrap_or_default(), true)
+            {
                 return decoded.map(NoritoQuery);
             }
             match decode_query::<T>(query) {
                 Ok(value) => Ok(NoritoQuery(value)),
-                Err(e) => Err(typed_request_rejection(
-                    StatusCode::BAD_REQUEST,
-                    "request_query_invalid",
-                    format!("invalid query params: {e}"),
-                )),
+                Err(error) => Err(query_rejection(error)),
             }
         }
     }
-    /// Extractor for URL query strings decoded into `JsonDeserialize` types
-    /// without scalar type coercion.
+    /// Extractor for canonical form-encoded URL queries decoded into
+    /// `JsonDeserialize` types without scalar type coercion.
     #[derive(Clone, Debug)]
     pub struct NoritoStringQuery<T>(pub T);
     impl<S, T> FromRequestParts<S> for NoritoStringQuery<T>
@@ -2311,118 +2365,204 @@ pub mod extractors {
             parts: &mut axum::http::request::Parts,
             _state: &S,
         ) -> Result<Self, Self::Rejection> {
-            let query = parts.uri.query().unwrap_or("");
+            let query = parts.uri.query();
+            if query == Some("") {
+                return Err(query_rejection(QueryDecodeError::Invalid(
+                    "A present query string must contain at least one key=value pair.",
+                )));
+            }
             #[cfg(feature = "app_api")]
-            if let Some(decoded) = crate::decode_current_app_routed_read_query::<T>(query, false) {
+            if let Some(decoded) =
+                crate::decode_current_app_routed_read_query::<T>(query.unwrap_or_default(), false)
+            {
                 return decoded.map(NoritoStringQuery);
             }
             match decode_string_query::<T>(query) {
                 Ok(value) => Ok(NoritoStringQuery(value)),
-                Err(e) => Err(typed_request_rejection(
-                    StatusCode::BAD_REQUEST,
-                    "request_query_invalid",
-                    format!("invalid query params: {e}"),
-                )),
+                Err(error) => Err(query_rejection(error)),
             }
         }
     }
-    fn decode_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
+    fn decode_query<T: JsonDeserializeOwned>(query: Option<&str>) -> Result<T, QueryDecodeError> {
         let pairs = query_pairs(query)?;
         reject_duplicate_query_keys(&pairs)?;
         let mut object = json::Map::new();
         for (key, value) in pairs {
             object.insert(key, scalar_to_value(&value));
         }
-        json::from_value(Value::Object(object))
+        json::from_value(Value::Object(object)).map_err(|_| QueryDecodeError::Schema)
     }
-    fn decode_string_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
+    fn decode_string_query<T: JsonDeserializeOwned>(
+        query: Option<&str>,
+    ) -> Result<T, QueryDecodeError> {
         let pairs = query_pairs(query)?;
         reject_duplicate_query_keys(&pairs)?;
         let mut object = json::Map::new();
         for (key, value) in pairs {
             object.insert(key, Value::String(value));
         }
-        json::from_value(Value::Object(object))
+        json::from_value(Value::Object(object)).map_err(|_| QueryDecodeError::Schema)
     }
-    fn reject_duplicate_query_keys(pairs: &[(String, String)]) -> Result<(), json::Error> {
+    fn reject_duplicate_query_keys(pairs: &[(String, String)]) -> Result<(), QueryDecodeError> {
         // Structured query DTOs have exactly one value per field. Keep this
         // check local to the DTO decoders so protocol-specific parsers can
         // still define ordered or repeated-key semantics explicitly.
         let mut seen = std::collections::BTreeSet::new();
         for (key, _) in pairs {
             if !seen.insert(key.as_str()) {
-                return Err(json::Error::duplicate_field(key));
+                return Err(QueryDecodeError::Invalid(
+                    "Query parameters contain a duplicate decoded key.",
+                ));
             }
         }
         Ok(())
     }
-    fn query_pairs(query: &str) -> Result<Vec<(String, String)>, json::Error> {
-        query
-            .split('&')
-            .filter(|segment| !segment.is_empty())
-            .map(|segment| {
-                let mut parts = segment.splitn(2, '=');
-                let raw_key = parts.next().unwrap_or("");
-                let raw_value = parts.next().unwrap_or("");
-                Ok((decode_component(raw_key)?, decode_component(raw_value)?))
-            })
-            .collect()
+    fn query_pairs(query: Option<&str>) -> Result<Vec<(String, String)>, QueryDecodeError> {
+        let Some(query) = query else {
+            return Ok(Vec::new());
+        };
+        if query.is_empty() {
+            return Err(QueryDecodeError::Invalid(
+                "A present query string must contain at least one key=value pair.",
+            ));
+        }
+        if query.len() > TORII_QUERY_MAX_RAW_BYTES_V1 {
+            return Err(QueryDecodeError::Capacity {
+                resource: "raw-byte",
+                attempted: query.len(),
+                limit: TORII_QUERY_MAX_RAW_BYTES_V1,
+            });
+        }
+
+        let mut pairs = Vec::new();
+        for segment in query.split('&') {
+            if pairs.len() == TORII_QUERY_MAX_PAIRS_V1 {
+                return Err(QueryDecodeError::Capacity {
+                    resource: "pair-count",
+                    attempted: TORII_QUERY_MAX_PAIRS_V1 + 1,
+                    limit: TORII_QUERY_MAX_PAIRS_V1,
+                });
+            }
+            if segment.is_empty() {
+                return Err(QueryDecodeError::Invalid(
+                    "Query parameters must not contain empty segments.",
+                ));
+            }
+            let Some((raw_key, raw_value)) = segment.split_once('=') else {
+                return Err(QueryDecodeError::Invalid(
+                    "Every query parameter must use key=value framing.",
+                ));
+            };
+            if raw_value.contains('=') {
+                return Err(QueryDecodeError::Invalid(
+                    "Literal equals signs in query components must be percent-encoded.",
+                ));
+            }
+            if raw_key.is_empty() || raw_value.is_empty() {
+                return Err(QueryDecodeError::Invalid(
+                    "Query parameter names and values must be non-empty.",
+                ));
+            }
+            pairs.push((decode_component(raw_key)?, decode_component(raw_value)?));
+        }
+        Ok(pairs)
     }
-    fn decode_component(input: &str) -> Result<String, json::Error> {
-        // HTML form query semantics decode `+` as a space before percent
-        // decoding. A literal plus must therefore be encoded as `%2B`.
+    fn decode_component(input: &str) -> Result<String, QueryDecodeError> {
+        // V1 uses one exact HTML-form spelling. Keeping the spelling unique is
+        // important for signed requests, caches, and duplicate-key checks: an
+        // accepted component cannot acquire an alternate percent-encoded alias.
         let bytes = input.as_bytes();
         let mut position = 0;
         while position < bytes.len() {
-            if bytes[position] != b'%' {
-                position += 1;
-                continue;
+            match bytes[position] {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' | b'+' => {
+                    position += 1;
+                }
+                b'%' => {
+                    let Some(high) = bytes.get(position + 1).copied() else {
+                        return Err(QueryDecodeError::Invalid(
+                            "Query parameters contain invalid percent-encoding.",
+                        ));
+                    };
+                    let Some(low) = bytes.get(position + 2).copied() else {
+                        return Err(QueryDecodeError::Invalid(
+                            "Query parameters contain invalid percent-encoding.",
+                        ));
+                    };
+                    if !matches!(high, b'0'..=b'9' | b'A'..=b'F')
+                        || !matches!(low, b'0'..=b'9' | b'A'..=b'F')
+                    {
+                        return Err(QueryDecodeError::Invalid(
+                            "Query percent-encoding must use two uppercase hexadecimal digits.",
+                        ));
+                    }
+                    let decoded = (query_hex_nibble(high) << 4) | query_hex_nibble(low);
+                    if is_query_form_literal(decoded) || decoded == b' ' {
+                        return Err(QueryDecodeError::Invalid(
+                            "Query parameters contain a non-canonical percent escape.",
+                        ));
+                    }
+                    position += 3;
+                }
+                _ => {
+                    return Err(QueryDecodeError::Invalid(
+                        "Query components must percent-encode bytes outside the canonical form literal set.",
+                    ));
+                }
             }
-            let Some(high) = bytes.get(position + 1).copied() else {
-                return Err(json::Error::Message(
-                    "invalid percent-encoding in query component".to_owned(),
-                ));
-            };
-            let Some(low) = bytes.get(position + 2).copied() else {
-                return Err(json::Error::Message(
-                    "invalid percent-encoding in query component".to_owned(),
-                ));
-            };
-            if !high.is_ascii_hexdigit() || !low.is_ascii_hexdigit() {
-                return Err(json::Error::Message(
-                    "invalid percent-encoding in query component".to_owned(),
-                ));
-            }
-            position += 3;
         }
         let replaced = input.replace('+', " ");
-        decode(&replaced)
+        let decoded = decode(&replaced)
             .map(std::borrow::Cow::into_owned)
-            .map_err(|error| {
-                json::Error::Message(format!(
-                    "invalid percent-encoding in query component: {error}"
-                ))
-            })
+            .map_err(|_| QueryDecodeError::Invalid("Query components must decode as UTF-8."))?;
+        if decoded.chars().any(char::is_control) {
+            return Err(QueryDecodeError::Invalid(
+                "Query components must not contain control characters.",
+            ));
+        }
+        Ok(decoded)
+    }
+    const fn query_hex_nibble(byte: u8) -> u8 {
+        match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'A'..=b'F' => byte - b'A' + 10,
+            _ => 0,
+        }
+    }
+    const fn is_query_form_literal(byte: u8) -> bool {
+        matches!(
+            byte,
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_'
+        )
     }
     fn scalar_to_value(raw: &str) -> Value {
-        let trimmed = raw.trim();
-        if trimmed.eq_ignore_ascii_case("null") {
+        if raw == "null" {
             Value::Null
-        } else if trimmed.eq_ignore_ascii_case("true") {
+        } else if raw == "true" {
             Value::Bool(true)
-        } else if trimmed.eq_ignore_ascii_case("false") {
+        } else if raw == "false" {
             Value::Bool(false)
-        } else if let Ok(u) = trimmed.parse::<u64>() {
+        } else if canonical_unsigned_decimal(raw)
+            && let Ok(u) = raw.parse::<u64>()
+        {
             Value::Number(Number::from(u))
-        } else if let Ok(i) = trimmed.parse::<i64>() {
+        } else if canonical_negative_decimal(raw)
+            && let Ok(i) = raw.parse::<i64>()
+        {
             Value::Number(Number::from(i))
-        } else if let Ok(f) = trimmed.parse::<f64>() {
-            Number::from_f64(f)
-                .map(Value::Number)
-                .unwrap_or_else(|| Value::String(trimmed.to_string()))
         } else {
-            Value::String(trimmed.to_string())
+            Value::String(raw.to_owned())
         }
+    }
+    fn canonical_unsigned_decimal(raw: &str) -> bool {
+        raw == "0"
+            || raw.as_bytes().split_first().is_some_and(|(first, rest)| {
+                matches!(*first, b'1'..=b'9') && rest.iter().all(u8::is_ascii_digit)
+            })
+    }
+    fn canonical_negative_decimal(raw: &str) -> bool {
+        raw.strip_prefix('-')
+            .is_some_and(|magnitude| magnitude != "0" && canonical_unsigned_decimal(magnitude))
     }
     #[cfg(test)]
     mod tests {
@@ -2601,7 +2741,7 @@ pub mod extractors {
                     expires_at_ms: 2,
                     nonce: [0x4A; 32],
                     payload_digest: [0x4B; 32],
-                    registration_hash: [0x4C; 32],
+                    registration_hash: Hash::new([0x4C; 32]).into(),
                     hardware_assertion: KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
                         KagemushaAndroidKeyMintHardwareAssertionV1 {
                             signature: KagemushaDeviceSignatureV2::from_raw_bytes(&[1; 64])
@@ -2829,12 +2969,24 @@ pub mod extractors {
             assert_eq!(envelope.code(), "request_query_invalid");
         }
         #[tokio::test]
-        async fn duplicate_query_fields_are_rejected_before_deserialization() {
-            for query in [
-                "asset_definition_id=first&asset_definition_id=second",
-                "asset_definition_id=first&asset%5fdefinition%5fid=second",
-                "asset_definition_id=first&%61sset_definition_id=second",
-                "asset_definition_id=first&asset%5Fdefinition%5Fid=second",
+        async fn duplicate_and_encoded_alias_query_fields_are_rejected() {
+            for (query, expected_message) in [
+                (
+                    "asset_definition_id=first&asset_definition_id=second",
+                    "duplicate decoded key",
+                ),
+                (
+                    "asset_definition_id=first&asset%5fdefinition%5fid=second",
+                    "uppercase hexadecimal",
+                ),
+                (
+                    "asset_definition_id=first&%61sset_definition_id=second",
+                    "non-canonical percent escape",
+                ),
+                (
+                    "asset_definition_id=first&asset%5Fdefinition%5Fid=second",
+                    "non-canonical percent escape",
+                ),
             ] {
                 let request = Request::builder()
                     .uri(format!("/?{query}"))
@@ -2858,7 +3010,7 @@ pub mod extractors {
                     norito::json::from_slice(&bytes).expect("decode duplicate-query error");
                 assert_eq!(envelope.code(), "request_query_invalid", "query={query}");
                 assert!(
-                    envelope.message().contains("duplicate field"),
+                    envelope.message().contains(expected_message),
                     "query={query}, envelope={envelope:?}"
                 );
             }
@@ -2901,11 +3053,109 @@ pub mod extractors {
         #[test]
         fn query_plus_and_percent_encoded_plus_have_distinct_form_semantics() {
             let space: StringQueryForTest =
-                super::decode_string_query("label=tron+nile").expect("form-space query");
+                super::decode_string_query(Some("label=tron+nile")).expect("form-space query");
             assert_eq!(space.label.as_deref(), Some("tron nile"));
             let plus: StringQueryForTest =
-                super::decode_string_query("label=tron%2Bnile").expect("literal-plus query");
+                super::decode_string_query(Some("label=tron%2Bnile")).expect("literal-plus query");
             assert_eq!(plus.label.as_deref(), Some("tron+nile"));
+        }
+        #[test]
+        fn generic_query_rejects_noncanonical_component_aliases() {
+            for query in [
+                "label=tron%20nile",
+                "label=%74ron",
+                "label=tron%2bnile",
+                "label=tron/nile",
+                "label=tron:nile",
+                "label=tron~nile",
+                "label=tron%C2%A0nile%0A",
+                "label=tron nile",
+                "label=tron💖nile",
+            ] {
+                assert!(
+                    super::decode_string_query::<StringQueryForTest>(Some(query)).is_err(),
+                    "query {query:?} must not acquire an alternate wire spelling"
+                );
+            }
+            let decoded: StringQueryForTest =
+                super::decode_string_query(Some("label=tron%F0%9F%92%96nile"))
+                    .expect("uppercase UTF-8 escapes are canonical");
+            assert_eq!(decoded.label.as_deref(), Some("tron💖nile"));
+            let decoded: StringQueryForTest = super::decode_string_query(Some("label=tron*nile"))
+                .expect("the form asterisk is a canonical literal");
+            assert_eq!(decoded.label.as_deref(), Some("tron*nile"));
+            let decoded: StringQueryForTest = super::decode_string_query(Some("label=tron%7Enile"))
+                .expect("tilde is canonically escaped by form encoding");
+            assert_eq!(decoded.label.as_deref(), Some("tron~nile"));
+        }
+        #[test]
+        fn generic_query_rejects_empty_and_ambiguous_framing() {
+            for query in ["", "&", "label", "=value", "label=", "label=x=", "label=x&"] {
+                assert!(
+                    super::query_pairs(Some(query)).is_err(),
+                    "query {query:?} must be rejected"
+                );
+            }
+            assert!(super::query_pairs(None).expect("absent query").is_empty());
+        }
+        #[test]
+        fn generic_query_capacity_boundaries_are_exact() {
+            let exact_pairs = (0..super::TORII_QUERY_MAX_PAIRS_V1)
+                .map(|index| format!("k{index}=v"))
+                .collect::<Vec<_>>()
+                .join("&");
+            assert_eq!(
+                super::query_pairs(Some(&exact_pairs))
+                    .expect("exact pair-count boundary")
+                    .len(),
+                super::TORII_QUERY_MAX_PAIRS_V1
+            );
+            let excessive_pairs = format!("{exact_pairs}&overflow=v");
+            assert!(matches!(
+                super::query_pairs(Some(&excessive_pairs)),
+                Err(super::QueryDecodeError::Capacity {
+                    resource: "pair-count",
+                    ..
+                })
+            ));
+
+            let exact_bytes = format!("k={}", "a".repeat(super::TORII_QUERY_MAX_RAW_BYTES_V1 - 2));
+            assert!(super::query_pairs(Some(&exact_bytes)).is_ok());
+            let excessive_bytes = format!("{exact_bytes}a");
+            assert!(matches!(
+                super::query_pairs(Some(&excessive_bytes)),
+                Err(super::QueryDecodeError::Capacity {
+                    resource: "raw-byte",
+                    ..
+                })
+            ));
+        }
+        #[test]
+        fn generic_query_scalar_coercion_accepts_only_canonical_spellings() {
+            assert_eq!(super::scalar_to_value("null"), Value::Null);
+            assert_eq!(super::scalar_to_value("true"), Value::Bool(true));
+            assert_eq!(super::scalar_to_value("false"), Value::Bool(false));
+            assert_eq!(
+                super::scalar_to_value("0"),
+                Value::Number(Number::from(0_u64))
+            );
+            assert_eq!(
+                super::scalar_to_value("42"),
+                Value::Number(Number::from(42_u64))
+            );
+            assert_eq!(
+                super::scalar_to_value("-42"),
+                Value::Number(Number::from(-42_i64))
+            );
+            for alias in [
+                "NULL", "TRUE", "False", "00", "01", "-0", "+1", "1.0", "1e0",
+            ] {
+                assert_eq!(
+                    super::scalar_to_value(alias),
+                    Value::String(alias.to_owned()),
+                    "scalar alias {alias:?} must remain text"
+                );
+            }
         }
         #[tokio::test]
         async fn duplicate_string_query_fields_are_rejected_before_deserialization() {
@@ -2930,7 +3180,7 @@ pub mod extractors {
             let envelope: iroha_torii_shared::ErrorEnvelope =
                 norito::json::from_slice(&bytes).expect("decode duplicate string-query error");
             assert_eq!(envelope.code(), "request_query_invalid");
-            assert!(envelope.message().contains("duplicate field"));
+            assert!(envelope.message().contains("duplicate decoded key"));
         }
         impl Version for Dummy {
             fn version(&self) -> u8 {

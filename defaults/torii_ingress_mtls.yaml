@@ -93,7 +93,6 @@ client_profiles:
     certificate:
       validity_days: 30
       renewal_window_days: 10
-      require_hardware_slot: true
     authz:
       norito_stage: "canary"
       allowed_tokens: ["nrpc-staging", "nrpc-torii-workshop"]
@@ -106,7 +105,7 @@ client_profiles:
     trust_anchor: "torii-norito-ops-2026q3"
     description: >
       Canonical production clients (SDKs, gateways, automation).  Certificates
-      must use hardware-backed keys and include the governance ticket reference.
+      must include the governance ticket reference.
     allowed_sans:
       dns:
         - "sdk.sora"
@@ -122,7 +121,6 @@ client_profiles:
     certificate:
       validity_days: 60
       renewal_window_days: 21
-      require_hardware_slot: true
       require_ocsp_must_staple: true
       governance_ticket_field: "1.2.3.4.5.6.7.8.1"
     authz:

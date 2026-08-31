@@ -1,11 +1,12 @@
 #[test]
 fn handler_local_api_token_checks_use_the_canonical_evaluator() {
     let source = include_str!("../../lib.rs");
-    let fail_open_empty_set_check = ["!app.api_tokens_", "set.is_empty()"].concat();
-    let direct_membership_check = ["app.api_tokens_set.", "contains"].concat();
+    let mcp_source = include_str!("../../mcp.rs");
+    let retired_raw_set = ["api_tokens_", "set"].concat();
+    let direct_membership_check = ["configured_tokens.", "contains"].concat();
     assert!(
-        !source.contains(&fail_open_empty_set_check),
-        "handler-local API-token checks must not make an empty required token set fail open"
+        !source.contains(&retired_raw_set) && !mcp_source.contains(&retired_raw_set),
+        "runtime API-token policy must not retain the retired raw-token set"
     );
     assert!(
         !source.contains(&direct_membership_check),
@@ -27,9 +28,11 @@ fn norito_rpc_canary_rejects_duplicate_api_token_headers() {
         HEADER_API_TOKEN,
         HeaderValue::from_static("attacker-choice"),
     );
+    let allowed_client_digests =
+        limits::ApiTokenDigestSet::from_tokens(cfg.allowed_clients.iter().map(String::as_str));
 
     assert_eq!(
-        evaluate_norito_rpc_gate(&cfg, &[], &headers, None),
+        evaluate_norito_rpc_gate(&cfg, &allowed_client_digests, &[], &headers, None),
         Err(NoritoRpcGateFailure::CanaryDenied)
     );
 }

@@ -221,7 +221,7 @@ pub struct SccpReplayDomainV1 {
     pub actor: SccpReplayActorV1,
 }
 
-/// Consensus key selecting one route-scoped replay forest.
+/// Consensus key selecting one complete-domain replay forest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
@@ -232,6 +232,8 @@ pub struct SccpReplayAccumulatorIdV1 {
     pub route_key: SccpRouteKeyV1,
     /// Replay boundary retained independently for this route.
     pub boundary: SccpReplayBoundaryV1,
+    /// Hash of the complete replay domain, including its actor identity.
+    pub domain_hash: [u8; 32],
 }
 
 /// Semantic material committed by an occupied replay leaf.
@@ -480,6 +482,55 @@ pub fn sccp_replay_domain_hash_v1(
         &actor_len,
         &actor,
     ]))
+}
+
+impl SccpReplayAccumulatorIdV1 {
+    /// Derive the unique accumulator identity for a governed route and complete replay domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpReplayAccumulatorError::InvalidDomain`] when the route key is malformed or
+    /// its revision or lane does not match the supplied domain.
+    pub fn from_domain(
+        route_key: SccpRouteKeyV1,
+        domain: &SccpReplayDomainV1,
+    ) -> Result<Self, SccpReplayAccumulatorError> {
+        route_key
+            .validate()
+            .map_err(|_| SccpReplayAccumulatorError::InvalidDomain)?;
+        let domain_hash = sccp_replay_domain_hash_v1(domain)?;
+        let lane = route_key.lane_id;
+        let networks_match = if domain.source_network == SccpNetworkV1::SoraTaira {
+            lane.source == domain.target_network && lane.target == domain.source_network
+        } else {
+            lane.source == domain.source_network && lane.target == domain.target_network
+        };
+        if route_key.revision != domain.route_revision || !networks_match {
+            return Err(SccpReplayAccumulatorError::InvalidDomain);
+        }
+        Ok(Self {
+            route_key,
+            boundary: domain.boundary,
+            domain_hash,
+        })
+    }
+
+    /// Verify that this identity commits to the supplied complete replay domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpReplayAccumulatorError::InvalidDomain`] when any route coordinate, boundary,
+    /// configuration commitment, network direction, or actor identity differs.
+    pub fn validate_domain(
+        &self,
+        domain: &SccpReplayDomainV1,
+    ) -> Result<(), SccpReplayAccumulatorError> {
+        let expected = Self::from_domain(self.route_key.clone(), domain)?;
+        if *self != expected {
+            return Err(SccpReplayAccumulatorError::InvalidDomain);
+        }
+        Ok(())
+    }
 }
 
 /// Derive a replay leaf key from its domain and replay identifier.
@@ -790,6 +841,8 @@ impl SccpReplayForestV1 {
 
 #[cfg(test)]
 mod tests {
+    use norito::codec::DecodeAll as _;
+
     use super::*;
 
     fn domain(boundary: SccpReplayBoundaryV1) -> SccpReplayDomainV1 {
@@ -1022,6 +1075,102 @@ mod tests {
         assert_eq!(
             sccp_replay_record_digest_v1(&invalid_record),
             Err(SccpReplayAccumulatorError::InvalidRecord)
+        );
+    }
+
+    #[test]
+    fn accumulator_identity_binds_the_complete_actor_domain() {
+        let route_key = SccpRouteKeyV1::new(
+            super::super::SccpLaneIdV1 {
+                source: SccpNetworkV1::TonMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            "taira_ton_xor".to_owned(),
+            "xor".to_owned(),
+            7,
+        )
+        .expect("valid TON route key");
+        let first_domain = SccpReplayDomainV1 {
+            source_network: SccpNetworkV1::SoraTaira,
+            target_network: SccpNetworkV1::TonMainnet,
+            boundary: SccpReplayBoundaryV1::TonWalletMintCredit,
+            route_revision: 7,
+            route_configuration_hash: [0x44; 32],
+            actor: SccpReplayActorV1::Ton(SccpTonAccountV1 {
+                workchain: 0,
+                account: [0x51; 32],
+            }),
+        };
+        let first = SccpReplayAccumulatorIdV1::from_domain(route_key.clone(), &first_domain)
+            .expect("first wallet domain is valid");
+        assert_eq!(
+            first.domain_hash,
+            sccp_replay_domain_hash_v1(&first_domain).expect("first domain hashes")
+        );
+        first
+            .validate_domain(&first_domain)
+            .expect("identity validates its source domain");
+        let encoded = Encode::encode(&first);
+        assert_eq!(
+            SccpReplayAccumulatorIdV1::decode_all(&mut encoded.as_slice())
+                .expect("current replay identity layout decodes"),
+            first,
+            "the complete domain hash must survive the Norito wire roundtrip"
+        );
+
+        let mut second_domain = first_domain;
+        second_domain.actor = SccpReplayActorV1::Ton(SccpTonAccountV1 {
+            workchain: 0,
+            account: [0x52; 32],
+        });
+        let second = SccpReplayAccumulatorIdV1::from_domain(route_key.clone(), &second_domain)
+            .expect("second wallet domain is valid");
+        assert_ne!(first, second, "actor-local replay forests must not alias");
+        assert_eq!(
+            first.validate_domain(&second_domain),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
+        );
+
+        let mut wrong_boundary = first.clone();
+        wrong_boundary.boundary = SccpReplayBoundaryV1::TonMasterMint;
+        assert_eq!(
+            wrong_boundary.validate_domain(&first_domain),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
+        );
+        let mut wrong_hash = first.clone();
+        wrong_hash.domain_hash[0] ^= 1;
+        assert_eq!(
+            wrong_hash.validate_domain(&first_domain),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
+        );
+
+        let mut reconfigured_domain = first_domain;
+        reconfigured_domain.route_configuration_hash = [0x45; 32];
+        let reconfigured =
+            SccpReplayAccumulatorIdV1::from_domain(route_key.clone(), &reconfigured_domain)
+                .expect("reconfigured domain is structurally valid");
+        assert_ne!(first, reconfigured, "route configurations must not alias");
+
+        let wrong_lane = SccpRouteKeyV1::new(
+            super::super::SccpLaneIdV1 {
+                source: SccpNetworkV1::EthereumMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            "taira_eth_xor".to_owned(),
+            "xor".to_owned(),
+            7,
+        )
+        .expect("valid but unrelated Ethereum route key");
+        assert_eq!(
+            SccpReplayAccumulatorIdV1::from_domain(wrong_lane, &first_domain),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
+        );
+
+        let mut wrong_revision = first_domain;
+        wrong_revision.route_revision += 1;
+        assert_eq!(
+            SccpReplayAccumulatorIdV1::from_domain(route_key, &wrong_revision),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
         );
     }
 

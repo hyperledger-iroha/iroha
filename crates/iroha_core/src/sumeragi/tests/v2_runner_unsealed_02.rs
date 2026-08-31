@@ -1012,6 +1012,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         .configure_roster(std::iter::empty())
         .expect("configure untrusted test lane");
     let directory = TempDir::new().expect("temporary unretired CompleteTip lifecycle root");
+    let kura = Kura::blank_kura_for_testing();
     let mut successor_context = parent_context.clone();
     successor_context.height += 1;
     let error = PendingSuccessorActivation::recovered(
@@ -1021,6 +1022,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
             b"exact recovered successor context",
             directory.path(),
         )),
+        kura.as_ref(),
         &keys[0],
     )
     .expect_err("CompleteTip cannot form activation before exact predecessor retirement");

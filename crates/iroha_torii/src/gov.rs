@@ -1699,12 +1699,14 @@ fn build_signable_transaction_b64(
     base64::engine::general_purpose::STANDARD.encode(builder.encode_payload())
 }
 fn deploy_contract_proposal_kind(
+    proposal_operator: &iroha_data_model::account::AccountId,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     code_hash: &[u8; 32],
     abi_hash: &[u8; 32],
     manifest_provenance: Option<ManifestProvenance>,
 ) -> ProposalKind {
     ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: proposal_operator.clone(),
         contract_address: contract_address.clone(),
         code_hash: ContractCodeHash::new(*code_hash),
         abi_hash: ContractAbiHash::new(*abi_hash),
@@ -2475,6 +2477,7 @@ pub async fn handle_gov_propose_deploy(
     };
     let proposal_id = ProposalContentId::new(
         deploy_contract_proposal_kind(
+            &body.proposal_operator,
             &instr.contract_address,
             &code_hash_bytes,
             &abi_hash_bytes,
@@ -2879,6 +2882,7 @@ mod tests {
         let attempt_request = ParliamentAttemptDraftRequestV1 {
             version: PARLIAMENT_API_VERSION_V1,
             proposal: ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: ALICE_ID.clone(),
                 contract_address: sample_contract_address(),
                 code_hash: ContractCodeHash::new([0x11; 32]),
                 abi_hash: ContractAbiHash::new([0x22; 32]),
@@ -2944,6 +2948,7 @@ mod tests {
         let request = |attempt_sequence| ParliamentAttemptDraftRequestV1 {
             version: PARLIAMENT_API_VERSION_V1,
             proposal: ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: ALICE_ID.clone(),
                 contract_address: sample_contract_address(),
                 code_hash: ContractCodeHash::new([0x11; 32]),
                 abi_hash: ContractAbiHash::new([0x22; 32]),
@@ -2978,6 +2983,7 @@ mod tests {
 
         let proposal = |start_height, end_height| {
             ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+                proposal_operator: ALICE_ID.clone(),
                 manifest: RuntimeUpgradeManifest {
                     name: "bounded Parliament runtime upgrade".to_owned(),
                     description: "Torii exact JSON integer guard".to_owned(),
@@ -3167,6 +3173,7 @@ mod tests {
         proposer: &AccountId,
     ) -> String {
         let kind = deploy_contract_proposal_kind(
+            proposer,
             &sample_contract_address(),
             &[0x71; 32],
             &[0x72; 32],
@@ -3710,6 +3717,7 @@ seiyaku GovernedReadFixture {
     fn serde_shapes_compile() {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let req = DeployContractProposalDraftRequestV1 {
+            proposal_operator: ALICE_ID.clone(),
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: AbiVersion::new(1),
@@ -3855,6 +3863,7 @@ seiyaku GovernedReadFixture {
                 .expect("derive proposal provenance fixture key");
         let provenance = mk_manifest_provenance(&provenance_key, [0x11; 32], canonical_abi);
         let dto = DeployContractProposalDraftRequestV1 {
+            proposal_operator: ALICE_ID.clone(),
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: AbiVersion::new(1),
@@ -3868,6 +3877,7 @@ seiyaku GovernedReadFixture {
         let body = res.0;
         assert_eq!(body.tx_instructions.len(), 1);
         let expected_id = deploy_contract_proposal_kind(
+            &ALICE_ID,
             &sample_contract_address(),
             &code_hash_bytes,
             &canonical_abi,
@@ -3878,6 +3888,7 @@ seiyaku GovernedReadFixture {
         assert_ne!(
             expected_id,
             deploy_contract_proposal_kind(
+                &ALICE_ID,
                 &sample_contract_address(),
                 &code_hash_bytes,
                 &canonical_abi,
@@ -4109,6 +4120,7 @@ seiyaku GovernedReadFixture {
     fn propose_deploy_rejects_retired_lifecycle_controls_during_decode() {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let dto = DeployContractProposalDraftRequestV1 {
+            proposal_operator: ALICE_ID.clone(),
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: AbiVersion::new(1),
@@ -4134,6 +4146,7 @@ seiyaku GovernedReadFixture {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         for abi_version in [0, 2, u16::MAX] {
             let dto = DeployContractProposalDraftRequestV1 {
+                proposal_operator: ALICE_ID.clone(),
                 contract_address: Some(sample_contract_address()),
                 contract_alias: None,
                 abi_version: AbiVersion::new(abi_version),
@@ -4154,6 +4167,7 @@ seiyaku GovernedReadFixture {
     async fn propose_deploy_rejects_mismatched_abi_hash() {
         let (state, _queue, _chain_id) = mk_basic_context();
         let dto = DeployContractProposalDraftRequestV1 {
+            proposal_operator: ALICE_ID.clone(),
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: AbiVersion::new(1),
@@ -5158,6 +5172,7 @@ seiyaku GovernedReadFixture {
         let manifest_provenance =
             mk_manifest_provenance(&harness.authority_keypair, code_hash_bytes, abi_hash_bytes);
         let propose = DeployContractProposalDraftRequestV1 {
+            proposal_operator: harness.authority.clone(),
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: AbiVersion::new(1),

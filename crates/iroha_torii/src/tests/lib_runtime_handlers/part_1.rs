@@ -767,7 +767,6 @@ fn ensure_runtime_peer_binding_for_test(
         pop: Some(consensus_pop),
         activation_height: next_height,
         expiry_height: None,
-        hsm: None,
         replaces: None,
         status: ConsensusKeyStatus::Active,
     };
@@ -1687,7 +1686,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
             .map(std::num::NonZeroU32::get),
         soranet_privacy_ingest.burst.map(std::num::NonZeroU32::get),
     );
-    let api_tokens_set: Arc<HashSet<String>> = Arc::new(Default::default());
+    let api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
     let operator_auth = Arc::new(
         operator_auth::OperatorAuth::new(
             iroha_config::parameters::actual::ToriiOperatorAuth::default(),
@@ -1868,7 +1867,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         content_config: content_config_snapshot,
         ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
         require_api_token: false,
-        api_tokens_set: api_tokens_set.clone(),
+        api_token_digests: api_token_digests.clone(),
         webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
         zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,
         operator_auth,
@@ -1894,8 +1893,13 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         mcp_long_poll_inflight,
         mcp_inflight_requests: Arc::new(mcp::McpInflightRegistry::default()),
         mcp_allowed_origins: Arc::new(Vec::new()),
-        mcp_dispatch_router: std::sync::RwLock::new(None),
+        mcp_dispatch_router: McpDispatchRouterSlot::default(),
         fee_policy: FeePolicy::Disabled,
+        norito_rpc_allowed_client_digests: Arc::new(
+            limits::ApiTokenDigestSet::from_tokens(
+                norito_rpc_cfg.allowed_clients.iter().map(String::as_str),
+            ),
+        ),
         norito_rpc: norito_rpc_cfg,
         high_load_tx_threshold: usize::MAX,
         high_load_stream_tx_threshold: usize::MAX,
@@ -2359,7 +2363,8 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
         OnlinePeersProvider::new(peers_rx),
         None,
         routing::MaybeTelemetry::disabled(),
-    );
+    )
+    .expect("valid Torii test fixture");
     assert!(
         torii
             .tx_rate_limiter
@@ -2424,7 +2429,8 @@ async fn torii_ram_lfe_uses_config_runtime() {
         OnlinePeersProvider::new(peers_rx),
         None,
         routing::MaybeTelemetry::disabled(),
-    );
+    )
+    .expect("valid Torii test fixture");
     assert!(
         torii.identifier_resolver.is_some(),
         "Torii should build an in-process identifier resolver from config"
@@ -2720,7 +2726,8 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
         app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
         app_mut.fee_policy = FeePolicy::Disabled;
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::from(["shared-token".to_owned()]));
+        app_mut.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["shared-token"]));
     }
     let first_keypair = checked_torii_test_ed25519_keypair(
         0xc2,

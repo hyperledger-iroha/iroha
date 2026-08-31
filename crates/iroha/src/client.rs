@@ -177,6 +177,9 @@ pub struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
     /// Exact public-map count vector.
     pub counts: PrivateSettlementTestNetworkStateCountsV1,
 }
+pub use iroha_torii_shared::offline_api::{
+    OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES, OfflineOperationStatus,
+};
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1,
@@ -198,9 +201,8 @@ use iroha_torii_shared::{
     PipelineTransactionDetailsResponse, PipelineTransactionStatusResponse,
     TriggerCompletionListResponse,
     offline_api::{
-        OFFLINE_OPERATION_REFERENCE_MAX_BYTES, OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
-        OFFLINE_OPERATION_STATUS_MAX_BYTES, OFFLINE_STATUS_MAX_BYTES, OfflineOperationKind,
-        OfflineOperationReference, OfflineOperationState, OfflineOperationStatus,
+        OFFLINE_OPERATION_REFERENCE_MAX_BYTES, OFFLINE_OPERATION_STATUS_MAX_BYTES,
+        OFFLINE_STATUS_MAX_BYTES, OfflineOperationKind, OfflineOperationReference,
         OfflineRedeemRequest, OfflineStatus, OfflineTopUpRequest,
     },
     uri as torii_uri,
@@ -3783,6 +3785,7 @@ mod parliament_draft_response_validation_tests {
         ParliamentAttemptDraftRequestV1 {
             version: PARLIAMENT_API_VERSION_V1,
             proposal: ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: iroha_test_samples::gen_account_in("wonderland").0,
                 contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                     .parse::<ContractAddress>()
                     .expect("parse Parliament client fixture contract"),
@@ -4004,6 +4007,7 @@ fn validate_deploy_contract_proposal_draft_response(
         ));
     }
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: request.proposal_operator.clone(),
         contract_address: proposed.contract_address.clone(),
         code_hash: request.code_hash,
         abi_hash: request.abi_hash,
@@ -9386,14 +9390,6 @@ impl Client {
             "{field} must be exactly 64 lowercase hexadecimal characters"
         ))
     }
-    fn require_canonical_transaction_hash(value: &str, field: &str) -> Result<()> {
-        if is_canonical_signed_transaction_hash_text(value) {
-            return Ok(());
-        }
-        Err(eyre!(
-            "{field} must be exactly 64 lowercase hexadecimal characters with the Iroha hash marker set"
-        ))
-    }
     fn require_governance_selector_v1(value: &str, field: &str) -> Result<()> {
         if iroha_data_model::governance::is_valid_governance_selector_v1(value) {
             return Ok(());
@@ -9467,32 +9463,10 @@ impl Client {
         expected_kind: OfflineOperationKind,
         submitted_at_ms: u64,
     ) -> Result<()> {
-        Self::require_lower_hex_32(&reference.operation_id, "operation_id")?;
-        if reference.operation_id != operation_id {
-            return Err(eyre!(
-                "offline operation response id does not match the signed request"
-            ));
-        }
-        if reference.kind != expected_kind || reference.state != OfflineOperationState::Pending {
-            return Err(eyre!(
-                "offline operation response kind or initial state does not match the request"
-            ));
-        }
-        Self::require_canonical_transaction_hash(
-            &reference.transaction_hash,
-            "transaction_hash",
-        )?;
-        if reference.submitted_at_ms != submitted_at_ms {
-            return Err(eyre!(
-                "offline operation response submission time does not match the signed request"
-            ));
-        }
+        reference
+            .validate_for_submission(operation_id, expected_kind, submitted_at_ms)
+            .map_err(|error| eyre!("invalid offline operation reference: {error}"))?;
         let expected_status_uri = format!("/v1/offline/operations/{operation_id}");
-        if reference.status_uri != expected_status_uri {
-            return Err(eyre!(
-                "offline operation response contains a non-canonical status URI"
-            ));
-        }
         let location = response
             .headers()
             .get(http::header::LOCATION)
@@ -9513,12 +9487,12 @@ impl Client {
         let _ = retry_after;
         Ok(())
     }
-    fn validate_offline_operation_status(
+    fn observe_offline_operation_status(
         status: &OfflineOperationStatus,
-        expected_operation_id: &str,
+        reference: &mut OfflineOperationReference,
     ) -> Result<()> {
-        status
-            .validate_for_operation_id(expected_operation_id)
+        reference
+            .observe_status(status)
             .map_err(|error| eyre!("invalid offline operation status: {error}"))
     }
     fn validate_offline_capability(status: &OfflineStatus) -> Result<()> {
@@ -9661,19 +9635,26 @@ impl Client {
         )?;
         Ok(reference)
     }
-    /// Fetch the current state of one offline operation.
+    /// Poll the current state and advance the active Pending-attempt cursor.
+    ///
+    /// A validated newer Pending transaction replaces the reference's
+    /// transaction hash and submission time atomically. Terminal observations
+    /// may identify a different retry or globally winning transaction but do
+    /// not rewrite the pending cursor.
     ///
     /// # Errors
-    /// Returns an error for a malformed operation ID, transport failure, non-success response,
-    /// malformed negotiated representation, or a response bound to another operation.
-    pub fn get_offline_operation_status(
+    /// Returns an error for a malformed accepted-operation reference, transport
+    /// failure, non-success response, malformed negotiated representation, or
+    /// a response whose operation or kind differs, or an active Pending hash
+    /// whose submission time changes.
+    pub fn poll_offline_operation_status(
         &self,
-        operation_id: &str,
+        reference: &mut OfflineOperationReference,
     ) -> Result<OfflineOperationStatus> {
-        Self::require_lower_hex_32(operation_id, "operation_id")?;
-        if operation_id.bytes().all(|byte| byte == b'0') {
-            return Err(eyre!("offline operation_id must not be zero"));
-        }
+        reference
+            .validate_structure()
+            .map_err(|error| eyre!("invalid offline operation reference: {error}"))?;
+        let operation_id = &reference.operation_id;
         let path = torii_uri::OFFLINE_OPERATION.replace("{operation_id}", operation_id);
         let url = join_torii_url(&self.torii_url, &path);
         let max_response_bytes = match self.wire_format_preference {
@@ -9692,7 +9673,7 @@ impl Client {
             StatusCode::OK,
             "Failed to fetch offline operation",
         )?;
-        Self::validate_offline_operation_status(&status, operation_id)?;
+        Self::observe_offline_operation_status(&status, reference)?;
         Ok(status)
     }
     /// GET `/v1/sumeragi/status` — consensus status snapshot.
@@ -10060,22 +10041,24 @@ mod offline_client_tests {
         asset::{AssetDefinitionId, AssetId},
         block::consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout,
-            ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId, PayloadEncoding,
-            QuorumCertificate, PROTOCOL_VERSION,
+            ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId, PROTOCOL_VERSION,
+            PayloadEncoding, QuorumCertificate,
         },
         domain::DomainId,
         offline::{
             KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-            KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2, KagemushaRecursiveSpendArtifactBindingV4,
-            KagemushaRecursiveSpendTopUpAnchorV4, KagemushaScaledAmountV2,
-            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpAnchorMerkleProofV2,
-            KagemushaTopUpFinalityCompactQcV2, KagemushaTopUpFinalityHeightContextV2,
-            KagemushaTopUpFinalityProofV2,
+            KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2,
+            KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendTopUpAnchorV4,
+            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+            KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
+            KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
+            kagemusha_topup_anchor_leaf_hash_v2, kagemusha_topup_anchor_node_hash_v2,
         },
         proof::VerifyingKeyId,
     };
-    use iroha_torii_shared::offline_api::{OfflineOperationResult, OfflineTopUpResult};
+    use iroha_torii_shared::offline_api::{
+        OfflineOperationResult, OfflineOperationState, OfflineTopUpResult,
+    };
     use norito::derive::NoritoSerialize;
     use std::sync::{Arc, Mutex};
     #[derive(NoritoSerialize)]
@@ -10109,7 +10092,7 @@ mod offline_client_tests {
         clippy::too_many_lines,
         reason = "the fixture keeps the applied result, anchor, compact QC, and proof mutually consistent"
     )]
-    fn applied_topup_status_fixture() -> (String, OfflineOperationStatus) {
+    fn applied_topup_status_fixture() -> (OfflineOperationReference, OfflineOperationStatus) {
         let operation_id = [0x11; 32];
         let mut transaction_hash = [0x22; 32];
         transaction_hash[31] = 0x23;
@@ -10164,17 +10147,18 @@ mod offline_client_tests {
             view: 0,
         };
         let ordinary_writes_root = Hash::new(b"offline-client-ordinary-writes");
-        let topup_anchor_root = Hash::new(b"offline-client-topup-root");
+        let topup_anchor_leaf =
+            kagemusha_topup_anchor_leaf_hash_v2(operation_id, anchor.anchor_digest)
+                .expect("valid top-up leaf");
+        let sibling = kagemusha_topup_anchor_leaf_hash_v2([0x41; 32], [0x42; 32])
+            .expect("valid sibling top-up leaf");
+        let topup_anchor_root = kagemusha_topup_anchor_node_hash_v2(0, topup_anchor_leaf, sibling);
         let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
             Hash::new(b"offline-client-parent-state"),
-            ExecutionCommitment::topup_post_state_root(
-                1,
-                ordinary_writes_root,
-                topup_anchor_root,
-            ),
+            ExecutionCommitment::topup_post_state_root(2, ordinary_writes_root, topup_anchor_root),
             ordinary_writes_root,
             Some(topup_anchor_root),
-            1,
+            2,
             1,
             Hash::new(b"offline-client-block-wire"),
         )
@@ -10224,19 +10208,19 @@ mod offline_client_tests {
             },
             anchor_path: KagemushaTopUpAnchorMerkleProofV2 {
                 leaf_index: 0,
-                leaf_count: 1,
-                siblings: Vec::new(),
+                leaf_count: 2,
+                siblings: vec![sibling.into()],
             },
         };
         let operation_id = hex::encode(operation_id);
+        let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
         (
-            operation_id.clone(),
+            reference,
             OfflineOperationStatus::Applied {
                 operation_id,
                 result: OfflineOperationResult::TopUp(OfflineTopUpResult {
                     transaction_hash: hex::encode(transaction_hash),
                     finalized_block_height: anchor.finalized_height,
-                    server_time_ms: 1_700_000_000_000,
                     anchor,
                     finality_proof,
                 }),
@@ -10421,11 +10405,13 @@ mod offline_client_tests {
     #[test]
     fn operation_status_request_validates_path_id_and_payload_binding() {
         let operation_id = "11".repeat(32);
+        let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
+        let newer_transaction_hash = format!("{}25", "22".repeat(31));
         let status = OfflineOperationStatus::Pending {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
-            transaction_hash: canonical_transaction_hash_text(),
-            submitted_at_ms: 42,
+            transaction_hash: newer_transaction_hash.clone(),
+            submitted_at_ms: 43,
         };
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
@@ -10434,9 +10420,11 @@ mod offline_client_tests {
             .expect("response");
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         with_mock_http(respond_with(&snapshots, response), || {
-            client_with_base_url(base_url()).get_offline_operation_status(&operation_id)
+            client_with_base_url(base_url()).poll_offline_operation_status(&mut reference)
         })
         .expect("operation status");
+        assert_eq!(reference.transaction_hash, newer_transaction_hash);
+        assert_eq!(reference.submitted_at_ms, 43);
         let snapshots = snapshots.lock().expect("snapshots");
         assert_eq!(
             snapshots[0].url.path(),
@@ -10447,18 +10435,55 @@ mod offline_client_tests {
             OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES
         );
         assert_single_accept_header(&snapshots[0], ACCEPT_NORITO_PREFERRED);
+        drop(snapshots);
+
+        let repeated_response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&status).expect("encode repeated status"))
+            .expect("response");
+        with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), repeated_response),
+            || client_with_base_url(base_url()).poll_offline_operation_status(&mut reference),
+        )
+        .expect("second poll uses the advanced pending cursor");
+
+        let changed_time = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: reference.transaction_hash.clone(),
+            submitted_at_ms: 44,
+        };
+        let changed_time_response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&changed_time).expect("encode changed-time status"))
+            .expect("response");
+        let unchanged_reference = reference.clone();
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), changed_time_response),
+            || client_with_base_url(base_url()).poll_offline_operation_status(&mut reference),
+        )
+        .expect_err("the active pending hash cannot change its timestamp");
+        assert!(error.to_string().contains("submission time"));
+        assert_eq!(reference, unchanged_reference);
+
+        let mut malformed_reference = reference.clone();
+        malformed_reference.operation_id = "../redeem".to_owned();
+        malformed_reference.status_uri = "/v1/offline/operations/../redeem".to_owned();
         let malformed = client_with_base_url(base_url())
-            .get_offline_operation_status("../redeem")
+            .poll_offline_operation_status(&mut malformed_reference)
             .expect_err("path injection must fail locally");
         assert!(malformed.to_string().contains("64 lowercase hexadecimal"));
 
         let zero_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let mut zero_reference = operation_reference(&"0".repeat(64), OfflineOperationKind::TopUp);
         let zero_error = with_mock_http(
             respond_with(
                 &zero_snapshots,
                 mk_response(StatusCode::INTERNAL_SERVER_ERROR, Vec::new(), None),
             ),
-            || client_with_base_url(base_url()).get_offline_operation_status(&"0".repeat(64)),
+            || client_with_base_url(base_url()).poll_offline_operation_status(&mut zero_reference),
         )
         .expect_err("zero operation id must fail before transport");
         assert!(zero_error.to_string().contains("must not be zero"));
@@ -10467,13 +10492,14 @@ mod offline_client_tests {
     #[test]
     fn pending_operation_status_rejects_zero_submission_time() {
         let operation_id = "11".repeat(32);
+        let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
         let status = OfflineOperationStatus::Pending {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
             transaction_hash: canonical_transaction_hash_text(),
             submitted_at_ms: 0,
         };
-        let error = Client::validate_offline_operation_status(&status, &operation_id)
+        let error = Client::observe_offline_operation_status(&status, &mut reference)
             .expect_err("zero pending submission time must fail closed");
         assert!(error.to_string().contains("submitted_at_ms"));
     }
@@ -10499,24 +10525,23 @@ mod offline_client_tests {
             transaction_hash: "22".repeat(32),
             submitted_at_ms: 42,
         };
-        let status_error = Client::validate_offline_operation_status(&status, &operation_id)
+        let mut valid_reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
+        let status_error = Client::observe_offline_operation_status(&status, &mut valid_reference)
             .expect_err("a status transaction hash without the Iroha marker must fail closed");
         assert!(status_error.to_string().contains("hash marker"));
     }
     #[test]
     fn applied_topup_status_binds_operation_anchor_proof_and_finality() {
-        let (operation_id, status) = applied_topup_status_fixture();
-        Client::validate_offline_operation_status(&status, &operation_id)
+        let (mut reference, status) = applied_topup_status_fixture();
+        Client::observe_offline_operation_status(&status, &mut reference)
             .expect("mutually bound applied top-up status");
 
         let mut mismatched_transaction = status.clone();
         topup_result_mut(&mut mismatched_transaction).transaction_hash =
             format!("{}25", "22".repeat(31));
-        let error = Client::validate_offline_operation_status(
-            &mismatched_transaction,
-            &operation_id,
-        )
-        .expect_err("terminal transaction must match the finalized anchor");
+        let error =
+            Client::observe_offline_operation_status(&mismatched_transaction, &mut reference)
+                .expect_err("terminal transaction must match the finalized anchor");
         assert!(error.to_string().contains("not mutually bound"));
 
         let mut mismatched_proof = status.clone();
@@ -10524,39 +10549,67 @@ mod offline_client_tests {
             .finality_proof
             .anchor
             .anchor_digest[0] ^= 1;
-        let error = Client::validate_offline_operation_status(&mismatched_proof, &operation_id)
+        let error = Client::observe_offline_operation_status(&mismatched_proof, &mut reference)
             .expect_err("finality proof must select the returned anchor");
-        assert!(error.to_string().contains("not mutually bound"));
+        assert!(
+            error
+                .to_string()
+                .contains("topup_finality.anchor_path.inclusion")
+        );
+
+        let mut forged_path = status.clone();
+        topup_result_mut(&mut forged_path)
+            .finality_proof
+            .anchor_path
+            .siblings[0][0] ^= 1;
+        let error = Client::observe_offline_operation_status(&forged_path, &mut reference)
+            .expect_err("every Merkle sibling must authenticate the finalized top-up");
+        assert!(error.to_string().contains("finality proof is invalid"));
 
         let mut mismatched_height = status;
         topup_result_mut(&mut mismatched_height).finalized_block_height += 1;
-        let error = Client::validate_offline_operation_status(&mismatched_height, &operation_id)
+        let error = Client::observe_offline_operation_status(&mismatched_height, &mut reference)
             .expect_err("terminal height must match the anchor and QC context");
-        assert!(error.to_string().contains("not mutually bound"));
+        assert!(
+            error
+                .to_string()
+                .contains("topup_finality.terminal_binding")
+        );
     }
     #[test]
-    fn applied_operation_status_rejects_zero_finality_fields() {
+    fn applied_operation_status_rejects_zero_finalized_height() {
         let operation_id = "11".repeat(32);
-        for (finalized_block_height, server_time_ms, field) in
-            [(0, 1, "finalized_block_height"), (1, 0, "server_time_ms")]
-        {
-            let status = OfflineOperationStatus::Applied {
-                operation_id: operation_id.clone(),
-                result: OfflineOperationResult::Redeem(
-                    iroha_torii_shared::offline_api::OfflineRedeemResult {
-                        transaction_hash: canonical_transaction_hash_text(),
-                        finalized_block_height,
-                        server_time_ms,
-                    },
-                ),
-            };
-            let error = Client::validate_offline_operation_status(&status, &operation_id)
-                .expect_err("zero applied finality field must fail closed");
-            assert!(
-                error.to_string().contains(field),
-                "unexpected error: {error}"
-            );
-        }
+        let mut reference = operation_reference(&operation_id, OfflineOperationKind::Redeem);
+        let status = OfflineOperationStatus::Applied {
+            operation_id: operation_id.clone(),
+            result: OfflineOperationResult::Redeem(
+                iroha_torii_shared::offline_api::OfflineRedeemResult {
+                    transaction_hash: canonical_transaction_hash_text(),
+                    finalized_block_height: 0,
+                },
+            ),
+        };
+        let error = Client::observe_offline_operation_status(&status, &mut reference)
+            .expect_err("zero applied finality height must fail closed");
+        assert!(error.to_string().contains("finalized_block_height"));
+    }
+    #[test]
+    fn applied_redemption_status_accepts_another_authorized_winner() {
+        let operation_id = "11".repeat(32);
+        let mut reference = operation_reference(&operation_id, OfflineOperationKind::Redeem);
+        let original_reference = reference.clone();
+        let status = OfflineOperationStatus::Applied {
+            operation_id,
+            result: OfflineOperationResult::Redeem(
+                iroha_torii_shared::offline_api::OfflineRedeemResult {
+                    transaction_hash: format!("{}25", "22".repeat(31)),
+                    finalized_block_height: 1,
+                },
+            ),
+        };
+        Client::observe_offline_operation_status(&status, &mut reference)
+            .expect("another authorized transaction may win global finality");
+        assert_eq!(reference, original_reference);
     }
     #[test]
     fn negotiated_decoder_rejects_retired_and_missing_media_types() {
@@ -13378,7 +13431,6 @@ mod evidence_http_tests {
             recorded_at_height: 42,
             recorded_at_view: 5,
             recorded_at_ms: 123_456,
-            consensus_admitted_at_height: None,
             penalty_applied: false,
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
@@ -20973,6 +21025,11 @@ impl Client {
         &self,
         request: &DeployContractProposalDraftRequestV1,
     ) -> Result<DeployContractProposalDraftResponseV1> {
+        if request.proposal_operator != self.account {
+            return Err(eyre!(
+                "deploy-contract proposal operator must equal the client transaction authority"
+            ));
+        }
         if request.abi_version.get() != 1 {
             return Err(eyre!(
                 "deploy-contract proposal ABI version must be exactly one"
@@ -36074,7 +36131,9 @@ mod tests {
             }],
         }
     }
-    fn sample_deploy_contract_proposal_draft_request() -> DeployContractProposalDraftRequestV1 {
+    fn sample_deploy_contract_proposal_draft_request(
+        proposal_operator: &AccountId,
+    ) -> DeployContractProposalDraftRequestV1 {
         let key_pair =
             iroha_crypto::KeyPair::try_from_seed(vec![0xD4; 32], iroha_crypto::Algorithm::Ed25519)
                 .expect("derive deploy proposal provenance fixture key");
@@ -36087,6 +36146,7 @@ mod tests {
             .expect("sign deploy proposal provenance fixture"),
         };
         DeployContractProposalDraftRequestV1 {
+            proposal_operator: proposal_operator.clone(),
             contract_address: Some(
                 "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                     .parse()
@@ -36120,6 +36180,7 @@ mod tests {
         let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
             .expect("frame deploy proposal instruction");
         let proposal = ProposalKind::DeployContract(DeployContractProposal {
+            proposal_operator: request.proposal_operator.clone(),
             contract_address,
             code_hash: request.code_hash,
             abi_hash: request.abi_hash,
@@ -36712,7 +36773,8 @@ mod tests {
     }
     #[test]
     fn deploy_contract_proposal_draft_is_typed_locally_signed_and_response_bound() {
-        let request = sample_deploy_contract_proposal_draft_request();
+        let client = client_with_base_url(base_url());
+        let request = sample_deploy_contract_proposal_draft_request(&client.account);
         let response_payload = deploy_contract_proposal_draft_response(&request);
         let response_json = norito::json::to_json(&response_payload)
             .expect("encode deploy-contract governance response");
@@ -36729,7 +36791,7 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &response_json);
         let decoded = with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url()).post_deploy_contract_proposal_draft(&request)
+            client.post_deploy_contract_proposal_draft(&request)
         })
         .expect("valid typed deploy-contract proposal draft");
         assert_eq!(decoded, response_payload);
@@ -36759,6 +36821,7 @@ mod tests {
                 "code_hash",
                 "contract_address",
                 "manifest_provenance",
+                "proposal_operator",
             ])
         );
         for forbidden in [
@@ -36774,8 +36837,14 @@ mod tests {
     }
     #[test]
     fn deploy_contract_proposal_draft_rejects_local_and_server_malleability() {
-        let request = sample_deploy_contract_proposal_draft_request();
         let client = client_with_base_url(base_url());
+        let request = sample_deploy_contract_proposal_draft_request(&client.account);
+        let mut wrong_operator = request.clone();
+        wrong_operator.proposal_operator = gen_account_in("another-domain").0;
+        let error = client
+            .post_deploy_contract_proposal_draft(&wrong_operator)
+            .expect_err("another deploy proposal operator must reject before transport");
+        assert!(error.to_string().contains("operator"));
         let mut invalid_target = request.clone();
         invalid_target.contract_alias = Some(
             iroha_data_model::smart_contract::ContractAlias::from_components(

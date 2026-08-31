@@ -2371,6 +2371,24 @@ impl StateTelemetry {
             status_counts[status_index] = status_counts[status_index].saturating_add(1);
             stage_counts[stage_index] = stage_counts[stage_index].saturating_add(1);
         }
+        self.set_parliament_attempt_counts(status_counts, stage_counts);
+    }
+
+    /// Replace Parliament attempt gauges from the exact derived-state counters.
+    ///
+    /// Status order is Active, Certified, Rejected, Enacted, Superseded,
+    /// ExecutionFailed. Stage order follows the closed `GovernanceStageV1`
+    /// lifecycle from Qualification through Enactment.
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn set_parliament_attempt_counts(
+        &self,
+        status_counts: [u64; 6],
+        stage_counts: [u64; 13],
+    ) {
+        use iroha_data_model::governance::types::{
+            GovernanceAttemptStatusV1 as Status, GovernanceStageV1 as Stage,
+        };
+
         if !self.is_enabled() {
             return;
         }
@@ -10198,6 +10216,32 @@ mod tests {
             metrics
                 .governance_parliament_attempts_by_stage
                 .with_label_values(&["policy_jury"])
+                .get(),
+            1
+        );
+
+        telemetry.set_parliament_attempt_counts(
+            [3, 2, 1, 0, 4, 5],
+            [13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_status
+                .with_label_values(&["execution_failed"])
+                .get(),
+            5
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_stage
+                .with_label_values(&["qualification"])
+                .get(),
+            13
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_stage
+                .with_label_values(&["enactment"])
                 .get(),
             1
         );

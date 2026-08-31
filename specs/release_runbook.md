@@ -117,8 +117,8 @@ runtime. V1 fixes `signing_provider=authenticated_external_signer` and
 `signing_backend=software`; a verified release reports
 `signer_qualification=software-key-qualified`. Never place private keys, PINs,
 bearer tokens, or forwarded authentication headers in repository files,
-command arguments, or release artifacts. A future HSM adapter requires new
-HSM-backed evidence and does not change this release's qualification.
+command arguments, or release artifacts. Iroha exposes no hardware-specific
+signer mode; the authenticated process boundary remains provider-neutral.
 
 The output is created at `artifacts/releases/<X.Y.Z>/` unless another output
 root is supplied. Review at least:

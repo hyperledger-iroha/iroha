@@ -1087,6 +1087,7 @@ fn gov_propose_deploy_against_mock() {
             .parse()
             .expect("contract address");
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: parse_account_literal(alice_account_literal()),
         contract_address: contract_address.clone(),
         code_hash: ContractCodeHash::new(code_hash_bytes),
         abi_hash: ContractAbiHash::new(abi_hash_bytes),

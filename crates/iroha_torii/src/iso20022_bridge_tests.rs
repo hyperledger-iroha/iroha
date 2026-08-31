@@ -8731,6 +8731,39 @@ fn queued_lifecycle_rejection_keeps_transaction_identity_and_blocks_retry() {
     assert_eq!(settled.pacs002_code(), "ACSC");
 }
 #[test]
+fn candidate_execution_events_do_not_terminalize_queued_iso_payment() {
+    let runtime = sample_runtime();
+    let message_id = "candidate-execution-is-not-final";
+    let hash_text = "11".repeat(32);
+    let hash = crate::parse_signed_transaction_hash(&hash_text).expect("canonical hash");
+    assert!(runtime.check_and_record_inbound(message_id, inbound_metadata(message_id, "pacs.008")));
+    runtime.mark_accepted(message_id, &hash_text);
+
+    let approved = iroha_data_model::events::pipeline::TransactionEvent {
+        hash,
+        block_height: std::num::NonZeroU64::new(7),
+        lane_id: LaneId::new(1),
+        dataspace_id: DataSpaceId::new(1),
+        status: iroha_data_model::events::pipeline::TransactionStatus::Approved,
+    };
+    crate::process_iso_bridge_transaction_event(&runtime, &approved)
+        .expect("candidate approval is only a hint");
+    assert!(runtime.has_queued_transaction_hash(&hash_text));
+
+    let rejected = iroha_data_model::events::pipeline::TransactionEvent {
+        status: iroha_data_model::events::pipeline::TransactionStatus::Rejected(Box::new(
+            TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+        )),
+        ..approved
+    };
+    crate::process_iso_bridge_transaction_event(&runtime, &rejected)
+        .expect("candidate rejection is only a hint");
+    assert!(runtime.has_queued_transaction_hash(&hash_text));
+    let status = runtime.message_status(message_id).expect("status");
+    assert_eq!(status.status_label(), "Accepted");
+    assert!(status.settled_at().is_none());
+}
+#[test]
 fn pacs004_return_requires_settlement_and_preserves_original_transaction() {
     let runtime = sample_runtime();
     let original_id = "settled-payment-return";
@@ -8962,6 +8995,84 @@ fn transaction_hash_binding_fails_closed_when_durable_store_is_unwritable() {
     assert_eq!(status.transaction_hash(), None);
     assert!(!runtime.tx_hash_index.contains_key("tx-must-not-dispatch"));
 }
+#[test]
+fn status_transition_is_not_published_when_candidate_persistence_fails() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    assert!(runtime.check_and_record_message("atomic-status"));
+    let messages_dir = store.path().join("messages");
+    let backup_dir = store.path().join("messages-backup");
+    fs::rename(&messages_dir, &backup_dir).expect("move valid message store aside");
+    fs::write(&messages_dir, b"block candidate persistence").expect("write directory blocker");
+
+    let returned = runtime.mark_accepted("atomic-status", "tx-must-not-publish");
+    assert_eq!(returned.status_label(), "Pending");
+    let retained = runtime
+        .message_status("atomic-status")
+        .expect("original pending record retained");
+    assert_eq!(retained.status_label(), "Pending");
+    assert_eq!(retained.transaction_hash(), None);
+    assert!(!runtime.tx_hash_index.contains_key("tx-must-not-publish"));
+    let lifecycle_error = runtime
+        .try_transition_existing("atomic-status", |record| {
+            record.detail = Some("must not publish".to_owned());
+        })
+        .expect_err("lifecycle candidate persistence must fail");
+    assert_eq!(lifecycle_error, IsoStatusHistoryLimitError::Persistence);
+    assert_eq!(
+        runtime
+            .message_status("atomic-status")
+            .expect("original record still retained")
+            .detail(),
+        None
+    );
+
+    fs::remove_file(&messages_dir).expect("remove directory blocker");
+    fs::rename(&backup_dir, &messages_dir).expect("restore valid message store");
+    let persisted = fs::read_to_string(messages_dir.join(message_filename("atomic-status")))
+        .expect("read original persisted record");
+    let value = norito::json::from_json::<JsonValue>(&persisted).expect("parse persisted record");
+    let (_, record) = persisted_record_from_value(&value).expect("valid persisted record");
+    assert_eq!(record.state, IsoMessageState::Pending);
+    assert_eq!(record.transaction_hash, None);
+}
+#[test]
+fn context_update_preserves_previous_record_when_candidate_exceeds_byte_cap() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    assert!(runtime.check_and_record_message("oversized-candidate"));
+    let path = store
+        .path()
+        .join("messages")
+        .join(message_filename("oversized-candidate"));
+    let before = fs::read(&path).expect("read original record");
+    let oversized = "x".repeat(
+        usize::try_from(ISO_PERSISTED_RECORD_MAX_BYTES).expect("record cap fits usize") + 1,
+    );
+    assert!(!runtime.update_message_context(
+        "oversized-candidate",
+        IsoMessageContext {
+            settlement_amount: Some(oversized),
+            ..IsoMessageContext::default()
+        },
+    ));
+    assert_eq!(
+        runtime
+            .message_status("oversized-candidate")
+            .expect("original record retained")
+            .settlement_amount(),
+        None
+    );
+    assert_eq!(fs::read(path).expect("read retained record"), before);
+}
 fn read_audit_index(store: &TempDir) -> JsonValue {
     let index_path = store
         .path()
@@ -9063,6 +9174,287 @@ fn persisted_record_reader_enforces_the_open_file_byte_limit() {
         .write_all(&vec![b'a'; cap + 1])
         .expect("write oversized record");
     assert!(read_persisted_record_bounded(excessive.path()).is_none());
+}
+#[test]
+fn persisted_record_reader_rejects_a_replaced_path_identity() {
+    let directory = TempDir::new().expect("tempdir");
+    let path = directory.path().join("record.json");
+    let displaced = directory.path().join("record.displaced.json");
+    fs::write(&path, b"same-length").expect("write original record");
+    let expected = fs::symlink_metadata(&path).expect("inspect original record");
+    fs::rename(&path, &displaced).expect("displace original record");
+    fs::write(&path, b"same-length").expect("write replacement record");
+
+    assert!(
+        read_persisted_json_bounded_with_metadata(
+            &path,
+            &expected,
+            ISO_PERSISTED_RECORD_MAX_BYTES,
+        )
+        .is_none(),
+        "a same-sized replacement must not satisfy the enumerated identity"
+    );
+}
+#[test]
+fn startup_scan_budget_bounds_entry_work_and_aggregate_bytes() {
+    let mut entry_budget = IsoStartupScanBudget {
+        entries: 0,
+        bytes: 0,
+        max_entries: 1,
+        max_bytes: 16,
+    };
+    entry_budget
+        .charge_entry(Path::new("first.json"), 1)
+        .expect("first entry fits");
+    let entry_error = entry_budget
+        .charge_entry(Path::new("second.json"), 1)
+        .expect_err("second entry exceeds work bound");
+    assert!(entry_error.to_string().contains("startup work limit"));
+
+    let mut byte_budget = IsoStartupScanBudget {
+        entries: 0,
+        bytes: 0,
+        max_entries: 2,
+        max_bytes: 3,
+    };
+    byte_budget
+        .charge_entry(Path::new("first.json"), 2)
+        .expect("first entry fits");
+    let byte_error = byte_budget
+        .charge_entry(Path::new("second.json"), 2)
+        .expect_err("aggregate bytes exceed bound");
+    assert!(
+        byte_error
+            .to_string()
+            .contains("aggregate startup byte limit")
+    );
+}
+#[test]
+fn startup_removes_exact_bounded_writer_crash_temps() {
+    for directory in ["messages", ISO_PERSISTED_REPLAY_TOMBSTONE_DIR] {
+        let store = TempDir::new().expect("tempdir");
+        let owned_dir = store.path().join(directory);
+        fs::create_dir_all(&owned_dir).expect("create owned store directory");
+        let target = message_filename("crashed-writer");
+        let temp_path = owned_dir.join(iso_record_temp_filename(&target, 42, 7));
+        fs::write(&temp_path, [0xff, 0xfe, 0xfd]).expect("write partial crash temp");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+
+        Iso20022BridgeRuntime::from_config(&config)
+            .expect("an exact writer temp is recoverable")
+            .expect("bridge remains enabled");
+
+        assert!(
+            !temp_path.exists(),
+            "startup must durably remove a recognized crash temp in {directory}"
+        );
+    }
+}
+#[test]
+fn startup_writer_temp_cleanup_is_budgeted_before_unlink() {
+    for (max_entries, max_bytes, expected) in [
+        (0, ISO_PERSISTED_RECORD_MAX_BYTES, "startup work limit"),
+        (1, 0, "aggregate startup byte limit"),
+    ] {
+        let store = TempDir::new().expect("tempdir");
+        let owned_dir = store.path().join("messages");
+        fs::create_dir_all(&owned_dir).expect("create messages directory");
+        let target = message_filename("budgeted-crash-temp");
+        let temp_path = owned_dir.join(iso_record_temp_filename(&target, 42, 7));
+        fs::write(&temp_path, b"x").expect("write crash temp");
+        let entry = fs::read_dir(&owned_dir)
+            .expect("enumerate crash temp")
+            .next()
+            .expect("crash temp entry")
+            .expect("read crash temp entry");
+        let mut directory_entries = 0;
+        let mut budget = IsoStartupScanBudget {
+            entries: 0,
+            bytes: 0,
+            max_entries,
+            max_bytes,
+        };
+
+        let error =
+            read_startup_record_entry(entry, &mut directory_entries, &mut budget, "message")
+                .expect_err("a crash temp cannot bypass startup bounds");
+
+        assert!(error.to_string().contains(expected), "{error:?}");
+        assert_eq!(directory_entries, 1);
+        assert_eq!(budget.entries, 1);
+        assert!(
+            temp_path.exists(),
+            "startup must not unlink work it refused to account"
+        );
+    }
+}
+#[test]
+fn durable_store_usage_enforces_runtime_count_and_byte_limits() {
+    let mut usage = IsoDurableStoreUsage {
+        message_bytes: std::collections::HashMap::new(),
+        tombstone_bytes: std::collections::HashMap::new(),
+        bytes: 0,
+        max_directory_entries: 1,
+        max_entries: 2,
+        max_bytes: 10,
+    };
+    usage
+        .record_existing(IsoDurableRecordKind::Message, "first", 6)
+        .expect("first message fits");
+    assert_eq!(
+        usage.record_existing(IsoDurableRecordKind::Message, "second", 1),
+        Err(IsoDurableStoreUsageError::DirectoryEntries)
+    );
+    assert_eq!(
+        usage.record_existing(IsoDurableRecordKind::ReplayTombstone, "first", 5),
+        Err(IsoDurableStoreUsageError::AggregateBytes)
+    );
+    assert_eq!(usage.bytes, 6, "rejected reservations do not mutate usage");
+    usage
+        .record_replacement(IsoDurableRecordKind::Message, "first", 4)
+        .expect("smaller replacement releases bytes");
+    usage
+        .record_existing(IsoDurableRecordKind::ReplayTombstone, "first", 5)
+        .expect("tombstone fits after replacement");
+    assert_eq!(usage.bytes, 9);
+    usage
+        .remove(IsoDurableRecordKind::Message, "first")
+        .expect("removal updates usage");
+    assert_eq!(usage.bytes, 5);
+}
+#[test]
+fn runtime_refuses_writes_beyond_the_restart_byte_budget() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    runtime.durable_store_usage.lock().max_bytes = 1;
+
+    assert!(!runtime.check_and_record_message("runtime-byte-budget"));
+    assert!(!runtime.records.contains_key("runtime-byte-budget"));
+    assert!(
+        !runtime
+            .replay_tombstones
+            .contains_key("runtime-byte-budget")
+    );
+    let usage = runtime.durable_store_usage.lock();
+    assert_eq!(usage.bytes, 0);
+    assert!(usage.message_bytes.is_empty());
+    assert!(usage.tombstone_bytes.is_empty());
+}
+#[test]
+fn startup_rejects_unexpected_entries_in_owned_record_directories() {
+    for directory in ["messages", ISO_PERSISTED_REPLAY_TOMBSTONE_DIR] {
+        let target = message_filename("writer-temp-lookalike");
+        for unexpected_name in [
+            "unexpected.tmp".to_owned(),
+            format!(".{target}.01.0.tmp"),
+            format!(".{target}.1.00.tmp"),
+            format!(".{target}.1.0.tmp.extra"),
+        ] {
+            let store = TempDir::new().expect("tempdir");
+            let owned_dir = store.path().join(directory);
+            fs::create_dir_all(&owned_dir).expect("create owned store directory");
+            fs::write(
+                owned_dir.join(&unexpected_name),
+                b"ignored work is forbidden",
+            )
+            .expect("write unexpected entry");
+            let mut config = sample_config();
+            config.store_dir = Some(store.path().to_path_buf());
+            let error = runtime_config_error(&config, "unexpected entries must stop startup");
+            assert!(
+                error.to_string().contains("contains unexpected entry"),
+                "unexpected hard-cut error for {directory}/{unexpected_name}: {error:?}"
+            );
+        }
+    }
+}
+#[cfg(unix)]
+#[test]
+fn startup_rejects_symlinked_writer_temps_without_touching_the_target() {
+    for directory in ["messages", ISO_PERSISTED_REPLAY_TOMBSTONE_DIR] {
+        let store = TempDir::new().expect("tempdir");
+        let owned_dir = store.path().join(directory);
+        fs::create_dir_all(&owned_dir).expect("create owned store directory");
+        let target_path = store.path().join("outside-writer-temp-target");
+        fs::write(&target_path, b"must survive").expect("write symlink target");
+        let target = message_filename("symlinked-writer-temp");
+        let temp_path = owned_dir.join(iso_record_temp_filename(&target, 42, 7));
+        std::os::unix::fs::symlink(&target_path, &temp_path).expect("symlink writer temp");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+
+        let error = runtime_config_error(&config, "writer temp symlinks must stop startup");
+
+        assert!(
+            error.to_string().contains("not a direct regular file"),
+            "unexpected hard-cut error for {directory}: {error:?}"
+        );
+        assert_eq!(
+            fs::read(&target_path).expect("read retained symlink target"),
+            b"must survive"
+        );
+    }
+}
+#[test]
+fn durable_unlink_keeps_accounting_when_directory_sync_fails() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    let message_id = "directory-sync-failure";
+    assert!(runtime.check_and_record_message(message_id));
+    let messages_dir = store.path().join("messages");
+    let path = messages_dir.join(message_filename(message_id));
+    let before_bytes = runtime.durable_store_usage.lock().bytes;
+    let sync_called = std::cell::Cell::new(false);
+
+    assert!(!runtime.remove_durable_identity_file_with_directory_sync(
+        IsoDurableRecordKind::Message,
+        message_id,
+        &path,
+        |parent| {
+            sync_called.set(true);
+            assert_eq!(parent, messages_dir.as_path());
+            Err(std::io::Error::other("injected directory sync failure"))
+        },
+    ));
+
+    assert!(sync_called.get());
+    assert!(!path.exists(), "unlink itself succeeded");
+    assert!(
+        runtime.records.contains_key(message_id),
+        "the in-memory identity remains authoritative while durability is uncertain"
+    );
+    {
+        let usage = runtime.durable_store_usage.lock();
+        assert_eq!(usage.bytes, before_bytes);
+        assert!(usage.message_bytes.contains_key(message_id));
+    }
+    let retry_sync_called = std::cell::Cell::new(false);
+    assert!(runtime.remove_durable_identity_file_with_directory_sync(
+        IsoDurableRecordKind::Message,
+        message_id,
+        &path,
+        |parent| {
+            retry_sync_called.set(true);
+            assert_eq!(parent, messages_dir.as_path());
+            Ok(())
+        },
+    ));
+    assert!(
+        retry_sync_called.get(),
+        "an already absent name still requires a durable directory sync"
+    );
+    let usage = runtime.durable_store_usage.lock();
+    assert!(!usage.message_bytes.contains_key(message_id));
+    assert!(usage.bytes < before_bytes);
 }
 #[test]
 fn runtime_rejects_unbounded_or_excessive_store_counts() {
@@ -9324,7 +9716,7 @@ fn durable_store_never_evicts_an_unexpired_identity_for_capacity() {
     runtime.mark_accepted("compact-old", "tx-compact-old");
     runtime.mark_settled("compact-old", SystemTime::now());
     std::thread::sleep(Duration::from_millis(1));
-    assert!(!runtime.check_and_record_inbound(
+    assert!(runtime.check_and_record_inbound(
         "compact-new",
         IsoMessageMetadata::inbound(
             "generic-iso20022",
@@ -9571,6 +9963,53 @@ fn durable_store_exports_external_audit_notary_spool() {
     assert!(!audit_export_anchor_digest_matches(
         tampered.as_object().expect("tampered anchor")
     ));
+}
+#[tokio::test]
+async fn external_audit_write_failure_marks_runtime_unhealthy_and_retries() {
+    let store = TempDir::new().expect("store tempdir");
+    let export = TempDir::new().expect("export tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.audit_export_dir = Some(export.path().to_path_buf());
+    let runtime = Arc::new(
+        Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled"),
+    );
+    let latest_anchor = export.path().join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE);
+    fs::remove_file(&latest_anchor).expect("remove initial latest anchor");
+    fs::create_dir(&latest_anchor).expect("block latest anchor replacement");
+
+    assert!(runtime.check_and_record_inbound(
+        "external-audit-failure",
+        IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("external-audit-failure-biz".to_owned()),
+            None,
+            "external-audit-failure-hash".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        ),
+    ));
+    assert!(!runtime.audit_persistence_is_healthy());
+
+    let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
+    let worker = runtime.start_audit_persistence_worker(shutdown.clone());
+    fs::remove_dir(&latest_anchor).expect("repair latest anchor path");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !runtime.audit_persistence_is_healthy() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("audit retry should recover");
+    shutdown.send();
+    assert_eq!(
+        worker.await.expect("audit worker joins"),
+        crate::ToriiCriticalWorkerExit::StoppedByShutdown
+    );
 }
 #[test]
 fn durable_store_exports_audit_index_matching_persisted_manifest() {
@@ -10145,22 +10584,14 @@ fn durable_store_refuses_symlinked_external_export_dirs() {
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
     config.audit_export_dir = Some(export_link);
-    let runtime = Iso20022BridgeRuntime::from_config(&config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(runtime.check_and_record_inbound(
-        "symlinked-export-root",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("symlinked-export-root-biz".to_owned()),
-            None,
-            "symlinked-export-root-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
+    let error = runtime_config_error(
+        &config,
+        "symlinked ISO audit export roots must stop startup",
+    );
+    assert!(
+        error.to_string().contains("audit persistence targets"),
+        "unexpected hard-cut error: {error:?}"
+    );
     assert!(
         !export_target
             .path()
@@ -10185,36 +10616,28 @@ fn durable_store_refuses_symlinked_external_export_dirs() {
     let mut anchor_config = sample_config();
     anchor_config.store_dir = Some(store.path().to_path_buf());
     anchor_config.audit_export_dir = Some(export.path().to_path_buf());
-    let anchor_runtime = Iso20022BridgeRuntime::from_config(&anchor_config)
-        .expect("cfg")
-        .expect("enabled");
-    assert!(anchor_runtime.check_and_record_inbound(
-        "symlinked-anchor-dir",
-        IsoMessageMetadata::inbound(
-            "generic-iso20022",
-            "pacs.008",
-            None,
-            Some("symlinked-anchor-dir-biz".to_owned()),
-            None,
-            "symlinked-anchor-dir-hash".to_owned(),
-            "snapshot".to_owned(),
-            false,
-        ),
-    ));
-    let external = read_external_audit_index(&export);
-    let index_digest = audit_index_digest(&external).expect("index digest");
+    let error = runtime_config_error(
+        &anchor_config,
+        "symlinked ISO audit anchor directories must stop startup",
+    );
     assert!(
-        export
+        error.to_string().contains("audit persistence targets"),
+        "unexpected hard-cut error: {error:?}"
+    );
+    assert!(
+        !export
             .path()
             .join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE)
             .exists(),
-        "latest anchor should still be written to the real export root"
+        "latest anchor must not advance when the immutable anchor cannot be written"
     );
     assert!(
-        !anchor_target
+        anchor_target
             .path()
-            .join(format!("{index_digest}.notary.json"))
-            .exists(),
+            .read_dir()
+            .expect("anchor target directory")
+            .next()
+            .is_none(),
         "digest-addressed anchors must not follow a symlinked anchors directory"
     );
 }

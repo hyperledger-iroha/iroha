@@ -45,7 +45,10 @@ use super::{
     },
     v2_beacon::V2GlobalBeaconLifecycle,
     v2_block_sync::{
-        CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
+        CommitCertificateAdmissionError, HistoricalBodyServeAdmission,
+        HistoricalBodyServeCompletion, HistoricalBodyServeLimits, HistoricalBodyServeTask,
+        PreparedHistoricalBodyPostOutcome, V2BlockSyncDiscovery, V2BlockSyncError,
+        V2BlockSyncServer,
     },
     v2_body_store::{BlockSignaturePolicy, V2BodyStore, V2BodyStoreCapacity},
     v2_candidate::{
@@ -1026,7 +1029,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             .transpose()?;
         let pending_successor_activation = recovered_successor_activation
             .map(|authority| {
-                PendingSuccessorActivation::recovered(authority, &common_config.key_pair)
+                PendingSuccessorActivation::recovered(
+                    authority,
+                    kura.as_ref(),
+                    &common_config.key_pair,
+                )
             })
             .transpose()?;
         if let Some(activation) = pending_successor_activation.as_ref() {
@@ -1849,6 +1856,55 @@ fn finalize_bound_block_sync_serve(
         }
         Err(error) => Err(error.into()),
     }
+}
+fn settle_historical_body_serve_completion(
+    receiver: &FairV2Ingress,
+    block_sync_server: &mut V2BlockSyncServer,
+    services: &ProductionV2Services,
+    output_guard: &ConsensusOutputGuard,
+) -> Result<bool, V2RunnerError> {
+    let Some(completion) = block_sync_server.try_recv_historical_body_completion()? else {
+        return Ok(false);
+    };
+    match completion {
+        HistoricalBodyServeCompletion::Prepared(prepared) => {
+            let operation = output_guard
+                .begin_fail_stop_operation()
+                .ok_or(V2RunnerError::RestartRequired)?;
+            let posted = services
+                .post_prepared_historical_body_response_on_reply_routes_with_permit(
+                    prepared,
+                    operation.permit(),
+                );
+            match posted {
+                Ok(PreparedHistoricalBodyPostOutcome::Posted) => {}
+                Ok(PreparedHistoricalBodyPostOutcome::SourceRetained(prepared)) => {
+                    if let Err(error) =
+                        block_sync_server.defer_prepared_historical_body_output(prepared)
+                    {
+                        drop(operation);
+                        return Err(error.into());
+                    }
+                }
+                Err(error) => {
+                    drop(operation);
+                    return Err(V2BlockSyncError::ResponsePost(error).into());
+                }
+            }
+            operation.complete();
+        }
+        HistoricalBodyServeCompletion::NoResponse(task) => {
+            mark_leader_wire_volatile(receiver, task.ingress_ownership())?;
+        }
+        HistoricalBodyServeCompletion::Failed(task, error)
+            if is_remote_block_sync_rejection(&error) =>
+        {
+            mark_leader_wire_volatile(receiver, task.ingress_ownership())?;
+            iroha_logger::debug!(%error, "rejected historical certified body request");
+        }
+        HistoricalBodyServeCompletion::Failed(_task, error) => return Err(error.into()),
+    }
+    Ok(true)
 }
 fn enqueue_control(
     executor: &mut V2EffectExecutor,

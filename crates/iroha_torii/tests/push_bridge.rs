@@ -84,8 +84,11 @@ fn build_torii(
         state,
         da_receipt_signer,
         OnlinePeersProvider::new(peers_rx),
-    );
-    let router = torii.api_router_for_tests();
+    )
+    .expect("valid Torii push fixture");
+    let router = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
     (torii, router, data_dir)
 }
 fn register_device_request(

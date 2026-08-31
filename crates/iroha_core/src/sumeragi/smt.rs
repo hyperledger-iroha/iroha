@@ -19,7 +19,14 @@
 //! This is a minimal, internal component. It does not attempt optimizations and
 //! runs in O((R+W) * 256). Avoid using in hot paths beyond prototyping.
 use iroha_crypto::Hash;
-use iroha_data_model::block::consensus_v2 as wire;
+use iroha_data_model::{
+    block::consensus_v2 as wire,
+    offline::{
+        KAGEMUSHA_TOPUP_ANCHOR_WITNESS_KEY_TAG_V2, KagemushaTopUpAnchorMerkleProofV2,
+        kagemusha_topup_anchor_empty_hash_v2, kagemusha_topup_anchor_leaf_hash_v2,
+        kagemusha_topup_anchor_node_hash_v2, kagemusha_topup_anchor_root_from_merkle_proof_v2,
+    },
+};
 use std::collections::{BTreeMap, BTreeSet};
 /// A (key, value) pair for SMT inputs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,7 +37,8 @@ pub struct KvPair {
     pub value: Vec<u8>,
 }
 /// Dedicated execution-witness key tag for a finalized Kagemusha V2 top-up.
-pub(crate) const KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG: u8 = 0xD2;
+pub(crate) const KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG: u8 =
+    KAGEMUSHA_TOPUP_ANCHOR_WITNESS_KEY_TAG_V2;
 /// Execution-witness key tag for one Kagemusha V4 anchor drawdown balance.
 ///
 /// Unlike the anchor tag, this is an ordinary state write. It must not enter
@@ -46,8 +54,6 @@ pub(crate) const KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_BYTES: usize = 33;
 /// envelope's derived 9,211-byte payload sub-cap even at branch depth 64.
 pub(crate) const KAGEMUSHA_V2_MAX_TOPUP_ANCHORS_PER_BLOCK: usize =
     wire::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK as usize;
-const KAGEMUSHA_V2_TOPUP_NODE_DOMAIN: &[u8] = b"iroha:kagemusha:v2:topup-node";
-const KAGEMUSHA_V2_TOPUP_EMPTY_DOMAIN: &[u8] = b"iroha:kagemusha:v2:topup-empty";
 /// Canonical balanced-Merkle path for one block-local Kagemusha top-up leaf.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaTopUpMerkleProof {
@@ -148,13 +154,21 @@ pub fn compute_post_state_root(reads: &[KvPair], writes: &[KvPair]) -> Hash {
 ///
 /// # Errors
 ///
-/// A tagged key with the wrong shape, a zero operation id/digest, or more than
-/// [`KAGEMUSHA_V2_MAX_TOPUP_ANCHORS_PER_BLOCK`] anchors fails closed.
+/// A tagged key with the wrong shape, a zero operation id/digest, a duplicate
+/// top-up operation id, or more than [`KAGEMUSHA_V2_MAX_TOPUP_ANCHORS_PER_BLOCK`]
+/// anchors fails closed. Ordinary state keys retain last-write-wins semantics.
 pub fn build_kagemusha_topup_block_commitment(
     writes: &[KvPair],
 ) -> Result<Option<KagemushaTopUpBlockCommitment>, &'static str> {
     let mut canonical = BTreeMap::<Vec<u8>, Vec<u8>>::new();
+    let mut topup_operation_ids = BTreeSet::<Vec<u8>>::new();
     for pair in writes {
+        if pair.key.first() == Some(&KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG) {
+            validate_kagemusha_topup_leaf(pair)?;
+            if !topup_operation_ids.insert(pair.key[1..].to_vec()) {
+                return Err("Kagemusha V2 top-up operation id is duplicated");
+            }
+        }
         canonical.insert(pair.key.clone(), pair.value.clone());
     }
     let mut ordinary_writes = Vec::new();
@@ -180,15 +194,18 @@ pub fn build_kagemusha_topup_block_commitment(
     let depth = usize::try_from(width.trailing_zeros())
         .map_err(|_| "Kagemusha V2 top-up tree depth does not fit usize")?;
     let mut levels = Vec::with_capacity(depth.saturating_add(1));
-    let mut current = leaves.iter().map(leaf_hash).collect::<Vec<_>>();
-    current.resize(width, kagemusha_topup_empty_hash());
+    let mut current = leaves
+        .iter()
+        .map(kagemusha_topup_leaf_hash)
+        .collect::<Result<Vec<_>, _>>()?;
+    current.resize(width, kagemusha_topup_anchor_empty_hash_v2());
     levels.push(current.clone());
     for level in 0..depth {
         let level =
             u16::try_from(level).map_err(|_| "Kagemusha V2 top-up tree level does not fit u16")?;
         current = current
             .chunks_exact(2)
-            .map(|pair| kagemusha_topup_node_hash(level, pair[0], pair[1]))
+            .map(|pair| kagemusha_topup_anchor_node_hash_v2(level, pair[0], pair[1]))
             .collect();
         levels.push(current.clone());
     }
@@ -264,22 +281,22 @@ pub fn verify_kagemusha_topup_write_inclusion(
     if proof.siblings.len() != expected_depth {
         return false;
     }
-    let mut current = leaf_hash(target);
-    let mut index = match usize::try_from(proof.leaf_index) {
-        Ok(index) => index,
-        Err(_) => return false,
+    let Ok(operation_id) = target.key[1..].try_into() else {
+        return false;
     };
-    for (level, sibling) in proof.siblings.iter().copied().enumerate() {
-        let Ok(level) = u16::try_from(level) else {
-            return false;
-        };
-        current = if index & 1 == 0 {
-            kagemusha_topup_node_hash(level, current, sibling)
-        } else {
-            kagemusha_topup_node_hash(level, sibling, current)
-        };
-        index /= 2;
-    }
+    let Ok(anchor_digest) = target.value.as_slice().try_into() else {
+        return false;
+    };
+    let path = KagemushaTopUpAnchorMerkleProofV2 {
+        leaf_index: proof.leaf_index,
+        leaf_count: proof.leaf_count,
+        siblings: proof.siblings.iter().copied().map(Into::into).collect(),
+    };
+    let Some(current) =
+        kagemusha_topup_anchor_root_from_merkle_proof_v2(operation_id, anchor_digest, &path)
+    else {
+        return false;
+    };
     wire::ExecutionCommitment::topup_post_state_root(
         proof.leaf_count,
         ordinary_writes_root,
@@ -300,19 +317,18 @@ fn validate_kagemusha_topup_leaf(pair: &KvPair) -> Result<(), &'static str> {
     }
     Ok(())
 }
-fn kagemusha_topup_empty_hash() -> Hash {
-    Hash::new(KAGEMUSHA_V2_TOPUP_EMPTY_DOMAIN)
-}
-fn kagemusha_topup_node_hash(level: u16, left: Hash, right: Hash) -> Hash {
-    let mut preimage = Vec::with_capacity(
-        KAGEMUSHA_V2_TOPUP_NODE_DOMAIN.len() + 1 + core::mem::size_of::<u16>() + 2 * Hash::LENGTH,
-    );
-    preimage.extend_from_slice(KAGEMUSHA_V2_TOPUP_NODE_DOMAIN);
-    preimage.push(0);
-    preimage.extend_from_slice(&level.to_le_bytes());
-    preimage.extend_from_slice(left.as_ref());
-    preimage.extend_from_slice(right.as_ref());
-    Hash::new(preimage)
+fn kagemusha_topup_leaf_hash(pair: &KvPair) -> Result<Hash, &'static str> {
+    validate_kagemusha_topup_leaf(pair)?;
+    let operation_id = pair.key[1..]
+        .try_into()
+        .map_err(|_| "Kagemusha V2 top-up operation id has the wrong shape")?;
+    let anchor_digest = pair
+        .value
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Kagemusha V2 top-up anchor digest has the wrong shape")?;
+    kagemusha_topup_anchor_leaf_hash_v2(operation_id, anchor_digest)
+        .ok_or("Kagemusha V2 top-up leaf contains a zero identity")
 }
 fn hash_bytes(b: &[u8]) -> [u8; 32] {
     let h = Hash::new(b);
@@ -725,19 +741,25 @@ mod tests {
         assert!(compute_consensus_post_state_root(&[], &oversized).is_err());
     }
     #[test]
-    fn kagemusha_duplicate_operation_uses_only_the_final_digest() {
+    fn kagemusha_duplicate_operation_is_rejected_before_last_write_wins() {
         let stale = topup_leaf(7, 0xA1);
         let final_leaf = topup_leaf(7, 0xA2);
-        let commitment = build_kagemusha_topup_block_commitment(&[stale, final_leaf.clone()])
-            .expect("last-write-wins block")
-            .expect("top-up commitment");
-        assert_eq!(commitment.leaves, vec![final_leaf.clone()]);
-        assert!(verify_kagemusha_topup_write_inclusion(
-            &final_leaf,
-            &commitment.proofs[0],
-            commitment.ordinary_writes_root,
-            commitment.post_state_root,
-        ));
+        let writes = [stale, final_leaf];
+        assert_eq!(
+            build_kagemusha_topup_block_commitment(&writes),
+            Err("Kagemusha V2 top-up operation id is duplicated")
+        );
+        assert_eq!(
+            compute_consensus_post_state_root(&[], &writes),
+            Err("Kagemusha V2 top-up operation id is duplicated")
+        );
+
+        let ordinary = [kv("balance", "stale"), kv("balance", "final")];
+        assert_eq!(
+            compute_post_state_root(&[], &ordinary),
+            compute_post_state_root(&[], &[ordinary[1].clone()]),
+            "ordinary state writes must retain last-write-wins semantics",
+        );
     }
     #[test]
     fn mask_tail_bits_handles_byte_boundaries_without_fallible_invariants() {

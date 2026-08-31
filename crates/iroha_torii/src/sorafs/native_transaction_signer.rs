@@ -172,7 +172,7 @@ pub enum SorafsNativeTransactionSignerBindingErrorV1 {
 /// Payload-free failure while probing an external signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SorafsNativeTransactionSignerProbeErrorV1 {
-    /// The provider or its backing HSM/KMS is temporarily unavailable.
+    /// The configured signing provider is temporarily unavailable.
     Unavailable,
     /// The provider refused or could not answer the public probe.
     Refused,
@@ -208,8 +208,9 @@ pub trait SorafsNativeTransactionSignerProviderV1: Send + Sync {
 }
 /// Runtime-only signer used by the durable SoraFS proof-outcome forwarder.
 ///
-/// Implementations may delegate to PKCS#11/HSM infrastructure. The signer is intentionally given
-/// only a fully constructed payload and no transaction queue capability, which makes an interrupted
+/// Implementations use qualified deployment-owned signing infrastructure. The signer is
+/// intentionally given only a fully constructed payload and no transaction queue capability,
+/// which makes an interrupted
 /// signing claim safe to replay. Before claiming an outbox entry, the worker checks finalized state
 /// for the exact provider-scoped `CanRecordSorafsProofOutcome` permission on
 /// [`SorafsNativeTransactionSignerProviderV1::authority`], including permissions inherited through
@@ -226,7 +227,7 @@ pub trait SoraFsProofOutcomeTransactionSigner:
 /// Payload-free proof-outcome signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsProofOutcomeSigningError {
-    /// The runtime signer or backing HSM is temporarily unavailable.
+    /// The runtime signing provider is temporarily unavailable.
     Unavailable,
     /// The signer refused or could not sign the supplied payload.
     Refused,
@@ -254,7 +255,7 @@ pub trait SoraFsRepairTransactionSigner:
 /// Payload-free native repair transaction signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsRepairTransactionSigningError {
-    /// The runtime signer or backing HSM is temporarily unavailable.
+    /// The runtime signing provider is temporarily unavailable.
     Unavailable,
     /// The signer refused or could not sign the supplied payload.
     Refused,
@@ -283,7 +284,7 @@ pub trait SoraFsReserveTransactionSigner:
 /// Payload-free native reserve/rent transaction signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsReserveTransactionSigningError {
-    /// The runtime signer or backing HSM is temporarily unavailable.
+    /// The runtime signing provider is temporarily unavailable.
     Unavailable,
     /// The signer refused or could not sign the supplied payload.
     Refused,
@@ -311,7 +312,7 @@ pub trait SoraFsOrderbookTransactionSigner:
 /// Payload-free native orderbook transaction signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsOrderbookTransactionSigningError {
-    /// The runtime signer or backing HSM is temporarily unavailable.
+    /// The runtime signing provider is temporarily unavailable.
     Unavailable,
     /// The signer refused or could not sign the supplied payload.
     Refused,

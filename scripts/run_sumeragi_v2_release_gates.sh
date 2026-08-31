@@ -2490,8 +2490,10 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::auxiliary_completion_drain_is_batch_bounded
   sumeragi::v2_worker::tests::actor_backpressure_retains_exact_final_lane_commit_qc_post
   sumeragi::v2_worker::tests::actor_backpressure_retains_complete_merge_share_fanout
-  sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner
-  sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_symlink_replacement
+  sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_has_one_exclusive_store_owner
+  sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_inode_replacement
+  sumeragi::v2_certified_serve_payload_store::tests::production_open_consumes_the_exact_kura_directory_authority
+  sumeragi::v2_certified_serve_payload_store::tests::emergency_fast_payload_store_skips_inventory_and_rejects_retirement
   sumeragi::v2_certified_serve_payload_store::tests::capacity_is_checked_before_a_second_file_is_published
   sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_certified_responder_authority
   sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_durable_body_receipt_and_bytes
@@ -2501,6 +2503,7 @@ required_production_liveness_tests=(
   sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reauthenticates_request_qc_and_typed_negative
   sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reconstructs_and_authenticates_completed_response
   sumeragi::v2_certified_serve_payload_store::tests::reopen_discards_regular_interrupted_file_but_rejects_corruption
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_corrupt_payload_rejects_before_live_apply_ledger_repair
   sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_all_row_retirement_consumes_pending_serve_terminal_update
   sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_survives_completed_serve_body_cleanup_with_live_work
   sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::completed_certified_serve_replay_requires_exact_worker_readback
@@ -2774,7 +2777,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=864
+readonly expected_production_liveness_test_count=867
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1

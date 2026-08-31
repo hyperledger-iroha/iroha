@@ -70,6 +70,7 @@ use iroha_data_model::{
         sccp_ton_groth16_bls12381_proof_profile_commitment_v1 as structural_sccp_ton_groth16_bls12381_proof_profile_commitment_v1,
     },
 };
+#[cfg(test)]
 use norito::to_bytes;
 use sha2::{Digest as _, Sha256};
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -4077,7 +4078,7 @@ pub fn encode_canonical_sccp_ton_groth16_bls12381_proof_request_v1(
     request: &SccpTonGroth16Bls12381ProofRequestV1,
 ) -> Option<Vec<u8>> {
     validate_sccp_ton_groth16_bls12381_request_v1(request)?;
-    let bytes = to_bytes(request).ok()?;
+    let bytes = norito::encode_canonical(request).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Decode exactly one canonical, bounded TON proving request.
@@ -4133,7 +4134,7 @@ pub fn encode_canonical_sccp_ton_groth16_bls12381_proof_result_v1(
     {
         return None;
     }
-    let bytes = to_bytes(result).ok()?;
+    let bytes = norito::encode_canonical(result).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Encode one fully self-canonical TON proof artifact.
@@ -4144,7 +4145,7 @@ pub fn encode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1(
     if !sccp_ton_groth16_bls12381_artifact_is_self_canonical_v1(artifact) {
         return None;
     }
-    let bytes = to_bytes(artifact).ok()?;
+    let bytes = norito::encode_canonical(artifact).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Decode one fully self-canonical TON proof artifact.
@@ -4915,7 +4916,7 @@ where
         return None;
     }
     let decoded = norito::decode_from_bytes::<T>(bytes).ok()?;
-    if to_bytes(&decoded).ok()?.as_slice() != bytes {
+    if norito::encode_canonical(&decoded).ok()?.as_slice() != bytes {
         return None;
     }
     Some(decoded)
@@ -4950,7 +4951,7 @@ pub fn encode_canonical_sccp_groth16_bn254_proof_request_v1(
     if !sccp_groth16_bn254_proof_request_is_self_canonical(request) {
         return None;
     }
-    let bytes = to_bytes(request).ok()?;
+    let bytes = norito::encode_canonical(request).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Decode exactly one canonical, size-bounded Groth16 request.
@@ -4978,7 +4979,7 @@ pub fn encode_canonical_sccp_groth16_bn254_proof_result_v1(
     if !sccp_groth16_bn254_proof_result_is_structurally_valid(result) {
         return None;
     }
-    let bytes = to_bytes(result).ok()?;
+    let bytes = norito::encode_canonical(result).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Decode exactly one canonical, size-bounded minimal Groth16 result.
@@ -5006,7 +5007,7 @@ pub fn encode_canonical_sccp_groth16_bn254_proof_artifact_v1(
     if !sccp_groth16_bn254_proof_artifact_is_self_canonical(artifact) {
         return None;
     }
-    let bytes = to_bytes(artifact).ok()?;
+    let bytes = norito::encode_canonical(artifact).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Decode exactly one canonical, bounded, pairing-verified Groth16 artifact.
@@ -5263,7 +5264,7 @@ pub fn decode_and_parse_canonical_sccp_destination_proof_v1(
     }
     let proof: BridgeSccpDestinationProofV1 = norito::decode_from_bytes(bytes).ok()?;
     if proof.encoded_artifact.len() > SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1
-        || to_bytes(&proof).ok()?.as_slice() != bytes
+        || norito::encode_canonical(&proof).ok()?.as_slice() != bytes
     {
         return None;
     }
@@ -6247,7 +6248,7 @@ where
         return None;
     }
     let artifact = norito::decode_from_bytes(proof_bytes).ok()?;
-    (to_bytes(&artifact).ok()?.as_slice() == proof_bytes).then_some(artifact)
+    (norito::encode_canonical(&artifact).ok()?.as_slice() == proof_bytes).then_some(artifact)
 }
 fn preflight_uncompressed_norito_frame(bytes: &[u8], maximum: usize) -> bool {
     if bytes.is_empty()
@@ -6271,7 +6272,7 @@ pub fn verify_taira_bridge_finality_proof_structure(proof: &TairaBridgeFinalityP
     let Some(commitment_root) = proof.block_header.sccp_commitment_root() else {
         return false;
     };
-    let Ok(block_header_bytes) = to_bytes(&proof.block_header) else {
+    let Ok(block_header_bytes) = norito::encode_canonical(&proof.block_header) else {
         return false;
     };
     if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V2
@@ -7468,6 +7469,51 @@ mod tests {
             decode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1(&artifact_bytes),
             Some(artifact.clone())
         );
+        let result_bytes =
+            encode_canonical_sccp_ton_groth16_bls12381_proof_result_v1(&artifact.result)
+                .expect("canonical TON result bytes");
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let alternate_request =
+                to_bytes(&request).expect("alternate-layout TON request encoding");
+            let alternate_result =
+                to_bytes(&artifact.result).expect("alternate-layout TON result encoding");
+            let alternate_artifact =
+                to_bytes(&artifact).expect("alternate-layout TON artifact encoding");
+            assert_ne!(alternate_request, request_bytes);
+            assert_ne!(alternate_result, result_bytes);
+            assert_ne!(alternate_artifact, artifact_bytes);
+            assert_eq!(
+                encode_canonical_sccp_ton_groth16_bls12381_proof_request_v1(&request),
+                Some(request_bytes.clone())
+            );
+            assert_eq!(
+                encode_canonical_sccp_ton_groth16_bls12381_proof_result_v1(&artifact.result),
+                Some(result_bytes)
+            );
+            assert_eq!(
+                encode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1(&artifact),
+                Some(artifact_bytes.clone())
+            );
+            assert_eq!(
+                decode_canonical_sccp_ton_groth16_bls12381_proof_request_v1(&request_bytes),
+                Some(request.clone())
+            );
+            assert!(
+                decode_canonical_sccp_ton_groth16_bls12381_proof_request_v1(&alternate_request)
+                    .is_none()
+            );
+            assert_eq!(
+                decode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1(&artifact_bytes),
+                Some(artifact.clone())
+            );
+            assert!(
+                decode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1(&alternate_artifact)
+                    .is_none()
+            );
+        }
         let bridge_proof =
             bridge_sccp_ton_destination_proof_v1(&artifact).expect("closed TON bridge proof");
         let finality = trusted_finality(&bundle);
@@ -7849,6 +7895,77 @@ mod tests {
             decode_canonical_sccp_payload_bytes(&material.canonical_payload_bytes),
             Some(material.bundle.payload.clone())
         );
+    }
+    #[test]
+    fn canonical_destination_and_finality_boundaries_ignore_ambient_norito_layout() {
+        let fixture = fixture();
+        let finality = trusted_finality(&fixture.bundle);
+        let canonical_request =
+            encode_canonical_sccp_groth16_bn254_proof_request_v1(&fixture.request)
+                .expect("canonical request encoding");
+        let canonical_result =
+            encode_canonical_sccp_groth16_bn254_proof_result_v1(&fixture.artifact.result)
+                .expect("canonical result encoding");
+        let canonical_artifact =
+            encode_canonical_sccp_groth16_bn254_proof_artifact_v1(&fixture.artifact)
+                .expect("canonical artifact encoding");
+        let canonical_bridge =
+            norito::encode_canonical(&fixture.bridge_proof).expect("canonical bridge encoding");
+        let canonical_finality =
+            norito::encode_canonical(&finality).expect("canonical finality encoding");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let alternate_request = to_bytes(&fixture.request).expect("alternate request encoding");
+        let alternate_result =
+            to_bytes(&fixture.artifact.result).expect("alternate result encoding");
+        let alternate_artifact = to_bytes(&fixture.artifact).expect("alternate artifact encoding");
+        let alternate_bridge = to_bytes(&fixture.bridge_proof).expect("alternate bridge encoding");
+        let alternate_finality = to_bytes(&finality).expect("alternate finality encoding");
+
+        assert_ne!(alternate_request, canonical_request);
+        assert_ne!(alternate_result, canonical_result);
+        assert_ne!(alternate_artifact, canonical_artifact);
+        assert_ne!(alternate_bridge, canonical_bridge);
+        assert_ne!(alternate_finality, canonical_finality);
+        assert_eq!(
+            encode_canonical_sccp_groth16_bn254_proof_request_v1(&fixture.request),
+            Some(canonical_request.clone())
+        );
+        assert_eq!(
+            encode_canonical_sccp_groth16_bn254_proof_result_v1(&fixture.artifact.result),
+            Some(canonical_result.clone())
+        );
+        assert_eq!(
+            encode_canonical_sccp_groth16_bn254_proof_artifact_v1(&fixture.artifact),
+            Some(canonical_artifact.clone())
+        );
+        assert_eq!(
+            decode_canonical_sccp_groth16_bn254_proof_request_v1(&canonical_request),
+            Some(fixture.request.clone())
+        );
+        assert!(decode_canonical_sccp_groth16_bn254_proof_request_v1(&alternate_request).is_none());
+        assert_eq!(
+            decode_canonical_sccp_groth16_bn254_proof_result_v1(&canonical_result),
+            Some(fixture.artifact.result.clone())
+        );
+        assert!(decode_canonical_sccp_groth16_bn254_proof_result_v1(&alternate_result).is_none());
+        assert_eq!(
+            decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&canonical_artifact),
+            Some(fixture.artifact.clone())
+        );
+        assert!(
+            decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&alternate_artifact).is_none()
+        );
+        assert!(decode_and_parse_canonical_sccp_destination_proof_v1(&canonical_bridge).is_some());
+        assert!(decode_and_parse_canonical_sccp_destination_proof_v1(&alternate_bridge).is_none());
+        assert_eq!(
+            decode_taira_bridge_finality_proof(&canonical_finality),
+            Some(finality.clone())
+        );
+        assert!(decode_taira_bridge_finality_proof(&alternate_finality).is_none());
+        assert!(verify_taira_bridge_finality_proof_structure(&finality));
     }
     #[test]
     fn artifact_admission_decodes_bundle_once_across_pairing_and_binding() {
