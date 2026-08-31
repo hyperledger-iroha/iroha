@@ -683,6 +683,16 @@ for namespace in ("sdk", "android"):
             "Java_org_hyperledger_iroha_"
             f"{namespace}_validationfee_ValidationFeeHijiriQuoteBridge_{method}"
         )
+    for method in (
+        "nativeBridgeAbiVersion",
+        "nativeVerifyCommitteeProofResponseV1",
+        "nativeVerifyAuditorCapsuleResponseV1",
+        "nativeVerifyAuditApprovalResponseV1",
+    ):
+        required.add(
+            "Java_org_hyperledger_iroha_"
+            f"{namespace}_client_AtomicPrivateSettlementNativeResponseVerifierV1_{method}"
+        )
 forbidden = {
     "connect_norito_get_chain_discriminant",
     "connect_norito_set_chain_discriminant",

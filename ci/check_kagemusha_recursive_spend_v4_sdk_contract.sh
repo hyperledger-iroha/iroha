@@ -46,6 +46,9 @@ paths = {
     "rust_platform_jni_part_3": Path(
         "crates/connect_norito_bridge/src/platform_jni/part_3.rs"
     ),
+    "rust_platform_jni_private_settlement": Path(
+        "crates/connect_norito_bridge/src/platform_jni/private_settlement.rs"
+    ),
     "header": Path("crates/connect_norito_bridge/include/connect_norito_bridge.h"),
     "swift": Path("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"),
     "swift_v4": Path("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV4.swift"),
@@ -209,12 +212,13 @@ platform_jni_includes = tuple(
         re.MULTILINE,
     )
 )
-expected_platform_jni_includes = tuple(
-    f"platform_jni/part_{part}.rs" for part in range(1, 4)
+expected_platform_jni_includes = (
+    *(f"platform_jni/part_{part}.rs" for part in range(1, 4)),
+    "platform_jni/private_settlement.rs",
 )
 if platform_jni_includes != expected_platform_jni_includes:
     raise SystemExit(
-        f"{paths['rust_platform_jni']}: expected the reviewed three-part JNI include "
+        f"{paths['rust_platform_jni']}: expected the reviewed JNI include "
         f"closure, found {platform_jni_includes!r}"
     )
 texts["rust"] = "\n".join(
@@ -222,6 +226,7 @@ texts["rust"] = "\n".join(
         texts["rust"],
         texts["rust_platform_jni"],
         *(texts[f"rust_platform_jni_part_{part}"] for part in range(1, 4)),
+        texts["rust_platform_jni_private_settlement"],
     )
 )
 bundle_source_seal_include = (
@@ -1186,6 +1191,9 @@ base_bridge_symbols = (
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
     "connect_norito_validation_fee_hijiri_quote_request_v1",
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+    "connect_norito_private_settlement_committee_proof_response_verify_v1",
+    "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+    "connect_norito_private_settlement_audit_approval_response_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 )
 c_symbols = (
@@ -1560,10 +1568,10 @@ if mode == "--self-test":
         "reviewed JNI fragment closure cannot detach",
         lambda fixture: replace_once(
             fixture / paths["rust_platform_jni"],
-            'include!("platform_jni/part_3.rs");',
+            'include!("platform_jni/private_settlement.rs");',
             "// reviewed JNI fragment detached",
         ),
-        "expected the reviewed three-part JNI include closure",
+        "expected the reviewed JNI include closure",
     )
 
     run_negative(

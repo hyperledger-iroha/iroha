@@ -17666,19 +17666,11 @@ public enum ToriiJSONValue: Codable, Sendable, Equatable {
                 self = .string(stringValue)
             } else if let boolValue = try? container.decode(Bool.self) {
                 self = .bool(boolValue)
-            } else if let integerValue = try? container.decode(UInt128.self) {
-                if integerValue > 9_007_199_254_740_991 {
-                    self = .integer(String(integerValue))
-                } else if let doubleValue = try? container.decode(Double.self) {
-                    self = .number(doubleValue)
-                } else {
-                    throw DecodingError.dataCorruptedError(
-                        in: container,
-                        debugDescription: "Unsupported JSON number"
-                    )
-                }
-            } else if let doubleValue = try? container.decode(Double.self) {
-                self = .number(doubleValue)
+            } else if let numberValue = try Self.decodeNumber(
+                from: container,
+                decoder: decoder
+            ) {
+                self = numberValue
             } else if let arrayValue = try? container.decode([ToriiJSONValue].self) {
                 self = .array(arrayValue)
             } else if let dictValue = try? container.decode([String: ToriiJSONValue].self) {
@@ -17701,12 +17693,21 @@ public enum ToriiJSONValue: Codable, Sendable, Equatable {
         case .number(let number):
             try container.encode(number)
         case .integer(let integer):
-            guard let value = UInt128(integer), String(value) == integer else {
+            guard SccpUInt128.parse(integer) != nil else {
                 throw EncodingError.invalidValue(
                     integer,
                     .init(
                         codingPath: encoder.codingPath,
                         debugDescription: "integer must be a canonical UInt128 decimal"
+                    )
+                )
+            }
+            guard let value = UInt64(integer) else {
+                throw EncodingError.invalidValue(
+                    integer,
+                    .init(
+                        codingPath: encoder.codingPath,
+                        debugDescription: "extended integers require ToriiJSONValue.encodedData()"
                     )
                 )
             }
@@ -17721,6 +17722,88 @@ public enum ToriiJSONValue: Codable, Sendable, Equatable {
             try container.encodeNil()
         }
     }
+
+    private static func decodeNumber(
+        from container: SingleValueDecodingContainer,
+        decoder: Decoder
+    ) throws -> ToriiJSONValue? {
+        if let lexeme = exactNumberLexeme(from: decoder) {
+            if let parsed = SccpUInt128.parse(lexeme) {
+                if parsed.exceedsMaximumSafeJSONInteger {
+                    return .integer(parsed.decimalString)
+                }
+                guard let doubleValue = try? container.decode(Double.self) else {
+                    throw DecodingError.dataCorruptedError(
+                        in: container,
+                        debugDescription: "Unable to decode exact JSON integer"
+                    )
+                }
+                return .number(doubleValue)
+            }
+
+            if lexeme.first == "-",
+               !lexeme.dropFirst().isEmpty,
+               lexeme.dropFirst().utf8.allSatisfy({ (0x30...0x39).contains($0) }) {
+                let magnitude = String(lexeme.dropFirst())
+                guard let parsed = SccpUInt128.parse(magnitude),
+                      !parsed.exceedsMaximumSafeJSONInteger else {
+                    throw DecodingError.dataCorruptedError(
+                        in: container,
+                        debugDescription: "signed extended JSON integers are unsupported"
+                    )
+                }
+            } else if !lexeme.contains(".")
+                        && !lexeme.contains("e")
+                        && !lexeme.contains("E") {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "unsigned JSON integer exceeds UInt128"
+                )
+            }
+
+            guard let doubleValue = try? container.decode(Double.self), doubleValue.isFinite else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "Unsupported JSON number"
+                )
+            }
+            return .number(doubleValue)
+        }
+
+        if let integerValue = try? container.decode(UInt64.self) {
+            if integerValue > 9_007_199_254_740_991 {
+                return .integer(String(integerValue))
+            }
+            if let doubleValue = try? container.decode(Double.self) {
+                return .number(doubleValue)
+            }
+            return nil
+        }
+        if let doubleValue = try? container.decode(Double.self), doubleValue.isFinite {
+            guard doubleValue.rounded(.towardZero) != doubleValue
+                    || abs(doubleValue) <= 9_007_199_254_740_991 else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "exact raw JSON integer lexeme is required"
+                )
+            }
+            return .number(doubleValue)
+        }
+        return nil
+    }
+
+    private static func exactNumberLexeme(from decoder: Decoder) -> String? {
+        if let lexemes = decoder.userInfo[exactJSONNumberLexemesUserInfoKey]
+            as? [String: String],
+           let lexeme = lexemes[exactJSONNumberCodingPathKey(decoder.codingPath)] {
+            return lexeme
+        }
+        if let lexemes = decoder.userInfo[governanceExactIntegerLexemesUserInfoKey]
+            as? [String: String] {
+            return lexemes[legacyExactJSONIntegerCodingPathKey(decoder.codingPath)]
+        }
+        return nil
+    }
 }
 
 public extension ToriiJSONValue {
@@ -17732,16 +17815,19 @@ public extension ToriiJSONValue {
     }
 
     func encodedData(prettyPrinted: Bool = false) throws -> Data {
-        let encoder = JSONEncoder()
-        if prettyPrinted {
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        }
-        return try encoder.encode(self)
+        try ToriiJSONExactEncoder.encode(self, prettyPrinted: prettyPrinted)
+    }
+
+    static func decodeExact(from data: Data) throws -> ToriiJSONValue {
+        let decoder = JSONDecoder()
+        decoder.userInfo[exactJSONNumberLexemesUserInfoKey] = try ExactJSONNumberLexemeScanner.scan(data)
+        return try decoder.decode(ToriiJSONValue.self, from: data)
     }
 
     func decode<T: Decodable>(as type: T.Type = T.self,
                               decoder: JSONDecoder = JSONDecoder()) throws -> T {
         let data = try encodedData()
+        decoder.userInfo[exactJSONNumberLexemesUserInfoKey] = try ExactJSONNumberLexemeScanner.scan(data)
         return try decoder.decode(T.self, from: data)
     }
 }
@@ -19625,9 +19711,7 @@ enum ToriiNativeAmxWire {
             field: field,
             allowFraction: false
         )
-        let maximum = "340282366920938463463374607431768211455"
-        guard canonical.count < maximum.count
-                || (canonical.count == maximum.count && canonical <= maximum) else {
+        guard SccpUInt128.parse(canonical) != nil else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
@@ -29325,7 +29409,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     private func decodeJSON<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do {
-            return try JSONDecoder().decode(T.self, from: data)
+            let decoder = JSONDecoder()
+            decoder.userInfo[exactJSONNumberLexemesUserInfoKey] =
+                try ExactJSONNumberLexemeScanner.scan(data)
+            return try decoder.decode(T.self, from: data)
         } catch {
             throw ToriiClientError.decoding(error)
         }

@@ -10035,6 +10035,7 @@ class ToriiClient(
         operator_signing_context: Optional[ToriiOperatorSigningContext] = None,
         orderbook_native_verifier: Any = None,
         orderbook_chain_discriminant: Optional[int] = None,
+        private_settlement_native_verifier: Any = None,
     ) -> None:
         if operator_signing_context is not None and not isinstance(
             operator_signing_context,
@@ -10050,6 +10051,9 @@ class ToriiClient(
         self._operator_signing_context = operator_signing_context
         self._configure_sorafs_orderbook_native_verifier(orderbook_native_verifier)
         self._orderbook_chain_discriminant = orderbook_chain_discriminant
+        self._configure_private_settlement_native_verifier(
+            private_settlement_native_verifier
+        )
 
     def _sorafs_orderbook_expected_chain_discriminant(self, context: str) -> int:
         return require_orderbook_chain_discriminant(self._orderbook_chain_discriminant, context)

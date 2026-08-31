@@ -864,6 +864,14 @@ pub struct PublicKeyCompact {
     // algorithm: Algorithm,
     // payload: ConstVec<u8>,
 }
+
+impl Zeroize for PublicKeyCompact {
+    fn zeroize(&mut self) {
+        let mut bytes = core::mem::take(&mut self.algorithm_and_payload).into_vec();
+        bytes.zeroize();
+        self.algorithm_and_payload = ConstVec::from(bytes);
+    }
+}
 /// Parsed Ed25519 public key for hot-path verification reuse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ed25519ParsedPublicKey(signature::ed25519::PublicKey);
@@ -2005,6 +2013,15 @@ impl PublicKey {
     fn new(inner: PublicKeyFull) -> Self {
         Self(inner.into())
     }
+    /// Wipe the compact key bytes before discarding a confidential copy.
+    ///
+    /// The key intentionally becomes invalid and must not be used after this
+    /// call. This is for restricted plaintext containers whose account or
+    /// authorization identifiers are confidential even though public keys are
+    /// not secrets in ordinary ledger state.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.0.zeroize();
+    }
     /// Creates a new public key from raw bytes received from elsewhere.
     ///
     /// Ed25519 input must be a canonical encoding of a non-small-order point in the prime-order
@@ -2115,6 +2132,12 @@ impl PublicKey {
     /// [`Self::try_algorithm`] in fallible paths.
     pub fn algorithm(&self) -> Algorithm {
         self.try_algorithm().expect("Invalid PublicKey::algorithm")
+    }
+}
+
+impl Zeroize for PublicKey {
+    fn zeroize(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 impl PublicKey {

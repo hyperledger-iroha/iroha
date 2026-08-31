@@ -74,6 +74,20 @@ pub const PRIVATE_SETTLEMENT_WRAPPED_DEK_ROW_BOUND_BYTES_V1: u64 = 8 * 1024;
 pub const PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1: usize = 4 * 1024 * 1024;
 /// Compressed BLS-normal proof/signature width used by Native AMX.
 pub const PRIVATE_SETTLEMENT_BLS_BYTES_V1: usize = 96;
+/// Attested lifecycle code for a sidecar collecting auditor approvals.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_COLLECTING_V1: u8 = 0;
+/// Attested lifecycle code for a sidecar with its auditor threshold satisfied.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_AUDITED_V1: u8 = 1;
+/// Attested lifecycle code for a durably prepared sidecar.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_PREPARED_V1: u8 = 2;
+/// Attested lifecycle code for a sidecar carrying a durable Commit QC.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_COMMIT_CERTIFIED_V1: u8 = 3;
+/// Attested lifecycle code for an atomically finalized sidecar.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_FINALIZED_V1: u8 = 4;
+/// Attested lifecycle code for an authoritatively aborted sidecar.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_ABORTED_V1: u8 = 5;
+/// Attested lifecycle code for an expired sidecar.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_EXPIRED_V1: u8 = 6;
 /// Exact audited settlement-local proof profile descriptor.
 pub const PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:native-rust:first-release:inputs=2-fixed:payer-authorization=purpose-separated-controller-signatures:outputs=3-fixed:roles=recipient+change+sponsor-reimbursement:selectors=canonical-active-or-domain-dummy:values=u128-checked-balanced:asset=salted-hidden-binding:tree=sha256-depth32:successor=validator-derived-only:public-intent=canonical-proof-binding-excluding-post-proof-artifacts:business-plaintext=auditor-capsule-sha256-commitment:wallet=x25519+xchacha20poly1305:proof=stark-fri-sha256-goldilocks";
 
@@ -106,6 +120,15 @@ const CAPSULE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:audit-c
 const SIDECAR_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:sidecar:v1\0";
 const SIDECAR_AVAILABILITY_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha:nexus:private-settlement:availability-signature:v1\0";
+const AUDITOR_VIEW_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:auditor-view:v1\0";
+const AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
+    b"iroha:nexus:private-settlement:auditor-view-attestation:v1\0";
+const AUDIT_APPROVAL_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:nexus:private-settlement:audit-approval:v1\0";
+const AUDIT_APPROVAL_ACKNOWLEDGEMENT_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:nexus:private-settlement:audit-approval-acknowledgement:v1\0";
+const AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
+    b"iroha:nexus:private-settlement:audit-approval-acknowledgement-attestation:v1\0";
 const PHASE_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha:nexus:private-settlement:participant-phase-signature:v1\0";
 const PREPARED_BUNDLE_DIGEST_DOMAIN_V1: &[u8] =
@@ -2704,6 +2727,326 @@ impl PrivateSettlementSidecarAvailabilityV1 {
     }
 }
 
+/// Exact restricted auditor view committed by a node response attestation.
+///
+/// This material is not a second HTTP shape. It is the canonical, typed input
+/// to [`Self::digest`], so implementations cannot silently omit a response
+/// field when authenticating an auditor view.
+#[derive(Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+pub struct PrivateSettlementAuditorViewDigestMaterialV1 {
+    /// Digest-material wire version.
+    pub version: u8,
+    /// Node-authoritative height used for access and policy evaluation.
+    pub authoritative_height: u64,
+    /// Exact public bundle manifest.
+    pub manifest: AtomicPrivateSettlementV1,
+    /// Exact governed local auditor policy.
+    pub audit_policy: PrivateSettlementAuditPolicyV1,
+    /// Exact four-validator participant authority.
+    pub committee_authority: PrivateSettlementCommitteeAuthorityV1,
+    /// Restricted proof statement; proof bytes remain absent.
+    pub statement: PrivateSettlementProofStatementV1,
+    /// Opaque fixed-shape private-state transition.
+    pub delta: PrivateSettlementDeltaV1,
+    /// Padded hybrid-encrypted auditor capsule.
+    pub audit_capsule: PrivateSettlementAuditCapsuleV1,
+    /// Durable restricted-DA certificate.
+    pub availability: PrivateSettlementSidecarAvailabilityV1,
+    /// Explicit stable code for the durable lifecycle projected by Torii.
+    pub lifecycle_code: u8,
+}
+
+impl fmt::Debug for PrivateSettlementAuditorViewDigestMaterialV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateSettlementAuditorViewDigestMaterialV1")
+            .field("bundle_id", &self.manifest.bundle_id)
+            .field("leg_ordinal", &self.statement.leg_ordinal)
+            .field("route", &self.statement.route)
+            .field("authoritative_height", &self.authoritative_height)
+            .field("lifecycle_code", &self.lifecycle_code)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PrivateSettlementAuditorViewDigestMaterialV1 {
+    /// Compute the purpose-separated digest of the complete restricted view.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the exact typed view cannot be encoded.
+    pub fn digest(&self) -> Result<Hash, norito::Error> {
+        canonical_hash(AUDITOR_VIEW_DIGEST_DOMAIN_V1, self)
+    }
+}
+
+/// Exact node-authenticated statement over one restricted auditor view.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementAuditorViewAttestationBodyV1 {
+    /// Attestation wire version.
+    pub version: u8,
+    /// Genesis-derived network identity.
+    pub network_id: NetworkId,
+    /// Content address of the exact encrypted participant leg.
+    pub payload_digest: Hash,
+    /// Digest of every unsigned auditor-response field.
+    pub view_digest: Hash,
+    /// Digest of the exact four-validator authority.
+    pub authority_digest: Hash,
+    /// Stable code for the exact lifecycle included in the view digest.
+    pub lifecycle_code: u8,
+    /// Exact height included in the view digest.
+    pub authoritative_height: u64,
+    /// Committee validator that served and authenticated the view.
+    pub responder: PeerId,
+}
+
+impl PrivateSettlementAuditorViewAttestationBodyV1 {
+    /// Canonical purpose-separated bytes signed by the responding validator.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the body cannot be canonically encoded.
+    pub fn signature_preimage(&self) -> Result<Vec<u8>, norito::Error> {
+        let body = norito::encode_canonical(self)?;
+        let body_len = u64::try_from(body.len()).map_err(|_| {
+            norito::Error::Io(std::io::Error::other(
+                "auditor view attestation body is too large",
+            ))
+        })?;
+        let mut preimage = Vec::with_capacity(
+            AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1.len()
+                + std::mem::size_of::<u64>()
+                + body.len(),
+        );
+        preimage.extend_from_slice(AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1);
+        preimage.extend_from_slice(&body_len.to_le_bytes());
+        preimage.extend_from_slice(&body);
+        Ok(preimage)
+    }
+
+    /// Validate fixed attestation fields before authority and signature work.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for reserved values or an unknown lifecycle code.
+    pub fn validate_shape(&self) -> Result<(), PrivateSettlementValidationError> {
+        if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1 {
+            return Err(PrivateSettlementValidationError::UnsupportedVersion {
+                actual: self.version,
+            });
+        }
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0)
+            || hash_is_zero(&self.payload_digest)
+            || hash_is_zero(&self.view_digest)
+            || hash_is_zero(&self.authority_digest)
+            || self.authoritative_height == 0
+            || self.lifecycle_code > PRIVATE_SETTLEMENT_LIFECYCLE_EXPIRED_V1
+        {
+            return Err(PrivateSettlementValidationError::InvalidAuditorViewAttestation);
+        }
+        Ok(())
+    }
+}
+
+/// One committee validator's BLS authentication of an auditor capsule view.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementAuditorViewAttestationV1 {
+    /// Exact purpose-separated body signed by the responder.
+    pub body: PrivateSettlementAuditorViewAttestationBodyV1,
+    /// Compressed BLS-normal signature over [`Self::body`].
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub signature: Vec<u8>,
+}
+
+impl PrivateSettlementAuditorViewAttestationV1 {
+    /// Validate fixed wire shape before roster and cryptographic verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for malformed body or signature bytes.
+    pub fn validate_shape(&self) -> Result<(), PrivateSettlementValidationError> {
+        self.body.validate_shape()?;
+        if self.signature.len() != PRIVATE_SETTLEMENT_BLS_BYTES_V1 {
+            return Err(PrivateSettlementValidationError::InvalidAuditorViewAttestation);
+        }
+        Ok(())
+    }
+}
+
+/// Exact approval-acknowledgement view committed by a node attestation.
+#[derive(Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+pub struct PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1 {
+    /// Digest-material wire version.
+    pub version: u8,
+    /// Node-authoritative height at which the approval became durable.
+    pub authoritative_height: u64,
+    /// Public bundle identifier.
+    pub bundle_id: Hash,
+    /// Content address of the encrypted leg.
+    pub payload_digest: Hash,
+    /// Canonical leg ordinal.
+    pub leg_ordinal: u8,
+    /// Exact four-validator participant authority returned by the node.
+    pub committee_authority: PrivateSettlementCommitteeAuthorityV1,
+    /// Number of distinct governed approvals now durable.
+    pub collected: u8,
+    /// Governed approval threshold.
+    pub required: u8,
+    /// Whether this request inserted new durable approval material.
+    pub newly_recorded: bool,
+    /// Stable code for the exact durable lifecycle returned by the node.
+    pub lifecycle_code: u8,
+}
+
+impl fmt::Debug for PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1")
+            .field("bundle_id", &self.bundle_id)
+            .field("payload_digest", &self.payload_digest)
+            .field("leg_ordinal", &self.leg_ordinal)
+            .field("authoritative_height", &self.authoritative_height)
+            .field("collected", &self.collected)
+            .field("required", &self.required)
+            .field("newly_recorded", &self.newly_recorded)
+            .field("lifecycle_code", &self.lifecycle_code)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1 {
+    /// Compute the purpose-separated digest of the complete acknowledgement.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the exact typed view cannot be encoded.
+    pub fn digest(&self) -> Result<Hash, norito::Error> {
+        canonical_hash(AUDIT_APPROVAL_ACKNOWLEDGEMENT_DIGEST_DOMAIN_V1, self)
+    }
+}
+
+/// Exact node-authenticated statement over one durable approval acknowledgement.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
+    /// Attestation wire version.
+    pub version: u8,
+    /// Genesis-derived network identity.
+    pub network_id: NetworkId,
+    /// Content address of the exact encrypted participant leg.
+    pub payload_digest: Hash,
+    /// Digest of the exact signed auditor approval request.
+    pub approval_digest: Hash,
+    /// Digest of every unsigned acknowledgement-response field.
+    pub acknowledgement_digest: Hash,
+    /// Digest of the exact four-validator authority.
+    pub authority_digest: Hash,
+    /// Stable code for the exact lifecycle included in the acknowledgement.
+    pub lifecycle_code: u8,
+    /// Exact height included in the acknowledgement.
+    pub authoritative_height: u64,
+    /// Committee validator that persisted and authenticated the approval.
+    pub responder: PeerId,
+}
+
+impl PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
+    /// Canonical purpose-separated bytes signed by the responding validator.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the body cannot be canonically encoded.
+    pub fn signature_preimage(&self) -> Result<Vec<u8>, norito::Error> {
+        let body = norito::encode_canonical(self)?;
+        let body_len = u64::try_from(body.len()).map_err(|_| {
+            norito::Error::Io(std::io::Error::other(
+                "audit approval acknowledgement attestation body is too large",
+            ))
+        })?;
+        let mut preimage = Vec::with_capacity(
+            AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1.len()
+                + std::mem::size_of::<u64>()
+                + body.len(),
+        );
+        preimage.extend_from_slice(AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1);
+        preimage.extend_from_slice(&body_len.to_le_bytes());
+        preimage.extend_from_slice(&body);
+        Ok(preimage)
+    }
+
+    /// Validate fixed fields before authority and signature verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for reserved values or an invalid lifecycle.
+    pub fn validate_shape(&self) -> Result<(), PrivateSettlementValidationError> {
+        if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1 {
+            return Err(PrivateSettlementValidationError::UnsupportedVersion {
+                actual: self.version,
+            });
+        }
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0)
+            || hash_is_zero(&self.payload_digest)
+            || hash_is_zero(&self.approval_digest)
+            || hash_is_zero(&self.acknowledgement_digest)
+            || hash_is_zero(&self.authority_digest)
+            || self.authoritative_height == 0
+            || self.lifecycle_code > PRIVATE_SETTLEMENT_LIFECYCLE_AUDITED_V1
+        {
+            return Err(
+                PrivateSettlementValidationError::InvalidAuditApprovalAcknowledgementAttestation,
+            );
+        }
+        Ok(())
+    }
+}
+
+/// One committee validator's BLS authentication of an approval acknowledgement.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementAuditApprovalAcknowledgementAttestationV1 {
+    /// Exact purpose-separated body signed by the responder.
+    pub body: PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
+    /// Compressed BLS-normal signature over [`Self::body`].
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub signature: Vec<u8>,
+}
+
+impl PrivateSettlementAuditApprovalAcknowledgementAttestationV1 {
+    /// Validate fixed wire shape before roster and cryptographic verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for malformed body or signature bytes.
+    pub fn validate_shape(&self) -> Result<(), PrivateSettlementValidationError> {
+        self.body.validate_shape()?;
+        if self.signature.len() != PRIVATE_SETTLEMENT_BLS_BYTES_V1 {
+            return Err(
+                PrivateSettlementValidationError::InvalidAuditApprovalAcknowledgementAttestation,
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Complete restricted sidecar verified by one participant committee.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3128,6 +3471,15 @@ impl fmt::Debug for PrivateSettlementAuditApprovalV1 {
 }
 
 impl PrivateSettlementAuditApprovalV1 {
+    /// Compute the purpose-separated digest of the complete signed approval.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the approval cannot be canonically encoded.
+    pub fn digest(&self) -> Result<Hash, norito::Error> {
+        canonical_hash(AUDIT_APPROVAL_DIGEST_DOMAIN_V1, self)
+    }
+
     /// Verify membership, signature, policy/key epoch, and height validity.
     ///
     /// # Errors
@@ -3920,6 +4272,12 @@ pub enum PrivateSettlementValidationError {
     /// One provisional availability share is malformed or unauthenticated.
     #[error("private settlement restricted-DA availability share is invalid")]
     InvalidAvailabilityShare,
+    /// A node auditor-view attestation has malformed or reserved fields.
+    #[error("private settlement auditor view attestation is invalid")]
+    InvalidAuditorViewAttestation,
+    /// A node approval-acknowledgement attestation is malformed or reserved.
+    #[error("private settlement audit approval acknowledgement attestation is invalid")]
+    InvalidAuditApprovalAcknowledgementAttestation,
     /// Auditor-only plaintext has an invalid fixed shape, value balance, or dummy slot.
     #[error("private settlement auditor plaintext is invalid")]
     InvalidAuditPlaintext,
@@ -5335,6 +5693,113 @@ mod tests {
         assert_eq!(
             missing.validate_shape(),
             Err(PrivateSettlementValidationError::InvalidAvailabilityCertificate)
+        );
+    }
+
+    #[test]
+    fn auditor_view_attestation_is_purpose_height_lifecycle_and_responder_bound() {
+        let (validators, validator_pops) = measured_validator_material();
+        let authority = measured_authority(route(1), &validators, &validator_pops);
+        let body = PrivateSettlementAuditorViewAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id: network(1),
+            payload_digest: hash(0xD3),
+            view_digest: hash(0xD4),
+            authority_digest: authority.digest().expect("authority digest"),
+            lifecycle_code: PRIVATE_SETTLEMENT_LIFECYCLE_COLLECTING_V1,
+            authoritative_height: 19,
+            responder: validators[0].clone(),
+        };
+        body.validate_shape().expect("attestation body shape");
+        let preimage = body.signature_preimage().expect("attestation preimage");
+        assert!(preimage.starts_with(AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1));
+
+        let mut substituted = body.clone();
+        substituted.authoritative_height += 1;
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("height-substituted preimage")
+        );
+        substituted = body.clone();
+        substituted.lifecycle_code = PRIVATE_SETTLEMENT_LIFECYCLE_AUDITED_V1;
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("lifecycle-substituted preimage")
+        );
+        substituted = body.clone();
+        substituted.responder = validators[1].clone();
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("responder-substituted preimage")
+        );
+
+        let mut invalid = body;
+        invalid.lifecycle_code = PRIVATE_SETTLEMENT_LIFECYCLE_EXPIRED_V1.saturating_add(1);
+        assert_eq!(
+            invalid.validate_shape(),
+            Err(PrivateSettlementValidationError::InvalidAuditorViewAttestation)
+        );
+    }
+
+    #[test]
+    fn audit_approval_acknowledgement_attestation_binds_request_view_and_responder() {
+        let (validators, validator_pops) = measured_validator_material();
+        let authority = measured_authority(route(1), &validators, &validator_pops);
+        let body = PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id: network(1),
+            payload_digest: hash(0xE3),
+            approval_digest: hash(0xE4),
+            acknowledgement_digest: hash(0xE5),
+            authority_digest: authority.digest().expect("authority digest"),
+            lifecycle_code: PRIVATE_SETTLEMENT_LIFECYCLE_AUDITED_V1,
+            authoritative_height: 23,
+            responder: validators[0].clone(),
+        };
+        body.validate_shape().expect("acknowledgement body shape");
+        let preimage = body
+            .signature_preimage()
+            .expect("acknowledgement attestation preimage");
+        assert!(
+            preimage.starts_with(AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1)
+        );
+
+        let mut substituted = body.clone();
+        substituted.approval_digest = hash(0xE6);
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("approval-substituted preimage")
+        );
+        substituted = body.clone();
+        substituted.acknowledgement_digest = hash(0xE7);
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("acknowledgement-substituted preimage")
+        );
+        substituted = body.clone();
+        substituted.responder = validators[1].clone();
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("responder-substituted preimage")
+        );
+
+        let mut invalid = body;
+        invalid.lifecycle_code = PRIVATE_SETTLEMENT_LIFECYCLE_PREPARED_V1;
+        assert_eq!(
+            invalid.validate_shape(),
+            Err(PrivateSettlementValidationError::InvalidAuditApprovalAcknowledgementAttestation)
         );
     }
 

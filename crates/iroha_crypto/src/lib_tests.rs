@@ -1660,6 +1660,19 @@ mod tests {
         assert_eq!(public_key, reconstructed);
     }
     #[test]
+    fn confidential_discard_zeroizes_public_key_and_signature_copies() {
+        let mut public_key = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("checked discard fixture")
+            .public_key()
+            .clone();
+        public_key.zeroize_for_confidential_discard();
+        assert!(public_key.0.algorithm_and_payload.is_empty());
+
+        let mut signature = Signature::from_bytes(&[0xA8; 64]);
+        signature.zeroize();
+        assert!(signature.payload().is_empty());
+    }
+    #[test]
     fn invalid_private_key() {
         assert!(PrivateKey::from_hex(
             Algorithm::Ed25519,

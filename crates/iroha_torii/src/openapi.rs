@@ -504,7 +504,44 @@ mod tests {
         "OfflineRedeemResult",
         "ErrorEnvelope",
     ];
+    const COMPONENT_REF_PREFIX: &str = "#/components/";
     const COMPONENT_SCHEMA_REF_PREFIX: &str = "#/components/schemas/";
+    #[derive(Clone, Copy)]
+    enum ComponentRefContext {
+        Document,
+        Components,
+        SchemaMap,
+        Schema,
+        HeaderMap,
+        Header,
+    }
+    impl ComponentRefContext {
+        fn child(self, key: &str) -> Self {
+            match self {
+                Self::Schema | Self::SchemaMap => Self::Schema,
+                Self::HeaderMap => Self::Header,
+                Self::Components => match key {
+                    "schemas" => Self::SchemaMap,
+                    "headers" => Self::HeaderMap,
+                    _ => Self::Document,
+                },
+                Self::Document if key == "components" => Self::Components,
+                Self::Document if key == "headers" => Self::HeaderMap,
+                Self::Document | Self::Header if key == "schema" || key.ends_with("-schema") => {
+                    Self::Schema
+                }
+                Self::Document => Self::Document,
+                Self::Header => Self::Header,
+            }
+        }
+        fn expected_component(self) -> Option<&'static str> {
+            match self {
+                Self::Schema => Some("schemas"),
+                Self::Header => Some("headers"),
+                _ => None,
+            }
+        }
+    }
     fn documented_reject_codes<'a>(responses: &'a Map, status: &str) -> Vec<&'a str> {
         responses
             .get(status)
@@ -531,12 +568,16 @@ mod tests {
             .is_some_and(|headers| headers.contains_key("x-iroha-reject-code"))
     }
     fn component_schemas(document: &Value) -> &Map {
+        component_collections(document)
+            .get("schemas")
+            .and_then(Value::as_object)
+            .expect("component schemas")
+    }
+    fn component_collections(document: &Value) -> &Map {
         document
             .get("components")
             .and_then(Value::as_object)
-            .and_then(|components| components.get("schemas"))
-            .and_then(Value::as_object)
-            .expect("component schemas")
+            .expect("OpenAPI components")
     }
     fn openapi_operation<'a>(document: &'a Value, path: &str, method: &str) -> &'a Map {
         document
@@ -799,19 +840,21 @@ mod tests {
             _ => {}
         }
     }
-    fn assert_component_schema_refs_resolve(
+    fn assert_component_refs_resolve(
         value: &Value,
-        schemas: &Map,
+        components: &Map,
         location: &str,
+        context: ComponentRefContext,
         reference_count: &mut usize,
     ) {
         match value {
             Value::Array(values) => {
                 for (index, value) in values.iter().enumerate() {
-                    assert_component_schema_refs_resolve(
+                    assert_component_refs_resolve(
                         value,
-                        schemas,
+                        components,
                         &format!("{location}[{index}]"),
+                        context,
                         reference_count,
                     );
                 }
@@ -824,30 +867,51 @@ mod tests {
                         let reference = value.as_str().unwrap_or_else(|| {
                             panic!("OpenAPI $ref at {child_location} must be a string")
                         });
-                        let schema_name = reference
-                            .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
+                        let component_path = reference
+                            .strip_prefix(COMPONENT_REF_PREFIX)
                             .unwrap_or_else(|| {
                                 panic!(
-                                    "OpenAPI $ref at {child_location} must target a local component schema: {reference}"
+                                    "OpenAPI $ref at {child_location} must target a local component root: {reference}"
+                                )
+                            });
+                        let mut segments = component_path.split('/');
+                        let kind = segments.next().unwrap_or_default();
+                        let name = segments.next().unwrap_or_default();
+                        assert!(
+                            !kind.is_empty() && !name.is_empty(),
+                            "OpenAPI $ref at {child_location} has no component kind or name"
+                        );
+                        assert!(
+                            segments.next().is_none(),
+                            "OpenAPI $ref at {child_location} must not target a nested component path: {reference}"
+                        );
+                        let expected_kind = context.expected_component().unwrap_or_else(|| {
+                            panic!(
+                                "OpenAPI $ref at {child_location} is not permitted at this location: {reference}"
+                            )
+                        });
+                        assert_eq!(
+                            kind, expected_kind,
+                            "OpenAPI $ref at {child_location} targets {kind}, but this location requires {expected_kind}"
+                        );
+                        let collection = components
+                            .get(kind)
+                            .and_then(Value::as_object)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "OpenAPI $ref at {child_location} targets missing component collection {kind}"
                                 )
                             });
                         assert!(
-                            !schema_name.is_empty(),
-                            "OpenAPI $ref at {child_location} has no component schema name"
-                        );
-                        assert!(
-                            !schema_name.contains('/'),
-                            "OpenAPI $ref at {child_location} must not target a nested schema path: {reference}"
-                        );
-                        assert!(
-                            schemas.contains_key(schema_name),
-                            "OpenAPI $ref at {child_location} targets missing component schema {schema_name}"
+                            collection.contains_key(name),
+                            "OpenAPI $ref at {child_location} targets missing component {kind}/{name}"
                         );
                     }
-                    assert_component_schema_refs_resolve(
+                    assert_component_refs_resolve(
                         value,
-                        schemas,
+                        components,
                         &child_location,
+                        context.child(key),
                         reference_count,
                     );
                 }
@@ -1109,17 +1173,23 @@ mod tests {
         }
     }
     #[test]
-    fn openapi_authorities_have_only_resolvable_component_schema_refs() {
+    fn openapi_authorities_have_only_resolvable_component_refs() {
         for (label, document) in [
             ("package-local", canonical_document()),
             ("compiled", generate_spec()),
         ] {
-            let schemas = component_schemas(&document);
+            let components = component_collections(&document);
             let mut reference_count = 0;
-            assert_component_schema_refs_resolve(&document, schemas, "$", &mut reference_count);
+            assert_component_refs_resolve(
+                &document,
+                components,
+                "$",
+                ComponentRefContext::Document,
+                &mut reference_count,
+            );
             assert!(
                 reference_count > 0,
-                "{label} OpenAPI document unexpectedly contains no schema references"
+                "{label} OpenAPI document unexpectedly contains no component references"
             );
         }
     }

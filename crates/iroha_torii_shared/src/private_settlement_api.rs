@@ -8,15 +8,25 @@
 
 use core::fmt;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
+use iroha_data_model::NetworkId;
 use iroha_data_model::nexus::{
-    AtomicPrivateSettlementV1, PrivateSettlementAbortReceiptV1, PrivateSettlementAuditApprovalV1,
-    PrivateSettlementAuditCapsuleV1, PrivateSettlementAuditPolicyV1,
-    PrivateSettlementAvailabilityShareV1, PrivateSettlementCommitteeAuthorityV1,
-    PrivateSettlementDeltaV1, PrivateSettlementLegPayloadV1, PrivateSettlementPhaseCertificateV1,
-    PrivateSettlementPhaseV1, PrivateSettlementPhaseVoteV1, PrivateSettlementPrepareBarrierV1,
-    PrivateSettlementProofStatementV1, PrivateSettlementProvisionalLegMaterialV1,
-    PrivateSettlementReceiptV1, PrivateSettlementRouteV1, PrivateSettlementSidecarAvailabilityV1,
+    ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
+    PRIVATE_SETTLEMENT_LIFECYCLE_ABORTED_V1, PRIVATE_SETTLEMENT_LIFECYCLE_AUDITED_V1,
+    PRIVATE_SETTLEMENT_LIFECYCLE_COLLECTING_V1, PRIVATE_SETTLEMENT_LIFECYCLE_COMMIT_CERTIFIED_V1,
+    PRIVATE_SETTLEMENT_LIFECYCLE_EXPIRED_V1, PRIVATE_SETTLEMENT_LIFECYCLE_FINALIZED_V1,
+    PRIVATE_SETTLEMENT_LIFECYCLE_PREPARED_V1, PrivateSettlementAbortReceiptV1,
+    PrivateSettlementAuditApprovalAcknowledgementAttestationV1,
+    PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1,
+    PrivateSettlementAuditApprovalV1, PrivateSettlementAuditCapsuleV1,
+    PrivateSettlementAuditPolicyV1, PrivateSettlementAuditorViewAttestationV1,
+    PrivateSettlementAuditorViewDigestMaterialV1, PrivateSettlementAvailabilityShareV1,
+    PrivateSettlementCommitteeAuthorityV1, PrivateSettlementDeltaV1, PrivateSettlementLegPayloadV1,
+    PrivateSettlementPhaseCertificateV1, PrivateSettlementPhaseV1, PrivateSettlementPhaseVoteV1,
+    PrivateSettlementPrepareBarrierV1, PrivateSettlementProofStatementV1,
+    PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementReceiptV1,
+    PrivateSettlementRouteV1, PrivateSettlementSidecarAvailabilityV1,
+    private_settlement_proof_digest_v1,
 };
 use iroha_data_model::transaction::SignedTransaction;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
@@ -49,6 +59,22 @@ pub enum PrivateSettlementLifecycleDtoV1 {
     Aborted,
     /// Height expiry released the staged lock.
     Expired,
+}
+
+impl PrivateSettlementLifecycleDtoV1 {
+    /// Return the stable lifecycle code committed by node view attestations.
+    #[must_use]
+    pub const fn attestation_code(self) -> u8 {
+        match self {
+            Self::Collecting => PRIVATE_SETTLEMENT_LIFECYCLE_COLLECTING_V1,
+            Self::Audited => PRIVATE_SETTLEMENT_LIFECYCLE_AUDITED_V1,
+            Self::Prepared => PRIVATE_SETTLEMENT_LIFECYCLE_PREPARED_V1,
+            Self::CommitCertified => PRIVATE_SETTLEMENT_LIFECYCLE_COMMIT_CERTIFIED_V1,
+            Self::Finalized => PRIVATE_SETTLEMENT_LIFECYCLE_FINALIZED_V1,
+            Self::Aborted => PRIVATE_SETTLEMENT_LIFECYCLE_ABORTED_V1,
+            Self::Expired => PRIVATE_SETTLEMENT_LIFECYCLE_EXPIRED_V1,
+        }
+    }
 }
 
 /// Account-authenticated upload of one complete encrypted settlement leg.
@@ -327,6 +353,8 @@ impl fmt::Debug for PrivateSettlementCommitteeProofResponseV1 {
 )]
 #[norito(deny_unknown_fields)]
 pub struct PrivateSettlementAuditorCapsuleResponseV1 {
+    /// Node-authoritative height used for access and lifecycle evaluation.
+    pub authoritative_height: u64,
     /// Exact public manifest used to recompute bindings.
     pub manifest: AtomicPrivateSettlementV1,
     /// Exact governed local policy.
@@ -343,6 +371,36 @@ pub struct PrivateSettlementAuditorCapsuleResponseV1 {
     pub availability: PrivateSettlementSidecarAvailabilityV1,
     /// Current durable lifecycle.
     pub lifecycle: PrivateSettlementLifecycleDtoV1,
+    /// Purpose-separated BLS authentication by the exact responding validator.
+    pub responder_attestation: PrivateSettlementAuditorViewAttestationV1,
+}
+
+impl PrivateSettlementAuditorCapsuleResponseV1 {
+    /// Reconstruct the exact typed material committed by the responder.
+    #[must_use]
+    pub fn view_digest_material(&self) -> PrivateSettlementAuditorViewDigestMaterialV1 {
+        PrivateSettlementAuditorViewDigestMaterialV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            authoritative_height: self.authoritative_height,
+            manifest: self.manifest.clone(),
+            audit_policy: self.audit_policy.clone(),
+            committee_authority: self.committee_authority.clone(),
+            statement: self.statement.clone(),
+            delta: self.delta.clone(),
+            audit_capsule: self.audit_capsule.clone(),
+            availability: self.availability.clone(),
+            lifecycle_code: self.lifecycle.attestation_code(),
+        }
+    }
+
+    /// Compute the exact purpose-separated digest authenticated by the node.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the typed restricted view cannot be encoded.
+    pub fn view_digest(&self) -> Result<Hash, norito::Error> {
+        self.view_digest_material().digest()
+    }
 }
 
 /// Governed-auditor submission of one purpose-separated approval.
@@ -357,24 +415,20 @@ pub struct PrivateSettlementAuditApprovalRequestV1 {
 
 /// Redacted result of durably collecting one approval.
 #[derive(
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
 pub struct PrivateSettlementAuditApprovalResponseV1 {
+    /// Node-authoritative height at which the approval result is durable.
+    pub authoritative_height: u64,
     /// Public bundle identifier.
     pub bundle_id: Hash,
     /// Content address of the encrypted leg.
     pub payload_digest: Hash,
     /// Canonical leg ordinal.
     pub leg_ordinal: u8,
+    /// Exact four-validator participant authority serving the acknowledgement.
+    pub committee_authority: PrivateSettlementCommitteeAuthorityV1,
     /// Number of distinct governed approvals now durable.
     pub collected: u8,
     /// Governed approval threshold.
@@ -383,6 +437,527 @@ pub struct PrivateSettlementAuditApprovalResponseV1 {
     pub newly_recorded: bool,
     /// Current durable lifecycle.
     pub lifecycle: PrivateSettlementLifecycleDtoV1,
+    /// Purpose-separated BLS authentication by the exact responding validator.
+    pub responder_attestation: PrivateSettlementAuditApprovalAcknowledgementAttestationV1,
+}
+
+impl PrivateSettlementAuditApprovalResponseV1 {
+    /// Reconstruct the exact typed material committed by the responder.
+    #[must_use]
+    pub fn acknowledgement_digest_material(
+        &self,
+    ) -> PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1 {
+        PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            authoritative_height: self.authoritative_height,
+            bundle_id: self.bundle_id,
+            payload_digest: self.payload_digest,
+            leg_ordinal: self.leg_ordinal,
+            committee_authority: self.committee_authority.clone(),
+            collected: self.collected,
+            required: self.required,
+            newly_recorded: self.newly_recorded,
+            lifecycle_code: self.lifecycle.attestation_code(),
+        }
+    }
+
+    /// Compute the exact purpose-separated acknowledgement digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the typed response cannot be encoded.
+    pub fn acknowledgement_digest(&self) -> Result<Hash, norito::Error> {
+        self.acknowledgement_digest_material().digest()
+    }
+}
+
+/// Redacted failure returned by shared private-settlement response validation.
+///
+/// The variants identify only the public validation boundary that rejected a
+/// response. They deliberately retain no proof bytes, capsule material,
+/// auditor identity, cryptographic key, digest, or underlying parser error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PrivateSettlementResponseValidationErrorV1 {
+    /// A committee proof view was malformed, inconsistent, or substituted.
+    InvalidCommitteeProofResponse,
+    /// An auditor capsule view or its responder attestation was invalid.
+    InvalidAuditorCapsuleResponse,
+    /// The supplied signing key was not governed or reused a committee key.
+    InvalidAuditorKeySeparation,
+    /// An audit-approval acknowledgement was invalid or request-substituted.
+    InvalidAuditApprovalAcknowledgement,
+}
+
+impl fmt::Display for PrivateSettlementResponseValidationErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::InvalidCommitteeProofResponse => {
+                "private-settlement committee response validation failed"
+            }
+            Self::InvalidAuditorCapsuleResponse => {
+                "private-settlement auditor response validation failed"
+            }
+            Self::InvalidAuditorKeySeparation => "private-settlement auditor key validation failed",
+            Self::InvalidAuditApprovalAcknowledgement => {
+                "private-settlement approval acknowledgement validation failed"
+            }
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for PrivateSettlementResponseValidationErrorV1 {}
+
+fn validate_response_availability_certificate_v1(
+    certificate: &PrivateSettlementSidecarAvailabilityV1,
+    authority: &PrivateSettlementCommitteeAuthorityV1,
+) -> Result<(), PrivateSettlementResponseValidationErrorV1> {
+    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse;
+    certificate.validate_shape().map_err(|_| invalid)?;
+    authority.validate().map_err(|_| invalid)?;
+    let authority_digest = authority.digest().map_err(|_| invalid)?;
+    if certificate.body.route != authority.route
+        || certificate.body.authority_digest != authority_digest
+    {
+        return Err(invalid);
+    }
+    let mut signer_keys = Vec::with_capacity(3);
+    let mut signer_pops = Vec::with_capacity(3);
+    for (index, (validator, pop)) in authority
+        .validators
+        .iter()
+        .zip(&authority.validator_pops)
+        .enumerate()
+    {
+        if validator.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
+            || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
+        {
+            return Err(invalid);
+        }
+        if certificate.signers_bitmap & (1_u8 << index) != 0 {
+            signer_keys.push(validator.public_key());
+            signer_pops.push(pop.as_slice());
+        }
+    }
+    let preimage = certificate.signature_preimage().map_err(|_| invalid)?;
+    iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        &preimage,
+        &certificate.aggregate_signature,
+        &signer_keys,
+        &signer_pops,
+    )
+    .map_err(|_| invalid)
+}
+
+/// Validate a committee-only proof response against the exact requested leg.
+///
+/// This verifies the manifest, policy, authority and every validator proof of
+/// possession, proof statement, fixed-shape delta, availability certificate,
+/// proof/capsule/delta digests, and the canonical governed approval threshold.
+/// No private response material is retained in an error.
+///
+/// # Errors
+///
+/// Returns [`PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse`]
+/// for any malformed, inconsistent, unauthenticated, stale, or substituted
+/// field.
+pub fn validate_private_settlement_committee_proof_response_v1(
+    expected_network: &NetworkId,
+    requested_payload_digest: Hash,
+    response: &PrivateSettlementCommitteeProofResponseV1,
+) -> Result<(), PrivateSettlementResponseValidationErrorV1> {
+    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse;
+    response.manifest.validate().map_err(|_| invalid)?;
+    response.audit_policy.validate().map_err(|_| invalid)?;
+    response
+        .committee_authority
+        .validate()
+        .map_err(|_| invalid)?;
+    response.statement.validate().map_err(|_| invalid)?;
+    response
+        .delta
+        .validate_against(&response.statement)
+        .map_err(|_| invalid)?;
+    validate_response_availability_certificate_v1(
+        &response.availability,
+        &response.committee_authority,
+    )?;
+    let statement_digest = response.statement.digest().map_err(|_| invalid)?;
+    let proof_digest = private_settlement_proof_digest_v1(&response.proof);
+    let delta_digest = response.delta.digest().map_err(|_| invalid)?;
+    let authority_digest = response.committee_authority.digest().map_err(|_| invalid)?;
+    let availability_digest = response.availability.digest().map_err(|_| invalid)?;
+    let ordinal = usize::from(response.statement.leg_ordinal);
+    let leg = response.manifest.legs.get(ordinal).ok_or(invalid)?;
+    let availability = &response.availability.body;
+    if &response.manifest.network_id != expected_network
+        || response.statement.network_id != response.manifest.network_id
+        || response.statement.authority_context_height != response.manifest.authority_context_height
+        || response.statement.fee_intent_digest != response.manifest.fee_intent_digest
+        || response.statement.reimbursement_terms_commitment
+            != response.manifest.reimbursement_terms_commitment
+        || response.statement.reimbursement_leg_ordinal
+            != response.manifest.reimbursement_leg_ordinal
+        || response.statement.expiry_height != response.manifest.expiry_height
+        || availability.payload_digest != requested_payload_digest
+        || leg.payload_digest != requested_payload_digest
+        || leg.ordinal != response.statement.leg_ordinal
+        || leg.delta_digest != delta_digest
+        || leg.availability_certificate_digest != availability_digest
+        || leg.route != response.statement.route
+        || leg.pool_id != response.statement.pool_id
+        || leg.asset_binding_commitment != response.statement.asset_binding_commitment
+        || leg.audit_policy_digest != response.audit_policy.policy_digest
+        || response.audit_policy.body.dataspace_id != response.statement.route.dataspace_id
+        || response.statement.audit_policy_digest != response.audit_policy.policy_digest
+        || response.statement.audit_key_epoch != response.audit_policy.body.key_epoch
+        || response.committee_authority.route != response.statement.route
+        || availability.network_id != response.manifest.network_id
+        || availability.bundle_id != response.manifest.bundle_id
+        || availability.leg_ordinal != response.statement.leg_ordinal
+        || availability.route != response.statement.route
+        || availability.authority_digest != authority_digest
+        || availability.authority_context_height != response.manifest.authority_context_height
+        || availability.retention_until_height < response.manifest.expiry_height
+        || response.manifest.bundle_id != response.statement.bundle_id
+        || response.manifest.bundle_id != response.delta.bundle_id
+        || response.statement.leg_ordinal != response.delta.leg_ordinal
+        || response.statement.route != response.delta.route
+        || response.statement.pool_id != response.delta.pool_id
+        || response.statement.asset_binding_commitment != response.delta.asset_binding_commitment
+        || response.statement.audit_policy_digest != response.delta.audit_policy_digest
+        || response.statement.audit_key_epoch != response.delta.audit_key_epoch
+        || response.statement.audit_capsule_digest != response.audit_capsule_digest
+        || response.delta.capsule_digest != response.audit_capsule_digest
+        || response.delta.statement_digest != statement_digest
+        || response.delta.proof_digest != proof_digest
+    {
+        return Err(invalid);
+    }
+    if response.audit_approvals.len() < usize::from(response.audit_policy.body.min_approvals) {
+        return Err(invalid);
+    }
+    let mut previous_auditor = None;
+    for approval in &response.audit_approvals {
+        approval
+            .verify(
+                &response.audit_policy,
+                response.manifest.authority_context_height,
+            )
+            .map_err(|_| invalid)?;
+        if previous_auditor
+            .as_ref()
+            .is_some_and(|previous| previous >= &approval.body.auditor_id)
+            || approval.body.network_id != response.statement.network_id
+            || approval.body.bundle_id != response.statement.bundle_id
+            || approval.body.leg_ordinal != response.statement.leg_ordinal
+            || approval.body.dataspace_id != response.statement.route.dataspace_id
+            || approval.body.audit_policy_digest != response.audit_policy.policy_digest
+            || approval.body.audit_key_epoch != response.audit_policy.body.key_epoch
+            || approval.body.proof_digest != proof_digest
+            || approval.body.capsule_digest != response.audit_capsule_digest
+            || approval.body.delta_digest != delta_digest
+            || approval.body.old_root != response.delta.old_root
+            || approval.body.new_root != response.delta.new_root
+            || approval.body.expiry_height != response.statement.expiry_height
+        {
+            return Err(invalid);
+        }
+        previous_auditor = Some(approval.body.auditor_id.clone());
+    }
+    Ok(())
+}
+
+fn validate_private_settlement_auditor_view_attestation_v1(
+    requested_payload_digest: Hash,
+    response: &PrivateSettlementAuditorCapsuleResponseV1,
+) -> Result<usize, PrivateSettlementResponseValidationErrorV1> {
+    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse;
+    let attestation = &response.responder_attestation;
+    attestation.validate_shape().map_err(|_| invalid)?;
+    let authority_digest = response.committee_authority.digest().map_err(|_| invalid)?;
+    let view_digest = response.view_digest().map_err(|_| invalid)?;
+    let expected_body = iroha_data_model::nexus::PrivateSettlementAuditorViewAttestationBodyV1 {
+        version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+        network_id: response.manifest.network_id,
+        payload_digest: requested_payload_digest,
+        view_digest,
+        authority_digest,
+        lifecycle_code: response.lifecycle.attestation_code(),
+        authoritative_height: response.authoritative_height,
+        responder: attestation.body.responder.clone(),
+    };
+    if attestation.body != expected_body {
+        return Err(invalid);
+    }
+    let responder_index = response
+        .committee_authority
+        .validators
+        .iter()
+        .position(|validator| validator == &attestation.body.responder)
+        .ok_or(invalid)?;
+    let responder_pop = response
+        .committee_authority
+        .validator_pops
+        .get(responder_index)
+        .ok_or(invalid)?;
+    if attestation.body.responder.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
+        || iroha_crypto::bls_normal_pop_verify(
+            attestation.body.responder.public_key(),
+            responder_pop,
+        )
+        .is_err()
+    {
+        return Err(invalid);
+    }
+    let signature = Signature::try_from_bytes(&attestation.signature).map_err(|_| invalid)?;
+    signature
+        .verify(
+            attestation.body.responder.public_key(),
+            &attestation.body.signature_preimage().map_err(|_| invalid)?,
+        )
+        .map_err(|_| invalid)?;
+    Ok(responder_index)
+}
+
+/// Validate an auditor-only capsule response and authenticate its responder.
+///
+/// In addition to the public manifest, policy, authority, proof-statement,
+/// delta, capsule, availability, and lifecycle bindings, this recomputes the
+/// complete typed view digest and verifies the exact responder's BLS-normal
+/// proof of possession and signature.
+///
+/// # Errors
+///
+/// Returns [`PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse`]
+/// for any malformed, inconsistent, unauthenticated, stale, or substituted
+/// field.
+pub fn validate_private_settlement_auditor_capsule_response_v1(
+    expected_network: &NetworkId,
+    requested_payload_digest: Hash,
+    response: &PrivateSettlementAuditorCapsuleResponseV1,
+) -> Result<usize, PrivateSettlementResponseValidationErrorV1> {
+    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse;
+    response.manifest.validate().map_err(|_| invalid)?;
+    response.audit_policy.validate().map_err(|_| invalid)?;
+    response
+        .committee_authority
+        .validate()
+        .map_err(|_| invalid)?;
+    response.statement.validate().map_err(|_| invalid)?;
+    response
+        .delta
+        .validate_against(&response.statement)
+        .map_err(|_| invalid)?;
+    response
+        .audit_capsule
+        .validate_against(&response.audit_policy)
+        .map_err(|_| invalid)?;
+    validate_response_availability_certificate_v1(
+        &response.availability,
+        &response.committee_authority,
+    )
+    .map_err(|_| invalid)?;
+    let capsule_digest = response.audit_capsule.digest().map_err(|_| invalid)?;
+    let delta_digest = response.delta.digest().map_err(|_| invalid)?;
+    let authority_digest = response.committee_authority.digest().map_err(|_| invalid)?;
+    let availability_digest = response.availability.digest().map_err(|_| invalid)?;
+    let ordinal = usize::from(response.statement.leg_ordinal);
+    let leg = response.manifest.legs.get(ordinal).ok_or(invalid)?;
+    let availability = &response.availability.body;
+    let capsule_aad = &response.audit_capsule.aad;
+    if &response.manifest.network_id != expected_network
+        || response.authoritative_height == 0
+        || response.authoritative_height < response.manifest.authority_context_height
+        || response.authoritative_height > response.manifest.expiry_height
+        || !response
+            .audit_policy
+            .is_active_at(response.authoritative_height)
+        || availability.payload_digest != requested_payload_digest
+        || leg.payload_digest != requested_payload_digest
+        || leg.ordinal != response.statement.leg_ordinal
+        || leg.delta_digest != delta_digest
+        || leg.availability_certificate_digest != availability_digest
+        || leg.route != response.statement.route
+        || leg.pool_id != response.statement.pool_id
+        || leg.asset_binding_commitment != response.statement.asset_binding_commitment
+        || leg.audit_policy_digest != response.audit_policy.policy_digest
+        || response.audit_policy.body.dataspace_id != response.statement.route.dataspace_id
+        || response.committee_authority.route != response.statement.route
+        || availability.network_id != response.manifest.network_id
+        || availability.bundle_id != response.manifest.bundle_id
+        || availability.leg_ordinal != response.statement.leg_ordinal
+        || availability.route != response.statement.route
+        || availability.authority_digest != authority_digest
+        || availability.authority_context_height != response.manifest.authority_context_height
+        || availability.retention_until_height < response.manifest.expiry_height
+        || response.statement.network_id != response.manifest.network_id
+        || response.manifest.bundle_id != response.statement.bundle_id
+        || response.manifest.bundle_id != response.delta.bundle_id
+        || response.statement.authority_context_height != response.manifest.authority_context_height
+        || response.statement.leg_ordinal != response.delta.leg_ordinal
+        || response.statement.route != response.delta.route
+        || response.statement.pool_id != response.delta.pool_id
+        || response.statement.asset_binding_commitment != response.delta.asset_binding_commitment
+        || response.statement.audit_policy_digest != response.delta.audit_policy_digest
+        || response.statement.audit_policy_digest != response.audit_policy.policy_digest
+        || response.statement.audit_key_epoch != response.delta.audit_key_epoch
+        || response.statement.audit_key_epoch != response.audit_policy.body.key_epoch
+        || response.statement.fee_intent_digest != response.manifest.fee_intent_digest
+        || response.statement.reimbursement_terms_commitment
+            != response.manifest.reimbursement_terms_commitment
+        || response.statement.reimbursement_leg_ordinal
+            != response.manifest.reimbursement_leg_ordinal
+        || response.statement.expiry_height != response.manifest.expiry_height
+        || capsule_aad.network_id != response.statement.network_id
+        || capsule_aad.bundle_id != response.statement.bundle_id
+        || capsule_aad.leg_ordinal != response.statement.leg_ordinal
+        || capsule_aad.route != response.statement.route
+        || capsule_aad.authority_digest != authority_digest
+        || capsule_aad.authority_context_height != response.statement.authority_context_height
+        || capsule_aad.plaintext_commitment != response.statement.audit_plaintext_commitment
+        || response.statement.audit_capsule_digest != capsule_digest
+        || response.delta.capsule_digest != capsule_digest
+    {
+        return Err(invalid);
+    }
+    validate_private_settlement_auditor_view_attestation_v1(requested_payload_digest, response)
+}
+
+/// Validate that an auditor signing key is governed and consensus-separated.
+///
+/// The key must appear in the response's active auditor policy and must not be
+/// reused by any validator in the response's committee authority.
+///
+/// # Errors
+///
+/// Returns [`PrivateSettlementResponseValidationErrorV1::InvalidAuditorKeySeparation`]
+/// when the key is not governed or is reused as a consensus key.
+pub fn validate_private_settlement_auditor_identity_v1(
+    auditor_signing_key: &PublicKey,
+    response: &PrivateSettlementAuditorCapsuleResponseV1,
+) -> Result<(), PrivateSettlementResponseValidationErrorV1> {
+    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidAuditorKeySeparation;
+    response.audit_policy.validate().map_err(|_| invalid)?;
+    response
+        .committee_authority
+        .validate()
+        .map_err(|_| invalid)?;
+    for (validator, pop) in response
+        .committee_authority
+        .validators
+        .iter()
+        .zip(&response.committee_authority.validator_pops)
+    {
+        if validator.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
+            || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
+        {
+            return Err(invalid);
+        }
+    }
+    let governed_auditor = response
+        .audit_policy
+        .body
+        .auditors
+        .iter()
+        .any(|auditor| &auditor.signing_key == auditor_signing_key);
+    let committee_key_reused = response
+        .committee_authority
+        .validators
+        .iter()
+        .any(|validator| validator.public_key() == auditor_signing_key);
+    if !governed_auditor || committee_key_reused {
+        return Err(invalid);
+    }
+    Ok(())
+}
+
+/// Validate an audit-approval acknowledgement against the exact request.
+///
+/// This checks lifecycle and height bounds, request identifiers, governed
+/// route, committee roster and proofs of possession, all acknowledgement
+/// digests, and the exact responding validator's BLS-normal signature.
+///
+/// # Errors
+///
+/// Returns [`PrivateSettlementResponseValidationErrorV1::InvalidAuditApprovalAcknowledgement`]
+/// for any malformed, inconsistent, unauthenticated, expired, or substituted
+/// field.
+pub fn validate_private_settlement_audit_approval_response_v1(
+    requested_payload_digest: Hash,
+    request: &PrivateSettlementAuditApprovalRequestV1,
+    response: &PrivateSettlementAuditApprovalResponseV1,
+) -> Result<usize, PrivateSettlementResponseValidationErrorV1> {
+    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidAuditApprovalAcknowledgement;
+    let lifecycle_is_exact = if response.collected < response.required {
+        response.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting
+    } else {
+        response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited
+    };
+    if response.authoritative_height == 0
+        || response.authoritative_height > request.approval.body.expiry_height
+        || response.payload_digest != requested_payload_digest
+        || response.bundle_id != request.approval.body.bundle_id
+        || response.leg_ordinal != request.approval.body.leg_ordinal
+        || response.committee_authority.route.dataspace_id != request.approval.body.dataspace_id
+        || response.collected == 0
+        || response.required == 0
+        || response.collected > response.required
+        || !lifecycle_is_exact
+    {
+        return Err(invalid);
+    }
+    response
+        .committee_authority
+        .validate()
+        .map_err(|_| invalid)?;
+    for (validator, pop) in response
+        .committee_authority
+        .validators
+        .iter()
+        .zip(&response.committee_authority.validator_pops)
+    {
+        if validator.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
+            || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
+        {
+            return Err(invalid);
+        }
+    }
+    let approval_digest = request.approval.digest().map_err(|_| invalid)?;
+    let acknowledgement_digest = response.acknowledgement_digest().map_err(|_| invalid)?;
+    let authority_digest = response.committee_authority.digest().map_err(|_| invalid)?;
+    let attestation = &response.responder_attestation;
+    attestation.validate_shape().map_err(|_| invalid)?;
+    let expected_body =
+        iroha_data_model::nexus::PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id: request.approval.body.network_id,
+            payload_digest: requested_payload_digest,
+            approval_digest,
+            acknowledgement_digest,
+            authority_digest,
+            lifecycle_code: response.lifecycle.attestation_code(),
+            authoritative_height: response.authoritative_height,
+            responder: attestation.body.responder.clone(),
+        };
+    if attestation.body != expected_body {
+        return Err(invalid);
+    }
+    let responder_index = response
+        .committee_authority
+        .validators
+        .iter()
+        .position(|validator| validator == &attestation.body.responder)
+        .ok_or(invalid)?;
+    let signature = Signature::try_from_bytes(&attestation.signature).map_err(|_| invalid)?;
+    signature
+        .verify(
+            attestation.body.responder.public_key(),
+            &attestation.body.signature_preimage().map_err(|_| invalid)?,
+        )
+        .map_err(|_| invalid)?;
+    Ok(responder_index)
 }
 
 /// Sponsor-authenticated complete global finalization or abort carrier submission.
@@ -458,6 +1033,650 @@ pub enum PrivateSettlementBundleReceiptResponseV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{HashOf, HybridKeyPair, KeyPair, SignatureOf};
+    use iroha_data_model::{
+        account::AccountId,
+        block::BlockHeader,
+        nexus::{
+            DataSpaceId, LaneId, PRIVATE_SETTLEMENT_ML_KEM_768_CIPHERTEXT_BYTES_V1,
+            PRIVATE_SETTLEMENT_WRAPPED_DEK_BYTES_V1, PrivateSettlementAuditAadV1,
+            PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
+            PrivateSettlementAuditApprovalBodyV1, PrivateSettlementAuditPolicyBodyV1,
+            PrivateSettlementAuditorV1, PrivateSettlementAuditorViewAttestationBodyV1,
+            PrivateSettlementCapsulePaddingV1, PrivateSettlementHybridPublicKeyV1,
+            PrivateSettlementLegCommitmentV1, PrivateSettlementProofProfileV1,
+            PrivateSettlementWrappedDekV1,
+        },
+        peer::PeerId,
+        privacy::{
+            PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
+            PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
+            PrivacyRecipientIdV1, PrivacyRootV1,
+        },
+        transaction::FeePaymentIntent,
+    };
+
+    struct ResponseValidationFixtureV1 {
+        network_id: NetworkId,
+        payload_digest: Hash,
+        auditor_signing: KeyPair,
+        validator_keys: Vec<KeyPair>,
+        committee: PrivateSettlementCommitteeProofResponseV1,
+        auditor: PrivateSettlementAuditorCapsuleResponseV1,
+        approval_request: PrivateSettlementAuditApprovalRequestV1,
+        approval_response: PrivateSettlementAuditApprovalResponseV1,
+    }
+
+    fn validation_network(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([
+            seed,
+        ])))
+    }
+
+    fn validation_route(dataspace: u64) -> PrivateSettlementRouteV1 {
+        PrivateSettlementRouteV1 {
+            dataspace_id: DataSpaceId::new(dataspace),
+            lane_id: LaneId::new(u32::try_from(dataspace).expect("fixture dataspace fits lane")),
+            lane_incarnation: Hash::new(dataspace.to_le_bytes()),
+        }
+    }
+
+    fn validation_output(seed: u8) -> PrivacyEncryptedOutputV1 {
+        let commitment = PrivacyCommitmentV1::new([seed; 32]);
+        let mut ciphertext = vec![seed; PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1];
+        ciphertext[..4].copy_from_slice(b"IPNE");
+        PrivacyEncryptedOutputV1 {
+            recipient: PrivacyRecipientIdV1::new([seed.wrapping_add(0x10); 32]),
+            ephemeral_public_key: PrivacyEncryptionKeyV1::new([seed.wrapping_add(0x20); 32]),
+            commitment,
+            ciphertext,
+        }
+    }
+
+    fn sign_bytes(key: &KeyPair, preimage: &[u8]) -> Vec<u8> {
+        Signature::try_new(key.private_key(), preimage)
+            .expect("fixture signature")
+            .payload()
+            .to_vec()
+    }
+
+    fn response_validation_fixture_v1() -> ResponseValidationFixtureV1 {
+        let network_id = validation_network(0x31);
+        let route = validation_route(7);
+        let second_route = validation_route(8);
+        let auditor_signing = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
+        let auditor_id = AccountId::new(auditor_signing.public_key().clone());
+        let mut hybrid_rng = iroha_crypto::rng_from_seed_slice(b"shared response verifier auditor");
+        let hybrid = HybridKeyPair::generate(&mut hybrid_rng).expect("fixture hybrid key");
+        let audit_policy =
+            PrivateSettlementAuditPolicyV1::new(PrivateSettlementAuditPolicyBodyV1 {
+                version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+                dataspace_id: route.dataspace_id,
+                policy_id: Hash::new(b"shared response verifier policy"),
+                revision: 1,
+                key_epoch: 1,
+                activation_height: 5,
+                retirement_height: Some(500),
+                min_approvals: 1,
+                auditors: vec![PrivateSettlementAuditorV1 {
+                    auditor_id: auditor_id.clone(),
+                    signing_key: auditor_signing.public_key().clone(),
+                    encryption_key: PrivateSettlementHybridPublicKeyV1::from_hybrid(
+                        hybrid.public(),
+                    ),
+                }],
+            })
+            .expect("fixture audit policy");
+
+        let mut validator_keys = (0_u8..4)
+            .map(|index| KeyPair::from_seed(vec![0x50 + index; 32], Algorithm::BlsNormal))
+            .collect::<Vec<_>>();
+        validator_keys.sort_by(|left, right| {
+            PeerId::from(left.public_key().clone()).cmp(&PeerId::from(right.public_key().clone()))
+        });
+        let validators = validator_keys
+            .iter()
+            .map(|key| PeerId::from(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let authority = PrivateSettlementCommitteeAuthorityV1 {
+            route,
+            validator_set_hash: HashOf::new(&validators),
+            validators,
+            validator_pops: validator_keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("fixture validator proof of possession")
+                })
+                .collect(),
+        };
+        authority.validate().expect("fixture authority");
+        let authority_digest = authority.digest().expect("fixture authority digest");
+
+        let sponsor = KeyPair::from_seed(vec![0x61; 32], Algorithm::Ed25519);
+        let mut manifest = AtomicPrivateSettlementV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id,
+            bundle_id: Hash::new(b"shared response verifier provisional bundle"),
+            authority_context_height: 10,
+            expiry_height: 100,
+            sponsor: AccountId::new(sponsor.public_key().clone()),
+            public_fee_intent: FeePaymentIntent::authority(Vec::new(), None),
+            fee_intent_digest: Hash::new(b"shared response verifier provisional fee"),
+            reimbursement_terms_commitment: Hash::new(
+                b"shared response verifier reimbursement terms",
+            ),
+            reimbursement_leg_ordinal: 0,
+            legs: vec![
+                PrivateSettlementLegCommitmentV1 {
+                    ordinal: 0,
+                    route,
+                    pool_id: PrivacyPoolIdV1::new([0x71; 32]),
+                    asset_binding_commitment: Hash::new(b"shared response verifier asset"),
+                    audit_policy_digest: audit_policy.policy_digest,
+                    payload_digest: Hash::new(b"shared response verifier provisional payload"),
+                    availability_certificate_digest: Hash::new(
+                        b"shared response verifier provisional availability",
+                    ),
+                    delta_digest: Hash::new(b"shared response verifier provisional delta"),
+                },
+                PrivateSettlementLegCommitmentV1 {
+                    ordinal: 1,
+                    route: second_route,
+                    pool_id: PrivacyPoolIdV1::new([0x72; 32]),
+                    asset_binding_commitment: Hash::new(b"shared response verifier second asset"),
+                    audit_policy_digest: Hash::new(b"shared response verifier second policy"),
+                    payload_digest: Hash::new(b"shared response verifier second payload"),
+                    availability_certificate_digest: Hash::new(
+                        b"shared response verifier second availability",
+                    ),
+                    delta_digest: Hash::new(b"shared response verifier second delta"),
+                },
+            ],
+        };
+        manifest.fee_intent_digest = manifest
+            .computed_fee_intent_digest()
+            .expect("fixture fee intent digest");
+        manifest.bundle_id = manifest.computed_bundle_id().expect("fixture bundle id");
+
+        let padding = PrivateSettlementCapsulePaddingV1::KiB4;
+        let audit_plaintext_commitment = Hash::new(b"shared response verifier audit plaintext");
+        let audit_capsule = PrivateSettlementAuditCapsuleV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            aad: PrivateSettlementAuditAadV1 {
+                network_id,
+                bundle_id: manifest.bundle_id,
+                leg_ordinal: 0,
+                route,
+                authority_digest,
+                authority_context_height: manifest.authority_context_height,
+                audit_policy_digest: audit_policy.policy_digest,
+                audit_key_epoch: audit_policy.body.key_epoch,
+                plaintext_commitment: audit_plaintext_commitment,
+            },
+            padding,
+            nonce: [0x81; 24],
+            ciphertext: vec![0x82; padding.ciphertext_bytes()],
+            wrapped_deks: vec![PrivateSettlementWrappedDekV1 {
+                auditor_id: auditor_id.clone(),
+                ephemeral_x25519: [0x83; 32],
+                ml_kem_ciphertext: vec![0x84; PRIVATE_SETTLEMENT_ML_KEM_768_CIPHERTEXT_BYTES_V1],
+                nonce: [0x85; 24],
+                wrapped_dek: vec![0x86; PRIVATE_SETTLEMENT_WRAPPED_DEK_BYTES_V1],
+            }],
+        };
+        audit_capsule
+            .validate_against(&audit_policy)
+            .expect("fixture audit capsule");
+        let capsule_digest = audit_capsule.digest().expect("fixture capsule digest");
+        let encrypted_outputs = vec![
+            validation_output(0x91),
+            validation_output(0x92),
+            validation_output(0x93),
+        ];
+        let profile = PrivateSettlementProofProfileV1::IvmPrivateNoteFixed2In3Out;
+        let statement = PrivateSettlementProofStatementV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            profile,
+            proof_profile_digest: profile.digest(),
+            network_id,
+            bundle_id: manifest.bundle_id,
+            leg_ordinal: 0,
+            route,
+            authority_context_height: manifest.authority_context_height,
+            pool_id: manifest.legs[0].pool_id,
+            asset_binding_commitment: manifest.legs[0].asset_binding_commitment,
+            old_root: PrivacyRootV1::new([0xA1; 32]),
+            old_epoch: 1,
+            nullifiers: vec![
+                PrivacyNullifierV1::new([0xA2; 32]),
+                PrivacyNullifierV1::new([0xA3; 32]),
+            ],
+            output_commitments: encrypted_outputs
+                .iter()
+                .map(|output| output.commitment)
+                .collect(),
+            encrypted_outputs: encrypted_outputs.clone(),
+            audit_plaintext_commitment,
+            audit_capsule_digest: capsule_digest,
+            audit_policy_digest: audit_policy.policy_digest,
+            audit_key_epoch: audit_policy.body.key_epoch,
+            fee_intent_digest: manifest.fee_intent_digest,
+            reimbursement_terms_commitment: manifest.reimbursement_terms_commitment,
+            reimbursement_leg_ordinal: manifest.reimbursement_leg_ordinal,
+            expiry_height: manifest.expiry_height,
+        };
+        statement.validate().expect("fixture proof statement");
+        let proof = vec![0xB1; 128];
+        let proof_digest = private_settlement_proof_digest_v1(&proof);
+        let delta = PrivateSettlementDeltaV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            bundle_id: statement.bundle_id,
+            leg_ordinal: statement.leg_ordinal,
+            route,
+            pool_id: statement.pool_id,
+            asset_binding_commitment: statement.asset_binding_commitment,
+            old_root: statement.old_root,
+            new_root: PrivacyRootV1::new([0xA4; 32]),
+            old_epoch: statement.old_epoch,
+            new_epoch: statement.old_epoch + 1,
+            nullifiers: statement.nullifiers.clone(),
+            output_commitments: statement.output_commitments.clone(),
+            encrypted_outputs,
+            statement_digest: statement.digest().expect("fixture statement digest"),
+            proof_digest,
+            capsule_digest,
+            audit_policy_digest: audit_policy.policy_digest,
+            audit_key_epoch: audit_policy.body.key_epoch,
+        };
+        delta
+            .validate_against(&statement)
+            .expect("fixture private delta");
+        let delta_digest = delta.digest().expect("fixture delta digest");
+        let payload_digest = Hash::new(b"shared response verifier exact payload");
+        let availability_body =
+            iroha_data_model::nexus::PrivateSettlementSidecarAvailabilityBodyV1 {
+                version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+                network_id,
+                bundle_id: manifest.bundle_id,
+                leg_ordinal: 0,
+                route,
+                authority_digest,
+                authority_context_height: manifest.authority_context_height,
+                payload_digest,
+                payload_bytes: 4096,
+                retention_until_height: 120,
+            };
+        let availability_preimage = availability_body
+            .signature_preimage()
+            .expect("fixture availability preimage");
+        let availability_signatures = validator_keys[..3]
+            .iter()
+            .map(|key| sign_bytes(key, &availability_preimage))
+            .collect::<Vec<_>>();
+        let availability_signature_refs = availability_signatures
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        let availability = PrivateSettlementSidecarAvailabilityV1 {
+            body: availability_body,
+            signers_bitmap: 0b0111,
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                &availability_signature_refs,
+            )
+            .expect("fixture availability aggregate"),
+        };
+        manifest.legs[0].payload_digest = payload_digest;
+        manifest.legs[0].delta_digest = delta_digest;
+        manifest.legs[0].availability_certificate_digest =
+            availability.digest().expect("fixture availability digest");
+        manifest.validate().expect("fixture final manifest");
+
+        let approval_body = PrivateSettlementAuditApprovalBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id,
+            bundle_id: manifest.bundle_id,
+            leg_ordinal: 0,
+            dataspace_id: route.dataspace_id,
+            auditor_id,
+            audit_policy_digest: audit_policy.policy_digest,
+            audit_key_epoch: audit_policy.body.key_epoch,
+            proof_digest,
+            capsule_digest,
+            delta_digest,
+            old_root: delta.old_root,
+            new_root: delta.new_root,
+            expiry_height: manifest.expiry_height,
+        };
+        let approval = PrivateSettlementAuditApprovalV1 {
+            signature: SignatureOf::try_new(auditor_signing.private_key(), &approval_body)
+                .expect("fixture auditor approval"),
+            body: approval_body,
+        };
+        approval
+            .verify(&audit_policy, manifest.authority_context_height)
+            .expect("fixture governed approval");
+        let approval_request = PrivateSettlementAuditApprovalRequestV1 {
+            approval: approval.clone(),
+        };
+
+        let committee = PrivateSettlementCommitteeProofResponseV1 {
+            manifest: manifest.clone(),
+            audit_policy: audit_policy.clone(),
+            committee_authority: authority.clone(),
+            statement: statement.clone(),
+            proof,
+            delta: delta.clone(),
+            audit_approvals: vec![approval],
+            audit_capsule_digest: capsule_digest,
+            availability: availability.clone(),
+            lifecycle: PrivateSettlementLifecycleDtoV1::Audited,
+        };
+
+        let placeholder_view_body = PrivateSettlementAuditorViewAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id,
+            payload_digest,
+            view_digest: Hash::new(b"shared response verifier placeholder view"),
+            authority_digest,
+            lifecycle_code: PrivateSettlementLifecycleDtoV1::Collecting.attestation_code(),
+            authoritative_height: 11,
+            responder: authority.validators[0].clone(),
+        };
+        let mut auditor = PrivateSettlementAuditorCapsuleResponseV1 {
+            authoritative_height: 11,
+            manifest: manifest.clone(),
+            audit_policy: audit_policy.clone(),
+            committee_authority: authority.clone(),
+            statement,
+            delta,
+            audit_capsule,
+            availability,
+            lifecycle: PrivateSettlementLifecycleDtoV1::Collecting,
+            responder_attestation: PrivateSettlementAuditorViewAttestationV1 {
+                body: placeholder_view_body,
+                signature: vec![0; 96],
+            },
+        };
+        let view_body = PrivateSettlementAuditorViewAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id,
+            payload_digest,
+            view_digest: auditor.view_digest().expect("fixture auditor view digest"),
+            authority_digest,
+            lifecycle_code: auditor.lifecycle.attestation_code(),
+            authoritative_height: auditor.authoritative_height,
+            responder: authority.validators[0].clone(),
+        };
+        auditor.responder_attestation = PrivateSettlementAuditorViewAttestationV1 {
+            signature: sign_bytes(
+                &validator_keys[0],
+                &view_body
+                    .signature_preimage()
+                    .expect("fixture auditor attestation preimage"),
+            ),
+            body: view_body,
+        };
+
+        let placeholder_ack_body = PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id,
+            payload_digest,
+            approval_digest: Hash::new(b"shared response verifier placeholder approval"),
+            acknowledgement_digest: Hash::new(
+                b"shared response verifier placeholder acknowledgement",
+            ),
+            authority_digest,
+            lifecycle_code: PrivateSettlementLifecycleDtoV1::Audited.attestation_code(),
+            authoritative_height: 12,
+            responder: authority.validators[0].clone(),
+        };
+        let mut approval_response = PrivateSettlementAuditApprovalResponseV1 {
+            authoritative_height: 12,
+            bundle_id: manifest.bundle_id,
+            payload_digest,
+            leg_ordinal: 0,
+            committee_authority: authority,
+            collected: 1,
+            required: 1,
+            newly_recorded: true,
+            lifecycle: PrivateSettlementLifecycleDtoV1::Audited,
+            responder_attestation: PrivateSettlementAuditApprovalAcknowledgementAttestationV1 {
+                body: placeholder_ack_body,
+                signature: vec![0; 96],
+            },
+        };
+        let acknowledgement_body = PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id,
+            payload_digest,
+            approval_digest: approval_request
+                .approval
+                .digest()
+                .expect("fixture approval digest"),
+            acknowledgement_digest: approval_response
+                .acknowledgement_digest()
+                .expect("fixture acknowledgement digest"),
+            authority_digest,
+            lifecycle_code: approval_response.lifecycle.attestation_code(),
+            authoritative_height: approval_response.authoritative_height,
+            responder: approval_response.committee_authority.validators[0].clone(),
+        };
+        approval_response.responder_attestation =
+            PrivateSettlementAuditApprovalAcknowledgementAttestationV1 {
+                signature: sign_bytes(
+                    &validator_keys[0],
+                    &acknowledgement_body
+                        .signature_preimage()
+                        .expect("fixture acknowledgement attestation preimage"),
+                ),
+                body: acknowledgement_body,
+            };
+
+        ResponseValidationFixtureV1 {
+            network_id,
+            payload_digest,
+            auditor_signing,
+            validator_keys,
+            committee,
+            auditor,
+            approval_request,
+            approval_response,
+        }
+    }
+
+    #[test]
+    fn shared_committee_response_verifier_binds_network_payload_and_private_material() {
+        let fixture = response_validation_fixture_v1();
+        validate_private_settlement_committee_proof_response_v1(
+            &fixture.network_id,
+            fixture.payload_digest,
+            &fixture.committee,
+        )
+        .expect("exact committee response verifies");
+
+        assert_eq!(
+            validate_private_settlement_committee_proof_response_v1(
+                &validation_network(0x32),
+                fixture.payload_digest,
+                &fixture.committee,
+            ),
+            Err(PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse)
+        );
+        let mut substituted = fixture.committee;
+        substituted.delta.proof_digest = Hash::new(b"substituted committee proof digest");
+        assert_eq!(
+            validate_private_settlement_committee_proof_response_v1(
+                &fixture.network_id,
+                fixture.payload_digest,
+                &substituted,
+            ),
+            Err(PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse)
+        );
+
+        let mut substituted_policy = substituted;
+        substituted_policy.delta.proof_digest =
+            private_settlement_proof_digest_v1(&substituted_policy.proof);
+        substituted_policy.statement.audit_policy_digest =
+            Hash::new(b"substituted statement policy");
+        substituted_policy.statement.audit_key_epoch += 1;
+        substituted_policy.delta.audit_policy_digest =
+            substituted_policy.statement.audit_policy_digest;
+        substituted_policy.delta.audit_key_epoch = substituted_policy.statement.audit_key_epoch;
+        substituted_policy.delta.statement_digest = substituted_policy
+            .statement
+            .digest()
+            .expect("substituted statement remains encodable");
+        let substituted_delta_digest = substituted_policy
+            .delta
+            .digest()
+            .expect("substituted delta remains encodable");
+        substituted_policy.manifest.legs[0].delta_digest = substituted_delta_digest;
+        substituted_policy.audit_approvals[0].body.delta_digest = substituted_delta_digest;
+        let substituted_approval_signature = SignatureOf::try_new(
+            fixture.auditor_signing.private_key(),
+            &substituted_policy.audit_approvals[0].body,
+        )
+        .expect("substituted approval remains internally signed");
+        substituted_policy.audit_approvals[0].signature = substituted_approval_signature;
+        assert_eq!(
+            validate_private_settlement_committee_proof_response_v1(
+                &fixture.network_id,
+                fixture.payload_digest,
+                &substituted_policy,
+            ),
+            Err(PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse)
+        );
+    }
+
+    #[test]
+    fn shared_auditor_response_verifier_authenticates_exact_responder_and_network() {
+        let fixture = response_validation_fixture_v1();
+        assert_eq!(
+            validate_private_settlement_auditor_capsule_response_v1(
+                &fixture.network_id,
+                fixture.payload_digest,
+                &fixture.auditor,
+            ),
+            Ok(0)
+        );
+        assert_eq!(
+            validate_private_settlement_auditor_identity_v1(
+                fixture.auditor_signing.public_key(),
+                &fixture.auditor,
+            ),
+            Ok(())
+        );
+
+        assert_eq!(
+            validate_private_settlement_auditor_capsule_response_v1(
+                &validation_network(0x33),
+                fixture.payload_digest,
+                &fixture.auditor,
+            ),
+            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse)
+        );
+        let mut substituted = fixture.auditor;
+        substituted.responder_attestation.signature = sign_bytes(
+            &fixture.validator_keys[1],
+            &substituted
+                .responder_attestation
+                .body
+                .signature_preimage()
+                .expect("substituted response remains encodable"),
+        );
+        assert_eq!(
+            validate_private_settlement_auditor_capsule_response_v1(
+                &fixture.network_id,
+                fixture.payload_digest,
+                &substituted,
+            ),
+            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse)
+        );
+    }
+
+    #[test]
+    fn shared_auditor_identity_verifier_rejects_ungoverned_and_consensus_keys() {
+        let fixture = response_validation_fixture_v1();
+        let unknown = KeyPair::from_seed(vec![0xC1; 32], Algorithm::Ed25519);
+        assert_eq!(
+            validate_private_settlement_auditor_identity_v1(unknown.public_key(), &fixture.auditor,),
+            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorKeySeparation)
+        );
+
+        let mut reused = fixture.auditor;
+        let consensus_key = reused.committee_authority.validators[0]
+            .public_key()
+            .clone();
+        reused.audit_policy.body.auditors[0].signing_key = consensus_key.clone();
+        assert_eq!(
+            validate_private_settlement_auditor_identity_v1(&consensus_key, &reused),
+            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorKeySeparation)
+        );
+    }
+
+    #[test]
+    fn shared_approval_response_verifier_binds_exact_request_height_and_responder() {
+        let fixture = response_validation_fixture_v1();
+        assert_eq!(
+            validate_private_settlement_audit_approval_response_v1(
+                fixture.payload_digest,
+                &fixture.approval_request,
+                &fixture.approval_response,
+            ),
+            Ok(0)
+        );
+
+        let mut substituted_request = fixture.approval_request.clone();
+        substituted_request.approval.body.expiry_height -= 1;
+        assert_eq!(
+            validate_private_settlement_audit_approval_response_v1(
+                fixture.payload_digest,
+                &substituted_request,
+                &fixture.approval_response,
+            ),
+            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditApprovalAcknowledgement)
+        );
+        let mut expired = fixture.approval_response;
+        expired.authoritative_height = substituted_request.approval.body.expiry_height + 1;
+        assert_eq!(
+            validate_private_settlement_audit_approval_response_v1(
+                fixture.payload_digest,
+                &substituted_request,
+                &expired,
+            ),
+            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditApprovalAcknowledgement)
+        );
+    }
+
+    #[test]
+    fn shared_response_validation_errors_are_redacted() {
+        let sensitive_canary = "account=alice amount=424242 memo=classified";
+        for error in [
+            PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse,
+            PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse,
+            PrivateSettlementResponseValidationErrorV1::InvalidAuditorKeySeparation,
+            PrivateSettlementResponseValidationErrorV1::InvalidAuditApprovalAcknowledgement,
+        ] {
+            let rendered = format!("{error}: {sensitive_canary}");
+            assert!(!error.to_string().contains(sensitive_canary));
+            assert!(rendered.starts_with(&error.to_string()));
+        }
+    }
+
+    #[test]
+    fn auditor_capsule_json_requires_authoritative_height() {
+        let error = norito::json::from_json::<PrivateSettlementAuditorCapsuleResponseV1>("{}")
+            .expect_err("authoritative response height must be explicit");
+        assert!(error.to_string().contains("authoritative_height"));
+    }
+
+    #[test]
+    fn audit_approval_acknowledgement_json_requires_authoritative_height() {
+        let error = norito::json::from_json::<PrivateSettlementAuditApprovalResponseV1>("{}")
+            .expect_err("attested acknowledgement height must be explicit");
+        assert!(error.to_string().contains("authoritative_height"));
+    }
 
     #[test]
     fn bundle_status_json_requires_explicit_manifest() {

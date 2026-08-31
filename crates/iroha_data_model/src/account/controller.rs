@@ -57,6 +57,17 @@ impl AccountController {
             Self::Multisig(policy) => Some(policy),
         }
     }
+    /// Wipe controller key bytes before discarding a confidential account copy.
+    ///
+    /// The controller intentionally becomes invalid and must not be used after
+    /// this call. Ordinary ledger account identifiers never call this method;
+    /// it exists for decrypted restricted payload containers.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        match self {
+            Self::Single(public_key) => public_key.zeroize_for_confidential_discard(),
+            Self::Multisig(policy) => policy.zeroize_for_confidential_discard(),
+        }
+    }
 }
 impl fmt::Display for AccountController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -93,6 +104,20 @@ impl MultisigPolicy {
     /// Returns [`MultisigPolicyError`] if the supplied configuration is invalid.
     pub fn new(threshold: u16, members: Vec<MultisigMember>) -> Result<Self, MultisigPolicyError> {
         Self::validate(Self::CURRENT_VERSION, threshold, members)
+    }
+    /// Wipe every member key before discarding a confidential policy copy.
+    ///
+    /// The policy intentionally becomes invalid and must not be used after
+    /// this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        for member in &mut self.members {
+            member.public_key.zeroize_for_confidential_discard();
+        }
+        self.version = 0;
+        self.threshold = 0;
+        for member in &mut self.members {
+            member.weight = 0;
+        }
     }
     /// Construct a policy from serialized components.
     ///

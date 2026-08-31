@@ -693,7 +693,7 @@ final class FeePaymentTests: XCTestCase {
     func testSponsorQuoteRequiresCanonicalCapacityOrderAndPreservesFeeFreeQuotes() throws {
         let secondAsset = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
         let unrelatedAsset = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
-        let orderedAssets = [assetDefinitionId, secondAsset].sorted { lhs, rhs in
+        let orderedAssets: [String] = [assetDefinitionId, secondAsset].sorted { lhs, rhs in
             AssetDefinitionAddressCodec.uuidBytes(lhs)!.lexicographicallyPrecedes(
                 AssetDefinitionAddressCodec.uuidBytes(rhs)!
             )

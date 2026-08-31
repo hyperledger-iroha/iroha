@@ -3425,7 +3425,10 @@ fn prepare_fault_bundle(
         .iter()
         .map(|committee| committee.authority.clone())
         .collect();
-    let deltas = prepared.iter().map(|leg| leg.delta.clone()).collect();
+    let deltas = prepared
+        .iter()
+        .map(|leg| leg.prepared.delta.clone())
+        .collect();
     Ok(FaultPreparedBundleV1 {
         manifest,
         prepared,
@@ -3484,10 +3487,19 @@ fn audit_fault_bundle(
     committees: &[CommitteeEndpoints],
 ) -> Result<()> {
     for (ordinal, (leg, committee)) in bundle.prepared.iter().zip(committees).enumerate() {
-        let fetched = sponsor.private_settlement_auditor_capsule_v1(
+        let auditor_transport_signer =
+            BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
+        let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
+            &committee.endpoints,
+            &bundle.authorities[ordinal],
             bundle.manifest.legs[ordinal].payload_digest,
-            &leg.governed.auditor_signing,
+            &auditor_transport_signer,
         )?;
+        ensure!(
+            fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
+            "unexpected fault audit lifecycle"
+        );
+        let authoritative_height = fetched.authoritative_height;
         let view = PrivateSettlementAuditorSidecarViewV1 {
             manifest: fetched.manifest,
             policy: fetched.audit_policy,
@@ -3502,27 +3514,23 @@ fn audit_fault_bundle(
         let approval = approve_private_settlement_leg_v1(
             &view,
             &leg.governed.governance,
-            bundle.manifest.authority_context_height,
+            authoritative_height,
             &auditor_id,
             leg.governed.auditor_encryption.secret(),
             &leg.governed.auditor_signing,
             &approve_all_audit_material,
         )?;
-        for endpoint in &committee.endpoints {
-            let mut endpoint_client = sponsor.clone();
-            endpoint_client.torii_url = endpoint.clone();
-            let response = endpoint_client.submit_private_settlement_audit_approval_v1(
-                bundle.manifest.legs[ordinal].payload_digest,
-                &leg.governed.auditor_signing,
-                &PrivateSettlementAuditApprovalRequestV1 {
-                    approval: approval.clone(),
-                },
-            )?;
-            ensure!(
-                response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
-                "fault audit approval was not durable"
-            );
-        }
+        let response = sponsor.submit_private_settlement_audit_approval_quorum_for_authority_v1(
+            &committee.endpoints,
+            &bundle.authorities[ordinal],
+            bundle.manifest.legs[ordinal].payload_digest,
+            &auditor_transport_signer,
+            &PrivateSettlementAuditApprovalRequestV1 { approval },
+        )?;
+        ensure!(
+            response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
+            "fault audit approval quorum was not durable"
+        );
     }
     Ok(())
 }
@@ -6315,10 +6323,10 @@ fn verify_committee_proof_views(
             ensure!(
                 view.manifest == *manifest
                     && view.committee_authority == committee.authority
-                    && view.statement == leg.statement
-                    && view.proof == leg.proof
-                    && view.delta == leg.delta
-                    && view.audit_capsule_digest == leg.capsule.digest()?
+                    && view.statement == leg.prepared.statement
+                    && view.proof == leg.prepared.proof
+                    && view.delta == leg.prepared.delta
+                    && view.audit_capsule_digest == leg.prepared.audit_capsule.digest()?
                     && !view.audit_approvals.is_empty()
                     && view.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
                 "committee proof view was substituted or incomplete"
@@ -6510,14 +6518,19 @@ fn run_real_process_leakage_campaign(
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "leakage-collecting")?;
 
     for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
-        let fetched = sponsor.private_settlement_auditor_capsule_v1(
+        let auditor_transport_signer =
+            BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
+        let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
+            &committee.endpoints,
+            &materials[ordinal].committee_authority,
             final_manifest.legs[ordinal].payload_digest,
-            &leg.governed.auditor_signing,
+            &auditor_transport_signer,
         )?;
         ensure!(
             fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
             "unexpected leakage audit lifecycle"
         );
+        let authoritative_height = fetched.authoritative_height;
         let view = PrivateSettlementAuditorSidecarViewV1 {
             manifest: fetched.manifest,
             policy: fetched.audit_policy,
@@ -6532,27 +6545,23 @@ fn run_real_process_leakage_campaign(
         let approval = approve_private_settlement_leg_v1(
             &view,
             &leg.governed.governance,
-            authority_context_height,
+            authoritative_height,
             &auditor_id,
             leg.governed.auditor_encryption.secret(),
             &leg.governed.auditor_signing,
             &approve_all_audit_material,
         )?;
-        for endpoint in &committee.endpoints {
-            let mut endpoint_client = sponsor.clone();
-            endpoint_client.torii_url = endpoint.clone();
-            let response = endpoint_client.submit_private_settlement_audit_approval_v1(
-                final_manifest.legs[ordinal].payload_digest,
-                &leg.governed.auditor_signing,
-                &PrivateSettlementAuditApprovalRequestV1 {
-                    approval: approval.clone(),
-                },
-            )?;
-            ensure!(
-                response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
-                "leakage approval was not durable"
-            );
-        }
+        let response = sponsor.submit_private_settlement_audit_approval_quorum_for_authority_v1(
+            &committee.endpoints,
+            &materials[ordinal].committee_authority,
+            final_manifest.legs[ordinal].payload_digest,
+            &auditor_transport_signer,
+            &PrivateSettlementAuditApprovalRequestV1 { approval },
+        )?;
+        ensure!(
+            response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
+            "leakage approval quorum was not durable"
+        );
     }
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "leakage-audited")?;
     verify_committee_proof_views(&sponsor, &final_manifest, &prepared, &committees)?;
@@ -6567,7 +6576,7 @@ fn run_real_process_leakage_campaign(
         .collect::<Vec<_>>();
     let deltas = prepared
         .iter()
-        .map(|leg| leg.delta.clone())
+        .map(|leg| leg.prepared.delta.clone())
         .collect::<Vec<_>>();
     let barrier = sponsor.prepare_private_settlement_bundle_v1(
         &endpoint_matrix,
@@ -6621,7 +6630,7 @@ fn run_real_process_leakage_campaign(
     for (ordinal, leg) in receipt.legs.iter().enumerate() {
         ensure!(
             usize::from(leg.delta.leg_ordinal) == ordinal
-                && leg.delta == prepared[ordinal].delta
+                && leg.delta == prepared[ordinal].prepared.delta
                 && receipt
                     .legs
                     .iter()
@@ -7013,7 +7022,7 @@ fn run_real_process_private_benchmark(
     let proof_generation = elapsed_ms(proof_started);
     let proof_bytes = prepared.iter().try_fold(0_u64, |total, leg| {
         total
-            .checked_add(u64::try_from(leg.proof.len()).expect("proof length fits u64"))
+            .checked_add(u64::try_from(leg.prepared.proof.len()).expect("proof length fits u64"))
             .ok_or_else(|| eyre!("proof byte total overflow"))
     })?;
 
@@ -7078,14 +7087,19 @@ fn run_real_process_private_benchmark(
 
     let auditor_started = Instant::now();
     for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
-        let fetched = sponsor.private_settlement_auditor_capsule_v1(
+        let auditor_transport_signer =
+            BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
+        let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
+            &committee.endpoints,
+            &materials[ordinal].committee_authority,
             final_manifest.legs[ordinal].payload_digest,
-            &leg.governed.auditor_signing,
+            &auditor_transport_signer,
         )?;
         ensure!(
             fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
             "unexpected audit lifecycle"
         );
+        let authoritative_height = fetched.authoritative_height;
         let view = PrivateSettlementAuditorSidecarViewV1 {
             manifest: fetched.manifest,
             policy: fetched.audit_policy,
@@ -7100,27 +7114,23 @@ fn run_real_process_private_benchmark(
         let approval = approve_private_settlement_leg_v1(
             &view,
             &leg.governed.governance,
-            authority_context_height,
+            authoritative_height,
             &auditor_id,
             leg.governed.auditor_encryption.secret(),
             &leg.governed.auditor_signing,
             &approve_all_audit_material,
         )?;
-        for endpoint in &committee.endpoints {
-            let mut endpoint_client = sponsor.clone();
-            endpoint_client.torii_url = endpoint.clone();
-            let response = endpoint_client.submit_private_settlement_audit_approval_v1(
-                final_manifest.legs[ordinal].payload_digest,
-                &leg.governed.auditor_signing,
-                &PrivateSettlementAuditApprovalRequestV1 {
-                    approval: approval.clone(),
-                },
-            )?;
-            ensure!(
-                response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
-                "approval was not durable"
-            );
-        }
+        let response = sponsor.submit_private_settlement_audit_approval_quorum_for_authority_v1(
+            &committee.endpoints,
+            &materials[ordinal].committee_authority,
+            final_manifest.legs[ordinal].payload_digest,
+            &auditor_transport_signer,
+            &PrivateSettlementAuditApprovalRequestV1 { approval },
+        )?;
+        ensure!(
+            response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
+            "approval quorum was not durable"
+        );
     }
     let auditor_response = elapsed_ms(auditor_started);
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "audited")?;
@@ -7139,7 +7149,7 @@ fn run_real_process_private_benchmark(
         .collect::<Vec<_>>();
     let deltas = prepared
         .iter()
-        .map(|leg| leg.delta.clone())
+        .map(|leg| leg.prepared.delta.clone())
         .collect::<Vec<_>>();
     let prepare_started = Instant::now();
     let barrier = sponsor.prepare_private_settlement_bundle_v1(
@@ -7191,7 +7201,7 @@ fn run_real_process_private_benchmark(
     for (ordinal, leg) in receipt.legs.iter().enumerate() {
         ensure!(
             usize::from(leg.delta.leg_ordinal) == ordinal
-                && leg.delta == prepared[ordinal].delta
+                && leg.delta == prepared[ordinal].prepared.delta
                 && receipt
                     .legs
                     .iter()

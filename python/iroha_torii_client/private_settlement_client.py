@@ -8,6 +8,8 @@ decoding.  Secret-bearing bodies are never rendered in exceptions or reprs.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 from enum import Enum
@@ -160,6 +162,12 @@ class AtomicPrivateSettlementIdentifierV1:
         """Return the canonical Norito JSON hash literal."""
 
         return self._json_literal
+
+    @property
+    def bytes(self) -> bytes:
+        """Return the exact 32-byte hash value used by native verification."""
+
+        return bytes.fromhex(self._path_component)
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -360,13 +368,16 @@ _RESPONSE_FIELDS: tuple[tuple[str, frozenset[str]], ...] = (
         "/audit-approvals",
         frozenset(
             {
+                "authoritative_height",
                 "bundle_id",
                 "payload_digest",
                 "leg_ordinal",
+                "committee_authority",
                 "collected",
                 "required",
                 "newly_recorded",
                 "lifecycle",
+                "responder_attestation",
             }
         ),
     ),
@@ -406,6 +417,7 @@ _RESPONSE_FIELDS: tuple[tuple[str, frozenset[str]], ...] = (
         "/audit-capsule",
         frozenset(
             {
+                "authoritative_height",
                 "manifest",
                 "audit_policy",
                 "committee_authority",
@@ -414,6 +426,7 @@ _RESPONSE_FIELDS: tuple[tuple[str, frozenset[str]], ...] = (
                 "audit_capsule",
                 "availability",
                 "lifecycle",
+                "responder_attestation",
             }
         ),
     ),
@@ -456,6 +469,314 @@ def _validate_bundle_submit_response(parsed: dict[str, Any]) -> None:
         raise ValueError(
             "settlement bundle admission accepted_at_height must be a u64"
         )
+
+
+def _canonical_attestation_hash(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{context} must be a canonical hash literal")
+    identifier = AtomicPrivateSettlementIdentifierV1(value)
+    if identifier.json_literal != value:
+        raise ValueError(f"{context} must be a canonical hash literal")
+    return value
+
+
+def _validate_bls_normal_signature_literal(value: Any, context: str) -> None:
+    # TODO: Verify the responder PoP and signature once this package exposes the
+    # typed Norito attestation preimages and BLS-Normal verification boundary.
+    if not isinstance(value, str):
+        raise ValueError(f"{context} must be exact standard base64")
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError(f"{context} must be exact standard base64") from error
+    if len(decoded) != 96 or base64.b64encode(decoded).decode("ascii") != value:
+        raise ValueError(f"{context} must encode exactly 96 bytes")
+
+
+def _u8(value: Any, context: str, *, nonzero: bool = False) -> int:
+    if type(value) is not int or value < int(nonzero) or value > 0xFF:
+        raise ValueError(f"{context} must be a u8")
+    return value
+
+
+def _u64(value: Any, context: str, *, nonzero: bool = False) -> int:
+    if type(value) is not int or value < int(nonzero) or value > _U64_MAX:
+        raise ValueError(f"{context} must be a u64")
+    return value
+
+
+def _audit_approval_request_context(
+    request: AtomicPrivateSettlementPreparedRequestV1,
+) -> dict[str, Any]:
+    parsed = _parse_exact_json_object(
+        request.bytes(), "prepared settlement audit approval"
+    )
+    approval = parsed.get("approval")
+    if (
+        not isinstance(approval, dict)
+        or frozenset(approval) != frozenset({"body", "signature"})
+        or approval.get("signature") is None
+    ):
+        raise ValueError("prepared settlement audit approval is invalid")
+    body = approval.get("body")
+    expected_body_fields = frozenset(
+        {
+            "version",
+            "network_id",
+            "bundle_id",
+            "leg_ordinal",
+            "dataspace_id",
+            "auditor_id",
+            "audit_policy_digest",
+            "audit_key_epoch",
+            "proof_digest",
+            "capsule_digest",
+            "delta_digest",
+            "old_root",
+            "new_root",
+            "expiry_height",
+        }
+    )
+    if not isinstance(body, dict) or frozenset(body) != expected_body_fields:
+        raise ValueError("prepared settlement audit approval body is invalid")
+    if _u8(body.get("version"), "prepared settlement approval version", nonzero=True) != 1:
+        raise ValueError("prepared settlement approval version must be one")
+    network_id = _canonical_attestation_hash(
+        body.get("network_id"), "prepared settlement approval network_id"
+    )
+    bundle_id = _canonical_attestation_hash(
+        body.get("bundle_id"), "prepared settlement approval bundle_id"
+    )
+    for field in (
+        "audit_policy_digest",
+        "proof_digest",
+        "capsule_digest",
+        "delta_digest",
+    ):
+        _canonical_attestation_hash(
+            body.get(field), f"prepared settlement approval {field}"
+        )
+    leg_ordinal = _u8(
+        body.get("leg_ordinal"), "prepared settlement approval leg_ordinal"
+    )
+    if leg_ordinal == 0xFF:
+        raise ValueError("prepared settlement approval leg_ordinal is outside 0..=254")
+    return {
+        "network_id": AtomicPrivateSettlementIdentifierV1(network_id),
+        "bundle_id": AtomicPrivateSettlementIdentifierV1(bundle_id),
+        "leg_ordinal": leg_ordinal,
+        "dataspace_id": _u64(
+            body.get("dataspace_id"),
+            "prepared settlement approval dataspace_id",
+        ),
+        "expiry_height": _u64(
+            body.get("expiry_height"),
+            "prepared settlement approval expiry_height",
+            nonzero=True,
+        ),
+    }
+
+
+def _validate_auditor_capsule_attestation(
+    parsed: dict[str, Any],
+    *,
+    expected_network_id: AtomicPrivateSettlementIdentifierV1,
+    expected_payload_digest: AtomicPrivateSettlementIdentifierV1,
+) -> None:
+    attestation = parsed.get("responder_attestation")
+    if not isinstance(attestation, dict) or frozenset(attestation) != frozenset(
+        {"body", "signature"}
+    ):
+        raise ValueError("settlement auditor capsule responder attestation is invalid")
+    body = attestation.get("body")
+    body_fields = frozenset(
+        {
+            "version",
+            "network_id",
+            "payload_digest",
+            "view_digest",
+            "authority_digest",
+            "lifecycle_code",
+            "authoritative_height",
+            "responder",
+        }
+    )
+    if not isinstance(body, dict) or frozenset(body) != body_fields:
+        raise ValueError("settlement auditor capsule attestation body is invalid")
+    lifecycle_codes = {
+        "collecting": 0,
+        "audited": 1,
+        "prepared": 2,
+        "commit_certified": 3,
+        "finalized": 4,
+        "aborted": 5,
+        "expired": 6,
+    }
+    lifecycle = parsed.get("lifecycle")
+    lifecycle_status = lifecycle.get("status") if isinstance(lifecycle, dict) else None
+    authoritative_height = parsed.get("authoritative_height")
+    if (
+        type(body.get("version")) is not int
+        or body.get("version") != 1
+        or type(body.get("authoritative_height")) is not int
+        or body.get("authoritative_height") != authoritative_height
+        or body.get("authoritative_height") <= 0
+        or body.get("authoritative_height") > _U64_MAX
+        or type(body.get("lifecycle_code")) is not int
+        or body.get("lifecycle_code") != lifecycle_codes.get(lifecycle_status)
+        or not isinstance(body.get("responder"), str)
+        or not body.get("responder")
+        or body.get("responder") != body.get("responder").strip()
+    ):
+        raise ValueError("settlement auditor capsule responder attestation is invalid")
+    for field in ("network_id", "payload_digest", "view_digest", "authority_digest"):
+        _canonical_attestation_hash(
+            body.get(field), "settlement auditor capsule attestation digest"
+        )
+    if (
+        body["network_id"] != expected_network_id.json_literal
+        or body["payload_digest"] != expected_payload_digest.json_literal
+    ):
+        raise ValueError("settlement auditor capsule attestation binding is invalid")
+    manifest = parsed.get("manifest")
+    if not isinstance(manifest, dict):
+        raise ValueError("settlement auditor capsule manifest is invalid")
+    if "network_id" in manifest and (
+        _canonical_attestation_hash(
+            manifest["network_id"], "settlement auditor capsule manifest network_id"
+        )
+        != expected_network_id.json_literal
+    ):
+        raise ValueError("settlement auditor capsule network binding is invalid")
+    _validate_bls_normal_signature_literal(
+        attestation.get("signature"),
+        "settlement auditor capsule responder signature",
+    )
+
+
+def _validate_audit_approval_acknowledgement_attestation(
+    parsed: dict[str, Any],
+    *,
+    expected_network_id: AtomicPrivateSettlementIdentifierV1,
+    expected_payload_digest: AtomicPrivateSettlementIdentifierV1,
+    approval_context: dict[str, Any],
+) -> None:
+    attestation = parsed.get("responder_attestation")
+    if not isinstance(attestation, dict) or frozenset(attestation) != frozenset(
+        {"body", "signature"}
+    ):
+        raise ValueError(
+            "settlement approval acknowledgement responder attestation is invalid"
+        )
+    body = attestation.get("body")
+    body_fields = frozenset(
+        {
+            "version",
+            "network_id",
+            "payload_digest",
+            "approval_digest",
+            "acknowledgement_digest",
+            "authority_digest",
+            "lifecycle_code",
+            "authoritative_height",
+            "responder",
+        }
+    )
+    if not isinstance(body, dict) or frozenset(body) != body_fields:
+        raise ValueError(
+            "settlement approval acknowledgement attestation body is invalid"
+        )
+    lifecycle = parsed.get("lifecycle")
+    lifecycle_status = lifecycle.get("status") if isinstance(lifecycle, dict) else None
+    expected_code = {"collecting": 0, "audited": 1}.get(lifecycle_status)
+    height = parsed.get("authoritative_height")
+    leg_ordinal = _u8(
+        parsed.get("leg_ordinal"), "settlement approval acknowledgement leg_ordinal"
+    )
+    if leg_ordinal == 0xFF:
+        raise ValueError(
+            "settlement approval acknowledgement leg_ordinal is outside 0..=254"
+        )
+    collected = _u8(
+        parsed.get("collected"),
+        "settlement approval acknowledgement collected",
+        nonzero=True,
+    )
+    required = _u8(
+        parsed.get("required"),
+        "settlement approval acknowledgement required",
+        nonzero=True,
+    )
+    if (
+        _u64(
+            height,
+            "settlement approval acknowledgement authoritative_height",
+            nonzero=True,
+        )
+        > approval_context["expiry_height"]
+        or type(body.get("version")) is not int
+        or body.get("version") != 1
+        or type(body.get("authoritative_height")) is not int
+        or body.get("authoritative_height") != height
+        or body.get("payload_digest") != parsed.get("payload_digest")
+        or type(body.get("lifecycle_code")) is not int
+        or body.get("lifecycle_code") != expected_code
+        or not isinstance(body.get("responder"), str)
+        or not body.get("responder")
+        or body.get("responder") != body.get("responder").strip()
+        or type(parsed.get("newly_recorded")) is not bool
+        or collected > required
+        or lifecycle_status != ("collecting" if collected < required else "audited")
+        or leg_ordinal != approval_context["leg_ordinal"]
+    ):
+        raise ValueError(
+            "settlement approval acknowledgement responder attestation is invalid"
+        )
+    for field in (
+        "network_id",
+        "payload_digest",
+        "approval_digest",
+        "acknowledgement_digest",
+        "authority_digest",
+    ):
+        _canonical_attestation_hash(
+            body.get(field),
+            "settlement approval acknowledgement attestation digest",
+        )
+    payload_digest = _canonical_attestation_hash(
+        parsed.get("payload_digest"),
+        "settlement approval acknowledgement payload_digest",
+    )
+    bundle_id = _canonical_attestation_hash(
+        parsed.get("bundle_id"), "settlement approval acknowledgement bundle_id"
+    )
+    if (
+        body["network_id"] != expected_network_id.json_literal
+        or body["network_id"] != approval_context["network_id"].json_literal
+        or payload_digest != expected_payload_digest.json_literal
+        or body["payload_digest"] != expected_payload_digest.json_literal
+        or bundle_id != approval_context["bundle_id"].json_literal
+    ):
+        raise ValueError("settlement approval acknowledgement binding is invalid")
+    committee_authority = parsed.get("committee_authority")
+    authority_route = (
+        committee_authority.get("route")
+        if isinstance(committee_authority, dict)
+        else None
+    )
+    if (
+        not isinstance(authority_route, dict)
+        or _u64(
+            authority_route.get("dataspace_id"),
+            "settlement approval acknowledgement authority dataspace_id",
+        )
+        != approval_context["dataspace_id"]
+    ):
+        raise ValueError("settlement approval acknowledgement authority is invalid")
+    _validate_bls_normal_signature_literal(
+        attestation.get("signature"),
+        "settlement approval acknowledgement responder signature",
+    )
 
 
 def _read_bounded_response(response: Any, maximum_bytes: int) -> bytes:
@@ -501,6 +822,49 @@ def create_atomic_private_settlement_client_mixin(
         _request: Callable[..., Any]
         _require_canonical_auth: Callable[..., Any]
         _require_exact_i105_account_id: Callable[..., str]
+
+        def _configure_private_settlement_native_verifier(
+            self, verifier: Any
+        ) -> None:
+            if verifier is not None:
+                for name in (
+                    "private_settlement_verify_committee_proof_response_v1",
+                    "private_settlement_verify_auditor_capsule_response_v1",
+                    "private_settlement_verify_audit_approval_response_v1",
+                ):
+                    function = getattr(verifier, name, None)
+                    if not callable(function):
+                        raise RuntimeError(
+                            f"native verifier is missing {name}; "
+                            "install/rebuild iroha_python for this SDK version"
+                        )
+            self.__private_settlement_native_verifier = verifier
+
+        def _private_settlement_native_verifier(self) -> Any:
+            verifier = getattr(
+                self,
+                (
+                    "_AtomicPrivateSettlementClientMixin"
+                    "__private_settlement_native_verifier"
+                ),
+                None,
+            )
+            if verifier is None:
+                raise RuntimeError(
+                    "atomic private settlement restricted responses require an "
+                    "injected native verifier; use iroha_python.client.ToriiClient "
+                    "or pass private_settlement_native_verifier="
+                )
+            return verifier
+
+        def _private_settlement_native_function(self, name: str) -> Callable[..., Any]:
+            function = getattr(self._private_settlement_native_verifier(), name, None)
+            if not callable(function):
+                raise RuntimeError(
+                    f"native verifier is missing {name}; "
+                    "install/rebuild iroha_python for this SDK version"
+                )
+            return function
 
         @staticmethod
         def _private_settlement_request_headers(has_body: bool) -> dict[str, str]:
@@ -586,6 +950,13 @@ def create_atomic_private_settlement_client_mixin(
             maximum_bytes: int,
             expected_identifier: Optional[AtomicPrivateSettlementIdentifierV1] = None,
             expected_identifier_field: Optional[str] = None,
+            expected_network_id: Optional[
+                AtomicPrivateSettlementIdentifierV1
+            ] = None,
+            approval_context: Optional[dict[str, Any]] = None,
+            native_verification: Optional[
+                tuple[Callable[..., Any], tuple[Any, ...]]
+            ] = None,
         ) -> AtomicPrivateSettlementJsonResponseV1:
             expected_url = f"{self._base_url}{route}"
             actual_url = getattr(response, "url", None)
@@ -632,6 +1003,40 @@ def create_atomic_private_settlement_client_mixin(
                     raise ValueError("settlement response has unexpected public fields")
                 if route.endswith("/bundles"):
                     _validate_bundle_submit_response(parsed)
+                if route.endswith("/audit-capsule"):
+                    if expected_identifier is None or expected_network_id is None:
+                        raise ValueError(
+                            "settlement auditor capsule request binding is missing"
+                        )
+                    authoritative_height = parsed["authoritative_height"]
+                    if (
+                        type(authoritative_height) is not int
+                        or authoritative_height <= 0
+                        or authoritative_height > _U64_MAX
+                    ):
+                        raise ValueError(
+                            "settlement auditor capsule authoritative_height must be a nonzero u64"
+                        )
+                    _validate_auditor_capsule_attestation(
+                        parsed,
+                        expected_network_id=expected_network_id,
+                        expected_payload_digest=expected_identifier,
+                    )
+                if route.endswith("/audit-approvals"):
+                    if (
+                        expected_identifier is None
+                        or expected_network_id is None
+                        or approval_context is None
+                    ):
+                        raise ValueError(
+                            "settlement approval acknowledgement request binding is missing"
+                        )
+                    _validate_audit_approval_acknowledgement_attestation(
+                        parsed,
+                        expected_network_id=expected_network_id,
+                        expected_payload_digest=expected_identifier,
+                        approval_context=approval_context,
+                    )
                 if expected_identifier is not None and expected_identifier_field is not None:
                     if parsed.get(expected_identifier_field) != expected_identifier.json_literal:
                         raise ValueError("settlement response identifier is substituted")
@@ -661,6 +1066,9 @@ def create_atomic_private_settlement_client_mixin(
                         or manifest.get("bundle_id") != expected_identifier.json_literal
                     ):
                         raise ValueError("settlement bundle status is substituted")
+                if native_verification is not None:
+                    native_function, native_arguments = native_verification
+                    native_function(body, *native_arguments)
                 canonical = json.dumps(
                     parsed,
                     ensure_ascii=False,
@@ -762,16 +1170,30 @@ def create_atomic_private_settlement_client_mixin(
 
             if request.operation is not AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL:
                 raise ValueError("prepared settlement request is bound to another operation")
+            if not isinstance(auditor_signing_context, operator_context_type):
+                raise TypeError("settlement role identity has the wrong signing-context type")
             identifier = (
                 payload_digest
                 if isinstance(payload_digest, AtomicPrivateSettlementIdentifierV1)
                 else AtomicPrivateSettlementIdentifierV1(payload_digest)
             )
+            network_id = AtomicPrivateSettlementIdentifierV1(
+                auditor_signing_context.network_id
+            )
+            approval_context = _audit_approval_request_context(request)
+            if approval_context["network_id"] != network_id:
+                raise ValueError(
+                    "prepared settlement approval network differs from the signing context"
+                )
+            native_function = self._private_settlement_native_function(
+                "private_settlement_verify_audit_approval_response_v1"
+            )
+            request_bytes = request.bytes()
             path = request.operation.path.replace(
                 "{payload_digest}", identifier.path_component
             )
             response = self._private_settlement_role_request(
-                "POST", path, request.bytes(), auditor_signing_context
+                "POST", path, request_bytes, auditor_signing_context
             )
             return self._private_settlement_validate_response(
                 response,
@@ -779,6 +1201,17 @@ def create_atomic_private_settlement_client_mixin(
                 _RESPONSE_RESTRICTED_MAX_BYTES,
                 identifier,
                 "payload_digest",
+                network_id,
+                approval_context,
+                (
+                    native_function,
+                    (
+                        request_bytes,
+                        network_id.bytes,
+                        identifier.bytes,
+                        auditor_signing_context.public_key,
+                    ),
+                ),
             )
 
         def private_settlement_leg_status_v1(
@@ -839,6 +1272,14 @@ def create_atomic_private_settlement_client_mixin(
                 if isinstance(payload_digest, AtomicPrivateSettlementIdentifierV1)
                 else AtomicPrivateSettlementIdentifierV1(payload_digest)
             )
+            if not isinstance(validator_signing_context, operator_context_type):
+                raise TypeError("settlement role identity has the wrong signing-context type")
+            network_id = AtomicPrivateSettlementIdentifierV1(
+                validator_signing_context.network_id
+            )
+            native_function = self._private_settlement_native_function(
+                "private_settlement_verify_committee_proof_response_v1"
+            )
             path = (
                 "/v1/nexus/private-settlements/legs/"
                 f"{identifier.path_component}/committee-proof"
@@ -847,7 +1288,14 @@ def create_atomic_private_settlement_client_mixin(
                 "GET", path, b"", validator_signing_context
             )
             return self._private_settlement_validate_response(
-                response, path, _RESPONSE_RESTRICTED_MAX_BYTES
+                response,
+                path,
+                _RESPONSE_RESTRICTED_MAX_BYTES,
+                identifier,
+                None,
+                network_id,
+                None,
+                (native_function, (network_id.bytes, identifier.bytes)),
             )
 
         def private_settlement_auditor_capsule_v1(
@@ -858,17 +1306,39 @@ def create_atomic_private_settlement_client_mixin(
         ) -> AtomicPrivateSettlementJsonResponseV1:
             """Fetch one padded encrypted capsule as a governed auditor."""
 
+            if not isinstance(auditor_signing_context, operator_context_type):
+                raise TypeError("settlement role identity has the wrong signing-context type")
             identifier = (
                 payload_digest
                 if isinstance(payload_digest, AtomicPrivateSettlementIdentifierV1)
                 else AtomicPrivateSettlementIdentifierV1(payload_digest)
+            )
+            network_id = AtomicPrivateSettlementIdentifierV1(
+                auditor_signing_context.network_id
+            )
+            native_function = self._private_settlement_native_function(
+                "private_settlement_verify_auditor_capsule_response_v1"
             )
             path = f"/v1/nexus/private-settlements/legs/{identifier.path_component}/audit-capsule"
             response = self._private_settlement_role_request(
                 "GET", path, b"", auditor_signing_context
             )
             return self._private_settlement_validate_response(
-                response, path, _RESPONSE_RESTRICTED_MAX_BYTES
+                response,
+                path,
+                _RESPONSE_RESTRICTED_MAX_BYTES,
+                identifier,
+                None,
+                network_id,
+                None,
+                (
+                    native_function,
+                    (
+                        network_id.bytes,
+                        identifier.bytes,
+                        auditor_signing_context.public_key,
+                    ),
+                ),
             )
 
         def private_settlement_bundle_status_v1(

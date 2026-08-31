@@ -15,6 +15,7 @@ import java.nio.file.Paths
 import java.security.KeyPairGenerator
 import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -212,10 +213,7 @@ class AtomicPrivateSettlementToriiClientV1Test {
         val response = fixture.objectField("responses").objectField("audit_approval")
         val executor = CapturingSettlementExecutor(jsonResponse(response))
         val client = client(executor)
-        val request = AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
-            AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
-            """{"approval":{}}""".toByteArray(StandardCharsets.UTF_8),
-        )
+        val request = auditApprovalRequest()
         val roleContext = OperatorSigningContext(
             TestNetworkIds.canonical(),
             "ed0120${"11".repeat(32)}",
@@ -230,6 +228,267 @@ class AtomicPrivateSettlementToriiClientV1Test {
         assertEquals(RequestReplayPolicy.ONE_SHOT, executor.request.replayPolicy)
         assertTrue(executor.request.headers.containsKey(OperatorRequestSigner.HEADER_SIGNATURE))
         assertFalse(executor.request.headers.containsKey(CanonicalRequestSigner.HEADER_SIGNATURE))
+    }
+
+    @Test
+    fun auditorCapsuleRequiresExactNonzeroAuthoritativeHeight() {
+        val valid = fixture.objectField("responses").objectField("auditor_capsule")
+        val roleContext = OperatorSigningContext(
+            TestNetworkIds.canonical(),
+            "ed0120${"12".repeat(32)}",
+        ) { message -> ByteArray(64) { index -> (message.size + index + 2).toByte() } }
+        val executor = CapturingSettlementExecutor(jsonResponse(valid))
+
+        client(executor).getAuditorCapsule(payload, roleContext).join()
+
+        assertEquals(
+            "/api/v1/nexus/private-settlements/legs/${payload.pathComponent()}/audit-capsule",
+            executor.request.uri.path,
+        )
+        assertEquals(RequestReplayPolicy.ONE_SHOT, executor.request.replayPolicy)
+        assertTrue(executor.request.headers.containsKey(OperatorRequestSigner.HEADER_SIGNATURE))
+
+        val invalidHeights = listOf<Any?>(
+            0L,
+            -1L,
+            BigDecimal("105.0"),
+            "105",
+            BigInteger("18446744073709551616"),
+        )
+        invalidHeights.forEachIndexed { index, height ->
+            val invalid = LinkedHashMap(valid)
+            invalid["authoritative_height"] = height
+            val error = assertFailsWith<java.util.concurrent.CompletionException>("case $index") {
+                client(CapturingSettlementExecutor(jsonResponse(invalid)))
+                    .getAuditorCapsule(payload, roleContext)
+                    .join()
+            }
+            assertTrue(error.cause is AtomicPrivateSettlementToriiExceptionV1, "case $index")
+        }
+    }
+
+    @Test
+    fun restrictedResponsesPassExactBytesAndBindingsToTheConfiguredVerifier() {
+        val responses = fixture.objectField("responses")
+        val verifier = RecordingSettlementResponseVerifier()
+        val roleContext = OperatorSigningContext(
+            TestNetworkIds.canonical(),
+            "ed0120${"32".repeat(32)}",
+        ) { ByteArray(64) { 8 } }
+
+        val committeeRaw = (
+            " \n" + JsonEncoder.encode(committeeProofResponse()) + "\n"
+        ).toByteArray(StandardCharsets.UTF_8)
+        val committeeExecutor = CapturingSettlementExecutor(rawJsonResponse(committeeRaw))
+        client(committeeExecutor, verifier).getCommitteeProof(payload, roleContext).join()
+
+        assertContentEquals(committeeRaw, verifier.committeeResponse)
+        assertContentEquals(TestNetworkIds.canonical().bytes(), verifier.committeeNetwork)
+        assertContentEquals(payload.bytes(), verifier.committeePayload)
+
+        val capsuleRaw = JsonEncoder.encode(responses.objectField("auditor_capsule"))
+            .toByteArray(StandardCharsets.UTF_8)
+        val capsuleExecutor = CapturingSettlementExecutor(rawJsonResponse(capsuleRaw))
+        client(capsuleExecutor, verifier).getAuditorCapsule(payload, roleContext).join()
+
+        assertContentEquals(capsuleRaw, verifier.capsuleResponse)
+        assertContentEquals(TestNetworkIds.canonical().bytes(), verifier.capsuleNetwork)
+        assertContentEquals(payload.bytes(), verifier.capsulePayload)
+        assertEquals(roleContext.publicKey(), verifier.capsuleAuditorPublicKey)
+
+        val approvalRequest = auditApprovalRequest()
+        val exactApprovalRequest = approvalRequest.bytes()
+        val approvalRaw = JsonEncoder.encode(responses.objectField("audit_approval"))
+            .toByteArray(StandardCharsets.UTF_8)
+        val approvalExecutor = CapturingSettlementExecutor(rawJsonResponse(approvalRaw))
+        client(approvalExecutor, verifier)
+            .submitAuditApproval(payload, approvalRequest, roleContext)
+            .join()
+
+        assertContentEquals(approvalRaw, verifier.approvalResponse)
+        assertContentEquals(exactApprovalRequest, verifier.approvalRequest)
+        assertContentEquals(approvalExecutor.request.body, verifier.approvalRequest)
+        assertContentEquals(TestNetworkIds.canonical().bytes(), verifier.approvalNetwork)
+        assertContentEquals(payload.bytes(), verifier.approvalPayload)
+        assertEquals(roleContext.publicKey(), verifier.approvalAuditorPublicKey)
+        assertEquals(3, verifier.availabilityChecks)
+    }
+
+    @Test
+    fun missingVerifierFailsEveryRestrictedRouteBeforeHttpWithRedactedError() {
+        val responses = fixture.objectField("responses")
+        val roleContext = OperatorSigningContext(
+            TestNetworkIds.canonical(),
+            "ed0120${"33".repeat(32)}",
+        ) { ByteArray(64) { 9 } }
+        val cases = listOf(
+            Pair(
+                CapturingSettlementExecutor(jsonResponse(committeeProofResponse())),
+                { client: AtomicPrivateSettlementToriiClientV1 ->
+                    client.getCommitteeProof(payload, roleContext)
+                },
+            ),
+            Pair(
+                CapturingSettlementExecutor(jsonResponse(responses.objectField("auditor_capsule"))),
+                { client: AtomicPrivateSettlementToriiClientV1 ->
+                    client.getAuditorCapsule(payload, roleContext)
+                },
+            ),
+            Pair(
+                CapturingSettlementExecutor(jsonResponse(responses.objectField("audit_approval"))),
+                { client: AtomicPrivateSettlementToriiClientV1 ->
+                    client.submitAuditApproval(payload, auditApprovalRequest(), roleContext)
+                },
+            ),
+        )
+
+        cases.forEachIndexed { index, (executor, operation) ->
+            val error = assertFailsWith<java.util.concurrent.CompletionException>("case $index") {
+                operation(client(executor, null)).join()
+            }
+            assertEquals(0, executor.invocationCount, "case $index")
+            assertEquals(
+                "atomic private settlement response is invalid",
+                error.cause?.message,
+                "case $index",
+            )
+            assertTrue(error.cause is AtomicPrivateSettlementToriiExceptionV1, "case $index")
+        }
+    }
+
+    @Test
+    fun rejectingVerifierFailsClosedWithoutLeakingItsDiagnostic() {
+        val canary = "APS_NATIVE_VERIFIER_SECRET_CANARY_72C0"
+        val verifier = RecordingSettlementResponseVerifier(rejectionMessage = canary)
+        val roleContext = OperatorSigningContext(
+            TestNetworkIds.canonical(),
+            "ed0120${"34".repeat(32)}",
+        ) { ByteArray(64) { 10 } }
+        val executor = CapturingSettlementExecutor(
+            jsonResponse(fixture.objectField("responses").objectField("auditor_capsule")),
+        )
+
+        val error = assertFailsWith<java.util.concurrent.CompletionException> {
+            client(executor, verifier).getAuditorCapsule(payload, roleContext).join()
+        }
+
+        assertEquals(1, executor.invocationCount)
+        assertEquals("atomic private settlement response is invalid", error.cause?.message)
+        assertFalse(renderThrowable(error).contains(canary))
+    }
+
+    @Test
+    fun restrictedAttestationsBindNetworkPayloadResponderSignatureCountsAndEncoding() {
+        val responses = fixture.objectField("responses")
+        val roleContext = OperatorSigningContext(
+            TestNetworkIds.canonical(),
+            "ed0120${"13".repeat(32)}",
+        ) { message -> ByteArray(64) { index -> (message.size + index + 3).toByte() } }
+
+        fun changedAttestation(
+            source: Map<String, Any?>,
+            updateBody: MutableMap<String, Any?>.() -> Unit = {},
+            signature: String? = null,
+        ): Map<String, Any?> {
+            val changed = LinkedHashMap(source)
+            val attestation = LinkedHashMap(source.objectField("responder_attestation"))
+            val body = LinkedHashMap(attestation.objectField("body")).apply(updateBody)
+            attestation["body"] = body
+            if (signature != null) attestation["signature"] = signature
+            changed["responder_attestation"] = attestation
+            return changed
+        }
+
+        val capsule = responses.objectField("auditor_capsule")
+        val invalidCapsules = listOf(
+            changedAttestation(capsule, { this["network_id"] = identifiers.stringField("payload_json") }),
+            changedAttestation(capsule, { this["payload_digest"] = identifiers.stringField("bundle_json") }),
+            changedAttestation(capsule, { this["responder"] = "" }),
+            changedAttestation(capsule, signature = "AQ=="),
+        )
+        invalidCapsules.forEachIndexed { index, candidate ->
+            val error = assertFailsWith<java.util.concurrent.CompletionException>("capsule $index") {
+                client(CapturingSettlementExecutor(jsonResponse(candidate)))
+                    .getAuditorCapsule(payload, roleContext)
+                    .join()
+            }
+            assertTrue(error.cause is AtomicPrivateSettlementToriiExceptionV1, "capsule $index")
+        }
+
+        val approval = responses.objectField("audit_approval")
+        val invalidApprovals = listOf(
+            changedAttestation(approval, { this["network_id"] = identifiers.stringField("payload_json") }),
+            changedAttestation(approval, { this["payload_digest"] = identifiers.stringField("bundle_json") }),
+            LinkedHashMap(approval).apply { this["collected"] = 2L },
+            LinkedHashMap(approval).apply { this["required"] = 0L },
+            LinkedHashMap(approval).apply { this["leg_ordinal"] = 255L },
+            LinkedHashMap(approval).apply { this["newly_recorded"] = 1L },
+            LinkedHashMap(approval).apply {
+                this["lifecycle"] = mapOf("status" to "collecting", "value" to null)
+            },
+            changedAttestation(approval, { this["responder"] = "" }),
+            changedAttestation(approval, signature = "AQ=="),
+        )
+        val authoritySubstitution = LinkedHashMap(approval)
+        val authority = LinkedHashMap(authoritySubstitution.objectField("committee_authority"))
+        val route = LinkedHashMap(authority.objectField("route"))
+        route["dataspace_id"] = 8L
+        authority["route"] = route
+        authoritySubstitution["committee_authority"] = authority
+        val expired = LinkedHashMap(approval)
+        expired["authoritative_height"] = 201L
+        expired["responder_attestation"] = changedAttestation(
+            approval,
+            { this["authoritative_height"] = 201L },
+        )["responder_attestation"]
+        val boundInvalidApprovals = invalidApprovals + authoritySubstitution + expired
+        boundInvalidApprovals.forEachIndexed { index, candidate ->
+            val request = auditApprovalRequest()
+            val error = assertFailsWith<java.util.concurrent.CompletionException>("approval $index") {
+                client(CapturingSettlementExecutor(jsonResponse(candidate)))
+                    .submitAuditApproval(payload, request, roleContext)
+                    .join()
+            }
+            assertTrue(error.cause is AtomicPrivateSettlementToriiExceptionV1, "approval $index")
+        }
+
+        val wrongNetworkContext = OperatorSigningContext(
+            TestNetworkIds.fromSeed(99),
+            "ed0120${"14".repeat(32)}",
+        ) { ByteArray(64) { 4 } }
+        assertFailsWith<IllegalArgumentException> {
+            client(CapturingSettlementExecutor(jsonResponse(capsule)))
+                .getAuditorCapsule(payload, wrongNetworkContext)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            client(CapturingSettlementExecutor(jsonResponse(approval)))
+                .submitAuditApproval(
+                    payload,
+                    auditApprovalRequest(TestNetworkIds.fromSeed(99).literal),
+                    roleContext,
+                )
+        }
+
+        val compressed = TransportResponse.builder()
+            .setStatusCode(200)
+            .setBody(
+                JsonEncoder.encode(responses.objectField("bundle_status_aborted"))
+                    .toByteArray(StandardCharsets.UTF_8),
+            )
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Content-Encoding", "gzip")
+            .build()
+        val encodingError = assertFailsWith<java.util.concurrent.CompletionException> {
+            client(CapturingSettlementExecutor(compressed)).getBundleStatus(bundle).join()
+        }
+        assertTrue(encodingError.cause is AtomicPrivateSettlementToriiExceptionV1)
+
+        assertFailsWith<IllegalArgumentException> {
+            AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
+                AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
+                """{"approval":{"fractional":1e0}}""".toByteArray(StandardCharsets.UTF_8),
+            )
+        }
     }
 
     @Test
@@ -335,10 +594,7 @@ class AtomicPrivateSettlementToriiClientV1Test {
         val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
         assertFailsWith<IllegalArgumentException> { client.uploadLeg(wrong, auth) }
 
-        val approval = AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
-            AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
-            """{"approval":{}}""".toByteArray(StandardCharsets.UTF_8),
-        )
+        val approval = auditApprovalRequest()
         val roleContext = OperatorSigningContext(
             TestNetworkIds.canonical(),
             "ed0120${"22".repeat(32)}",
@@ -385,18 +641,70 @@ class AtomicPrivateSettlementToriiClientV1Test {
         }
     }
 
-    private fun client(executor: HttpTransportExecutor): AtomicPrivateSettlementToriiClientV1 =
+    private fun client(
+        executor: HttpTransportExecutor,
+        verifier: AtomicPrivateSettlementResponseVerifierV1? =
+            AcceptingSettlementResponseVerifier,
+    ): AtomicPrivateSettlementToriiClientV1 =
         AtomicPrivateSettlementToriiClientV1.builder()
             .executor(executor)
             .baseUri(URI.create("https://torii.example/api"))
             .localSigningContext(LocalSigningContext(TestNetworkIds.canonical()))
+            .responseVerifier(verifier)
             .build()
+
+    private fun committeeProofResponse(): Map<String, Any?> = linkedMapOf(
+        "manifest" to emptyMap<String, Any?>(),
+        "audit_policy" to emptyMap<String, Any?>(),
+        "committee_authority" to emptyMap<String, Any?>(),
+        "statement" to emptyMap<String, Any?>(),
+        "proof" to "opaque-proof",
+        "delta" to emptyMap<String, Any?>(),
+        "audit_approvals" to emptyList<Any?>(),
+        "audit_capsule_digest" to identifiers.stringField("payload_json"),
+        "availability" to emptyMap<String, Any?>(),
+        "lifecycle" to emptyMap<String, Any?>(),
+    )
 
     private fun bundleRequest(): AtomicPrivateSettlementPreparedRequestV1 =
         AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
             AtomicPrivateSettlementOperationV1.BUNDLE_SUBMIT,
             """{"transaction":{}}""".toByteArray(StandardCharsets.UTF_8),
         )
+
+    private fun auditApprovalRequest(
+        networkId: String = TestNetworkIds.canonical().literal,
+        legOrdinal: Int = 0,
+        dataspaceId: Long = 7,
+        expiryHeight: Long = 200,
+    ): AtomicPrivateSettlementPreparedRequestV1 {
+        val body = linkedMapOf<String, Any?>(
+            "version" to 1,
+            "network_id" to networkId,
+            "bundle_id" to identifiers.stringField("bundle_json"),
+            "leg_ordinal" to legOrdinal,
+            "dataspace_id" to dataspaceId,
+            "auditor_id" to "auditor-test",
+            "audit_policy_digest" to identifiers.stringField("payload_json"),
+            "audit_key_epoch" to 1,
+            "proof_digest" to identifiers.stringField("payload_json"),
+            "capsule_digest" to identifiers.stringField("payload_json"),
+            "delta_digest" to identifiers.stringField("payload_json"),
+            "old_root" to "11".repeat(32),
+            "new_root" to "22".repeat(32),
+            "expiry_height" to expiryHeight,
+        )
+        val request = linkedMapOf<String, Any?>(
+            "approval" to linkedMapOf(
+                "body" to body,
+                "signature" to "opaque-native-signature",
+            ),
+        )
+        return AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
+            AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
+            JsonEncoder.encode(request).toByteArray(StandardCharsets.UTF_8),
+        )
+    }
 
     private fun sponsorAuth(): ToriiCanonicalRequestAuth =
         ToriiCanonicalRequestAuth(
@@ -413,10 +721,18 @@ class AtomicPrivateSettlementToriiClientV1Test {
     private fun jsonResponse(
         value: Map<String, Any?>,
         statusCode: Int = 200,
+    ): TransportResponse = rawJsonResponse(
+        JsonEncoder.encode(value).toByteArray(StandardCharsets.UTF_8),
+        statusCode,
+    )
+
+    private fun rawJsonResponse(
+        body: ByteArray,
+        statusCode: Int = 200,
     ): TransportResponse =
         TransportResponse.builder()
             .setStatusCode(statusCode)
-            .setBody(JsonEncoder.encode(value).toByteArray(StandardCharsets.UTF_8))
+            .setBody(body)
             .addHeader("Content-Type", "application/json")
             .build()
 
@@ -447,8 +763,11 @@ private class CapturingSettlementExecutor(
     private val response: TransportResponse,
 ) : HttpTransportExecutor {
     lateinit var request: TransportRequest
+    var invocationCount: Int = 0
+        private set
 
     override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+        invocationCount += 1
         check(!this::request.isInitialized) { "settlement requests must be dispatched exactly once" }
         this.request = request
         return CompletableFuture.completedFuture(
@@ -461,6 +780,110 @@ private class CapturingSettlementExecutor(
                 response.redirected,
             ),
         )
+    }
+}
+
+private object AcceptingSettlementResponseVerifier :
+    AtomicPrivateSettlementResponseVerifierV1 {
+    override fun requireAvailable() = Unit
+
+    override fun verifyCommitteeProofResponse(
+        responseJson: ByteArray,
+        expectedNetworkId: ByteArray,
+        requestedPayloadDigest: ByteArray,
+    ) = Unit
+
+    override fun verifyAuditorCapsuleResponse(
+        responseJson: ByteArray,
+        expectedNetworkId: ByteArray,
+        requestedPayloadDigest: ByteArray,
+        auditorPublicKey: String,
+    ) = Unit
+
+    override fun verifyAuditApprovalResponse(
+        responseJson: ByteArray,
+        requestJson: ByteArray,
+        expectedNetworkId: ByteArray,
+        requestedPayloadDigest: ByteArray,
+        auditorPublicKey: String,
+    ) = Unit
+}
+
+private class RecordingSettlementResponseVerifier(
+    private val rejectionMessage: String? = null,
+) : AtomicPrivateSettlementResponseVerifierV1 {
+    var availabilityChecks: Int = 0
+        private set
+    var committeeResponse: ByteArray? = null
+        private set
+    var committeeNetwork: ByteArray? = null
+        private set
+    var committeePayload: ByteArray? = null
+        private set
+    var capsuleResponse: ByteArray? = null
+        private set
+    var capsuleNetwork: ByteArray? = null
+        private set
+    var capsulePayload: ByteArray? = null
+        private set
+    var capsuleAuditorPublicKey: String? = null
+        private set
+    var approvalResponse: ByteArray? = null
+        private set
+    var approvalRequest: ByteArray? = null
+        private set
+    var approvalNetwork: ByteArray? = null
+        private set
+    var approvalPayload: ByteArray? = null
+        private set
+    var approvalAuditorPublicKey: String? = null
+        private set
+
+    override fun requireAvailable() {
+        availabilityChecks += 1
+    }
+
+    override fun verifyCommitteeProofResponse(
+        responseJson: ByteArray,
+        expectedNetworkId: ByteArray,
+        requestedPayloadDigest: ByteArray,
+    ) {
+        rejectIfConfigured()
+        committeeResponse = responseJson.copyOf()
+        committeeNetwork = expectedNetworkId.copyOf()
+        committeePayload = requestedPayloadDigest.copyOf()
+    }
+
+    override fun verifyAuditorCapsuleResponse(
+        responseJson: ByteArray,
+        expectedNetworkId: ByteArray,
+        requestedPayloadDigest: ByteArray,
+        auditorPublicKey: String,
+    ) {
+        rejectIfConfigured()
+        capsuleResponse = responseJson.copyOf()
+        capsuleNetwork = expectedNetworkId.copyOf()
+        capsulePayload = requestedPayloadDigest.copyOf()
+        capsuleAuditorPublicKey = auditorPublicKey
+    }
+
+    override fun verifyAuditApprovalResponse(
+        responseJson: ByteArray,
+        requestJson: ByteArray,
+        expectedNetworkId: ByteArray,
+        requestedPayloadDigest: ByteArray,
+        auditorPublicKey: String,
+    ) {
+        rejectIfConfigured()
+        approvalResponse = responseJson.copyOf()
+        approvalRequest = requestJson.copyOf()
+        approvalNetwork = expectedNetworkId.copyOf()
+        approvalPayload = requestedPayloadDigest.copyOf()
+        approvalAuditorPublicKey = auditorPublicKey
+    }
+
+    private fun rejectIfConfigured() {
+        rejectionMessage?.let { throw IllegalArgumentException(it) }
     }
 }
 

@@ -11,13 +11,16 @@ use iroha_data_model::{
     nexus::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
         PRIVATE_SETTLEMENT_BLS_BYTES_V1, PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1,
-        PrivateSettlementAvailabilityShareV1, PrivateSettlementCommitteeAuthorityV1,
-        PrivateSettlementDeltaV1, PrivateSettlementPhaseBodyV1,
+        PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1, PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1,
+        PrivateSettlementAvailabilityShareV1, PrivateSettlementCommitBundleV1,
+        PrivateSettlementCommitteeAuthorityV1, PrivateSettlementDeltaV1,
+        PrivateSettlementLegReceiptV1, PrivateSettlementPhaseBodyV1,
         PrivateSettlementPhaseCertificateV1, PrivateSettlementPhaseV1,
         PrivateSettlementPhaseVoteV1, PrivateSettlementPrepareBarrierV1,
         PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementSidecarAvailabilityBodyV1,
-        PrivateSettlementSidecarAvailabilityV1, private_settlement_proof_digest_v1,
+        PrivateSettlementSidecarAvailabilityV1,
     },
+    peer::PeerId,
     transaction::Executable,
 };
 use iroha_torii_shared::private_settlement_api::{
@@ -31,13 +34,184 @@ use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementLifecycleDtoV1, PrivateSettlementPhaseCertificateRequestV1,
     PrivateSettlementPhaseCertificateResponseV1, PrivateSettlementPhaseCertificatesResponseV1,
     PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
+    validate_private_settlement_audit_approval_response_v1,
+    validate_private_settlement_auditor_capsule_response_v1,
+    validate_private_settlement_auditor_identity_v1,
+    validate_private_settlement_committee_proof_response_v1,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1: usize = 32 * 1024 * 1024;
 
 fn private_settlement_resource_path_v1(kind: &str, identifier: &Hash, suffix: &str) -> String {
     format!("v1/nexus/private-settlements/{kind}/{identifier}{suffix}")
+}
+
+#[cfg(test)]
+struct ExactPrivateSettlementQuorumViewV1<T> {
+    representative: T,
+    count: usize,
+    authoritative_heights: Vec<u64>,
+}
+
+struct PrivateSettlementAuthenticatedQuorumCandidateV1<T> {
+    endpoint_index: usize,
+    authority: PrivateSettlementCommitteeAuthorityV1,
+    responder: PeerId,
+    canonical_view: Vec<u8>,
+    authoritative_height: u64,
+    response: T,
+}
+
+struct ExactPrivateSettlementAuthenticatedQuorumViewV1<T> {
+    responses: Vec<(u64, T)>,
+    responders: BTreeSet<PeerId>,
+}
+
+fn validate_private_settlement_endpoint_v1(endpoint: &Url) -> Result<()> {
+    if !matches!(endpoint.scheme(), "http" | "https")
+        || endpoint.cannot_be_a_base()
+        || endpoint.host().is_none()
+        || !endpoint.path().ends_with('/')
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err(eyre!("private-settlement committee endpoint is invalid"));
+    }
+    Ok(())
+}
+
+fn validate_private_settlement_committee_endpoints_v1(endpoints: &[Url]) -> Result<()> {
+    for endpoint in endpoints {
+        validate_private_settlement_endpoint_v1(endpoint)?;
+    }
+    let unique = endpoints
+        .iter()
+        .map(|endpoint| endpoint.as_str())
+        .collect::<BTreeSet<_>>();
+    if endpoints.len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
+        || unique.len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
+    {
+        return Err(eyre!(
+            "private-settlement committee endpoints must be four distinct URLs"
+        ));
+    }
+    Ok(())
+}
+
+fn admit_private_settlement_auditor_responder_v1(
+    authority: &PrivateSettlementCommitteeAuthorityV1,
+    endpoint_index: usize,
+    responder: &PeerId,
+    admitted: &mut BTreeSet<PeerId>,
+) -> Result<()> {
+    if authority.validators.get(endpoint_index) != Some(responder) {
+        return Err(eyre!(
+            "private-settlement auditor endpoint identity is substituted"
+        ));
+    }
+    if !admitted.insert(responder.clone()) {
+        return Err(eyre!(
+            "private-settlement auditor responder identity is duplicated"
+        ));
+    }
+    Ok(())
+}
+
+fn select_private_settlement_authenticated_quorum_v1<T>(
+    expected_authority: Option<&PrivateSettlementCommitteeAuthorityV1>,
+    candidates: Vec<PrivateSettlementAuthenticatedQuorumCandidateV1<T>>,
+) -> Result<T> {
+    let mut views = BTreeMap::<Vec<u8>, ExactPrivateSettlementAuthenticatedQuorumViewV1<T>>::new();
+    for candidate in candidates {
+        let authority = if let Some(expected) = expected_authority {
+            if candidate.authority != *expected {
+                continue;
+            }
+            expected
+        } else {
+            &candidate.authority
+        };
+        let entry = views.entry(candidate.canonical_view).or_insert_with(|| {
+            ExactPrivateSettlementAuthenticatedQuorumViewV1 {
+                responses: Vec::with_capacity(usize::from(
+                    PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1,
+                )),
+                responders: BTreeSet::new(),
+            }
+        });
+        if admit_private_settlement_auditor_responder_v1(
+            authority,
+            candidate.endpoint_index,
+            &candidate.responder,
+            &mut entry.responders,
+        )
+        .is_err()
+        {
+            continue;
+        }
+        entry
+            .responses
+            .push((candidate.authoritative_height, candidate.response));
+    }
+    let mut exact = views
+        .into_values()
+        .find(|view| view.responses.len() >= usize::from(PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1))
+        .ok_or_else(|| eyre!("private-settlement exact auditor quorum is unavailable"))?
+        .responses;
+    exact.sort_by_key(|(authoritative_height, _)| *authoritative_height);
+    let median_index = exact.len() / 2;
+    Ok(exact.swap_remove(median_index).1)
+}
+
+#[cfg(test)]
+fn collect_exact_private_settlement_quorum_v1<T, Request, Normalize>(
+    endpoints: &[Url],
+    mut request: Request,
+    mut normalize: Normalize,
+    unavailable_message: &'static str,
+) -> Result<(T, u64)>
+where
+    Request: FnMut(&Url) -> Result<T>,
+    Normalize: FnMut(&T) -> Result<(Vec<u8>, u64)>,
+{
+    validate_private_settlement_committee_endpoints_v1(endpoints)?;
+    let mut views = BTreeMap::<Vec<u8>, ExactPrivateSettlementQuorumViewV1<T>>::new();
+    for endpoint in endpoints {
+        let Ok(response) = request(endpoint) else {
+            continue;
+        };
+        let Ok((canonical_view, authoritative_height)) = normalize(&response) else {
+            continue;
+        };
+        let entry =
+            views
+                .entry(canonical_view)
+                .or_insert_with(|| ExactPrivateSettlementQuorumViewV1 {
+                    representative: response,
+                    count: 0,
+                    authoritative_heights: Vec::with_capacity(usize::from(
+                        PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1,
+                    )),
+                });
+        entry.count = entry.count.saturating_add(1);
+        entry.authoritative_heights.push(authoritative_height);
+    }
+    views
+        .into_values()
+        .find(|view| view.count >= usize::from(PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1))
+        .map(|mut view| {
+            view.authoritative_heights.sort_unstable();
+            // With at least three responses and at most one Byzantine member,
+            // the middle order statistic is bounded by honest observations.
+            // A lone high or low outlier therefore cannot choose the policy
+            // evaluation height.
+            let quorum_height = view.authoritative_heights[view.authoritative_heights.len() / 2];
+            (view.representative, quorum_height)
+        })
+        .ok_or_else(|| eyre!(unavailable_message))
 }
 
 fn private_settlement_leg_ordinal_for_payload_v1(
@@ -574,213 +748,6 @@ fn retain_canonical_phase_certificate_v1(
     {
         *recovered = Some(candidate);
     }
-}
-
-fn validate_restricted_proof_response_v1(
-    requested: Hash,
-    response: &PrivateSettlementCommitteeProofResponseV1,
-) -> Result<()> {
-    response
-        .manifest
-        .validate()
-        .map_err(|_| eyre!("private-settlement committee response is invalid or substituted"))?;
-    response
-        .audit_policy
-        .validate()
-        .map_err(|_| eyre!("private-settlement committee response is invalid or substituted"))?;
-    response
-        .committee_authority
-        .validate()
-        .map_err(|_| eyre!("private-settlement committee response is invalid or substituted"))?;
-    response
-        .statement
-        .validate()
-        .map_err(|_| eyre!("private-settlement committee response is invalid or substituted"))?;
-    response
-        .delta
-        .validate_against(&response.statement)
-        .map_err(|_| eyre!("private-settlement committee response is invalid or substituted"))?;
-    validate_availability_certificate_v1(&response.availability, &response.committee_authority)
-        .map_err(|_| eyre!("private-settlement committee response is invalid or substituted"))?;
-    let statement_digest = response
-        .statement
-        .digest()
-        .map_err(|_| eyre!("private-settlement committee response is invalid or substituted"))?;
-    let proof_digest = private_settlement_proof_digest_v1(&response.proof);
-    let delta_digest = response
-        .delta
-        .digest()
-        .map_err(|_| eyre!("private-settlement committee response is invalid or substituted"))?;
-    let authority_digest = response
-        .committee_authority
-        .digest()
-        .map_err(|_| eyre!("private-settlement committee response is invalid or substituted"))?;
-    let availability_digest = response
-        .availability
-        .digest()
-        .map_err(|_| eyre!("private-settlement committee response is invalid or substituted"))?;
-    let ordinal = usize::from(response.statement.leg_ordinal);
-    let leg =
-        response.manifest.legs.get(ordinal).ok_or_else(|| {
-            eyre!("private-settlement committee response is invalid or substituted")
-        })?;
-    let availability = &response.availability.body;
-    if availability.payload_digest != requested
-        || leg.payload_digest != requested
-        || leg.delta_digest != delta_digest
-        || leg.availability_certificate_digest != availability_digest
-        || leg.route != response.statement.route
-        || leg.pool_id != response.statement.pool_id
-        || leg.asset_binding_commitment != response.statement.asset_binding_commitment
-        || leg.audit_policy_digest != response.audit_policy.policy_digest
-        || response.audit_policy.body.dataspace_id != response.statement.route.dataspace_id
-        || response.committee_authority.route != response.statement.route
-        || availability.network_id != response.manifest.network_id
-        || availability.bundle_id != response.manifest.bundle_id
-        || availability.leg_ordinal != response.statement.leg_ordinal
-        || availability.route != response.statement.route
-        || availability.authority_digest != authority_digest
-        || availability.authority_context_height != response.manifest.authority_context_height
-        || availability.retention_until_height < response.manifest.expiry_height
-        || response.manifest.bundle_id != response.statement.bundle_id
-        || response.manifest.bundle_id != response.delta.bundle_id
-        || response.statement.leg_ordinal != response.delta.leg_ordinal
-        || response.statement.route != response.delta.route
-        || response.statement.pool_id != response.delta.pool_id
-        || response.statement.asset_binding_commitment != response.delta.asset_binding_commitment
-        || response.statement.audit_policy_digest != response.delta.audit_policy_digest
-        || response.statement.audit_key_epoch != response.delta.audit_key_epoch
-        || response.statement.audit_capsule_digest != response.audit_capsule_digest
-        || response.delta.capsule_digest != response.audit_capsule_digest
-        || response.delta.statement_digest != statement_digest
-        || response.delta.proof_digest != proof_digest
-    {
-        return Err(eyre!(
-            "private-settlement committee response is invalid or substituted"
-        ));
-    }
-    if response.audit_approvals.len() < usize::from(response.audit_policy.body.min_approvals) {
-        return Err(eyre!(
-            "private-settlement committee response is invalid or substituted"
-        ));
-    }
-    let mut previous_auditor = None;
-    for approval in &response.audit_approvals {
-        approval
-            .verify(
-                &response.audit_policy,
-                response.manifest.authority_context_height,
-            )
-            .map_err(|_| {
-                eyre!("private-settlement committee response is invalid or substituted")
-            })?;
-        if previous_auditor
-            .as_ref()
-            .is_some_and(|previous| previous >= &approval.body.auditor_id)
-            || approval.body.network_id != response.statement.network_id
-            || approval.body.bundle_id != response.statement.bundle_id
-            || approval.body.leg_ordinal != response.statement.leg_ordinal
-            || approval.body.dataspace_id != response.statement.route.dataspace_id
-            || approval.body.audit_policy_digest != response.audit_policy.policy_digest
-            || approval.body.audit_key_epoch != response.audit_policy.body.key_epoch
-            || approval.body.proof_digest != proof_digest
-            || approval.body.capsule_digest != response.audit_capsule_digest
-            || approval.body.delta_digest != delta_digest
-            || approval.body.old_root != response.delta.old_root
-            || approval.body.new_root != response.delta.new_root
-            || approval.body.expiry_height != response.statement.expiry_height
-        {
-            return Err(eyre!(
-                "private-settlement committee response is invalid or substituted"
-            ));
-        }
-        previous_auditor = Some(approval.body.auditor_id.clone());
-    }
-    Ok(())
-}
-
-fn validate_auditor_capsule_response_v1(
-    requested: Hash,
-    response: &PrivateSettlementAuditorCapsuleResponseV1,
-) -> Result<()> {
-    response
-        .manifest
-        .validate()
-        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
-    response
-        .audit_policy
-        .validate()
-        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
-    response
-        .committee_authority
-        .validate()
-        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
-    response
-        .statement
-        .validate()
-        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
-    response
-        .delta
-        .validate_against(&response.statement)
-        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
-    response
-        .audit_capsule
-        .validate_against(&response.audit_policy)
-        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
-    validate_availability_certificate_v1(&response.availability, &response.committee_authority)
-        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
-    let capsule_digest = response
-        .audit_capsule
-        .digest()
-        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
-    let delta_digest = response
-        .delta
-        .digest()
-        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
-    let authority_digest = response
-        .committee_authority
-        .digest()
-        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
-    let availability_digest = response
-        .availability
-        .digest()
-        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
-    let ordinal = usize::from(response.statement.leg_ordinal);
-    let leg =
-        response.manifest.legs.get(ordinal).ok_or_else(|| {
-            eyre!("private-settlement auditor response is invalid or substituted")
-        })?;
-    let availability = &response.availability.body;
-    if availability.payload_digest != requested
-        || leg.payload_digest != requested
-        || leg.delta_digest != delta_digest
-        || leg.availability_certificate_digest != availability_digest
-        || leg.route != response.statement.route
-        || leg.pool_id != response.statement.pool_id
-        || leg.asset_binding_commitment != response.statement.asset_binding_commitment
-        || leg.audit_policy_digest != response.audit_policy.policy_digest
-        || response.audit_policy.body.dataspace_id != response.statement.route.dataspace_id
-        || response.committee_authority.route != response.statement.route
-        || availability.network_id != response.manifest.network_id
-        || availability.bundle_id != response.manifest.bundle_id
-        || availability.leg_ordinal != response.statement.leg_ordinal
-        || availability.route != response.statement.route
-        || availability.authority_digest != authority_digest
-        || availability.authority_context_height != response.manifest.authority_context_height
-        || availability.retention_until_height < response.manifest.expiry_height
-        || response.manifest.bundle_id != response.statement.bundle_id
-        || response.manifest.bundle_id != response.delta.bundle_id
-        || response.statement.leg_ordinal != response.delta.leg_ordinal
-        || response.statement.route != response.delta.route
-        || response.statement.pool_id != response.delta.pool_id
-        || response.statement.audit_capsule_digest != capsule_digest
-        || response.delta.capsule_digest != capsule_digest
-    {
-        return Err(eyre!(
-            "private-settlement auditor response is invalid or substituted"
-        ));
-    }
-    Ok(())
 }
 
 fn validate_bundle_status_response_v1(
@@ -1829,6 +1796,129 @@ impl Client {
             .collect()
     }
 
+    /// Construct the exact sponsor-signed global finalization request for one complete barrier.
+    ///
+    /// `max_carrier_bytes` must be the active governed limit obtained for the
+    /// target deployment. The client deliberately does not assume the V1 hard
+    /// ceiling because a deployment may govern a lower limit. Both the boxed
+    /// finalization instruction and the complete signed transaction wire are
+    /// measured before the request is returned.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid governed limit, an incomplete or substituted barrier,
+    /// any missing, duplicated, reordered, mis-bound, or unauthenticated Commit
+    /// certificate, a sponsor/network/fee mismatch, signing or encoding failure,
+    /// or a carrier that exceeds the governed byte limit.
+    pub fn build_private_settlement_finalization_request_v1(
+        &self,
+        barrier: &PrivateSettlementPrepareBarrierV1,
+        commit_certificates: &[PrivateSettlementPhaseCertificateV1],
+        max_carrier_bytes: u64,
+    ) -> Result<PrivateSettlementBundleSubmitRequestV1> {
+        let hard_max = u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+            .expect("private-settlement V1 carrier ceiling fits u64");
+        if !(1..=hard_max).contains(&max_carrier_bytes) {
+            return Err(eyre!(
+                "private-settlement governed carrier byte limit is invalid"
+            ));
+        }
+        validate_prepare_barrier_v1(barrier)?;
+        if barrier.manifest.network_id != self.network_id
+            || barrier.manifest.sponsor != self.account
+        {
+            return Err(eyre!(
+                "private-settlement finalization sponsor or network binding is invalid"
+            ));
+        }
+        if commit_certificates.len() != barrier.manifest.legs.len() {
+            return Err(eyre!(
+                "private-settlement finalization Commit barrier is incomplete"
+            ));
+        }
+
+        let mut legs = Vec::with_capacity(barrier.manifest.legs.len());
+        for (index, (((authority, delta), prepare), commit)) in barrier
+            .authority_catalog
+            .iter()
+            .zip(&barrier.deltas)
+            .zip(&barrier.prepare_certificates)
+            .zip(commit_certificates)
+            .enumerate()
+        {
+            let ordinal = u8::try_from(index)
+                .map_err(|_| eyre!("private-settlement finalization ordinal is invalid"))?;
+            let expected = expected_phase_body_v1(
+                &barrier.manifest,
+                ordinal,
+                authority,
+                PrivateSettlementPhaseV1::Commit,
+                barrier.prepared_bundle_digest,
+            )?;
+            validate_phase_certificate_v1(commit, &expected, ordinal, authority)?;
+            legs.push(PrivateSettlementLegReceiptV1 {
+                delta: delta.clone(),
+                prepare: prepare.clone(),
+                commit: commit.clone(),
+            });
+        }
+
+        let bundle = PrivateSettlementCommitBundleV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            manifest: barrier.manifest.clone(),
+            authority_catalog: barrier.authority_catalog.clone(),
+            legs,
+        };
+        bundle
+            .clone()
+            .into_receipt(barrier.manifest.authority_context_height)
+            .validate_shape()
+            .map_err(|_| eyre!("private-settlement finalization bundle is invalid"))?;
+        let instruction_bytes = u64::try_from(
+            bundle
+                .canonical_carrier_bytes_len()
+                .map_err(|_| eyre!("private-settlement finalization carrier encoding failed"))?,
+        )
+        .map_err(|_| eyre!("private-settlement finalization carrier is too large"))?;
+        if instruction_bytes > max_carrier_bytes {
+            return Err(eyre!(
+                "private-settlement finalization carrier exceeds the governed byte limit"
+            ));
+        }
+
+        let expected_manifest = barrier.manifest.clone();
+        let transaction = self.try_build_transaction(
+            [InstructionBox::from(
+                FinalizeAtomicPrivateSettlementV1::new(bundle),
+            )],
+            expected_manifest.public_fee_intent.clone(),
+            Metadata::default(),
+        )?;
+        let signed_manifest = exact_private_settlement_carrier_v1(&transaction)?;
+        if signed_manifest != &expected_manifest
+            || transaction.network_id() != Some(&expected_manifest.network_id)
+            || transaction.authority() != &expected_manifest.sponsor
+            || transaction.fee_payment_intent() != &expected_manifest.public_fee_intent
+        {
+            return Err(eyre!(
+                "private-settlement finalization signed carrier binding is invalid"
+            ));
+        }
+        let signed_bytes = u64::try_from(
+            transaction
+                .encode_wire_v1()
+                .map_err(|_| eyre!("private-settlement finalization transaction encoding failed"))?
+                .len(),
+        )
+        .map_err(|_| eyre!("private-settlement finalization transaction is too large"))?;
+        if signed_bytes > max_carrier_bytes {
+            return Err(eyre!(
+                "private-settlement finalization signed carrier exceeds the governed byte limit"
+            ));
+        }
+        Ok(PrivateSettlementBundleSubmitRequestV1 { transaction })
+    }
+
     /// Upload one encrypted, fixed-shape settlement leg with sponsor authentication.
     ///
     /// # Errors
@@ -2074,58 +2164,252 @@ impl Client {
             response,
             "private-settlement committee proof fetch failed",
         )?;
-        validate_restricted_proof_response_v1(payload_digest, &decoded)?;
+        validate_private_settlement_committee_proof_response_v1(
+            &self.network_id,
+            payload_digest,
+            &decoded,
+        )
+        .map_err(|_| eyre!("private-settlement committee response is invalid or substituted"))?;
         Ok(decoded)
     }
 
-    /// Fetch one padded encrypted capsule as an exact governed auditor identity.
+    /// Fetch one padded encrypted capsule from an exact committee endpoint.
+    ///
+    /// `auditor_signer` may be backed by an HSM, KMS, enclave, or threshold
+    /// service. Its advertised key must be an exact governed auditor signing
+    /// key and must not be reused by the participant committee.
     ///
     /// # Errors
     ///
     /// Fails on identity signing/transport failure, authorization denial, or a
     /// malformed/substituted auditor view.
-    pub fn private_settlement_auditor_capsule_v1(
+    pub fn private_settlement_auditor_capsule_from_v1<S>(
         &self,
+        endpoint: &Url,
         payload_digest: Hash,
-        auditor_signing_key: &KeyPair,
-    ) -> Result<PrivateSettlementAuditorCapsuleResponseV1> {
+        auditor_signer: &S,
+    ) -> Result<PrivateSettlementAuditorCapsuleResponseV1>
+    where
+        S: IdentityRequestSignerV1 + ?Sized,
+    {
+        let auditor_signing_key = auditor_signer.public_key().clone();
+        validate_private_settlement_endpoint_v1(endpoint)?;
         let path = private_settlement_resource_path_v1("legs", &payload_digest, "/audit-capsule");
-        let url = join_torii_url(&self.torii_url, &path);
+        let url = join_torii_url(endpoint, &path);
         let response = self.send_private_settlement_builder_v1(
-            self.identity_signed_request(auditor_signing_key, HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
+            self.identity_signed_request_with_signer(
+                auditor_signer,
+                HttpMethod::GET,
+                url,
+                Vec::new(),
+            )?
+            .header("Accept", APPLICATION_JSON),
         )?;
         let decoded = Self::decode_private_settlement_response_v1(
             response,
             "private-settlement auditor capsule fetch failed",
         )?;
-        validate_auditor_capsule_response_v1(payload_digest, &decoded)?;
+        validate_private_settlement_auditor_capsule_response_v1(
+            &self.network_id,
+            payload_digest,
+            &decoded,
+        )
+        .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
+        validate_private_settlement_auditor_identity_v1(&auditor_signing_key, &decoded)
+            .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
         Ok(decoded)
     }
 
-    /// Submit one auditor approval under the exact purpose-separated signing identity.
+    fn private_settlement_auditor_capsule_quorum_inner_v1<S>(
+        &self,
+        committee_endpoints: &[Url],
+        expected_authority: Option<&PrivateSettlementCommitteeAuthorityV1>,
+        payload_digest: Hash,
+        auditor_signer: &S,
+    ) -> Result<PrivateSettlementAuditorCapsuleResponseV1>
+    where
+        S: IdentityRequestSignerV1 + ?Sized,
+    {
+        validate_private_settlement_committee_endpoints_v1(committee_endpoints)?;
+        if let Some(authority) = expected_authority {
+            authority
+                .validate()
+                .map_err(|_| eyre!("private-settlement expected committee authority is invalid"))?;
+            for (validator, pop) in authority.validators.iter().zip(&authority.validator_pops) {
+                if validator.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
+                    || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
+                {
+                    return Err(eyre!(
+                        "private-settlement expected committee authority is invalid"
+                    ));
+                }
+            }
+            if authority.validators.len() != committee_endpoints.len() {
+                return Err(eyre!(
+                    "private-settlement auditor endpoints must match the expected authority roster"
+                ));
+            }
+        }
+
+        let mut candidates = Vec::with_capacity(committee_endpoints.len());
+        for (endpoint_index, endpoint) in committee_endpoints.iter().enumerate() {
+            let Ok(response) = self.private_settlement_auditor_capsule_from_v1(
+                endpoint,
+                payload_digest,
+                auditor_signer,
+            ) else {
+                continue;
+            };
+            if !matches!(
+                response.lifecycle,
+                PrivateSettlementLifecycleDtoV1::Collecting
+                    | PrivateSettlementLifecycleDtoV1::Audited
+            ) {
+                continue;
+            }
+            let mut canonical_view = response.view_digest_material();
+            canonical_view.authoritative_height = 0;
+            canonical_view.lifecycle_code =
+                PrivateSettlementLifecycleDtoV1::Collecting.attestation_code();
+            let encoded = norito::encode_canonical(&canonical_view)
+                .map_err(|_| eyre!("private-settlement auditor quorum response is invalid"))?;
+            candidates.push(PrivateSettlementAuthenticatedQuorumCandidateV1 {
+                endpoint_index,
+                authority: response.committee_authority.clone(),
+                responder: response.responder_attestation.body.responder.clone(),
+                canonical_view: encoded,
+                authoritative_height: response.authoritative_height,
+                response,
+            });
+        }
+        select_private_settlement_authenticated_quorum_v1(expected_authority, candidates)
+    }
+
+    /// Fetch one authority-pinned committee-quorum auditor view.
+    ///
+    /// Exactly four distinct endpoints must be aligned with the ordered
+    /// `expected_authority.validators` roster. Every accepted response carries
+    /// a purpose-separated BLS attestation by the validator at that endpoint's
+    /// roster index. At least three views must be identical after normalizing
+    /// the approval-retry lifecycle and height; the returned view is the
+    /// actually signed middle-height response, so no authenticated field is
+    /// rewritten after verification.
+    ///
+    /// # Errors
+    ///
+    /// Fails on malformed endpoints or fewer than three exact, unique,
+    /// authority- and roster-aligned authenticated views. Substituted,
+    /// misaligned, and duplicate responses are excluded from the quorum.
+    pub fn private_settlement_auditor_capsule_quorum_for_authority_v1<S>(
+        &self,
+        committee_endpoints: &[Url],
+        expected_authority: &PrivateSettlementCommitteeAuthorityV1,
+        payload_digest: Hash,
+        auditor_signer: &S,
+    ) -> Result<PrivateSettlementAuditorCapsuleResponseV1>
+    where
+        S: IdentityRequestSignerV1 + ?Sized,
+    {
+        self.private_settlement_auditor_capsule_quorum_inner_v1(
+            committee_endpoints,
+            Some(expected_authority),
+            payload_digest,
+            auditor_signer,
+        )
+    }
+
+    /// Fetch an authenticated quorum without an external authority trust anchor.
+    ///
+    /// This compatibility surface verifies node signatures and endpoint/roster
+    /// alignment, but learns the authority from the responses themselves. It
+    /// is unsuitable for production coordination; production callers must use
+    /// [`Self::private_settlement_auditor_capsule_quorum_for_authority_v1`]
+    /// with a separately governed authority record.
+    ///
+    /// # Errors
+    ///
+    /// Fails under the same response, identity, and quorum checks as the pinned
+    /// method, except that no external authority equality check is possible.
+    pub fn private_settlement_auditor_capsule_quorum_v1<S>(
+        &self,
+        committee_endpoints: &[Url],
+        payload_digest: Hash,
+        auditor_signer: &S,
+    ) -> Result<PrivateSettlementAuditorCapsuleResponseV1>
+    where
+        S: IdentityRequestSignerV1 + ?Sized,
+    {
+        self.private_settlement_auditor_capsule_quorum_inner_v1(
+            committee_endpoints,
+            None,
+            payload_digest,
+            auditor_signer,
+        )
+    }
+
+    /// Fetch one padded encrypted capsule from the default Torii endpoint.
+    ///
+    /// This software-key compatibility adapter delegates to
+    /// [`Self::private_settlement_auditor_capsule_from_v1`].
+    ///
+    /// # Errors
+    ///
+    /// Fails under the same conditions as the endpoint-aware method.
+    pub fn private_settlement_auditor_capsule_v1(
+        &self,
+        payload_digest: Hash,
+        auditor_signing_key: &KeyPair,
+    ) -> Result<PrivateSettlementAuditorCapsuleResponseV1> {
+        self.private_settlement_auditor_capsule_from_v1(
+            &self.torii_url,
+            payload_digest,
+            &BorrowedKeyPairIdentityRequestSignerV1::new(auditor_signing_key),
+        )
+    }
+
+    /// Submit one auditor approval to one self-authenticating endpoint.
+    ///
+    /// `auditor_signer` authenticates the transport request. The client first
+    /// verifies that the already purpose-separated approval signature was made
+    /// by the same advertised key. The response signature and self-asserted
+    /// authority are verified, but this single-endpoint compatibility method
+    /// has no external authority/endpoint trust anchor and is not a production
+    /// quorum coordination surface.
     ///
     /// # Errors
     ///
     /// Fails on identity mismatch, request signing/transport failure, Torii
     /// rejection, or a malformed/substituted acknowledgement.
-    pub fn submit_private_settlement_audit_approval_v1(
+    pub fn submit_private_settlement_audit_approval_to_v1<S>(
         &self,
+        endpoint: &Url,
         payload_digest: Hash,
-        auditor_signing_key: &KeyPair,
+        auditor_signer: &S,
         request: &PrivateSettlementAuditApprovalRequestV1,
-    ) -> Result<PrivateSettlementAuditApprovalResponseV1> {
+    ) -> Result<PrivateSettlementAuditApprovalResponseV1>
+    where
+        S: IdentityRequestSignerV1 + ?Sized,
+    {
+        let auditor_signing_key = auditor_signer.public_key().clone();
+        validate_private_settlement_endpoint_v1(endpoint)?;
+        if request.approval.body.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
+            || request.approval.body.network_id != self.network_id
+        {
+            return Err(eyre!(
+                "private-settlement auditor approval identity is invalid"
+            ));
+        }
         request
             .approval
             .signature
-            .verify(auditor_signing_key.public_key(), &request.approval.body)
+            .verify(&auditor_signing_key, &request.approval.body)
             .map_err(|_| eyre!("private-settlement auditor approval identity is invalid"))?;
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode private-settlement auditor approval")?;
         let path = private_settlement_resource_path_v1("legs", &payload_digest, "/audit-approvals");
-        let url = join_torii_url(&self.torii_url, &path);
+        let url = join_torii_url(endpoint, &path);
         let response = self.send_private_settlement_builder_v1(
-            self.identity_signed_request(auditor_signing_key, HttpMethod::POST, url, body)?
+            self.identity_signed_request_with_signer(auditor_signer, HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
@@ -2134,17 +2418,169 @@ impl Client {
                 response,
                 "private-settlement auditor approval failed",
             )?;
-        if decoded.payload_digest != payload_digest
-            || decoded.bundle_id != request.approval.body.bundle_id
-            || decoded.leg_ordinal != request.approval.body.leg_ordinal
-            || decoded.required == 0
-            || decoded.collected > decoded.required
+        validate_private_settlement_audit_approval_response_v1(payload_digest, request, &decoded)
+            .map_err(|_| eyre!("private-settlement auditor approval response is substituted"))?;
+        Ok(decoded)
+    }
+
+    fn submit_private_settlement_audit_approval_quorum_inner_v1<S>(
+        &self,
+        committee_endpoints: &[Url],
+        expected_authority: Option<&PrivateSettlementCommitteeAuthorityV1>,
+        payload_digest: Hash,
+        auditor_signer: &S,
+        request: &PrivateSettlementAuditApprovalRequestV1,
+    ) -> Result<PrivateSettlementAuditApprovalResponseV1>
+    where
+        S: IdentityRequestSignerV1 + ?Sized,
+    {
+        validate_private_settlement_committee_endpoints_v1(committee_endpoints)?;
+        if let Some(authority) = expected_authority {
+            authority
+                .validate()
+                .map_err(|_| eyre!("private-settlement expected committee authority is invalid"))?;
+            for (validator, pop) in authority.validators.iter().zip(&authority.validator_pops) {
+                if validator.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
+                    || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
+                {
+                    return Err(eyre!(
+                        "private-settlement expected committee authority is invalid"
+                    ));
+                }
+            }
+            if authority.validators.len() != committee_endpoints.len() {
+                return Err(eyre!(
+                    "private-settlement approval endpoints must match the expected authority roster"
+                ));
+            }
+        }
+        let auditor_signing_key = auditor_signer.public_key().clone();
+        if request.approval.body.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
+            || request.approval.body.network_id != self.network_id
+            || request
+                .approval
+                .signature
+                .verify(&auditor_signing_key, &request.approval.body)
+                .is_err()
         {
             return Err(eyre!(
-                "private-settlement auditor approval response is substituted"
+                "private-settlement auditor approval identity is invalid"
             ));
         }
-        Ok(decoded)
+        let mut candidates = Vec::with_capacity(committee_endpoints.len());
+        for (endpoint_index, endpoint) in committee_endpoints.iter().enumerate() {
+            let Ok(response) = self.submit_private_settlement_audit_approval_to_v1(
+                endpoint,
+                payload_digest,
+                auditor_signer,
+                request,
+            ) else {
+                continue;
+            };
+            let mut canonical_view = response.acknowledgement_digest_material();
+            canonical_view.authoritative_height = 0;
+            canonical_view.newly_recorded = false;
+            let encoded = norito::encode_canonical(&canonical_view)
+                .map_err(|_| eyre!("private-settlement approval acknowledgement is invalid"))?;
+            candidates.push(PrivateSettlementAuthenticatedQuorumCandidateV1 {
+                endpoint_index,
+                authority: response.committee_authority.clone(),
+                responder: response.responder_attestation.body.responder.clone(),
+                canonical_view: encoded,
+                authoritative_height: response.authoritative_height,
+                response,
+            });
+        }
+        select_private_settlement_authenticated_quorum_v1(expected_authority, candidates)
+    }
+
+    /// Submit one approval to an authority-pinned four-validator committee.
+    ///
+    /// All four distinct endpoints must be ordered like
+    /// `expected_authority.validators`. Every accepted acknowledgement is
+    /// purpose-separated, BLS-authenticated by the exact endpoint responder,
+    /// and counted at most once. One unavailable or substituted endpoint is
+    /// excluded without vetoing three exact roster-aligned acknowledgements.
+    /// `newly_recorded` and authoritative height are retry observations: they
+    /// are normalized only for quorum grouping, and an actually signed
+    /// middle-height response is returned unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Fails before dispatch for malformed endpoints, authority, or approval
+    /// identity, or after all attempts when fewer than three exact unique
+    /// authenticated acknowledgements exist.
+    pub fn submit_private_settlement_audit_approval_quorum_for_authority_v1<S>(
+        &self,
+        committee_endpoints: &[Url],
+        expected_authority: &PrivateSettlementCommitteeAuthorityV1,
+        payload_digest: Hash,
+        auditor_signer: &S,
+        request: &PrivateSettlementAuditApprovalRequestV1,
+    ) -> Result<PrivateSettlementAuditApprovalResponseV1>
+    where
+        S: IdentityRequestSignerV1 + ?Sized,
+    {
+        self.submit_private_settlement_audit_approval_quorum_inner_v1(
+            committee_endpoints,
+            Some(expected_authority),
+            payload_digest,
+            auditor_signer,
+            request,
+        )
+    }
+
+    /// Submit one approval quorum without an external authority trust anchor.
+    ///
+    /// This compatibility surface verifies response signatures and internally
+    /// self-asserted rosters, but it is unsuitable for production coordination.
+    /// Production callers must use
+    /// [`Self::submit_private_settlement_audit_approval_quorum_for_authority_v1`].
+    ///
+    /// # Errors
+    ///
+    /// Fails under the same response and quorum checks as the authority-pinned
+    /// method, except external authority equality cannot be established.
+    pub fn submit_private_settlement_audit_approval_quorum_v1<S>(
+        &self,
+        committee_endpoints: &[Url],
+        payload_digest: Hash,
+        auditor_signer: &S,
+        request: &PrivateSettlementAuditApprovalRequestV1,
+    ) -> Result<PrivateSettlementAuditApprovalResponseV1>
+    where
+        S: IdentityRequestSignerV1 + ?Sized,
+    {
+        self.submit_private_settlement_audit_approval_quorum_inner_v1(
+            committee_endpoints,
+            None,
+            payload_digest,
+            auditor_signer,
+            request,
+        )
+    }
+
+    /// Submit one approval through the software key to the default Torii endpoint.
+    ///
+    /// This compatibility adapter delegates to
+    /// [`Self::submit_private_settlement_audit_approval_to_v1`] and is likewise
+    /// unsuitable as a production quorum trust anchor.
+    ///
+    /// # Errors
+    ///
+    /// Fails under the same conditions as the endpoint-aware method.
+    pub fn submit_private_settlement_audit_approval_v1(
+        &self,
+        payload_digest: Hash,
+        auditor_signing_key: &KeyPair,
+        request: &PrivateSettlementAuditApprovalRequestV1,
+    ) -> Result<PrivateSettlementAuditApprovalResponseV1> {
+        self.submit_private_settlement_audit_approval_to_v1(
+            &self.torii_url,
+            payload_digest,
+            &BorrowedKeyPairIdentityRequestSignerV1::new(auditor_signing_key),
+            request,
+        )
     }
 
     /// Submit one exact sponsor-signed global finalization or abort carrier.
@@ -2241,7 +2677,411 @@ mod tests {
     use crate::client::evidence_http_tests::{
         SnapshotStore, base_url, client_with_base_url, respond_with, with_mock_http,
     };
-    use std::sync::{Arc, Mutex};
+    use iroha_data_model::{
+        nexus::{DataSpaceId, LaneId, PrivateSettlementLegCommitmentV1, PrivateSettlementRouteV1},
+        privacy::{
+            PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
+            PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
+            PrivacyRecipientIdV1, PrivacyRootV1,
+        },
+    };
+    use std::{
+        num::NonZeroU64,
+        sync::{Arc, Mutex},
+    };
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct MockExactQuorumViewV1 {
+        view: u8,
+        authoritative_height: u64,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct MockApprovalAcknowledgementV1 {
+        collected: u8,
+        required: u8,
+        newly_recorded: bool,
+        authoritative_height: u64,
+    }
+
+    fn committee_endpoint_fixture_v1() -> Vec<Url> {
+        (0_u16..4)
+            .map(|index| {
+                Url::parse(&format!("http://127.0.0.1:{}", 24_000 + index))
+                    .expect("committee endpoint fixture is valid")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn auditor_responder_must_be_unique_and_endpoint_roster_aligned() {
+        let validators = (0_u8..4)
+            .map(|index| {
+                iroha_data_model::peer::PeerId::from(
+                    iroha_crypto::KeyPair::from_seed(
+                        vec![0x91_u8.saturating_add(index); 32],
+                        Algorithm::BlsNormal,
+                    )
+                    .public_key()
+                    .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let authority = PrivateSettlementCommitteeAuthorityV1 {
+            route: PrivateSettlementRouteV1 {
+                dataspace_id: DataSpaceId::new(71),
+                lane_id: LaneId::new(5),
+                lane_incarnation: Hash::new(b"auditor responder roster incarnation"),
+            },
+            validator_set_hash: iroha_crypto::HashOf::new(&validators),
+            validators: validators.clone(),
+            validator_pops: vec![vec![0xA5; PRIVATE_SETTLEMENT_BLS_BYTES_V1]; 4],
+        };
+        let mut admitted = BTreeSet::new();
+        admit_private_settlement_auditor_responder_v1(&authority, 0, &validators[0], &mut admitted)
+            .expect("first aligned responder");
+        assert!(
+            admit_private_settlement_auditor_responder_v1(
+                &authority,
+                0,
+                &validators[0],
+                &mut admitted,
+            )
+            .is_err(),
+            "the same responder cannot be counted through a second URL"
+        );
+        assert!(
+            admit_private_settlement_auditor_responder_v1(
+                &authority,
+                1,
+                &validators[0],
+                &mut BTreeSet::new(),
+            )
+            .is_err(),
+            "an endpoint cannot authenticate as a different roster index"
+        );
+    }
+
+    fn mock_auditor_quorum_candidate_v1(
+        authority: &PrivateSettlementCommitteeAuthorityV1,
+        endpoint_index: usize,
+        responder_index: usize,
+        view: u8,
+        authoritative_height: u64,
+    ) -> PrivateSettlementAuthenticatedQuorumCandidateV1<MockExactQuorumViewV1> {
+        PrivateSettlementAuthenticatedQuorumCandidateV1 {
+            endpoint_index,
+            authority: authority.clone(),
+            responder: authority.validators[responder_index].clone(),
+            canonical_view: vec![view],
+            authoritative_height,
+            response: MockExactQuorumViewV1 {
+                view,
+                authoritative_height,
+            },
+        }
+    }
+
+    #[test]
+    fn auditor_quorum_ignores_one_substituted_responder() {
+        let validators = (0_u8..4)
+            .map(|index| {
+                PeerId::from(
+                    KeyPair::from_seed(
+                        vec![0xA1_u8.saturating_add(index); 32],
+                        Algorithm::BlsNormal,
+                    )
+                    .public_key()
+                    .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let authority = PrivateSettlementCommitteeAuthorityV1 {
+            route: PrivateSettlementRouteV1 {
+                dataspace_id: DataSpaceId::new(72),
+                lane_id: LaneId::new(6),
+                lane_incarnation: Hash::new(b"auditor quorum liveness incarnation"),
+            },
+            validator_set_hash: iroha_crypto::HashOf::new(&validators),
+            validators,
+            validator_pops: vec![vec![0xA6; PRIVATE_SETTLEMENT_BLS_BYTES_V1]; 4],
+        };
+        let candidates = vec![
+            mock_auditor_quorum_candidate_v1(&authority, 0, 0, 7, 11),
+            mock_auditor_quorum_candidate_v1(&authority, 1, 1, 7, 13),
+            mock_auditor_quorum_candidate_v1(&authority, 2, 2, 7, 17),
+            // Endpoint three is Byzantine and replays validator zero's identity.
+            mock_auditor_quorum_candidate_v1(&authority, 3, 0, 7, 19),
+        ];
+        let response =
+            select_private_settlement_authenticated_quorum_v1(Some(&authority), candidates)
+                .expect("three aligned responders form quorum despite one substitution");
+        assert_eq!(response.view, 7);
+        assert_eq!(response.authoritative_height, 13);
+    }
+
+    #[test]
+    fn auditor_quorum_rejects_fewer_than_three_aligned_responders() {
+        let validators = (0_u8..4)
+            .map(|index| {
+                PeerId::from(
+                    KeyPair::from_seed(
+                        vec![0xB1_u8.saturating_add(index); 32],
+                        Algorithm::BlsNormal,
+                    )
+                    .public_key()
+                    .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let authority = PrivateSettlementCommitteeAuthorityV1 {
+            route: PrivateSettlementRouteV1 {
+                dataspace_id: DataSpaceId::new(73),
+                lane_id: LaneId::new(6),
+                lane_incarnation: Hash::new(b"auditor quorum subthreshold incarnation"),
+            },
+            validator_set_hash: iroha_crypto::HashOf::new(&validators),
+            validators,
+            validator_pops: vec![vec![0xA7; PRIVATE_SETTLEMENT_BLS_BYTES_V1]; 4],
+        };
+        let candidates = vec![
+            mock_auditor_quorum_candidate_v1(&authority, 0, 0, 7, 11),
+            mock_auditor_quorum_candidate_v1(&authority, 1, 1, 7, 13),
+            mock_auditor_quorum_candidate_v1(&authority, 2, 0, 7, 17),
+            mock_auditor_quorum_candidate_v1(&authority, 3, 1, 7, 19),
+        ];
+        assert!(
+            select_private_settlement_authenticated_quorum_v1(Some(&authority), candidates)
+                .is_err(),
+            "two aligned and two substituted responders cannot form quorum"
+        );
+    }
+
+    #[test]
+    fn exact_quorum_rejects_duplicate_committee_urls_before_dispatch() {
+        let mut endpoints = committee_endpoint_fixture_v1();
+        endpoints[3] = endpoints[0].clone();
+        let mut attempts = 0_usize;
+        let result = collect_exact_private_settlement_quorum_v1(
+            &endpoints,
+            |_| {
+                attempts += 1;
+                Ok(MockExactQuorumViewV1 {
+                    view: 7,
+                    authoritative_height: 10,
+                })
+            },
+            |response| Ok((vec![response.view], response.authoritative_height)),
+            "mock exact quorum unavailable",
+        );
+        assert!(result.is_err());
+        assert_eq!(attempts, 0, "invalid endpoint rosters fail before I/O");
+    }
+
+    #[test]
+    fn exact_quorum_attempts_all_four_and_rejects_two_successes() {
+        let endpoints = committee_endpoint_fixture_v1();
+        let mut attempts = 0_usize;
+        let result = collect_exact_private_settlement_quorum_v1(
+            &endpoints,
+            |_| {
+                let attempt = attempts;
+                attempts += 1;
+                if attempt < 2 {
+                    Ok(MockExactQuorumViewV1 {
+                        view: 7,
+                        authoritative_height: 10,
+                    })
+                } else {
+                    Err(eyre!("mock endpoint unavailable"))
+                }
+            },
+            |response| Ok((vec![response.view], response.authoritative_height)),
+            "mock exact quorum unavailable",
+        );
+        assert!(result.is_err());
+        assert_eq!(attempts, 4, "every committee endpoint must be attempted");
+    }
+
+    #[test]
+    fn exact_quorum_rejects_split_two_plus_two_views() {
+        let endpoints = committee_endpoint_fixture_v1();
+        let mut attempts = 0_usize;
+        let result = collect_exact_private_settlement_quorum_v1(
+            &endpoints,
+            |_| {
+                let attempt = attempts;
+                attempts += 1;
+                Ok(MockExactQuorumViewV1 {
+                    view: if attempt < 2 { 7 } else { 8 },
+                    authoritative_height: 10 + u64::try_from(attempt).expect("attempt fits u64"),
+                })
+            },
+            |response| Ok((vec![response.view], response.authoritative_height)),
+            "mock exact quorum unavailable",
+        );
+        assert!(result.is_err());
+        assert_eq!(attempts, 4);
+    }
+
+    #[test]
+    fn exact_quorum_ignores_one_substituted_view_and_returns_middle_matching_height() {
+        let endpoints = committee_endpoint_fixture_v1();
+        let responses = [
+            MockExactQuorumViewV1 {
+                view: 7,
+                authoritative_height: 11,
+            },
+            MockExactQuorumViewV1 {
+                view: 7,
+                authoritative_height: 19,
+            },
+            MockExactQuorumViewV1 {
+                view: 8,
+                authoritative_height: 200,
+            },
+            MockExactQuorumViewV1 {
+                view: 7,
+                authoritative_height: 17,
+            },
+        ];
+        let mut attempts = 0_usize;
+        let (response, quorum_height) = collect_exact_private_settlement_quorum_v1(
+            &endpoints,
+            |_| {
+                let response = responses[attempts];
+                attempts += 1;
+                Ok(response)
+            },
+            |response| Ok((vec![response.view], response.authoritative_height)),
+            "mock exact quorum unavailable",
+        )
+        .expect("three identical views form a quorum");
+        assert_eq!(attempts, 4);
+        assert_eq!(response.view, 7);
+        assert_eq!(quorum_height, 17);
+    }
+
+    #[test]
+    fn exact_quorum_height_rejects_one_same_view_high_outlier() {
+        let endpoints = committee_endpoint_fixture_v1();
+        let responses = [11_u64, 12, 13, 200];
+        let mut attempts = 0_usize;
+        let (_, quorum_height) = collect_exact_private_settlement_quorum_v1(
+            &endpoints,
+            |_| {
+                let authoritative_height = responses[attempts];
+                attempts += 1;
+                Ok(MockExactQuorumViewV1 {
+                    view: 7,
+                    authoritative_height,
+                })
+            },
+            |response| Ok((vec![response.view], response.authoritative_height)),
+            "mock exact quorum unavailable",
+        )
+        .expect("four identical views form a quorum despite one height outlier");
+        assert_eq!(attempts, 4);
+        assert_eq!(quorum_height, 13, "one high outlier cannot select height");
+    }
+
+    #[test]
+    fn approval_acknowledgement_quorum_ignores_one_substituted_responder() {
+        let keys = (0_u8..4)
+            .map(|index| KeyPair::from_seed(vec![0xC1 + index; 32], Algorithm::BlsNormal))
+            .collect::<Vec<_>>();
+        let validators = keys
+            .iter()
+            .map(|key| PeerId::from(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let authority = PrivateSettlementCommitteeAuthorityV1 {
+            route: PrivateSettlementRouteV1 {
+                dataspace_id: DataSpaceId::new(74),
+                lane_id: LaneId::new(7),
+                lane_incarnation: Hash::new(b"approval acknowledgement quorum incarnation"),
+            },
+            validator_set_hash: iroha_crypto::HashOf::new(&validators),
+            validators,
+            validator_pops: vec![vec![0xA8; PRIVATE_SETTLEMENT_BLS_BYTES_V1]; 4],
+        };
+        let candidate = |endpoint_index: usize,
+                         responder_index: usize,
+                         newly_recorded: bool,
+                         authoritative_height: u64| {
+            let response = MockApprovalAcknowledgementV1 {
+                collected: 1,
+                required: 1,
+                newly_recorded,
+                authoritative_height,
+            };
+            PrivateSettlementAuthenticatedQuorumCandidateV1 {
+                endpoint_index,
+                authority: authority.clone(),
+                responder: authority.validators[responder_index].clone(),
+                canonical_view: vec![response.collected, response.required, 1],
+                authoritative_height,
+                response,
+            }
+        };
+        let candidates = vec![
+            candidate(0, 0, true, 11),
+            candidate(1, 1, false, 13),
+            candidate(2, 2, true, 17),
+            candidate(3, 0, false, 19),
+        ];
+        let response =
+            select_private_settlement_authenticated_quorum_v1(Some(&authority), candidates)
+                .expect("three aligned signed acknowledgements form quorum");
+        assert_eq!(response.authoritative_height, 13);
+        assert!(!response.newly_recorded);
+    }
+
+    #[test]
+    fn approval_acknowledgement_quorum_rejects_fewer_than_three_aligned_responders() {
+        let validators = (0_u8..4)
+            .map(|index| {
+                PeerId::from(
+                    KeyPair::from_seed(vec![0xD1 + index; 32], Algorithm::BlsNormal)
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let authority = PrivateSettlementCommitteeAuthorityV1 {
+            route: PrivateSettlementRouteV1 {
+                dataspace_id: DataSpaceId::new(75),
+                lane_id: LaneId::new(7),
+                lane_incarnation: Hash::new(b"approval acknowledgement subquorum incarnation"),
+            },
+            validator_set_hash: iroha_crypto::HashOf::new(&validators),
+            validators,
+            validator_pops: vec![vec![0xA9; PRIVATE_SETTLEMENT_BLS_BYTES_V1]; 4],
+        };
+        let candidates = [(0, 0), (1, 1), (2, 0), (3, 1)]
+            .into_iter()
+            .map(|(endpoint_index, responder_index)| {
+                let response = MockApprovalAcknowledgementV1 {
+                    collected: 1,
+                    required: 1,
+                    newly_recorded: endpoint_index == 0,
+                    authoritative_height: 11 + u64::try_from(endpoint_index).expect("index fits"),
+                };
+                PrivateSettlementAuthenticatedQuorumCandidateV1 {
+                    endpoint_index,
+                    authority: authority.clone(),
+                    responder: authority.validators[responder_index].clone(),
+                    canonical_view: vec![response.collected, response.required, 1],
+                    authoritative_height: response.authoritative_height,
+                    response,
+                }
+            })
+            .collect();
+        assert!(
+            select_private_settlement_authenticated_quorum_v1(Some(&authority), candidates)
+                .is_err(),
+            "two aligned and two substituted acknowledgement responders cannot form quorum"
+        );
+    }
 
     fn phase_fixture_v1() -> (
         PrivateSettlementCommitteeAuthorityV1,
@@ -2350,6 +3190,244 @@ mod tests {
                     .to_vec(),
             })
             .collect()
+    }
+
+    fn finalization_route_v1(index: usize) -> PrivateSettlementRouteV1 {
+        let dataspace = u64::try_from(index + 41).expect("fixture dataspace fits u64");
+        PrivateSettlementRouteV1 {
+            dataspace_id: DataSpaceId::new(dataspace),
+            lane_id: LaneId::new(u32::try_from(index + 11).expect("fixture lane fits u32")),
+            lane_incarnation: Hash::new_from_chunks(&[
+                b"client-finalization-route-v1",
+                &dataspace.to_le_bytes(),
+            ]),
+        }
+    }
+
+    fn finalization_authority_v1(
+        route: PrivateSettlementRouteV1,
+        ordinal: u8,
+    ) -> (
+        PrivateSettlementCommitteeAuthorityV1,
+        Vec<iroha_crypto::KeyPair>,
+    ) {
+        let keys = (0_u8..4)
+            .map(|index| {
+                iroha_crypto::KeyPair::from_seed(
+                    vec![0x90_u8.saturating_add(ordinal * 4).saturating_add(index); 32],
+                    Algorithm::BlsNormal,
+                )
+            })
+            .collect::<Vec<_>>();
+        let validators = keys
+            .iter()
+            .map(|key| iroha_data_model::peer::PeerId::from(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let authority = PrivateSettlementCommitteeAuthorityV1 {
+            route,
+            validator_set_hash: iroha_crypto::HashOf::new(&validators),
+            validators,
+            validator_pops: keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("finalization fixture validator PoP")
+                })
+                .collect(),
+        };
+        (authority, keys)
+    }
+
+    fn finalization_delta_v1(
+        manifest: &AtomicPrivateSettlementV1,
+        index: usize,
+    ) -> PrivateSettlementDeltaV1 {
+        let leg = &manifest.legs[index];
+        let base = 0x20_u8.saturating_add(
+            u8::try_from(index)
+                .expect("fixture index fits u8")
+                .saturating_mul(16),
+        );
+        let output_commitments = (0_u8..3)
+            .map(|slot| PrivacyCommitmentV1::new([base.saturating_add(slot); 32]))
+            .collect::<Vec<_>>();
+        let encrypted_outputs = output_commitments
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(slot, commitment)| {
+                let slot = u8::try_from(slot).expect("fixture slot fits u8");
+                let seed = base.saturating_add(8).saturating_add(slot);
+                let mut ciphertext = vec![seed; PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1];
+                ciphertext[..4].copy_from_slice(b"IPNE");
+                PrivacyEncryptedOutputV1 {
+                    recipient: PrivacyRecipientIdV1::new([seed; 32]),
+                    ephemeral_public_key: PrivacyEncryptionKeyV1::new([seed.saturating_add(1); 32]),
+                    commitment,
+                    ciphertext,
+                }
+            })
+            .collect::<Vec<_>>();
+        let delta = PrivateSettlementDeltaV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            bundle_id: manifest.bundle_id,
+            leg_ordinal: leg.ordinal,
+            route: leg.route,
+            pool_id: leg.pool_id,
+            asset_binding_commitment: leg.asset_binding_commitment,
+            old_root: PrivacyRootV1::new([base.saturating_add(11); 32]),
+            new_root: PrivacyRootV1::new([base.saturating_add(12); 32]),
+            old_epoch: 7,
+            new_epoch: 8,
+            nullifiers: vec![
+                PrivacyNullifierV1::new([base.saturating_add(13); 32]),
+                PrivacyNullifierV1::new([base.saturating_add(14); 32]),
+            ],
+            output_commitments,
+            encrypted_outputs,
+            statement_digest: Hash::new_from_chunks(&[
+                b"client-finalization-statement-v1",
+                &[leg.ordinal],
+            ]),
+            proof_digest: Hash::new_from_chunks(&[b"client-finalization-proof-v1", &[leg.ordinal]]),
+            capsule_digest: Hash::new_from_chunks(&[
+                b"client-finalization-capsule-v1",
+                &[leg.ordinal],
+            ]),
+            audit_policy_digest: leg.audit_policy_digest,
+            audit_key_epoch: 3,
+        };
+        delta
+            .validate_public_shape()
+            .expect("finalization fixture delta validates");
+        delta
+    }
+
+    fn finalization_fixture_v1(
+        client: &Client,
+    ) -> (
+        PrivateSettlementPrepareBarrierV1,
+        Vec<PrivateSettlementPhaseCertificateV1>,
+    ) {
+        let mut manifest = AtomicPrivateSettlementV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id: client.network_id,
+            bundle_id: Hash::new(b"client-finalization-bundle-placeholder"),
+            authority_context_height: 10,
+            expiry_height: 100,
+            sponsor: client.account.clone(),
+            public_fee_intent: FeePaymentIntent::authority(Vec::new(), None),
+            fee_intent_digest: Hash::new(b"client-finalization-fee-placeholder"),
+            reimbursement_terms_commitment: Hash::new(b"client-finalization-reimbursement-terms"),
+            reimbursement_leg_ordinal: 0,
+            legs: (0_usize..2)
+                .map(|index| {
+                    let ordinal = u8::try_from(index).expect("fixture ordinal fits u8");
+                    PrivateSettlementLegCommitmentV1 {
+                        ordinal,
+                        route: finalization_route_v1(index),
+                        pool_id: PrivacyPoolIdV1::new([0x11_u8.saturating_add(ordinal); 32]),
+                        asset_binding_commitment: Hash::new_from_chunks(&[
+                            b"client-finalization-asset-v1",
+                            &[ordinal],
+                        ]),
+                        audit_policy_digest: Hash::new_from_chunks(&[
+                            b"client-finalization-policy-v1",
+                            &[ordinal],
+                        ]),
+                        payload_digest: Hash::new_from_chunks(&[
+                            b"client-finalization-payload-v1",
+                            &[ordinal],
+                        ]),
+                        availability_certificate_digest: Hash::new_from_chunks(&[
+                            b"client-finalization-availability-v1",
+                            &[ordinal],
+                        ]),
+                        delta_digest: Hash::new_from_chunks(&[
+                            b"client-finalization-delta-placeholder-v1",
+                            &[ordinal],
+                        ]),
+                    }
+                })
+                .collect(),
+        };
+        manifest.fee_intent_digest = manifest
+            .computed_fee_intent_digest()
+            .expect("finalization fixture fee hashes");
+        manifest.bundle_id = manifest
+            .computed_bundle_id()
+            .expect("finalization fixture bundle hashes");
+        let deltas = (0..manifest.legs.len())
+            .map(|index| finalization_delta_v1(&manifest, index))
+            .collect::<Vec<_>>();
+        for (leg, delta) in manifest.legs.iter_mut().zip(&deltas) {
+            leg.delta_digest = delta.digest().expect("finalization fixture delta hashes");
+        }
+        manifest
+            .validate()
+            .expect("finalization fixture manifest validates");
+
+        let authority_material = manifest
+            .legs
+            .iter()
+            .map(|leg| finalization_authority_v1(leg.route, leg.ordinal))
+            .collect::<Vec<_>>();
+        let authorities = authority_material
+            .iter()
+            .map(|(authority, _)| authority.clone())
+            .collect::<Vec<_>>();
+        let prepare_certificates = authority_material
+            .iter()
+            .enumerate()
+            .map(|(index, (authority, keys))| {
+                let ordinal = u8::try_from(index).expect("fixture ordinal fits u8");
+                let body = expected_phase_body_v1(
+                    &manifest,
+                    ordinal,
+                    authority,
+                    PrivateSettlementPhaseV1::Prepare,
+                    private_settlement_reserved_prepared_digest_v1(),
+                )
+                .expect("finalization fixture Prepare body");
+                aggregate_phase_votes_v1(
+                    body,
+                    ordinal,
+                    authority,
+                    &phase_votes_v1(authority, keys, body, &[0, 1, 2]),
+                )
+                .expect("finalization fixture Prepare QC")
+            })
+            .collect::<Vec<_>>();
+        let barrier = Client::build_private_settlement_prepare_barrier_v1(
+            manifest,
+            authorities,
+            deltas,
+            prepare_certificates,
+        )
+        .expect("finalization fixture barrier validates");
+        let commits = authority_material
+            .iter()
+            .enumerate()
+            .map(|(index, (authority, keys))| {
+                let ordinal = u8::try_from(index).expect("fixture ordinal fits u8");
+                let body = expected_phase_body_v1(
+                    &barrier.manifest,
+                    ordinal,
+                    authority,
+                    PrivateSettlementPhaseV1::Commit,
+                    barrier.prepared_bundle_digest,
+                )
+                .expect("finalization fixture Commit body");
+                aggregate_phase_votes_v1(
+                    body,
+                    ordinal,
+                    authority,
+                    &phase_votes_v1(authority, keys, body, &[0, 1, 2]),
+                )
+                .expect("finalization fixture Commit QC")
+            })
+            .collect();
+        (barrier, commits)
     }
 
     #[test]
@@ -2521,6 +3599,282 @@ mod tests {
             recovered.as_ref().expect("canonical recovery"),
             &different_statement,
         ));
+    }
+
+    #[test]
+    fn finalization_builder_constructs_one_exact_sponsor_signed_carrier() {
+        let client = client_with_base_url(base_url());
+        let (barrier, commits) = finalization_fixture_v1(&client);
+        let request = client
+            .build_private_settlement_finalization_request_v1(
+                &barrier,
+                &commits,
+                u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+                    .expect("hard carrier ceiling fits u64"),
+            )
+            .expect("complete certified barrier builds a finalization request");
+
+        let signed_manifest = exact_private_settlement_carrier_v1(&request.transaction)
+            .expect("builder emits an exact direct carrier");
+        assert_eq!(signed_manifest, &barrier.manifest);
+        assert_eq!(
+            request.transaction.network_id(),
+            Some(&barrier.manifest.network_id)
+        );
+        assert_eq!(request.transaction.authority(), &barrier.manifest.sponsor);
+        assert_eq!(
+            request.transaction.fee_payment_intent(),
+            &barrier.manifest.public_fee_intent
+        );
+        let Executable::Instructions(instructions) = request.transaction.instructions() else {
+            panic!("finalization builder emitted a non-instruction executable");
+        };
+        assert_eq!(instructions.len(), 1);
+        let carrier = instructions[0]
+            .as_any()
+            .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
+            .expect("sole instruction is the finalization carrier");
+        assert_eq!(carrier.commit_bundle.manifest, barrier.manifest);
+        assert_eq!(
+            carrier.commit_bundle.authority_catalog,
+            barrier.authority_catalog
+        );
+        assert_eq!(
+            carrier.commit_bundle.legs.len(),
+            barrier.manifest.legs.len()
+        );
+        for (index, leg) in carrier.commit_bundle.legs.iter().enumerate() {
+            assert_eq!(leg.delta, barrier.deltas[index]);
+            assert_eq!(leg.prepare, barrier.prepare_certificates[index]);
+            assert_eq!(leg.commit, commits[index]);
+        }
+    }
+
+    #[test]
+    fn finalization_builder_enforces_governed_and_exact_signed_wire_bounds() {
+        let client = client_with_base_url(base_url());
+        let (barrier, commits) = finalization_fixture_v1(&client);
+        let hard_max = u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+            .expect("hard carrier ceiling fits u64");
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(&barrier, &commits, 0)
+                .is_err()
+        );
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(&barrier, &commits, hard_max + 1,)
+                .is_err()
+        );
+
+        let first = client
+            .build_private_settlement_finalization_request_v1(&barrier, &commits, hard_max)
+            .expect("hard ceiling admits fixture");
+        let exact_signed_bytes = u64::try_from(
+            first
+                .transaction
+                .encode_wire_v1()
+                .expect("fixture signed transaction encodes")
+                .len(),
+        )
+        .expect("fixture signed length fits u64");
+        client
+            .build_private_settlement_finalization_request_v1(
+                &barrier,
+                &commits,
+                exact_signed_bytes,
+            )
+            .expect("an exact signed-wire bound is inclusive");
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(
+                    &barrier,
+                    &commits,
+                    exact_signed_bytes - 1,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn finalization_builder_rejects_missing_duplicate_reordered_and_substituted_commits() {
+        let client = client_with_base_url(base_url());
+        let (barrier, commits) = finalization_fixture_v1(&client);
+        let hard_max = u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+            .expect("hard carrier ceiling fits u64");
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(
+                    &barrier,
+                    &commits[..1],
+                    hard_max,
+                )
+                .is_err()
+        );
+
+        let duplicate = vec![commits[0].clone(), commits[0].clone()];
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(&barrier, &duplicate, hard_max,)
+                .is_err()
+        );
+        let mut reordered = commits.clone();
+        reordered.reverse();
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(&barrier, &reordered, hard_max,)
+                .is_err()
+        );
+
+        let other_client = client_with_base_url(base_url());
+        let (_, other_commits) = finalization_fixture_v1(&other_client);
+        let mut substituted = commits.clone();
+        substituted[0] = other_commits[0].clone();
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(&barrier, &substituted, hard_max,)
+                .is_err()
+        );
+
+        let mut unauthenticated = commits;
+        unauthenticated[0].aggregate_signature[0] ^= 1;
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(
+                    &barrier,
+                    &unauthenticated,
+                    hard_max,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn finalization_builder_rejects_commit_digest_phase_and_route_mismatches() {
+        let client = client_with_base_url(base_url());
+        let (barrier, commits) = finalization_fixture_v1(&client);
+        let hard_max = u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+            .expect("hard carrier ceiling fits u64");
+
+        let mut wrong_digest = commits.clone();
+        wrong_digest[0].body.prepared_bundle_digest =
+            Hash::new(b"substituted-client-prepared-bundle");
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(
+                    &barrier,
+                    &wrong_digest,
+                    hard_max,
+                )
+                .is_err()
+        );
+
+        let mut wrong_phase = commits.clone();
+        wrong_phase[0].body.phase = PrivateSettlementPhaseV1::Prepare;
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(&barrier, &wrong_phase, hard_max,)
+                .is_err()
+        );
+
+        let mut wrong_route = commits;
+        wrong_route[0].body.route = barrier.manifest.legs[1].route;
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(&barrier, &wrong_route, hard_max,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn finalization_builder_and_submission_fail_closed_on_envelope_binding() {
+        let client = client_with_base_url(base_url());
+        let (barrier, commits) = finalization_fixture_v1(&client);
+        let hard_max = u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+            .expect("hard carrier ceiling fits u64");
+
+        let other_client = client_with_base_url(base_url());
+        let (other_barrier, other_commits) = finalization_fixture_v1(&other_client);
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(
+                    &other_barrier,
+                    &other_commits,
+                    hard_max,
+                )
+                .is_err()
+        );
+
+        let mut wrong_network_client = client.clone();
+        wrong_network_client.network_id =
+            iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::new(b"substituted-client-finalization-network"),
+            ));
+        assert!(
+            wrong_network_client
+                .build_private_settlement_finalization_request_v1(&barrier, &commits, hard_max,)
+                .is_err()
+        );
+
+        let mut substituted_fee_barrier = barrier.clone();
+        substituted_fee_barrier.manifest.public_fee_intent =
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1));
+        assert!(
+            client
+                .build_private_settlement_finalization_request_v1(
+                    &substituted_fee_barrier,
+                    &commits,
+                    hard_max,
+                )
+                .is_err()
+        );
+
+        let valid = client
+            .build_private_settlement_finalization_request_v1(&barrier, &commits, hard_max)
+            .expect("valid finalization request");
+        let Executable::Instructions(instructions) = valid.transaction.instructions() else {
+            panic!("valid builder result is not an instruction transaction");
+        };
+        let carrier = instructions[0]
+            .as_any()
+            .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
+            .expect("valid builder result contains a finalization carrier")
+            .clone();
+        let multiple = client
+            .try_build_transaction(
+                [
+                    InstructionBox::from(carrier.clone()),
+                    InstructionBox::from(carrier.clone()),
+                ],
+                barrier.manifest.public_fee_intent.clone(),
+                Metadata::default(),
+            )
+            .expect("fixture multi-carrier transaction signs");
+        assert!(exact_private_settlement_carrier_v1(&multiple).is_err());
+        assert!(
+            client
+                .submit_private_settlement_bundle_v1(&PrivateSettlementBundleSubmitRequestV1 {
+                    transaction: multiple,
+                })
+                .is_err()
+        );
+
+        let wrong_fee = client
+            .try_build_transaction(
+                [InstructionBox::from(carrier)],
+                FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1)),
+                Metadata::default(),
+            )
+            .expect("fixture fee-substituted transaction signs");
+        assert!(
+            client
+                .submit_private_settlement_bundle_v1(&PrivateSettlementBundleSubmitRequestV1 {
+                    transaction: wrong_fee,
+                })
+                .is_err()
+        );
     }
 
     #[test]
@@ -2752,6 +4106,7 @@ mod tests {
                 &snapshots,
                 Response::builder()
                     .status(StatusCode::OK)
+                    .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
                     .body(response_body)
                     .expect("response build"),
             ),

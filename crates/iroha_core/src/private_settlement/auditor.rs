@@ -13,17 +13,102 @@ use super::{
     },
 };
 use crate::privacy_engines::atomic_private_settlement::validate_audit_openings_v1;
-use iroha_crypto::{Algorithm, HybridSecretKey, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, HybridPublicKey, HybridSecretKey, KeyPair, PublicKey, SignatureOf};
 use iroha_data_model::{
     account::AccountId,
     nexus::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
         PrivateSettlementAuditApprovalBodyV1, PrivateSettlementAuditApprovalV1,
-        PrivateSettlementAuditPlaintextV1, PrivateSettlementAuditPolicyV1,
+        PrivateSettlementAuditCapsuleV1, PrivateSettlementAuditPlaintextV1,
+        PrivateSettlementAuditPolicyV1, PrivateSettlementHybridPublicKeyV1,
         PrivateSettlementPoolGovernanceV1,
     },
 };
 use thiserror::Error;
+use zeroize::{Zeroize as _, Zeroizing};
+
+struct ZeroizingPrivateSettlementAuditPlaintextV1(PrivateSettlementAuditPlaintextV1);
+
+impl core::ops::Deref for ZeroizingPrivateSettlementAuditPlaintextV1 {
+    type Target = PrivateSettlementAuditPlaintextV1;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for ZeroizingPrivateSettlementAuditPlaintextV1 {
+    fn drop(&mut self) {
+        zeroize_private_settlement_audit_plaintext_v1(&mut self.0);
+    }
+}
+
+fn zeroize_private_settlement_audit_plaintext_v1(
+    plaintext: &mut PrivateSettlementAuditPlaintextV1,
+) {
+    plaintext.payer.zeroize_for_confidential_discard();
+    plaintext.recipient.zeroize_for_confidential_discard();
+    plaintext.sponsor.zeroize_for_confidential_discard();
+    plaintext.asset_definition_id.aid_bytes.zeroize();
+    plaintext.asset_binding_salt.zeroize();
+    plaintext.amount.zeroize();
+    plaintext.sponsor_reimbursement_amount.zeroize();
+    plaintext.reimbursement_terms_salt.zeroize();
+    plaintext.memo.zeroize();
+    for policy_reference in &mut plaintext.policy_references {
+        *policy_reference = iroha_crypto::Hash::prehashed([0; iroha_crypto::Hash::LENGTH]);
+    }
+    plaintext.policy_references.clear();
+    plaintext
+        .payer_authorization
+        .body
+        .payer
+        .zeroize_for_confidential_discard();
+    for input in &mut plaintext.payer_authorization.body.inputs {
+        input.note_spending_authority.zeroize();
+    }
+    for signature in &mut plaintext.payer_authorization.signatures {
+        signature.signer.zeroize();
+        signature.signature.zeroize();
+    }
+    for input in &mut plaintext.inputs {
+        zeroize_note_opening_v1(input);
+    }
+    for output in &mut plaintext.outputs {
+        output.recipient_view_key.zeroize();
+        output
+            .view_key_authorization
+            .body
+            .recipient_view_key
+            .zeroize();
+        output
+            .view_key_authorization
+            .body
+            .note_spending_authority
+            .zeroize();
+        output
+            .view_key_authorization
+            .body
+            .authorized_account
+            .zeroize_for_confidential_discard();
+        for signature in &mut output.view_key_authorization.signatures {
+            signature.signer.zeroize();
+            signature.signature.zeroize();
+        }
+        output.encryption_opening.ephemeral_secret.zeroize();
+        zeroize_note_opening_v1(&mut output.note);
+    }
+}
+
+fn zeroize_note_opening_v1(
+    opening: &mut iroha_data_model::nexus::PrivateSettlementAuditNoteOpeningV1,
+) {
+    opening.value.zeroize();
+    opening.spending_authority.zeroize();
+    opening.rho.zeroize();
+    opening.blinding.zeroize();
+    opening.memo_digest.zeroize();
+}
 
 /// Private context presented to one configured local policy evaluator.
 #[derive(Clone, Copy)]
@@ -64,6 +149,128 @@ where
 {
     fn approves(&self, context: PrivateSettlementAuditEvaluationV1<'_>) -> bool {
         self(context)
+    }
+}
+
+/// Redacted failure returned by a deployment-owned auditor credential provider.
+///
+/// Providers deliberately expose no backend diagnostics through this boundary:
+/// an HSM, KMS, threshold signer, or remote decryption service may retain its
+/// detailed diagnostics privately while the settlement path remains
+/// indistinguishable and fail closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[error("private-settlement auditor credential operation failed")]
+pub struct PrivateSettlementAuditorCredentialErrorV1;
+
+/// Deployment-owned credential boundary for one governed online auditor.
+///
+/// Implementations may keep the hybrid decryption secret and purpose-specific
+/// approval key inside an HSM, KMS, enclave, or threshold service. The runtime
+/// constructs every approval body and independently verifies every returned
+/// signature. Decryption providers return only a zeroizing canonical plaintext
+/// buffer, which is validated in full before the policy evaluator can observe
+/// the decoded value.
+pub trait PrivateSettlementAuditorCredentialProviderV1: Send + Sync {
+    /// Public key of the purpose-specific approval signer.
+    fn approval_public_key(&self) -> &PublicKey;
+
+    /// Public counterpart of the governed hybrid capsule-decryption key.
+    fn capsule_public_key(&self) -> &HybridPublicKey;
+
+    /// Open one exact governed capsule into its canonical plaintext bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted provider failure without leaking backend or plaintext
+    /// details.
+    fn open_capsule(
+        &self,
+        capsule: &PrivateSettlementAuditCapsuleV1,
+        policy: &PrivateSettlementAuditPolicyV1,
+        auditor_id: &AccountId,
+    ) -> Result<Zeroizing<Vec<u8>>, PrivateSettlementAuditorCredentialErrorV1>;
+
+    /// Sign the exact runtime-constructed, purpose-separated approval body.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted provider failure. The runtime verifies the returned
+    /// signature against [`Self::approval_public_key`] before releasing it.
+    fn sign_approval(
+        &self,
+        body: &PrivateSettlementAuditApprovalBodyV1,
+    ) -> Result<
+        SignatureOf<PrivateSettlementAuditApprovalBodyV1>,
+        PrivateSettlementAuditorCredentialErrorV1,
+    >;
+}
+
+/// Runtime-only software adapter for an auditor's two purpose-separated keys.
+///
+/// Production deployments can replace this adapter with an implementation of
+/// [`PrivateSettlementAuditorCredentialProviderV1`] backed by an HSM, KMS,
+/// enclave, or threshold service. This adapter borrows key material and never
+/// serializes it.
+#[derive(Clone, Copy)]
+pub struct SoftwarePrivateSettlementAuditorCredentialsV1<'a> {
+    decryption_secret: &'a HybridSecretKey,
+    signing_key: &'a KeyPair,
+}
+
+impl core::fmt::Debug for SoftwarePrivateSettlementAuditorCredentialsV1<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("SoftwarePrivateSettlementAuditorCredentialsV1")
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> SoftwarePrivateSettlementAuditorCredentialsV1<'a> {
+    /// Borrow one hybrid decryption secret and a separate approval-signing key.
+    #[must_use]
+    pub const fn new(decryption_secret: &'a HybridSecretKey, signing_key: &'a KeyPair) -> Self {
+        Self {
+            decryption_secret,
+            signing_key,
+        }
+    }
+}
+
+impl PrivateSettlementAuditorCredentialProviderV1
+    for SoftwarePrivateSettlementAuditorCredentialsV1<'_>
+{
+    fn approval_public_key(&self) -> &PublicKey {
+        self.signing_key.public_key()
+    }
+
+    fn capsule_public_key(&self) -> &HybridPublicKey {
+        self.decryption_secret.public()
+    }
+
+    fn open_capsule(
+        &self,
+        capsule: &PrivateSettlementAuditCapsuleV1,
+        policy: &PrivateSettlementAuditPolicyV1,
+        auditor_id: &AccountId,
+    ) -> Result<Zeroizing<Vec<u8>>, PrivateSettlementAuditorCredentialErrorV1> {
+        open_private_settlement_audit_capsule_v1(
+            capsule,
+            policy,
+            auditor_id,
+            self.decryption_secret,
+        )
+        .map_err(|_| PrivateSettlementAuditorCredentialErrorV1)
+    }
+
+    fn sign_approval(
+        &self,
+        body: &PrivateSettlementAuditApprovalBodyV1,
+    ) -> Result<
+        SignatureOf<PrivateSettlementAuditApprovalBodyV1>,
+        PrivateSettlementAuditorCredentialErrorV1,
+    > {
+        SignatureOf::try_new(self.signing_key.private_key(), body)
+            .map_err(|_| PrivateSettlementAuditorCredentialErrorV1)
     }
 }
 
@@ -116,6 +323,41 @@ pub fn approve_private_settlement_leg_v1<E: PrivateSettlementAuditPolicyEvaluato
     signing_key: &KeyPair,
     evaluator: &E,
 ) -> Result<PrivateSettlementAuditApprovalV1, PrivateSettlementAuditorApprovalErrorV1> {
+    let credentials =
+        SoftwarePrivateSettlementAuditorCredentialsV1::new(decryption_secret, signing_key);
+    approve_private_settlement_leg_with_provider_v1(
+        view,
+        pool_governance,
+        authoritative_height,
+        auditor_id,
+        &credentials,
+        evaluator,
+    )
+}
+
+/// Validate, decrypt, policy-check, and sign through a deployment-owned credential provider.
+///
+/// The provider never chooses approval fields: this function constructs the
+/// exact body after validating the complete public and restricted context, then
+/// independently verifies the returned signature. Plaintext is confined to
+/// this call and is never returned.
+///
+/// # Errors
+///
+/// Returns a redacted failure for invalid/stale context, provider-key mismatch,
+/// authenticated-decryption failure, non-canonical plaintext, policy rejection,
+/// provider failure, or an invalid returned signature.
+pub fn approve_private_settlement_leg_with_provider_v1<
+    P: PrivateSettlementAuditorCredentialProviderV1 + ?Sized,
+    E: PrivateSettlementAuditPolicyEvaluatorV1 + ?Sized,
+>(
+    view: &PrivateSettlementAuditorSidecarViewV1,
+    pool_governance: &PrivateSettlementPoolGovernanceV1,
+    authoritative_height: u64,
+    auditor_id: &AccountId,
+    credentials: &P,
+    evaluator: &E,
+) -> Result<PrivateSettlementAuditApprovalV1, PrivateSettlementAuditorApprovalErrorV1> {
     validate_auditor_view_v1(view, pool_governance, authoritative_height)?;
     let governed_auditor = view
         .policy
@@ -124,21 +366,24 @@ pub fn approve_private_settlement_leg_v1<E: PrivateSettlementAuditPolicyEvaluato
         .iter()
         .find(|auditor| &auditor.auditor_id == auditor_id)
         .ok_or(PrivateSettlementAuditorApprovalErrorV1::UnauthorizedAuditor)?;
-    if signing_key.public_key() != &governed_auditor.signing_key {
+    if credentials.approval_public_key() != &governed_auditor.signing_key {
         return Err(PrivateSettlementAuditorApprovalErrorV1::SigningKeyMismatch);
     }
+    let provider_encryption_key =
+        PrivateSettlementHybridPublicKeyV1::from_hybrid(credentials.capsule_public_key());
+    if provider_encryption_key != governed_auditor.encryption_key {
+        return Err(PrivateSettlementAuditorApprovalErrorV1::CapsuleAuthenticationFailed);
+    }
 
-    let canonical_plaintext = open_private_settlement_audit_capsule_v1(
-        &view.audit_capsule,
-        &view.policy,
-        auditor_id,
-        decryption_secret,
-    )
-    .map_err(|_| PrivateSettlementAuditorApprovalErrorV1::CapsuleAuthenticationFailed)?;
-    let plaintext = norito::decode_canonical::<PrivateSettlementAuditPlaintextV1>(
-        canonical_plaintext.as_slice(),
-    )
-    .map_err(|_| PrivateSettlementAuditorApprovalErrorV1::InvalidPlaintext)?;
+    let canonical_plaintext = credentials
+        .open_capsule(&view.audit_capsule, &view.policy, auditor_id)
+        .map_err(|_| PrivateSettlementAuditorApprovalErrorV1::CapsuleAuthenticationFailed)?;
+    let plaintext = ZeroizingPrivateSettlementAuditPlaintextV1(
+        norito::decode_canonical::<PrivateSettlementAuditPlaintextV1>(
+            canonical_plaintext.as_slice(),
+        )
+        .map_err(|_| PrivateSettlementAuditorApprovalErrorV1::InvalidPlaintext)?,
+    );
     pool_governance
         .validate_asset_opening(
             plaintext.route,
@@ -190,7 +435,8 @@ pub fn approve_private_settlement_leg_v1<E: PrivateSettlementAuditPolicyEvaluato
         expiry_height: view.statement.expiry_height,
     };
     let approval = PrivateSettlementAuditApprovalV1 {
-        signature: SignatureOf::try_new(signing_key.private_key(), &body)
+        signature: credentials
+            .sign_approval(&body)
             .map_err(|_| PrivateSettlementAuditorApprovalErrorV1::SigningFailed)?,
         body,
     };
@@ -226,8 +472,11 @@ fn validate_auditor_view_v1(
     pool_governance
         .validate_against_policy_at(&view.policy, view.manifest.authority_context_height)
         .map_err(|_| PrivateSettlementAuditorApprovalErrorV1::InvalidView)?;
-    if view.lifecycle != PrivateSettlementSidecarLifecycleV1::Collecting
-        || authoritative_height < view.manifest.authority_context_height
+    if !matches!(
+        view.lifecycle,
+        PrivateSettlementSidecarLifecycleV1::Collecting
+            | PrivateSettlementSidecarLifecycleV1::Audited
+    ) || authoritative_height < view.manifest.authority_context_height
         || authoritative_height > view.manifest.expiry_height
         || !view.policy.is_active_at(authoritative_height)
     {
@@ -309,6 +558,74 @@ mod tests {
         sidecar_store::tests::sidecar_fixture,
     };
 
+    struct TestCredentialProviderV1<'a> {
+        software: SoftwarePrivateSettlementAuditorCredentialsV1<'a>,
+        capsule_key_override: Option<&'a HybridPublicKey>,
+        plaintext_override: Option<&'a [u8]>,
+        signing_key_override: Option<&'a KeyPair>,
+        fail_open: bool,
+        fail_sign: bool,
+    }
+
+    impl<'a> TestCredentialProviderV1<'a> {
+        fn exact(decryption_secret: &'a HybridSecretKey, signing_key: &'a KeyPair) -> Self {
+            Self {
+                software: SoftwarePrivateSettlementAuditorCredentialsV1::new(
+                    decryption_secret,
+                    signing_key,
+                ),
+                capsule_key_override: None,
+                plaintext_override: None,
+                signing_key_override: None,
+                fail_open: false,
+                fail_sign: false,
+            }
+        }
+    }
+
+    impl PrivateSettlementAuditorCredentialProviderV1 for TestCredentialProviderV1<'_> {
+        fn approval_public_key(&self) -> &PublicKey {
+            self.software.approval_public_key()
+        }
+
+        fn capsule_public_key(&self) -> &HybridPublicKey {
+            self.capsule_key_override
+                .unwrap_or_else(|| self.software.capsule_public_key())
+        }
+
+        fn open_capsule(
+            &self,
+            capsule: &PrivateSettlementAuditCapsuleV1,
+            policy: &PrivateSettlementAuditPolicyV1,
+            auditor_id: &AccountId,
+        ) -> Result<Zeroizing<Vec<u8>>, PrivateSettlementAuditorCredentialErrorV1> {
+            if self.fail_open {
+                return Err(PrivateSettlementAuditorCredentialErrorV1);
+            }
+            if let Some(plaintext) = self.plaintext_override {
+                return Ok(Zeroizing::new(plaintext.to_vec()));
+            }
+            self.software.open_capsule(capsule, policy, auditor_id)
+        }
+
+        fn sign_approval(
+            &self,
+            body: &PrivateSettlementAuditApprovalBodyV1,
+        ) -> Result<
+            SignatureOf<PrivateSettlementAuditApprovalBodyV1>,
+            PrivateSettlementAuditorCredentialErrorV1,
+        > {
+            if self.fail_sign {
+                return Err(PrivateSettlementAuditorCredentialErrorV1);
+            }
+            if let Some(signing_key) = self.signing_key_override {
+                return SignatureOf::try_new(signing_key.private_key(), body)
+                    .map_err(|_| PrivateSettlementAuditorCredentialErrorV1);
+            }
+            self.software.sign_approval(body)
+        }
+    }
+
     fn approve_all(_: PrivateSettlementAuditEvaluationV1<'_>) -> bool {
         true
     }
@@ -356,12 +673,248 @@ mod tests {
             .verify(&fixture.sidecar.policy, 12)
             .expect("signature");
         iroha_data_model::nexus::validate_private_settlement_audit_approvals_v1(
-            &[approval],
+            core::slice::from_ref(&approval),
             &fixture.sidecar.policy,
             &fixture.sidecar.payload,
             12,
         )
         .expect("threshold and exact bindings");
+
+        let mut audited_retry_view = view;
+        audited_retry_view.lifecycle = PrivateSettlementSidecarLifecycleV1::Audited;
+        let retry = approve_private_settlement_leg_v1(
+            &audited_retry_view,
+            &fixture.pool_governance,
+            12,
+            &fixture.auditor,
+            fixture.hybrid.secret(),
+            &fixture.signing,
+            &approve_all,
+        )
+        .expect("an uncertain submission can regenerate the same approval body");
+        assert_eq!(retry.body, approval.body);
+    }
+
+    #[test]
+    fn deployment_owned_provider_is_verified_at_both_credential_boundaries() {
+        let fixture = sidecar_fixture();
+        let digest = fixture.sidecar.payload_digest();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = PrivateSettlementFileSidecarStoreV1::open(
+            temp.path().join("provider-auditor-sidecars"),
+            PrivateSettlementSidecarStoreConfigV1::default(),
+        )
+        .expect("store");
+        store.store(fixture.sidecar.clone()).expect("upload");
+        let view = store
+            .fetch_for_auditor(digest, &fixture.auditor, 12)
+            .expect("auditor view");
+
+        let exact = TestCredentialProviderV1::exact(fixture.hybrid.secret(), &fixture.signing);
+        let approval = approve_private_settlement_leg_with_provider_v1(
+            &view,
+            &fixture.pool_governance,
+            12,
+            &fixture.auditor,
+            &exact,
+            &approve_all,
+        )
+        .expect("provider approval");
+        approval
+            .verify(&fixture.sidecar.policy, 12)
+            .expect("provider signature");
+
+        let mut wrong_rng = iroha_crypto::rng_from_seed_slice(b"wrong provider capsule key");
+        let wrong_hybrid = iroha_crypto::HybridKeyPair::generate(&mut wrong_rng).expect("key");
+        let mut wrong_capsule_key =
+            TestCredentialProviderV1::exact(fixture.hybrid.secret(), &fixture.signing);
+        wrong_capsule_key.capsule_key_override = Some(wrong_hybrid.public());
+        assert_eq!(
+            approve_private_settlement_leg_with_provider_v1(
+                &view,
+                &fixture.pool_governance,
+                12,
+                &fixture.auditor,
+                &wrong_capsule_key,
+                &must_not_evaluate,
+            ),
+            Err(PrivateSettlementAuditorApprovalErrorV1::CapsuleAuthenticationFailed)
+        );
+
+        let mut substituted_plaintext = fixture.plaintext.clone();
+        substituted_plaintext.amount = substituted_plaintext.amount.saturating_add(1);
+        let substituted_bytes = Zeroizing::new(
+            norito::encode_canonical(&substituted_plaintext).expect("encode substituted plaintext"),
+        );
+        let mut substituted =
+            TestCredentialProviderV1::exact(fixture.hybrid.secret(), &fixture.signing);
+        substituted.plaintext_override = Some(substituted_bytes.as_slice());
+        assert_eq!(
+            approve_private_settlement_leg_with_provider_v1(
+                &view,
+                &fixture.pool_governance,
+                12,
+                &fixture.auditor,
+                &substituted,
+                &must_not_evaluate,
+            ),
+            Err(PrivateSettlementAuditorApprovalErrorV1::InvalidPlaintext)
+        );
+
+        let wrong_signing = KeyPair::from_seed(vec![0xD2; 32], Algorithm::Ed25519);
+        let mut invalid_signature =
+            TestCredentialProviderV1::exact(fixture.hybrid.secret(), &fixture.signing);
+        invalid_signature.signing_key_override = Some(&wrong_signing);
+        assert_eq!(
+            approve_private_settlement_leg_with_provider_v1(
+                &view,
+                &fixture.pool_governance,
+                12,
+                &fixture.auditor,
+                &invalid_signature,
+                &approve_all,
+            ),
+            Err(PrivateSettlementAuditorApprovalErrorV1::SigningFailed)
+        );
+    }
+
+    #[test]
+    fn credential_provider_failures_remain_redacted_and_fail_closed() {
+        let fixture = sidecar_fixture();
+        let digest = fixture.sidecar.payload_digest();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = PrivateSettlementFileSidecarStoreV1::open(
+            temp.path().join("provider-failure-sidecars"),
+            PrivateSettlementSidecarStoreConfigV1::default(),
+        )
+        .expect("store");
+        store.store(fixture.sidecar.clone()).expect("upload");
+        let view = store
+            .fetch_for_auditor(digest, &fixture.auditor, 12)
+            .expect("auditor view");
+
+        let mut unavailable_decrypter =
+            TestCredentialProviderV1::exact(fixture.hybrid.secret(), &fixture.signing);
+        unavailable_decrypter.fail_open = true;
+        assert_eq!(
+            approve_private_settlement_leg_with_provider_v1(
+                &view,
+                &fixture.pool_governance,
+                12,
+                &fixture.auditor,
+                &unavailable_decrypter,
+                &must_not_evaluate,
+            ),
+            Err(PrivateSettlementAuditorApprovalErrorV1::CapsuleAuthenticationFailed)
+        );
+
+        let mut unavailable_signer =
+            TestCredentialProviderV1::exact(fixture.hybrid.secret(), &fixture.signing);
+        unavailable_signer.fail_sign = true;
+        assert_eq!(
+            approve_private_settlement_leg_with_provider_v1(
+                &view,
+                &fixture.pool_governance,
+                12,
+                &fixture.auditor,
+                &unavailable_signer,
+                &approve_all,
+            ),
+            Err(PrivateSettlementAuditorApprovalErrorV1::SigningFailed)
+        );
+        assert_eq!(
+            PrivateSettlementAuditorCredentialErrorV1.to_string(),
+            "private-settlement auditor credential operation failed"
+        );
+        let debug = format!(
+            "{:?}",
+            SoftwarePrivateSettlementAuditorCredentialsV1::new(
+                fixture.hybrid.secret(),
+                &fixture.signing,
+            )
+        );
+        assert!(!debug.contains("PrivateKey"));
+        assert!(!debug.contains("HybridSecretKey"));
+    }
+
+    #[test]
+    fn decoded_plaintext_scrubs_representable_secret_fields() {
+        let mut plaintext = sidecar_fixture().plaintext;
+        let original_payer = plaintext.payer.clone();
+        let original_recipient = plaintext.recipient.clone();
+        let original_sponsor = plaintext.sponsor.clone();
+        zeroize_private_settlement_audit_plaintext_v1(&mut plaintext);
+
+        assert_ne!(plaintext.payer, original_payer);
+        assert_ne!(plaintext.recipient, original_recipient);
+        assert_ne!(plaintext.sponsor, original_sponsor);
+        assert_eq!(plaintext.asset_definition_id.aid_bytes, [0; 16]);
+        assert_eq!(plaintext.asset_binding_salt, [0; 32]);
+        assert_eq!(plaintext.amount, 0);
+        assert_eq!(plaintext.sponsor_reimbursement_amount, 0);
+        assert_eq!(plaintext.reimbursement_terms_salt, [0; 32]);
+        assert!(plaintext.memo.is_empty());
+        assert!(plaintext.policy_references.is_empty());
+        assert_ne!(plaintext.payer_authorization.body.payer, original_payer);
+        assert!(
+            plaintext
+                .payer_authorization
+                .signatures
+                .iter()
+                .all(|entry| {
+                    entry.signature.payload().iter().all(|byte| *byte == 0)
+                        && entry
+                            .signer
+                            .try_to_bytes()
+                            .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
+                })
+        );
+        assert!(
+            plaintext
+                .payer_authorization
+                .body
+                .inputs
+                .iter()
+                .all(|input| input.note_spending_authority == [0; 32])
+        );
+        assert!(plaintext.inputs.iter().all(|input| {
+            input.value == 0
+                && input.spending_authority == [0; 32]
+                && input.rho == [0; 32]
+                && input.blinding == [0; 32]
+                && input.memo_digest == [0; 32]
+        }));
+        assert!(plaintext.outputs.iter().all(|output| {
+            output.recipient_view_key == [0; 32]
+                && output.view_key_authorization.body.recipient_view_key == [0; 32]
+                && output.view_key_authorization.body.note_spending_authority == [0; 32]
+                && output
+                    .view_key_authorization
+                    .body
+                    .authorized_account
+                    .try_signatory()
+                    .is_some_and(|key| {
+                        key.try_to_bytes()
+                            .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
+                    })
+                && output
+                    .view_key_authorization
+                    .signatures
+                    .iter()
+                    .all(|entry| {
+                        entry.signature.payload().iter().all(|byte| *byte == 0)
+                            && entry
+                                .signer
+                                .try_to_bytes()
+                                .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
+                    })
+                && output.encryption_opening.ephemeral_secret == [0; 32]
+                && output.note.value == 0
+                && output.note.spending_authority == [0; 32]
+                && output.note.rho == [0; 32]
+                && output.note.blinding == [0; 32]
+                && output.note.memo_digest == [0; 32]
+        }));
     }
 
     #[test]
@@ -442,13 +995,32 @@ mod tests {
         )
         .expect("store");
         store.store(fixture.sidecar).expect("upload");
-        let mut view = store
+        let view = store
             .fetch_for_auditor(digest, &fixture.auditor, 12)
             .expect("auditor view");
-        view.audit_capsule.ciphertext[0] ^= 1;
+        let mut capsule_substitution = view.clone();
+        capsule_substitution.audit_capsule.ciphertext[0] ^= 1;
         assert_eq!(
             approve_private_settlement_leg_v1(
-                &view,
+                &capsule_substitution,
+                &fixture.pool_governance,
+                12,
+                &fixture.auditor,
+                fixture.hybrid.secret(),
+                &fixture.signing,
+                &must_not_evaluate,
+            ),
+            Err(PrivateSettlementAuditorApprovalErrorV1::InvalidView)
+        );
+
+        let mut key_epoch_substitution = view;
+        key_epoch_substitution.statement.audit_key_epoch = key_epoch_substitution
+            .statement
+            .audit_key_epoch
+            .saturating_add(1);
+        assert_eq!(
+            approve_private_settlement_leg_v1(
+                &key_epoch_substitution,
                 &fixture.pool_governance,
                 12,
                 &fixture.auditor,

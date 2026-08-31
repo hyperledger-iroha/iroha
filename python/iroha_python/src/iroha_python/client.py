@@ -15411,6 +15411,11 @@ class ToriiClient(
     def _sorafs_orderbook_native_verifier(self) -> ModuleType:
         return _require_crypto()
 
+    def _private_settlement_native_verifier(self) -> ModuleType:
+        """Return the pinned Rust verifier for restricted settlement responses."""
+
+        return _require_crypto()
+
     def _sorafs_orderbook_expected_network_id(self, value: Any, context: str) -> NetworkId:
         if value is not None:
             raise ValueError(

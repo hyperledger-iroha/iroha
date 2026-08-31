@@ -36,11 +36,15 @@ pub use audit::{
 };
 pub use auditor::{
     PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditPolicyEvaluatorV1,
-    PrivateSettlementAuditorApprovalErrorV1, approve_private_settlement_leg_v1,
+    PrivateSettlementAuditorApprovalErrorV1, PrivateSettlementAuditorCredentialErrorV1,
+    PrivateSettlementAuditorCredentialProviderV1, SoftwarePrivateSettlementAuditorCredentialsV1,
+    approve_private_settlement_leg_v1, approve_private_settlement_leg_with_provider_v1,
 };
 pub use availability::{
     PrivateSettlementAvailabilityErrorV1, PrivateSettlementAvailabilitySignerV1,
     aggregate_private_settlement_availability_shares_v1,
+    verify_private_settlement_audit_approval_acknowledgement_attestation_v1,
+    verify_private_settlement_auditor_view_attestation_v1,
     verify_private_settlement_availability_share_v1,
 };
 pub use phase::{

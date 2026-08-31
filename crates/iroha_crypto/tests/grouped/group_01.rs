@@ -6,6 +6,8 @@ mod bls_batch;
 mod bls_keys_match;
 #[path = "../check_pop.rs"]
 mod check_pop;
+#[path = "../confidential_discard_zeroize.rs"]
+mod confidential_discard_zeroize;
 #[path = "../confidential_keyset_vectors.rs"]
 mod confidential_keyset_vectors;
 #[path = "../confidential_vectors.rs"]

@@ -17,9 +17,13 @@ use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{
     nexus::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PRIVATE_SETTLEMENT_BLS_BYTES_V1,
-        PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1, PrivateSettlementAvailabilityShareV1,
-        PrivateSettlementCommitteeAuthorityV1, PrivateSettlementProvisionalLegMaterialV1,
-        PrivateSettlementSidecarAvailabilityBodyV1, PrivateSettlementSidecarAvailabilityV1,
+        PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1,
+        PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
+        PrivateSettlementAuditApprovalAcknowledgementAttestationV1,
+        PrivateSettlementAuditorViewAttestationBodyV1, PrivateSettlementAuditorViewAttestationV1,
+        PrivateSettlementAvailabilityShareV1, PrivateSettlementCommitteeAuthorityV1,
+        PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementSidecarAvailabilityBodyV1,
+        PrivateSettlementSidecarAvailabilityV1,
     },
     peer::PeerId,
 };
@@ -140,6 +144,188 @@ impl PrivateSettlementAvailabilitySignerV1 {
         verify_private_settlement_availability_share_v1(&share, &share.body, &authority)?;
         Ok((outcome, share))
     }
+
+    /// Authenticate one exact restricted auditor response with this node's key.
+    ///
+    /// Unlike availability signing, this operation does not claim a new
+    /// persistence boundary. It can sign only a fully typed, purpose-separated
+    /// auditor-view body that names this roster member and the exact authority.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed body, an authority mismatch, a signer outside the
+    /// four-validator roster, or a body naming another responder.
+    pub fn sign_auditor_view(
+        &self,
+        body: PrivateSettlementAuditorViewAttestationBodyV1,
+        authority: &PrivateSettlementCommitteeAuthorityV1,
+    ) -> Result<PrivateSettlementAuditorViewAttestationV1, PrivateSettlementAvailabilityErrorV1>
+    {
+        body.validate_shape()
+            .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+        validate_authority_cryptography_v1(authority)
+            .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+        let authority_digest = authority
+            .digest()
+            .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+        if body.responder != self.peer_id
+            || body.authority_digest != authority_digest
+            || !authority
+                .validators
+                .iter()
+                .any(|validator| validator == &self.peer_id)
+        {
+            return Err(PrivateSettlementAvailabilityErrorV1::InvalidSigner);
+        }
+        let signature = Signature::try_new(
+            self.key_pair.private_key(),
+            &body
+                .signature_preimage()
+                .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?,
+        )
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+        let attestation = PrivateSettlementAuditorViewAttestationV1 {
+            body,
+            signature: signature.payload().to_vec(),
+        };
+        verify_private_settlement_auditor_view_attestation_v1(
+            &attestation,
+            &attestation.body,
+            authority,
+        )?;
+        Ok(attestation)
+    }
+
+    /// Authenticate one exact durable approval acknowledgement with this node's key.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed body, an authority mismatch, a signer outside the
+    /// four-validator roster, or a body naming another responder.
+    pub fn sign_audit_approval_acknowledgement(
+        &self,
+        body: PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
+        authority: &PrivateSettlementCommitteeAuthorityV1,
+    ) -> Result<
+        PrivateSettlementAuditApprovalAcknowledgementAttestationV1,
+        PrivateSettlementAvailabilityErrorV1,
+    > {
+        body.validate_shape()
+            .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+        validate_authority_cryptography_v1(authority)
+            .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+        let authority_digest = authority
+            .digest()
+            .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+        if body.responder != self.peer_id
+            || body.authority_digest != authority_digest
+            || !authority
+                .validators
+                .iter()
+                .any(|validator| validator == &self.peer_id)
+        {
+            return Err(PrivateSettlementAvailabilityErrorV1::InvalidSigner);
+        }
+        let signature = Signature::try_new(
+            self.key_pair.private_key(),
+            &body
+                .signature_preimage()
+                .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?,
+        )
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+        let attestation = PrivateSettlementAuditApprovalAcknowledgementAttestationV1 {
+            body,
+            signature: signature.payload().to_vec(),
+        };
+        verify_private_settlement_audit_approval_acknowledgement_attestation_v1(
+            &attestation,
+            &attestation.body,
+            authority,
+        )?;
+        Ok(attestation)
+    }
+}
+
+/// Verify one exact approval-acknowledgement attestation against a roster.
+///
+/// # Errors
+///
+/// Rejects body substitution, a responder outside the exact authority, an
+/// invalid proof of possession, or a malformed BLS-normal signature.
+pub fn verify_private_settlement_audit_approval_acknowledgement_attestation_v1(
+    attestation: &PrivateSettlementAuditApprovalAcknowledgementAttestationV1,
+    expected_body: &PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
+    authority: &PrivateSettlementCommitteeAuthorityV1,
+) -> Result<(), PrivateSettlementAvailabilityErrorV1> {
+    attestation
+        .validate_shape()
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+    validate_authority_cryptography_v1(authority)
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+    let authority_digest = authority
+        .digest()
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+    if &attestation.body != expected_body
+        || attestation.body.authority_digest != authority_digest
+        || !authority
+            .validators
+            .iter()
+            .any(|validator| validator == &attestation.body.responder)
+    {
+        return Err(PrivateSettlementAvailabilityErrorV1::InvalidShare);
+    }
+    let signature = Signature::try_from_bytes(&attestation.signature)
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+    signature
+        .verify(
+            attestation.body.responder.public_key(),
+            &attestation
+                .body
+                .signature_preimage()
+                .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?,
+        )
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)
+}
+
+/// Verify one exact auditor-view attestation against a four-validator roster.
+///
+/// # Errors
+///
+/// Rejects body substitution, a responder outside the exact authority, an
+/// invalid proof of possession, or a malformed BLS-normal signature.
+pub fn verify_private_settlement_auditor_view_attestation_v1(
+    attestation: &PrivateSettlementAuditorViewAttestationV1,
+    expected_body: &PrivateSettlementAuditorViewAttestationBodyV1,
+    authority: &PrivateSettlementCommitteeAuthorityV1,
+) -> Result<(), PrivateSettlementAvailabilityErrorV1> {
+    attestation
+        .validate_shape()
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+    validate_authority_cryptography_v1(authority)
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+    let authority_digest = authority
+        .digest()
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+    if &attestation.body != expected_body
+        || attestation.body.authority_digest != authority_digest
+        || !authority
+            .validators
+            .iter()
+            .any(|validator| validator == &attestation.body.responder)
+    {
+        return Err(PrivateSettlementAvailabilityErrorV1::InvalidShare);
+    }
+    let signature = Signature::try_from_bytes(&attestation.signature)
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?;
+    signature
+        .verify(
+            attestation.body.responder.public_key(),
+            &attestation
+                .body
+                .signature_preimage()
+                .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)?,
+        )
+        .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)
 }
 
 /// Verify one exact-body share against an exact four-validator authority.
@@ -244,6 +430,7 @@ mod tests {
         PrivateSettlementRestrictedSidecarV1, PrivateSettlementSidecarStoreConfigV1,
         tests::{provisional_material_fixture, sidecar_fixture},
     };
+    use iroha_data_model::nexus::PRIVATE_SETTLEMENT_LIFECYCLE_COLLECTING_V1;
     use std::{fs, sync::Arc};
 
     fn stores(
@@ -376,6 +563,108 @@ mod tests {
         }
         assert_eq!(stores[0].prune(120).expect("retain through ticket"), 0);
         assert_eq!(stores[0].prune(121).expect("prune after ticket"), 1);
+    }
+
+    #[test]
+    fn auditor_view_attestation_is_exact_body_and_roster_bound() {
+        let fixture = sidecar_fixture();
+        let material = provisional_material_fixture(&fixture);
+        let signer = PrivateSettlementAvailabilitySignerV1::new(fixture.validator_keys[0].clone())
+            .expect("roster signer");
+        let body = PrivateSettlementAuditorViewAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id: material.manifest.network_id,
+            payload_digest: material.availability_body.payload_digest,
+            view_digest: iroha_crypto::Hash::new(b"exact restricted auditor view"),
+            authority_digest: material
+                .committee_authority
+                .digest()
+                .expect("authority digest"),
+            lifecycle_code: PRIVATE_SETTLEMENT_LIFECYCLE_COLLECTING_V1,
+            authoritative_height: 11,
+            responder: signer.peer_id().clone(),
+        };
+        let attestation = signer
+            .sign_auditor_view(body.clone(), &material.committee_authority)
+            .expect("attested auditor view");
+        verify_private_settlement_auditor_view_attestation_v1(
+            &attestation,
+            &body,
+            &material.committee_authority,
+        )
+        .expect("attestation verifies");
+
+        let mut substituted = body.clone();
+        substituted.authoritative_height += 1;
+        assert_eq!(
+            verify_private_settlement_auditor_view_attestation_v1(
+                &attestation,
+                &substituted,
+                &material.committee_authority,
+            ),
+            Err(PrivateSettlementAvailabilityErrorV1::InvalidShare)
+        );
+
+        let other_signer =
+            PrivateSettlementAvailabilitySignerV1::new(fixture.validator_keys[1].clone())
+                .expect("second roster signer");
+        assert_eq!(
+            other_signer.sign_auditor_view(body, &material.committee_authority),
+            Err(PrivateSettlementAvailabilityErrorV1::InvalidSigner)
+        );
+    }
+
+    #[test]
+    fn audit_approval_acknowledgement_attestation_is_exact_and_roster_bound() {
+        let fixture = sidecar_fixture();
+        let material = provisional_material_fixture(&fixture);
+        let signer = PrivateSettlementAvailabilitySignerV1::new(fixture.validator_keys[0].clone())
+            .expect("roster signer");
+        let body = PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id: material.manifest.network_id,
+            payload_digest: material.availability_body.payload_digest,
+            approval_digest: iroha_crypto::Hash::new(b"exact auditor approval"),
+            acknowledgement_digest: iroha_crypto::Hash::new(
+                b"exact durable approval acknowledgement",
+            ),
+            authority_digest: material
+                .committee_authority
+                .digest()
+                .expect("authority digest"),
+            lifecycle_code: PRIVATE_SETTLEMENT_LIFECYCLE_COLLECTING_V1,
+            authoritative_height: 11,
+            responder: signer.peer_id().clone(),
+        };
+        let attestation = signer
+            .sign_audit_approval_acknowledgement(body.clone(), &material.committee_authority)
+            .expect("attested acknowledgement");
+        verify_private_settlement_audit_approval_acknowledgement_attestation_v1(
+            &attestation,
+            &body,
+            &material.committee_authority,
+        )
+        .expect("acknowledgement attestation verifies");
+
+        let mut substituted = body.clone();
+        substituted.acknowledgement_digest =
+            iroha_crypto::Hash::new(b"substituted approval acknowledgement");
+        assert_eq!(
+            verify_private_settlement_audit_approval_acknowledgement_attestation_v1(
+                &attestation,
+                &substituted,
+                &material.committee_authority,
+            ),
+            Err(PrivateSettlementAvailabilityErrorV1::InvalidShare)
+        );
+
+        let other_signer =
+            PrivateSettlementAvailabilitySignerV1::new(fixture.validator_keys[1].clone())
+                .expect("second roster signer");
+        assert_eq!(
+            other_signer.sign_audit_approval_acknowledgement(body, &material.committee_authority),
+            Err(PrivateSettlementAvailabilityErrorV1::InvalidSigner)
+        );
     }
 
     #[test]

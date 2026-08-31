@@ -597,6 +597,9 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_validation_fee_current_policy_proof_verify_v1
   connect_norito_validation_fee_hijiri_quote_request_v1
   connect_norito_validation_fee_hijiri_quote_response_verify_v1
+  connect_norito_private_settlement_committee_proof_response_verify_v1
+  connect_norito_private_settlement_auditor_capsule_response_verify_v1
+  connect_norito_private_settlement_audit_approval_response_verify_v1
   "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}"
   "${KAGEMUSHA_C_SYMBOLS[@]}"
 )
@@ -686,6 +689,17 @@ VALIDATION_FEE_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion
   Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1
   Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1
+)
+
+PRIVATE_SETTLEMENT_RESPONSE_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1
+  Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1
+  Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1
+  Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1
+  Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1
+  Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1
 )
 
 PARLIAMENT_TIMED_OVN_JNI_SYMBOLS=(
@@ -2876,6 +2890,7 @@ check_android_native_symbols() {
   local namespace
   local expected_jni=(
     "${VALIDATION_FEE_JNI_SYMBOLS[@]}"
+    "${PRIVATE_SETTLEMENT_RESPONSE_JNI_SYMBOLS[@]}"
     "${PARLIAMENT_TIMED_OVN_JNI_SYMBOLS[@]}"
     "${SORAFS_APPEAL_FINANCE_JNI_SYMBOLS[@]}"
     "${PRIVACY_COMPILED_PROFILE_JNI_SYMBOLS[@]}"

@@ -30,6 +30,7 @@ extern "C" {
 #define CONNECT_NORITO_ERR_VALIDATION_FEE_POLICY_PROOF -504
 #define CONNECT_NORITO_ERR_PARLIAMENT_TIMED_OVN -505
 #define CONNECT_NORITO_ERR_VALIDATION_FEE_HIJIRI_QUOTE -506
+#define CONNECT_NORITO_ERR_PRIVATE_SETTLEMENT_RESPONSE -507
 #define CONNECT_NORITO_ERR_CONNECT_IDENTITY -410
 #define CONNECT_NORITO_ERR_CONNECT_APPROVAL -411
 
@@ -37,6 +38,9 @@ extern "C" {
 #define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS_V1 100000
 #define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1 4096
 #define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1 65536
+
+#define CONNECT_NORITO_PRIVATE_SETTLEMENT_REQUEST_MAX_BYTES_V1 1048576
+#define CONNECT_NORITO_PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1 33554432
 
 #define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1 32
 #define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1 32
@@ -228,6 +232,48 @@ int32_t connect_norito_validation_fee_hijiri_quote_response_verify_v1(
     unsigned long request_norito_len,
     uint8_t** out_projection_json,
     unsigned long* out_projection_json_len);
+
+// Verifies the complete typed committee proof view, including all manifest,
+// statement, delta, approval, availability, roster-PoP, and network bindings.
+// expected_network_id and requested_payload_digest must each contain exactly
+// 32 bytes. The response is bounded to 32 MiB and no restricted bytes are
+// returned. Zero means success; failures use the single redacted -507 code.
+int32_t connect_norito_private_settlement_committee_proof_response_verify_v1(
+    const uint8_t* response_json,
+    unsigned long response_json_len,
+    const uint8_t* expected_network_id,
+    unsigned long expected_network_id_len,
+    const uint8_t* requested_payload_digest,
+    unsigned long requested_payload_digest_len);
+
+// Verifies one auditor capsule view, its responder attestation, the governed
+// auditor signing-key membership, and consensus/auditor key separation. The
+// signing key must be one canonical Iroha public-key literal. No plaintext is
+// decrypted or returned by this verifier.
+int32_t connect_norito_private_settlement_auditor_capsule_response_verify_v1(
+    const uint8_t* response_json,
+    unsigned long response_json_len,
+    const uint8_t* expected_network_id,
+    unsigned long expected_network_id_len,
+    const uint8_t* requested_payload_digest,
+    unsigned long requested_payload_digest_len,
+    const char* auditor_signing_key,
+    unsigned long auditor_signing_key_len);
+
+// Verifies the exact signed auditor approval request and its typed responder
+// acknowledgement. The request is bounded to 1 MiB and the response to
+// 32 MiB; no request, response, or restricted capsule bytes are returned.
+int32_t connect_norito_private_settlement_audit_approval_response_verify_v1(
+    const uint8_t* response_json,
+    unsigned long response_json_len,
+    const uint8_t* request_json,
+    unsigned long request_json_len,
+    const uint8_t* expected_network_id,
+    unsigned long expected_network_id_len,
+    const uint8_t* requested_payload_digest,
+    unsigned long requested_payload_digest_len,
+    const char* auditor_signing_key,
+    unsigned long auditor_signing_key_len);
 
 // ---------------- Parliament timed-OVN wallet operations ----------------
 

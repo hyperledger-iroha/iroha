@@ -91,14 +91,72 @@
         "lifecycle": {"status": "prepared", "value": null}
       }
     },
+    "committee_proof": {
+      "manifest": {},
+      "audit_policy": {},
+      "committee_authority": {},
+      "statement": {},
+      "proof": {},
+      "delta": {},
+      "audit_approvals": [],
+      "audit_capsule_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+      "availability": {},
+      "lifecycle": {"status": "audited", "value": null}
+    },
     "audit_approval": {
+      "authoritative_height": 105,
       "bundle_id": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
       "payload_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
       "leg_ordinal": 0,
+      "committee_authority": {
+        "route": {
+          "dataspace_id": 7,
+          "lane_id": 3,
+          "lane_incarnation": "hash:3333333333333333333333333333333333333333333333333333333333333333#70D6"
+        }
+      },
       "collected": 1,
       "required": 1,
       "newly_recorded": true,
-      "lifecycle": {"status": "audited", "value": null}
+      "lifecycle": {"status": "audited", "value": null},
+      "responder_attestation": {
+        "body": {
+          "version": 1,
+          "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+          "payload_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+          "approval_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+          "acknowledgement_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+          "authority_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+          "lifecycle_code": 1,
+          "authoritative_height": 105,
+          "responder": "bls_normal:ea013082F39DD89C3AA5C497C7C1843C21C117CF77E7A569E80B827B401A275179DD57F67CA52601BF4C127F848D71740A5D08"
+        },
+        "signature": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB"
+      }
+    },
+    "auditor_capsule": {
+      "authoritative_height": 105,
+      "manifest": {},
+      "audit_policy": {},
+      "committee_authority": {},
+      "statement": {},
+      "delta": {},
+      "audit_capsule": {},
+      "availability": {},
+      "lifecycle": {"status": "collecting", "value": null},
+      "responder_attestation": {
+        "body": {
+          "version": 1,
+          "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+          "payload_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+          "view_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+          "authority_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+          "lifecycle_code": 0,
+          "authoritative_height": 105,
+          "responder": "bls_normal:ea013082F39DD89C3AA5C497C7C1843C21C117CF77E7A569E80B827B401A275179DD57F67CA52601BF4C127F848D71740A5D08"
+        },
+        "signature": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB"
+      }
     }
   }
 }

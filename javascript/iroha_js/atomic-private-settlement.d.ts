@@ -35,7 +35,31 @@ export class AtomicPrivateSettlementIdentifierV1 {
   constructor(value: string);
   readonly pathComponent: string;
   readonly jsonLiteral: string;
+  /** Exact 32-byte hash value passed to the native response verifier. */
+  readonly bytes: Uint8Array;
   toString(): string;
+}
+
+/** Native cryptographic verifier required for restricted settlement responses. */
+export interface AtomicPrivateSettlementNativeVerifierV1 {
+  readonly privateSettlementVerifyCommitteeProofResponseV1: (
+    responseJson: Uint8Array,
+    expectedNetworkId: Uint8Array,
+    requestedPayloadDigest: Uint8Array,
+  ) => void;
+  readonly privateSettlementVerifyAuditorCapsuleResponseV1: (
+    responseJson: Uint8Array,
+    expectedNetworkId: Uint8Array,
+    requestedPayloadDigest: Uint8Array,
+    auditorSigningKey: string,
+  ) => void;
+  readonly privateSettlementVerifyAuditApprovalResponseV1: (
+    responseJson: Uint8Array,
+    requestJson: Uint8Array,
+    expectedNetworkId: Uint8Array,
+    requestedPayloadDigest: Uint8Array,
+    auditorSigningKey: string,
+  ) => void;
 }
 
 /** Bounded operation-tagged JSON object produced by a native coordinator. */
@@ -105,6 +129,10 @@ export class AtomicPrivateSettlementToriiClientV1 {
     options?: {
       readonly fetchImpl?: AtomicPrivateSettlementFetchV1;
       readonly sponsorHeaderProvider?: AtomicPrivateSettlementHeaderProviderV1;
+      /** Exact network bound into authenticated auditor responses. */
+      readonly networkId?: string | AtomicPrivateSettlementIdentifierV1;
+      /** Test or embedded-runtime override; Node resolves the verified native binding by default. */
+      readonly nativeVerifier?: AtomicPrivateSettlementNativeVerifierV1;
     },
   );
   requestAvailabilityShare(

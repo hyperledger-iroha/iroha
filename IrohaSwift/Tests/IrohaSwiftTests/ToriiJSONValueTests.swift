@@ -56,7 +56,7 @@ final class ToriiJSONValueTests: XCTestCase {
     func testUInt128JSONIntegerRoundTripsWithoutDoubleRounding() throws {
         let maximum = "340282366920938463463374607431768211455"
         let data = Data("{\"maximum\":\(maximum)}".utf8)
-        let value = try JSONDecoder().decode(ToriiJSONValue.self, from: data)
+        let value = try ToriiJSONValue.decodeExact(from: data)
         XCTAssertEqual(value["maximum"], .integer(maximum))
         XCTAssertEqual(
             String(decoding: try value.encodedData(), as: UTF8.self),
@@ -79,28 +79,129 @@ final class ToriiJSONValueTests: XCTestCase {
         )
     }
 
-    func testUInt128OverflowNeverBecomesAnExactIntegerValue() throws {
-        let overflow = Data("340282366920938463463374607431768211456".utf8)
-        let decoded = try JSONDecoder().decode(ToriiJSONValue.self, from: overflow)
-        if case .integer = decoded {
-            XCTFail("UInt128.max + 1 must not be represented as an exact integer")
+    func testSccpUInt128CanonicalParserEnforcesTheFullWireRange() {
+        let maximumSafeJSONInteger = "9007199254740991"
+        let firstExtendedJSONInteger = "9007199254740992"
+        let maximumUInt64 = "18446744073709551615"
+        let maximum = "340282366920938463463374607431768211455"
+        XCTAssertEqual(SccpUInt128.parse("0")?.decimalString, "0")
+        XCTAssertEqual(
+            SccpUInt128.parse(maximumSafeJSONInteger)?.decimalString,
+            maximumSafeJSONInteger
+        )
+        XCTAssertEqual(
+            SccpUInt128.parse(firstExtendedJSONInteger)?.decimalString,
+            firstExtendedJSONInteger
+        )
+        XCTAssertEqual(SccpUInt128.parse(maximumUInt64)?.decimalString, maximumUInt64)
+        XCTAssertEqual(SccpUInt128.parse(maximum)?.decimalString, maximum)
+        XCTAssertNil(SccpUInt128.parse(""))
+        XCTAssertNil(SccpUInt128.parse("00"))
+        XCTAssertNil(SccpUInt128.parse("01"))
+        XCTAssertNil(SccpUInt128.parse("-1"))
+        XCTAssertNil(SccpUInt128.parse("+1"))
+        XCTAssertNil(SccpUInt128.parse("1.0"))
+        XCTAssertNil(SccpUInt128.parse("1e0"))
+        XCTAssertNil(SccpUInt128.parse("١"))
+        XCTAssertNil(SccpUInt128.parse("340282366920938463463374607431768211456"))
+    }
+
+    func testExactDecoderClassifiesUnsignedIntegerBoundaries() throws {
+        let maximum = "340282366920938463463374607431768211455"
+        let data = Data(
+            "[0,9007199254740991,9007199254740992,18446744073709551615,\(maximum)]".utf8
+        )
+        let value = try ToriiJSONValue.decodeExact(from: data)
+        guard case .array(let values) = value else {
+            return XCTFail("boundary payload must decode as an array")
         }
+        XCTAssertEqual(values.count, 5)
+        XCTAssertEqual(values[0], .number(0))
+        XCTAssertEqual(values[1], .number(9_007_199_254_740_991))
+        XCTAssertEqual(values[2], .integer("9007199254740992"))
+        XCTAssertEqual(values[3], .integer("18446744073709551615"))
+        XCTAssertEqual(values[4], .integer(maximum))
+    }
+
+    func testExactDecoderPreservesNestedWideIntegerLexemes() throws {
+        let maximum = "340282366920938463463374607431768211455"
+        let data = Data(
+            "{\"outer\":[{\"amount\":\(maximum)},{\"amount\":18446744073709551615}]}".utf8
+        )
+        let value = try ToriiJSONValue.decodeExact(from: data)
+        guard case .array(let outer)? = value["outer"], outer.count == 2 else {
+            return XCTFail("nested payload must contain two entries")
+        }
+        XCTAssertEqual(outer[0]["amount"], .integer(maximum))
+        XCTAssertEqual(outer[1]["amount"], .integer("18446744073709551615"))
+    }
+
+    func testExactEncoderEmitsTheFullUnsignedRange() throws {
+        let maximumUInt64 = "18446744073709551615"
+        let maximumUInt128 = "340282366920938463463374607431768211455"
+        let value = ToriiJSONValue.array([
+            .integer("0"),
+            .integer(maximumUInt64),
+            .integer(maximumUInt128),
+        ])
+        XCTAssertEqual(
+            String(decoding: try value.encodedData(), as: UTF8.self),
+            "[0,\(maximumUInt64),\(maximumUInt128)]"
+        )
+        let pretty = try value.encodedData(prettyPrinted: true)
+        XCTAssertEqual(
+            try ToriiJSONValue.decodeExact(from: pretty),
+            .array([.number(0), .integer(maximumUInt64), .integer(maximumUInt128)])
+        )
+    }
+
+    func testUInt128OverflowAndUnavailableRawLexemesFailClosed() throws {
+        let overflow = Data("340282366920938463463374607431768211456".utf8)
+        XCTAssertThrowsError(try ToriiJSONValue.decodeExact(from: overflow))
+        XCTAssertThrowsError(try ToriiJSONValue.decodeExact(from: Data("01".utf8)))
+
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                ToriiJSONValue.self,
+                from: Data("18446744073709551615".utf8)
+            ),
+            .integer("18446744073709551615")
+        )
+        let maximum = Data("340282366920938463463374607431768211455".utf8)
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiJSONValue.self, from: maximum))
         XCTAssertThrowsError(
-            try governanceRequireExactJSONIntegers(
-                .object(["max_wrapped_supply": decoded]),
-                codingPath: [],
-                context: "proposal"
+            try JSONEncoder().encode(
+                ToriiJSONValue.integer("340282366920938463463374607431768211455")
             )
+        )
+    }
+
+    func testExactDecoderRejectsDuplicateKeysAndWideSignedIntegers() throws {
+        let maximum = "340282366920938463463374607431768211455"
+        let duplicate = Data("{\"amount\":\(maximum),\"amount\":0}".utf8)
+        XCTAssertThrowsError(try ToriiJSONValue.decodeExact(from: duplicate))
+        XCTAssertEqual(
+            try ToriiJSONValue.decodeExact(from: Data("-1".utf8)),
+            .number(-1)
+        )
+        XCTAssertThrowsError(
+            try ToriiJSONValue.decodeExact(from: Data("-9007199254740992".utf8))
         )
     }
 
     func testGovernanceLargeIntegersAreLimitedToSccpCaps() throws {
         let exact = "1000000000000000000000"
+        let data = Data("{\"max_wrapped_supply\":\(exact)}".utf8)
+        let exactIntegerLexemes = try governanceExactJSONIntegerLexemes(data)
+        let decoder = JSONDecoder()
+        decoder.userInfo[governanceExactIntegerLexemesUserInfoKey] = exactIntegerLexemes
+        let proposal = try decoder.decode(ToriiJSONValue.self, from: data)
         XCTAssertNoThrow(
             try governanceRequireExactJSONIntegers(
-                .object(["max_wrapped_supply": .integer(exact)]),
+                proposal,
                 codingPath: [],
-                context: "proposal"
+                context: "proposal",
+                exactIntegerLexemes: exactIntegerLexemes
             )
         )
         XCTAssertThrowsError(

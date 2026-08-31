@@ -1,3 +1,69 @@
+/// Redacted failure returned by a deployment-owned identity-request signer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[error("identity-bound request signing failed")]
+pub struct IdentityRequestSigningErrorV1;
+
+/// Deployment-owned signer for identity-bound Torii requests.
+///
+/// Implementations may keep the private key in an HSM, KMS, enclave, or
+/// threshold service. The client constructs the exact canonical request
+/// message and independently verifies the returned signature before adding any
+/// authentication headers.
+pub trait IdentityRequestSignerV1: Send + Sync {
+    /// Exact public identity advertised in the authenticated request headers.
+    fn public_key(&self) -> &PublicKey;
+
+    /// Sign one exact client-constructed request-authentication message.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted provider failure without exposing backend details.
+    fn sign_identity_request(
+        &self,
+        message: &[u8],
+    ) -> core::result::Result<Signature, IdentityRequestSigningErrorV1>;
+}
+
+/// Borrowed software-key adapter for identity-bound Torii requests.
+///
+/// This adapter never serializes the private key. Production clients can
+/// replace it with any [`IdentityRequestSignerV1`] implementation.
+#[derive(Clone, Copy)]
+pub struct BorrowedKeyPairIdentityRequestSignerV1<'a> {
+    key_pair: &'a KeyPair,
+}
+
+impl core::fmt::Debug for BorrowedKeyPairIdentityRequestSignerV1<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("BorrowedKeyPairIdentityRequestSignerV1")
+            .field("public_key", self.key_pair.public_key())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> BorrowedKeyPairIdentityRequestSignerV1<'a> {
+    /// Borrow one software signing key for the duration of a request.
+    #[must_use]
+    pub const fn new(key_pair: &'a KeyPair) -> Self {
+        Self { key_pair }
+    }
+}
+
+impl IdentityRequestSignerV1 for BorrowedKeyPairIdentityRequestSignerV1<'_> {
+    fn public_key(&self) -> &PublicKey {
+        self.key_pair.public_key()
+    }
+
+    fn sign_identity_request(
+        &self,
+        message: &[u8],
+    ) -> core::result::Result<Signature, IdentityRequestSigningErrorV1> {
+        Signature::try_new(self.key_pair.private_key(), message)
+            .map_err(|_| IdentityRequestSigningErrorV1)
+    }
+}
+
 impl Client {
     fn request_without_iroha_identity_auth(
         &self,
@@ -72,6 +138,21 @@ impl Client {
         url: Url,
         body: Vec<u8>,
     ) -> Result<DefaultRequestBuilder> {
+        self.identity_signed_request_with_signer(
+            &BorrowedKeyPairIdentityRequestSignerV1::new(identity_key_pair),
+            method,
+            url,
+            body,
+        )
+    }
+    fn identity_signed_request_with_signer<S: IdentityRequestSignerV1 + ?Sized>(
+        &self,
+        signer: &S,
+        method: HttpMethod,
+        url: Url,
+        body: Vec<u8>,
+    ) -> Result<DefaultRequestBuilder> {
+        let identity_public_key = signer.public_key().clone();
         let timestamp_ms: u64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -87,10 +168,13 @@ impl Client {
             timestamp_ms,
             nonce.as_str(),
         )?;
-        let signature = Signature::try_new(identity_key_pair.private_key(), &message)
-            .wrap_err("failed to sign identity-bound request headers")?;
-        let public_key = identity_key_pair
-            .public_key()
+        let signature = signer
+            .sign_identity_request(&message)
+            .map_err(|_| eyre!("identity-bound request signing failed"))?;
+        signature
+            .verify(&identity_public_key, &message)
+            .map_err(|_| eyre!("identity-bound request signing failed"))?;
+        let public_key = identity_public_key
             .try_to_multihash_string()
             .wrap_err("failed to encode identity-bound public key header")?;
         let timestamp = canonical_request_timestamp_header_value(timestamp_ms)?;

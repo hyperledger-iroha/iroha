@@ -25,7 +25,11 @@ use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     isi::private_settlement::{AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1},
     nexus::{
-        PrivateSettlementAbortReasonV1, PrivateSettlementAuditApprovalV1, PrivateSettlementPhaseV1,
+        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PrivateSettlementAbortReasonV1,
+        PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
+        PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1,
+        PrivateSettlementAuditApprovalV1, PrivateSettlementAuditorViewAttestationBodyV1,
+        PrivateSettlementAuditorViewDigestMaterialV1, PrivateSettlementPhaseV1,
     },
     transaction::{Executable, SignedTransaction},
 };
@@ -1543,13 +1547,65 @@ pub(crate) async fn handler_auditor_capsule(
     Extension(authenticated): Extension<crate::operator_signatures::AuthenticatedOperatorPublicKey>,
     Path(payload_digest): Path<String>,
 ) -> Response {
-    let (_, _, authenticated_view) =
+    let Ok(signer) = runtime.availability_signer() else {
+        return private_settlement_unavailable();
+    };
+    let (payload_digest, authoritative_height, authenticated_view) =
         match governed_auditor_view(&app, &runtime, &payload_digest, &authenticated.0) {
             Ok(value) => value,
             Err(response) => return response,
         };
     let view = authenticated_view.view;
+    let lifecycle = lifecycle_dto(view.lifecycle);
+    let view_digest = match (PrivateSettlementAuditorViewDigestMaterialV1 {
+        version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+        authoritative_height,
+        manifest: view.manifest.clone(),
+        audit_policy: view.policy.clone(),
+        committee_authority: view.authority.clone(),
+        statement: view.statement.clone(),
+        delta: view.delta.clone(),
+        audit_capsule: view.audit_capsule.clone(),
+        availability: view.availability.clone(),
+        lifecycle_code: lifecycle.attestation_code(),
+    })
+    .digest()
+    {
+        Ok(digest) => digest,
+        Err(_) => {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "private_settlement_service_unavailable",
+            );
+        }
+    };
+    let authority_digest = match view.authority.digest() {
+        Ok(digest) => digest,
+        Err(_) => {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "private_settlement_service_unavailable",
+            );
+        }
+    };
+    let attestation = match signer.sign_auditor_view(
+        PrivateSettlementAuditorViewAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id: view.manifest.network_id,
+            payload_digest,
+            view_digest,
+            authority_digest,
+            lifecycle_code: lifecycle.attestation_code(),
+            authoritative_height,
+            responder: signer.peer_id().clone(),
+        },
+        &view.authority,
+    ) {
+        Ok(attestation) => attestation,
+        Err(error) => return map_availability_error(error),
+    };
     JsonBody(PrivateSettlementAuditorCapsuleResponseV1 {
+        authoritative_height,
         manifest: view.manifest,
         audit_policy: view.policy,
         committee_authority: view.authority,
@@ -1557,7 +1613,8 @@ pub(crate) async fn handler_auditor_capsule(
         delta: view.delta,
         audit_capsule: view.audit_capsule,
         availability: view.availability,
-        lifecycle: lifecycle_dto(view.lifecycle),
+        lifecycle,
+        responder_attestation: attestation,
     })
     .into_response()
 }
@@ -1570,6 +1627,9 @@ pub(crate) async fn handler_auditor_approval(
     Path(payload_digest): Path<String>,
     NoritoJson(request): NoritoJson<PrivateSettlementAuditApprovalRequestV1>,
 ) -> Response {
+    let Ok(signer) = runtime.availability_signer() else {
+        return private_settlement_unavailable();
+    };
     let (digest, height, authenticated_view) =
         match governed_auditor_view(&app, &runtime, &payload_digest, &authenticated.0) {
             Ok(value) => value,
@@ -1579,6 +1639,19 @@ pub(crate) async fn handler_auditor_approval(
     if approval.body.auditor_id != authenticated_view.auditor_id {
         return private_settlement_unavailable();
     }
+    let authority = authenticated_view.view.authority.clone();
+    if !authority
+        .validators
+        .iter()
+        .any(|validator| validator == signer.peer_id())
+    {
+        return private_settlement_unavailable();
+    }
+    let network_id = approval.body.network_id;
+    let approval_digest = match approval.digest() {
+        Ok(digest) => digest,
+        Err(_) => return private_settlement_unavailable(),
+    };
     let config = match active_config(&app, height) {
         Ok(config) => config,
         Err(response) => return response,
@@ -1605,18 +1678,63 @@ pub(crate) async fn handler_auditor_approval(
         Ok(outcome) => outcome,
         Err(response) => return response,
     };
+    let lifecycle = if outcome.audited {
+        PrivateSettlementLifecycleDtoV1::Audited
+    } else {
+        PrivateSettlementLifecycleDtoV1::Collecting
+    };
+    let bundle_id = authenticated_view.view.manifest.bundle_id;
+    let leg_ordinal = authenticated_view.view.statement.leg_ordinal;
+    let acknowledgement_digest =
+        match (PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            authoritative_height: height,
+            bundle_id,
+            payload_digest: digest,
+            leg_ordinal,
+            committee_authority: authority.clone(),
+            collected: outcome.collected,
+            required: outcome.required,
+            newly_recorded: outcome.newly_recorded,
+            lifecycle_code: lifecycle.attestation_code(),
+        })
+        .digest()
+        {
+            Ok(digest) => digest,
+            Err(_) => return private_settlement_unavailable(),
+        };
+    let authority_digest = match authority.digest() {
+        Ok(digest) => digest,
+        Err(_) => return private_settlement_unavailable(),
+    };
+    let responder_attestation = match signer.sign_audit_approval_acknowledgement(
+        PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id,
+            payload_digest: digest,
+            approval_digest,
+            acknowledgement_digest,
+            authority_digest,
+            lifecycle_code: lifecycle.attestation_code(),
+            authoritative_height: height,
+            responder: signer.peer_id().clone(),
+        },
+        &authority,
+    ) {
+        Ok(attestation) => attestation,
+        Err(error) => return map_availability_error(error),
+    };
     JsonBody(PrivateSettlementAuditApprovalResponseV1 {
-        bundle_id: authenticated_view.view.manifest.bundle_id,
+        authoritative_height: height,
+        bundle_id,
         payload_digest: digest,
-        leg_ordinal: authenticated_view.view.statement.leg_ordinal,
+        leg_ordinal,
+        committee_authority: authority,
         collected: outcome.collected,
         required: outcome.required,
         newly_recorded: outcome.newly_recorded,
-        lifecycle: if outcome.audited {
-            PrivateSettlementLifecycleDtoV1::Audited
-        } else {
-            PrivateSettlementLifecycleDtoV1::Collecting
-        },
+        lifecycle,
+        responder_attestation,
     })
     .into_response()
 }
