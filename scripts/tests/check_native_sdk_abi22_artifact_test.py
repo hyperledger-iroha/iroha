@@ -1546,6 +1546,46 @@ def test_kotlin_localnet_evidence_validator_rejects_every_skip(
     assert list(evidence_dir.iterdir()) == []
 
 
+def test_jvm_missing_native_gate_matches_both_mandatory_assertions() -> None:
+    """The negative gate must recognize only the assertion the JVM tests emit."""
+
+    required_assertion = (
+        "A freshly built connect_norito_bridge ABI 22 "
+        "artifact-streaming library is required"
+    )
+    gate = (REPO_ROOT / "ci/check_kagemusha_jvm_native_bridge.sh").read_text(
+        encoding="utf-8"
+    )
+    kotlin_test = (
+        REPO_ROOT
+        / "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/"
+        "IrohaPeerTransportV1Test.kt"
+    ).read_text(encoding="utf-8")
+    java_test = (
+        REPO_ROOT
+        / "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/"
+        "IrohaPeerKagemushaAdapterV1Tests.java"
+    ).read_text(encoding="utf-8")
+
+    assert f'REQUIRED_NATIVE_ASSERTION="{required_assertion}"' in gate
+    assert kotlin_test.count(f'"{required_assertion}"') == 1
+    assert java_test.count(f'"{required_assertion}"') == 1
+
+    start = gate.index("run_expected_missing_native_failure() {")
+    end = gate.index("\n}\n", start)
+    negative_gate = gate[start:end]
+    exact_match = (
+        'grep -R -F -q "$REQUIRED_NATIVE_ASSERTION" '
+        '"$log_file" "$result_directory"'
+    )
+    assert exact_match in negative_gate
+    assert negative_gate.index("if run_exact_gradle") < negative_gate.index(exact_match)
+    assert (
+        'fail "$label did not fail at the mandatory native-bridge assertion"'
+        in negative_gate
+    )
+
+
 def test_repository_wires_exact_abi22_release_contract() -> None:
     """Freeze the fail-closed source and CI wiring without loading a native binary."""
 
