@@ -3412,7 +3412,11 @@ fn prepare_fault_bundle(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let activation =
-        sponsor.build_transaction_from_items(activations, no_fee(), Metadata::default());
+        sponsor.build_transaction_from_items(
+            activations,
+            bounded_nexus_fee(),
+            Metadata::default(),
+        );
     sponsor
         .submit_transaction_blocking(&activation)
         .wrap_err("activate fault-campaign private pools")?;
@@ -4396,7 +4400,7 @@ fn advance_fault_bundle_past_expiry(
                 Level::INFO,
                 format!("APS fault expiry {} h{height}", bundle.manifest.bundle_id),
             ))],
-            no_fee(),
+            bounded_nexus_fee(),
             Metadata::default(),
         );
         sponsor.submit_transaction_blocking(&tick)?;
@@ -6028,7 +6032,7 @@ fn grant_transparent_control_consents(network: &Network, settlements: &[DvpIsi])
                 permission,
                 authority.clone(),
             ))],
-            no_fee(),
+            bounded_nexus_fee(),
             Metadata::default(),
         );
         client
@@ -6090,7 +6094,7 @@ fn wait_for_transparent_control_consents(network: &Network, settlements: &[DvpIs
 fn build_transparent_control_carrier(client: &Client, settlements: &[DvpIsi]) -> SignedTransaction {
     client.build_transaction(
         settlements.iter().cloned().map(InstructionBox::from),
-        no_fee(),
+        bounded_nexus_fee(),
         Metadata::default(),
     )
 }
@@ -6467,7 +6471,11 @@ fn run_real_process_leakage_campaign(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let activation_transaction =
-        sponsor.build_transaction_from_items(activations, no_fee(), Metadata::default());
+        sponsor.build_transaction_from_items(
+            activations,
+            bounded_nexus_fee(),
+            Metadata::default(),
+        );
     sponsor
         .submit_transaction_blocking(&activation_transaction)
         .wrap_err("activate governed leakage pools")?;
@@ -7036,7 +7044,11 @@ fn run_real_process_private_benchmark(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let activation_transaction =
-        sponsor.build_transaction_from_items(activations, no_fee(), Metadata::default());
+        sponsor.build_transaction_from_items(
+            activations,
+            bounded_nexus_fee(),
+            Metadata::default(),
+        );
     sponsor
         .submit_transaction_blocking(&activation_transaction)
         .wrap_err("activate governed private pools")?;

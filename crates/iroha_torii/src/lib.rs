@@ -26421,6 +26421,29 @@ fn should_retry_torii_proxy_status(status: StatusCode) -> bool {
     )
 }
 #[cfg(feature = "connect")]
+fn should_retry_generic_torii_proxy_snapshot(snapshot: &ToriiProxyHttpResponseV1) -> bool {
+    let status = StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
+    if should_retry_torii_proxy_status(status) {
+        return true;
+    }
+    if status != StatusCode::TOO_MANY_REQUESTS {
+        return false;
+    }
+
+    // An authority can be temporarily unable to allocate the single bounded
+    // proxy-response slot even though another route authority is healthy. Only
+    // that exact structured rejection is safe to treat as candidate-local;
+    // ordinary 429 responses remain definitive client-visible rate limits.
+    let mut reject_codes = snapshot
+        .headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("x-iroha-reject-code"));
+    let Some(reject_code) = reject_codes.next() else {
+        return false;
+    };
+    reject_codes.next().is_none() && reject_code.value.as_slice() == b"proxy_capacity_exceeded"
+}
+#[cfg(feature = "connect")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ToriiProxyAttemptError {
     /// The request failed before any bytes could have reached the authority.
@@ -28113,16 +28136,15 @@ where
             let transport = candidate.transport_label();
             match execute(candidate, request.clone()).await {
                 Ok(snapshot) => {
-                    let status = StatusCode::from_u16(snapshot.status_code)
-                        .unwrap_or(StatusCode::BAD_GATEWAY);
-                    let snapshot = if should_retry_torii_proxy_status(status) {
+                    let retryable = should_retry_generic_torii_proxy_snapshot(&snapshot);
+                    let snapshot = if retryable {
                         bound_retained_retryable_torii_proxy_snapshot(snapshot)
                     } else {
                         snapshot
                     };
                     let mut response = torii_proxy_snapshot_to_response(snapshot);
                     insert_route_transport_header(&mut response, transport);
-                    if should_retry_torii_proxy_status(status) {
+                    if retryable {
                         retain_strongest_retryable_response(&mut last_retryable, response);
                         continue;
                     }

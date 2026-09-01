@@ -152,6 +152,118 @@ async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_re
     assert_eq!(body.as_ref(), b"retry-later");
 }
 #[cfg(feature = "connect")]
+fn generic_proxy_request_for_test(request_id: Hash) -> ToriiProxyRequestV1 {
+    ToriiProxyRequestV1 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+        request_id,
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
+        hop_count: 1,
+        max_hops: 3,
+        visited_peer_ids: Vec::new(),
+        request: ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
+            service_name: "capacity-failover".to_owned(),
+            service_version: "v1".to_owned(),
+            replica_slot: 0,
+            request_path: "/health".to_owned(),
+            method: "GET".to_owned(),
+            query_string: None,
+            headers: Vec::new(),
+            body: Vec::new(),
+            remote_ip: None,
+        }),
+    }
+}
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn generic_proxy_retries_exact_capacity_429_on_next_candidate() {
+    let first_peer_id =
+        checked_torii_test_peer_id(0x98, "derive capacity-limited proxy peer fixture key");
+    let second_peer_id =
+        checked_torii_test_peer_id(0x99, "derive healthy fallback proxy peer fixture key");
+    let route = RoutingDecision::new(LaneId::new(8), DataSpaceId::new(9));
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let attempts_ref = attempts.clone();
+    let first_peer_id_for_attempt = first_peer_id.clone();
+    let response = super::execute_torii_proxy_request_across_candidates(
+        vec![
+            ToriiProxyCandidate::P2p(first_peer_id),
+            ToriiProxyCandidate::P2p(second_peer_id),
+        ],
+        route,
+        generic_proxy_request_for_test(Hash::new(b"generic-proxy-capacity-failover")),
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
+        Duration::from_millis(20),
+        move |candidate, _request| {
+            let attempts = attempts_ref.clone();
+            let first_peer_id = first_peer_id_for_attempt.clone();
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if candidate.peer_id() == &first_peer_id {
+                    return Ok(ToriiProxyHttpResponseV1 {
+                        status_code: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                        headers: vec![iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                            name: "x-iroha-reject-code".to_owned(),
+                            value: b"proxy_capacity_exceeded".to_vec(),
+                        }],
+                        body: b"candidate proxy slot is occupied".to_vec(),
+                    });
+                }
+                Ok(ToriiProxyHttpResponseV1 {
+                    status_code: StatusCode::OK.as_u16(),
+                    headers: Vec::new(),
+                    body: b"healthy-fallback".to_vec(),
+                })
+            }
+        },
+        |_request_id| async move {},
+    )
+    .await;
+
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = torii_body_bytes(response, "healthy fallback response should be readable").await;
+    assert_eq!(body.as_ref(), b"healthy-fallback");
+}
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn generic_proxy_does_not_retry_an_unstructured_429() {
+    let first_peer_id =
+        checked_torii_test_peer_id(0x9A, "derive rate-limited proxy peer fixture key");
+    let second_peer_id =
+        checked_torii_test_peer_id(0x9B, "derive unused fallback proxy peer fixture key");
+    let route = RoutingDecision::new(LaneId::new(10), DataSpaceId::new(11));
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let attempts_ref = attempts.clone();
+    let response = super::execute_torii_proxy_request_across_candidates(
+        vec![
+            ToriiProxyCandidate::P2p(first_peer_id),
+            ToriiProxyCandidate::P2p(second_peer_id),
+        ],
+        route,
+        generic_proxy_request_for_test(Hash::new(b"generic-proxy-definitive-429")),
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
+        Duration::from_millis(20),
+        move |_candidate, _request| {
+            let attempts = attempts_ref.clone();
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(ToriiProxyHttpResponseV1 {
+                    status_code: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                    headers: Vec::new(),
+                    body: b"rate-limited".to_vec(),
+                })
+            }
+        },
+        |_request_id| async move {},
+    )
+    .await;
+
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = torii_body_bytes(response, "definitive 429 response should be readable").await;
+    assert_eq!(body.as_ref(), b"rate-limited");
+}
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() {
     let expected_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(

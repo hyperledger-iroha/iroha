@@ -339,6 +339,43 @@ fn torii_proxy_retry_policy_only_retries_gateway_class_statuses() {
 }
 #[cfg(feature = "connect")]
 #[test]
+fn generic_torii_proxy_retry_policy_requires_exact_capacity_429() {
+    let snapshot = |status: StatusCode, reject_codes: &[&str]| ToriiProxyHttpResponseV1 {
+        status_code: status.as_u16(),
+        headers: reject_codes
+            .iter()
+            .map(|code| iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                name: "x-iroha-reject-code".to_owned(),
+                value: code.as_bytes().to_vec(),
+            })
+            .collect(),
+        body: Vec::new(),
+    };
+
+    assert!(super::should_retry_generic_torii_proxy_snapshot(
+        &snapshot(
+            StatusCode::TOO_MANY_REQUESTS,
+            &["proxy_capacity_exceeded"]
+        )
+    ));
+    assert!(!super::should_retry_generic_torii_proxy_snapshot(
+        &snapshot(StatusCode::TOO_MANY_REQUESTS, &[])
+    ));
+    assert!(!super::should_retry_generic_torii_proxy_snapshot(
+        &snapshot(StatusCode::TOO_MANY_REQUESTS, &["rate_limited"])
+    ));
+    assert!(!super::should_retry_generic_torii_proxy_snapshot(
+        &snapshot(
+            StatusCode::TOO_MANY_REQUESTS,
+            &["proxy_capacity_exceeded", "proxy_capacity_exceeded"]
+        )
+    ));
+    assert!(super::should_retry_generic_torii_proxy_snapshot(
+        &snapshot(StatusCode::SERVICE_UNAVAILABLE, &[])
+    ));
+}
+#[cfg(feature = "connect")]
+#[test]
 fn torii_proxy_hosted_http_request_kind_uses_route_timeout() {
     let hosted_request = ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
         service_name: "svc".to_owned(),

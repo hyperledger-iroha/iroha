@@ -2,9 +2,10 @@
 /// Bound the aggregate retirement scan without treating legitimate route
 /// multiplicity as corruption.
 ///
-/// Each route can retain six ordinary histories (autonomous payload, input,
-/// preflight, certificate, canonical merge bundle, and application receipt), plus two Native evidence
-/// artifact families sharing one configured byte bound. Ordinary histories may also contain
+/// Each route can retain seven ordinary histories (autonomous payload, input,
+/// preflight, certificate, canonical merge bundle, canonical non-owning
+/// replica, and application receipt), plus two Native evidence artifact
+/// families sharing one configured byte bound. Ordinary histories may also contain
 /// the globally bounded pending-merge depth beyond their terminal frontier.
 /// Historical autonomous recovery contributes one additional globally bounded
 /// record inventory rather than a per-route multiplier.

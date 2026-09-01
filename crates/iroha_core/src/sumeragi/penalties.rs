@@ -136,8 +136,10 @@ impl<'a> PenaltyApplier<'a> {
         &self,
         block_header: &BlockHeader,
         include_admissions: bool,
-    ) -> Result<(Vec<iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence>, Vec<NposPenaltyAction>)>
-    {
+    ) -> Result<(
+        Vec<iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence>,
+        Vec<NposPenaltyAction>,
+    )> {
         loop {
             let generation_before = self.state.state_view_generation();
             if generation_before % 2 != 0 {
@@ -216,13 +218,11 @@ impl<'a> PenaltyApplier<'a> {
             let offenders = offender_indices(&record.evidence, record.recorded_at_height, context);
             let slash_id = Hash::new(key.clone());
             for signer in offenders {
-                let Some((peer_id, locators)) =
-                    self.locate_validator_in_roster_cached(
-                        signer,
-                        &roster,
-                        &snapshot.validator_map,
-                    )
-                else {
+                let Some((peer_id, locators)) = self.locate_validator_in_roster_cached(
+                    signer,
+                    &roster,
+                    &snapshot.validator_map,
+                ) else {
                     continue;
                 };
                 for locator in locators {
@@ -323,7 +323,7 @@ pub(crate) fn validate_npos_consensus_effects_after_execution(
     current_view: u64,
     now_ms: u64,
 ) -> Result<()> {
-    let mut tx = state_block.transaction();
+    let mut tx = state_block.consensus_effects_transaction();
     apply_npos_consensus_effects_to_transaction_inner(
         &mut tx,
         effects,
@@ -571,6 +571,171 @@ fn offender_indices(
     };
     canonical_indices([signer], context.roster.len())
 }
+
+#[cfg(test)]
+fn penalty_staking_fixture_ids() -> (
+    iroha_data_model::asset::AssetDefinitionId,
+    AccountId,
+    AccountId,
+) {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{asset::AssetDefinitionId, domain::DomainId};
+
+    let account = |seed: u8| {
+        let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("deterministic penalty-custody key");
+        AccountId::new(key.public_key().clone())
+    };
+    let asset_definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("penalty", "universal").expect("penalty fixture domain id"),
+        "stake".parse().expect("penalty fixture asset name"),
+    );
+    (asset_definition, account(0xE1), account(0xE2))
+}
+
+#[cfg(test)]
+fn penalty_staking_fixture_header() -> BlockHeader {
+    BlockHeader::new(
+        core::num::NonZeroU64::new(1).expect("non-zero penalty fixture height"),
+        None,
+        None,
+        None,
+        1,
+        0,
+    )
+}
+
+/// Install the governed stake asset and distinct escrow/slash-sink accounts used by
+/// Sumeragi penalty tests.
+///
+/// The setup is committed through a real world overlay so asset indexes and the
+/// definition incarnation stay consistent with production instruction execution.
+#[cfg(test)]
+pub(crate) fn configure_penalty_staking_state_for_tests(state: &mut State) {
+    use crate::smartcontracts::Execute as _;
+    use iroha_data_model::{
+        account::Account,
+        asset::{AssetBalancePolicy, AssetDefinition},
+        isi::Register,
+    };
+
+    let (asset_definition, escrow, slash_sink) = penalty_staking_fixture_ids();
+    assert_ne!(
+        escrow, slash_sink,
+        "penalty fixture must exercise an actual escrow-to-sink movement"
+    );
+    let mut nexus = state.nexus_snapshot();
+    nexus.staking.stake_asset_id = asset_definition.to_string();
+    nexus.staking.stake_escrow_account_id = escrow.to_string();
+    nexus.staking.slash_sink_account_id = slash_sink.to_string();
+    state
+        .set_nexus(nexus)
+        .expect("install penalty staking custody configuration");
+
+    let mut state_block = state.block(penalty_staking_fixture_header());
+    let mut transaction = state_block.transaction();
+    Register::account(Account::new(escrow.clone()))
+        .execute(&escrow, &mut transaction)
+        .expect("register penalty stake escrow account");
+    Register::account(Account::new(slash_sink))
+        .execute(&escrow, &mut transaction)
+        .expect("register penalty slash sink account");
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_definition,
+        "Penalty stake".to_owned(),
+        AssetBalancePolicy::Global,
+        None,
+    ))
+    .execute(&escrow, &mut transaction)
+    .expect("register penalty stake asset definition");
+    transaction.apply();
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit penalty staking custody fixture");
+}
+
+/// Seed one validator with an account, an exactly backed escrow balance, and
+/// the matching retained validator/share rows needed by the slash executor.
+#[cfg(test)]
+pub(crate) fn seed_penalty_validator_for_tests(
+    state: &State,
+    lane_id: LaneId,
+    peer: &PeerId,
+    stake: Quantity,
+) -> AccountId {
+    use crate::smartcontracts::Execute as _;
+    use iroha_data_model::{
+        account::Account,
+        asset::AssetId,
+        isi::{Mint, Register},
+        metadata::Metadata,
+        nexus::{PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+    };
+
+    assert!(!stake.is_zero(), "penalty validator stake must be non-zero");
+    let (asset_definition, escrow, _slash_sink) = penalty_staking_fixture_ids();
+    let validator = AccountId::new(peer.public_key().clone());
+    let mut state_block = state.block(penalty_staking_fixture_header());
+    let mut transaction = state_block.transaction();
+    if transaction.world.accounts.get(&validator).is_none() {
+        Register::account(Account::new(validator.clone()))
+            .execute(&validator, &mut transaction)
+            .expect("register penalty validator account");
+    }
+    Mint::asset_quantity(
+        stake.clone(),
+        AssetId::new(asset_definition, escrow.clone()),
+    )
+    .execute(&escrow, &mut transaction)
+    .expect("mint exact penalty stake into escrow");
+    assert!(
+        transaction
+            .world
+            .public_lane_validators
+            .insert(
+                (lane_id, validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id,
+                    validator: validator.clone(),
+                    peer_id: peer.clone(),
+                    stake_account: validator.clone(),
+                    total_stake: stake.clone(),
+                    self_stake: stake.clone(),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: Some(0),
+                    activation_height: Some(1),
+                    last_reward_epoch: None,
+                },
+            )
+            .is_none(),
+        "penalty validator fixture must not replace an existing row"
+    );
+    assert!(
+        transaction
+            .world
+            .public_lane_stake_shares
+            .insert(
+                (lane_id, validator.clone(), validator.clone()),
+                PublicLaneStakeShare {
+                    lane_id,
+                    validator: validator.clone(),
+                    staker: validator.clone(),
+                    bonded: stake,
+                    pending_unbonds: BTreeMap::new(),
+                    metadata: Metadata::default(),
+                },
+            )
+            .is_none(),
+        "penalty validator fixture must not replace an existing stake share"
+    );
+    transaction.apply();
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit exactly backed penalty validator fixture");
+    validator
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,11 +759,7 @@ mod tests {
                 finality::V2FinalityArtifact,
             },
         },
-        metadata::Metadata,
-        nexus::{
-            LaneCatalog, LaneConfig, LaneId, LaneVisibility, PublicLaneValidatorRecord,
-            PublicLaneValidatorStatus,
-        },
+        nexus::{LaneCatalog, LaneConfig, LaneId, LaneVisibility},
         parameter::{Parameter, system::SumeragiNposParameters},
         prelude::{AccountId, PeerId},
     };
@@ -611,11 +772,13 @@ mod tests {
         KeyPair::try_random().expect("penalty fixture key generation should succeed")
     }
     fn fresh_state() -> State {
-        State::new_for_testing(
+        let mut state = State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-        )
+        );
+        configure_penalty_staking_state_for_tests(&mut state);
+        state
     }
 
     fn enable_shared_public_staking_lanes(state: &mut State) {
@@ -869,24 +1032,7 @@ mod tests {
     }
 
     fn add_validator_record_on_lane(state: &State, lane_id: LaneId, peer: &PeerId) -> AccountId {
-        let validator = AccountId::new(peer.public_key().clone());
-        let record = PublicLaneValidatorRecord {
-            lane_id,
-            validator: validator.clone(),
-            peer_id: peer.clone(),
-            stake_account: validator.clone(),
-            total_stake: Quantity::from(10_000_u64),
-            self_stake: Quantity::from(10_000_u64),
-            metadata: Metadata::default(),
-            status: PublicLaneValidatorStatus::Active,
-            activation_epoch: None,
-            activation_height: None,
-            last_reward_epoch: None,
-        };
-        let mut block = state.world.public_lane_validators.block();
-        block.insert((lane_id, validator.clone()), record);
-        block.commit();
-        validator
+        seed_penalty_validator_for_tests(state, lane_id, peer, Quantity::from(10_000_u64))
     }
 
     fn add_validator_record(state: &State, peer: &PeerId) -> AccountId {
@@ -902,15 +1048,18 @@ mod tests {
         parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
         parameters.commit();
     }
-    fn height_two_state_block(state: &State) -> StateBlock<'_> {
-        state.block(BlockHeader::new(
-            NonZeroU64::new(2).expect("non-zero penalty test height"),
+    fn penalty_derivation_header(height: u64) -> BlockHeader {
+        BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero penalty test height"),
             None,
             None,
             None,
-            2_000,
+            height.saturating_mul(1_000),
             0,
-        ))
+        )
+    }
+    fn height_two_state_block(state: &State) -> StateBlock<'_> {
+        state.block(penalty_derivation_header(2))
     }
     fn retire_primary_lane_in_candidate(state_block: &mut StateBlock<'_>) {
         let catalog = LaneCatalog::new(
@@ -953,7 +1102,7 @@ mod tests {
             None,
         );
         let actions = applier
-            .derive_npos_consensus_effects(2)
+            .derive_npos_consensus_effects(&penalty_derivation_header(2))
             .expect("admitted proof is self-contained")
             .penalty_actions;
         assert!(actions.iter().any(|action| matches!(
@@ -1012,7 +1161,7 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2)
+        .derive_npos_consensus_effects(&penalty_derivation_header(2))
         .expect("canonical evidence produces deterministic effects")
         .penalty_actions;
         assert!(actions.iter().any(|action| matches!(
@@ -1028,6 +1177,71 @@ mod tests {
             NposPenaltyAction::MarkConsensusEvidenceApplied(mark)
                 if mark.evidence_key == key && mark.height == 2
         )));
+    }
+    #[test]
+    fn multiple_due_evidence_for_fully_slashed_signer_is_sequential_and_terminal() {
+        let state = fresh_state();
+        install_one_block_delay_npos(&state);
+        let frozen_roster = roster();
+        let context = install_height_one_artifact(&state, &frozen_roster);
+        let offender = frozen_roster[1].clone();
+        let validator = add_validator_record(&state, &offender);
+        let first_key = insert_evidence(&state, phase_vote_evidence(&context, 1, 7), 1);
+        let second_key = insert_evidence(&state, phase_vote_evidence(&context, 1, 8), 1);
+        assert_ne!(first_key, second_key);
+
+        let actions = PenaltyApplier::new(
+            &state,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        )
+        .derive_npos_consensus_effects(&penalty_derivation_header(2))
+        .expect("sequential scratch application handles multiple due proofs")
+        .penalty_actions;
+
+        let slashes = actions
+            .iter()
+            .filter_map(|action| match action {
+                NposPenaltyAction::ConsensusSlash(slash) => Some(slash),
+                NposPenaltyAction::MarkConsensusEvidenceApplied(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            slashes.len(),
+            1,
+            "the first canonical proof consumes all retained stake, so a second slash cannot be derived"
+        );
+        assert_eq!(slashes[0].validator, validator);
+        assert_eq!(slashes[0].amount, Quantity::from(10_000_u64));
+        assert!(slashes[0].evidence_key == first_key || slashes[0].evidence_key == second_key);
+        for evidence_key in [&first_key, &second_key] {
+            assert!(actions.iter().any(|action| matches!(
+                action,
+                NposPenaltyAction::MarkConsensusEvidenceApplied(mark)
+                    if &mark.evidence_key == evidence_key && mark.height == 2
+            )));
+        }
+
+        let (asset_definition, escrow, slash_sink) = penalty_staking_fixture_ids();
+        let escrow_asset = iroha_data_model::asset::AssetId::new(asset_definition, escrow);
+        let view = state.view();
+        assert_eq!(
+            view.world
+                .assets()
+                .get(&escrow_asset)
+                .map(|balance| balance.as_ref().clone()),
+            Some(Quantity::from(10_000_u64)),
+            "scratch derivation must not debit committed escrow"
+        );
+        assert!(
+            view.world
+                .assets()
+                .iter()
+                .all(|(asset, _)| asset.account() != &slash_sink),
+            "scratch derivation must not create a committed slash-sink balance"
+        );
     }
     #[test]
     fn consensus_penalty_ignores_singleton_non_owner_shared_dataspace_projection() {
@@ -1048,7 +1262,7 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2)
+        .derive_npos_consensus_effects(&penalty_derivation_header(2))
         .expect("canonical evidence remains processable")
         .penalty_actions;
 
@@ -1091,7 +1305,7 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2)
+        .derive_npos_consensus_effects(&penalty_derivation_header(2))
         .expect("due evidence derives a complete penalty bundle");
         assert!(effects.penalty_actions.iter().any(|action| matches!(
             action,
@@ -1151,7 +1365,7 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2)
+        .derive_npos_consensus_effects(&penalty_derivation_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
             crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
@@ -1227,7 +1441,7 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2)
+        .derive_npos_consensus_effects(&penalty_derivation_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
             crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
@@ -1278,7 +1492,7 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2)
+        .derive_npos_consensus_effects(&penalty_derivation_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
             crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(

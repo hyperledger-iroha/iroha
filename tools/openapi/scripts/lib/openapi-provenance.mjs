@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import {scanJsonRejectDuplicateKeys} from './openapi-json.mjs';
+
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const GIT_SHA1_HEX = /^[0-9a-f]{40}$/;
 
@@ -18,6 +20,7 @@ export function validateReleaseOpenApiDocumentBytes(
   try {
     const text =
       typeof bytes === 'string' ? bytes : Buffer.from(bytes).toString('utf8');
+    scanJsonRejectDuplicateKeys(text, label);
     document = JSON.parse(text);
   } catch (error) {
     throw new Error(`${label} is not valid JSON: ${error?.message ?? error}`);

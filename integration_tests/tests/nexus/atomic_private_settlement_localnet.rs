@@ -28,7 +28,7 @@ use iroha::{
         },
         domain::{Domain, DomainId},
         isi::{
-            Grant, InstructionBox, Log, Mint, Register,
+            Grant, GrantBox, InstructionBox, Log, Mint, Register,
             privacy::RegisterPrivacyProtocolActivationV1,
             private_settlement::{
                 ActivatePrivateSettlementPoolV1, FinalizeAtomicPrivateSettlementV1,
@@ -65,11 +65,14 @@ use iroha::{
         privacy::{
             PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
             PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-            PrivacyRecipientIdV1, PrivacyRootV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootV1,
         },
         query::block::prelude::FindBlocks,
-        transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
+        transaction::{
+            FeeChargeKind, FeeChargeLimit, FeePaymentIntent, SignedTransaction,
+            TransactionEntrypoint,
+        },
     },
 };
 use iroha_core::{
@@ -117,10 +120,13 @@ const PARTICIPANT_COUNT: usize = 3;
 const VALIDATORS_PER_LANE: usize = 4;
 const GLOBAL_LANE_ID: u32 = 0;
 const VALIDATOR_STAKE: u64 = 2_000;
+const PRIVACY_GENESIS_PROPOSAL_HEIGHT: u64 = 1;
 const PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT: u64 = 2;
 const MAX_EXPIRY_BLOCKS: u64 = 4_096;
 const SIDECAR_RETENTION_BLOCKS: u64 = 4_096;
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
+const NEXUS_FEE_SEED_BALANCE: u64 = 10_000;
+const NEXUS_FEE_SIGNED_MAXIMUM: u64 = 1;
 const TRANSPARENT_CONTROL_SEED_BALANCE: u64 = 10_000;
 const TRANSPARENT_CONTROL_OUTPUT_BASELINE: u64 = 1;
 const TEST_STACK_BYTES: usize = 64 * 1024 * 1024;
@@ -201,8 +207,36 @@ const LEAKAGE_ACCOUNT_RIGHT_I105: &str = "sorauﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰ�
 const LEAKAGE_ASSET_LEFT: &str = "4Zust3cNxfvUrJRuFjSMmNXho9rF";
 const LEAKAGE_ASSET_RIGHT: &str = "7fnqfbvxnCke21nA2Zy1C3KktDdi";
 
-fn no_fee() -> FeePaymentIntent {
-    FeePaymentIntent::authority(Vec::new(), None)
+fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::derive_from_components(
+        DomainId::try_new("universal", "universal").expect("Nexus fee domain"),
+        "xor".parse().expect("Nexus fee asset name"),
+    )
+}
+
+fn bounded_nexus_fee() -> FeePaymentIntent {
+    FeePaymentIntent::authority(
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::Nexus,
+            nexus_fee_asset_definition_id(),
+            Quantity::from(NEXUS_FEE_SIGNED_MAXIMUM),
+        )],
+        None,
+    )
+}
+
+fn genesis_private_note_activation() -> PrivacyProtocolActivationRecordV1 {
+    let activate_at_height = PRIVACY_GENESIS_PROPOSAL_HEIGHT
+        .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
+        .expect("privacy activation height fits u64");
+    compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+        .expect("compiled IVM private-note profile")
+        .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
+                activate_at_height,
+            },
+        ))
 }
 
 fn hash(seed: u8) -> Hash {
@@ -279,6 +313,10 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
     let stake_definition = stake_asset_definition_id();
     let mut universal = vec![
         Register::domain(Domain::new(
+            DomainId::try_new("universal", "universal").expect("Nexus fee domain"),
+        ))
+        .into(),
+        Register::domain(Domain::new(
             DomainId::try_new("nexus", "universal").expect("nexus domain"),
         ))
         .into(),
@@ -292,6 +330,18 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
             AssetBalancePolicy::Global,
             None,
         ))
+        .into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            nexus_fee_asset_definition_id(),
+            "xor".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .into(),
+        Mint::asset_quantity(
+            NEXUS_FEE_SEED_BALANCE,
+            AssetId::new(nexus_fee_asset_definition_id(), ALICE_ID.clone()),
+        )
         .into(),
         Grant::account_permission(Permission::from(CanEnactGovernance), ALICE_ID.clone()).into(),
     ];
@@ -318,6 +368,13 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
             .into(),
         );
     }
+    // Keep the grant and governed registration in one genesis transaction.
+    // Genesis pre-exec evaluates its transactions independently, so a grant in
+    // an earlier transaction is not an authorization source for a later one.
+    // Instruction order inside this transaction makes the grant visible before
+    // the profile is registered at canonical height one.
+    universal
+        .push(RegisterPrivacyProtocolActivationV1::new(genesis_private_note_activation()).into());
     let mut transactions = vec![universal];
     for ordinal in 0..shape.participants {
         let control_domain = transparent_control_domain_id(ordinal);
@@ -333,6 +390,24 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
             Register::account(Account::new(transparent_control_account_id(ordinal))).into(),
         ]);
     }
+    // Nexus fees are globally scoped even when the business instruction is
+    // routed to a restricted dataspace. Fund every authority that signs a
+    // transparent control transaction in one universal transaction after the
+    // corresponding accounts have been registered.
+    transactions.push(
+        (0..shape.participants)
+            .map(|ordinal| {
+                Mint::asset_quantity(
+                    NEXUS_FEE_SEED_BALANCE,
+                    AssetId::new(
+                        nexus_fee_asset_definition_id(),
+                        transparent_control_account_id(ordinal),
+                    ),
+                )
+                .into()
+            })
+            .collect(),
+    );
     // Keep each restricted balance mutation in its authoritative dataspace.
     for asset_ordinal in 0..shape.participants {
         let mut mints = Vec::new();
@@ -702,30 +777,11 @@ fn committees_from_network(
 }
 
 fn activate_ivm_private_note(client: &Client) -> Result<u64> {
-    let current = client.get_privacy_capabilities()?.committed_height;
-    let proposed_at = current
-        .checked_add(1)
-        .ok_or_else(|| eyre!("height overflow"))?;
-    let activate_at = proposed_at
-        .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-        .ok_or_else(|| eyre!("activation height overflow"))?;
-    let activation = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?
-        .activation_record(PrivacyProtocolLifecycleV1::Proposed(
-            PrivacyProposedLifecycleV1 {
-                proposed_at_height: proposed_at,
-                activate_at_height: activate_at,
-            },
-        ));
-    let transaction = client.build_transaction(
-        [InstructionBox::from(
-            RegisterPrivacyProtocolActivationV1::new(activation),
-        )],
-        no_fee(),
-        Metadata::default(),
-    );
-    client
-        .submit_transaction_blocking(&transaction)
-        .wrap_err("register governed IVM private-note activation")?;
+    let expected = genesis_private_note_activation();
+    let mut ticks = 0_u64;
+    let tick_limit = PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
+        .checked_add(16)
+        .expect("privacy activation tick limit fits u64");
     loop {
         let capability = client.get_privacy_capabilities()?;
         let row = capability
@@ -733,17 +789,51 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
             .iter()
             .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
             .ok_or_else(|| eyre!("IVM private-note capability row is absent"))?;
-        if matches!(
-            row.activation,
-            Some(activation)
-                if matches!(activation.lifecycle, PrivacyProtocolLifecycleV1::Active(_))
-        ) {
-            ensure!(
-                row.is_network_available(),
-                "active IVM profile is not network-available"
-            );
-            return Ok(capability.committed_height);
+        let activation = row
+            .activation
+            .ok_or_else(|| eyre!("governed IVM private-note activation is absent"))?;
+        let mut expected_at_lifecycle = expected;
+        expected_at_lifecycle.lifecycle = activation.lifecycle;
+        ensure!(
+            activation == expected_at_lifecycle,
+            "governed IVM private-note activation bindings differ from genesis"
+        );
+        match activation.lifecycle {
+            PrivacyProtocolLifecycleV1::Active(active) => {
+                ensure!(
+                    active.proposed_at_height == PRIVACY_GENESIS_PROPOSAL_HEIGHT
+                        && active.activated_at_height
+                            == PRIVACY_GENESIS_PROPOSAL_HEIGHT
+                                + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
+                        && active.state_since_height == active.activated_at_height,
+                    "governed IVM private-note activation history differs from genesis schedule"
+                );
+                ensure!(
+                    row.is_network_available(),
+                    "active IVM profile is not network-available"
+                );
+                return Ok(capability.committed_height);
+            }
+            PrivacyProtocolLifecycleV1::Proposed(proposed) => {
+                ensure!(
+                    proposed
+                        == match expected.lifecycle {
+                            PrivacyProtocolLifecycleV1::Proposed(expected) => expected,
+                            _ => unreachable!("genesis activation is proposed"),
+                        },
+                    "governed IVM private-note proposal schedule differs from genesis"
+                );
+            }
+            PrivacyProtocolLifecycleV1::Suspended(_) | PrivacyProtocolLifecycleV1::Retired(_) => {
+                return Err(eyre!(
+                    "governed IVM private-note activation became unavailable before the smoke"
+                ));
+            }
         }
+        ensure!(
+            ticks < tick_limit,
+            "governed IVM private-note activation did not promote within {tick_limit} blocks"
+        );
         let tick = client.build_transaction(
             [InstructionBox::from(Log::new(
                 Level::INFO,
@@ -752,10 +842,11 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
                     capability.committed_height
                 ),
             ))],
-            no_fee(),
+            bounded_nexus_fee(),
             Metadata::default(),
         );
         client.submit_transaction_blocking(&tick)?;
+        ticks += 1;
     }
 }
 
@@ -1024,7 +1115,7 @@ fn proof_manifest(
         authority_context_height,
         expiry_height,
         sponsor: ALICE_ID.clone(),
-        public_fee_intent: no_fee(),
+        public_fee_intent: bounded_nexus_fee(),
         fee_intent_digest: hash(0xA1),
         reimbursement_terms_commitment: hash(0xA2),
         reimbursement_leg_ordinal: 0,
@@ -1473,7 +1564,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     let activation_transaction =
-        sponsor.build_transaction_from_items(activations, no_fee(), Metadata::default());
+        sponsor.build_transaction_from_items(activations, bounded_nexus_fee(), Metadata::default());
     sponsor
         .submit_transaction_blocking(&activation_transaction)
         .wrap_err("activate all three governed private pools at the bound context height")?;
@@ -1639,6 +1730,115 @@ fn atomic_private_settlement_n3_real_process_smoke() -> Result<()> {
         Ok(result) => result,
         Err(panic) => std::panic::resume_unwind(panic),
     }
+}
+
+#[test]
+fn release_fee_intent_is_bounded_and_uses_canonical_nexus_xor() {
+    let intent = bounded_nexus_fee();
+    intent.validate().expect("release fee intent is canonical");
+    let [limit] = intent.charge_limits() else {
+        panic!("release fee intent must contain exactly one Nexus charge limit");
+    };
+    assert_eq!(limit.kind(), FeeChargeKind::Nexus);
+    assert_eq!(
+        limit.asset_definition_id(),
+        &nexus_fee_asset_definition_id()
+    );
+    assert_eq!(
+        limit.max_amount(),
+        &Quantity::from(NEXUS_FEE_SIGNED_MAXIMUM)
+    );
+}
+
+#[test]
+fn release_sources_do_not_construct_fee_free_non_genesis_transactions() {
+    let forbidden_constructor = ["FeePaymentIntent::authority(", "Vec::new(), None)"].concat();
+    let retired_helper = ["no_", "fee()"].concat();
+    for (name, source) in [
+        (
+            "localnet",
+            include_str!("atomic_private_settlement_localnet.rs"),
+        ),
+        (
+            "release harness",
+            include_str!("atomic_private_settlement_real_process_harness.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains(&forbidden_constructor),
+            "{name} constructs a fee-free non-genesis intent"
+        );
+        assert!(
+            !source.contains(&retired_helper),
+            "{name} calls the retired fee-free helper"
+        );
+    }
+}
+
+#[test]
+fn genesis_ivm_private_note_activation_is_exact() {
+    let shape = TopologyShape::new(PARTICIPANT_COUNT);
+    let topology = (0..shape.peer_count())
+        .map(|index| PeerId::new(validator_authority_keypair(index).public_key().clone()))
+        .collect::<Vec<_>>();
+    let transactions = genesis_post_topology(shape, &topology);
+    let governance_permission = Permission::from(CanEnactGovernance);
+    let (governance_transaction, governance_instruction) = transactions
+        .iter()
+        .enumerate()
+        .find_map(|(transaction_index, transaction)| {
+            transaction
+                .iter()
+                .position(|instruction| {
+                    matches!(
+                        instruction.as_any().downcast_ref::<GrantBox>(),
+                        Some(GrantBox::Permission(grant))
+                            if grant.destination == ALICE_ID.clone()
+                                && grant.object == governance_permission
+                    )
+                })
+                .map(|instruction_index| (transaction_index, instruction_index))
+        })
+        .expect("genesis grants the proposal authority governance permission");
+    let activations = transactions
+        .iter()
+        .enumerate()
+        .flat_map(|(transaction_index, transaction)| {
+            transaction
+                .iter()
+                .enumerate()
+                .filter_map(move |(instruction_index, instruction)| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
+                        .map(|registration| (transaction_index, instruction_index, registration))
+                })
+        })
+        .collect::<Vec<_>>();
+    let [(activation_transaction, activation_instruction, registration)] = activations.as_slice()
+    else {
+        panic!(
+            "genesis must contain exactly one IVM private-note activation, found {}",
+            activations.len()
+        );
+    };
+    assert_eq!(
+        *activation_transaction, governance_transaction,
+        "genesis grant and governed activation must be one atomic transaction"
+    );
+    assert!(
+        *activation_instruction > governance_instruction,
+        "governed activation must follow its permission grant"
+    );
+    assert_eq!(registration.activation, genesis_private_note_activation());
+    assert_eq!(
+        registration.activation.lifecycle,
+        PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+            proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
+            activate_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT
+                + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+        })
+    );
 }
 
 #[test]

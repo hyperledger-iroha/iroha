@@ -217,6 +217,40 @@ fn losing_autonomous_carrier_is_durably_retired_before_cache_drop() {
     let (winning_round, _winning_subject) =
         mark_global_body_locked_for_block(&mut adapter, &winning_carrier);
     assert!(adapter.autonomous_payloads.is_empty());
+    assert!(
+        adapter
+            .pending_autonomous_anchor_payloads
+            .values()
+            .any(|pending| {
+                let mut hint_free = anchored_payload.clone();
+                hint_free.origin_proposal.payload_block_hint = None;
+                pending == &hint_free
+            }),
+        "the lock alone must quarantine a superseded hint until its exact body is bound"
+    );
+    assert!(
+        adapter
+            .kura
+            .read_autonomous_lane_slot_retirement(
+                lane_id,
+                anchored_payload
+                    .origin_proposal
+                    .descriptor
+                    .lane_block_height,
+                adapter.native_network_id(),
+                adapter.context.epoch,
+            )
+            .expect("read quarantined autonomous retirement state")
+            .is_none(),
+        "a block hash alone cannot prove that the stable payload identity lost"
+    );
+    assert_eq!(queue.live_lane_reservations(), payload.reservation_keys);
+    assert_ne!(
+        adapter.bind_locked_global_body(&winning_carrier),
+        V2LaneIngressOutcome::Rejected,
+        "the exact empty winning body must retire the quarantined loser"
+    );
+    assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
     let retirement = adapter
         .kura
         .read_autonomous_lane_slot_retirement(
@@ -247,21 +281,26 @@ fn losing_autonomous_carrier_is_durably_retired_before_cache_drop() {
             .contains("lacks State lifecycle authority"),
         "unexpected unauthenticated replacement error: {unauthenticated}",
     );
-    adapter
+    let unrelated_after_retirement = adapter
         .kura
         .persist_committed_lane_block_session_with_authority(
             &ordinary_session,
             &ordinary_pops,
             &ordinary_authority,
         )
-        .expect("a different State-authorized ordinary winner may follow Complete retirement");
-    assert_eq!(
+        .expect_err("State authority cannot replace a retired slot with unrelated lane work");
+    assert!(
+        unrelated_after_retirement
+            .to_string()
+            .contains("not its authenticated canonical-hint promotion"),
+        "unexpected unrelated ordinary replacement error: {unrelated_after_retirement}",
+    );
+    assert!(
         adapter
             .kura
             .read_certified_lane_block_artifact(lane_id, retired_descriptor.lane_block_height)
-            .expect("read the ordinary winner after autonomous terminalization")
-            .proposal,
-        ordinary_winner,
+            .is_none(),
+        "an unrelated State-authorized certificate must not occupy the retired slot",
     );
     assert_eq!(
         accept_lane_message_from(
@@ -273,6 +312,168 @@ fn losing_autonomous_carrier_is_durably_retired_before_cache_drop() {
         V2LaneIngressOutcome::Rejected,
         "a delayed payload from the retired carrier must not reclaim the slot"
     );
+}
+#[test]
+fn higher_view_carrier_rebinds_same_autonomous_payload_without_retirement() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+    let journal_dir = tempfile::tempdir().expect("autonomous rebind reservation journal");
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        lane_id,
+        dataspace_id,
+        &journal_dir.path().join("lane-reservations.norito"),
+    );
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("produce one hint-free autonomous payload");
+    let hint_free = adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .next()
+        .expect("local producer publishes one pending payload")
+        .clone();
+    let reservation_keys = hint_free.reservation_keys.clone();
+    let envelope = autonomous_lane_payload_envelope(
+        &hint_free,
+        adapter.native_network_id(),
+        adapter.context.epoch,
+    )
+    .expect("encode autonomous payload envelope");
+
+    let first_view = 0;
+    let first_leader = usize::try_from(adapter.context.leader(first_view))
+        .expect("first carrier leader index");
+    let mut first_builder = BlockBuilder::new(
+        adapter
+            .merge_carrier_context_header(first_view)
+            .expect("first carrier context header"),
+    );
+    first_builder.set_execution_context(Some(
+        BlockExecutionContextBundle::new(Vec::new())
+            .with_autonomous_lane_payloads(vec![envelope.clone()]),
+    ));
+    let first_carrier = first_builder
+        .build_with_signature(
+            u64::try_from(first_leader).expect("first leader index fits u64"),
+            keys[first_leader].private_key(),
+        )
+        .canonical_resultless_proposal();
+    mark_global_body_locked_for_block(&mut adapter, &first_carrier);
+    assert_ne!(
+        adapter.bind_locked_global_body(&first_carrier),
+        V2LaneIngressOutcome::Rejected
+    );
+    let first_anchored = adapter
+        .autonomous_payloads
+        .values()
+        .next()
+        .expect("first carrier binds the autonomous payload")
+        .clone();
+    assert_eq!(
+        first_anchored
+            .origin_proposal
+            .payload_block_hint
+            .expect("first carrier hint")
+            .proposal_block_hash,
+        first_carrier.hash()
+    );
+
+    let winning_view = first_view.saturating_add(1);
+    let winning_leader = usize::try_from(adapter.context.leader(winning_view))
+        .expect("higher-view carrier leader index");
+    let mut winning_builder = BlockBuilder::new(
+        adapter
+            .merge_carrier_context_header(winning_view)
+            .expect("higher-view carrier context header"),
+    );
+    winning_builder.set_execution_context(Some(
+        BlockExecutionContextBundle::new(Vec::new())
+            .with_autonomous_lane_payloads(vec![envelope]),
+    ));
+    let winning_carrier = winning_builder
+        .build_with_signature(
+            u64::try_from(winning_leader).expect("higher-view leader index fits u64"),
+            keys[winning_leader].private_key(),
+        )
+        .canonical_resultless_proposal();
+    mark_global_body_locked_for_block(&mut adapter, &winning_carrier);
+    assert!(adapter.autonomous_payloads.is_empty());
+    assert_eq!(
+        adapter
+            .pending_autonomous_anchor_payloads
+            .values()
+            .next(),
+        Some(&hint_free),
+        "the superseded hint must be quarantined without changing stable payload bytes"
+    );
+    assert!(
+        adapter
+            .kura
+            .read_autonomous_lane_slot_retirement(
+                lane_id,
+                hint_free.origin_proposal.descriptor.lane_block_height,
+                adapter.native_network_id(),
+                adapter.context.epoch,
+            )
+            .expect("read pre-rebind retirement state")
+            .is_none()
+    );
+    assert_eq!(queue.live_lane_reservations(), reservation_keys);
+
+    assert_ne!(
+        adapter.bind_locked_global_body(&winning_carrier),
+        V2LaneIngressOutcome::Rejected,
+        "the protected higher-view body must rebind the exact stable payload"
+    );
+    let winning_hint = LaneBlockProposalPayloadHintV1 {
+        proposal_height: adapter.context.height,
+        proposal_view: winning_view,
+        proposal_block_hash: winning_carrier.hash(),
+    };
+    let expected = hint_free
+        .attach_global_hint_exact(
+            winning_hint,
+            adapter.native_network_id(),
+            adapter.context.epoch,
+        )
+        .expect("attach the expected winning hint");
+    assert_eq!(
+        adapter.autonomous_payloads.values().next(),
+        Some(&expected)
+    );
+    assert_eq!(
+        adapter
+            .kura
+            .current_autonomous_lane_payload(
+                lane_id,
+                expected.origin_proposal.descriptor.lane_block_height,
+                adapter.native_network_id(),
+                adapter.context.epoch,
+            )
+            .expect("recover rebound durable payload")
+            .0,
+        expected
+    );
+    assert!(
+        adapter
+            .kura
+            .read_autonomous_lane_slot_retirement(
+                lane_id,
+                hint_free.origin_proposal.descriptor.lane_block_height,
+                adapter.native_network_id(),
+                adapter.context.epoch,
+            )
+            .expect("read post-rebind retirement state")
+            .is_none(),
+        "reanchoring the same payload identity must not release its slot"
+    );
+    assert_eq!(queue.live_lane_reservations(), reservation_keys);
+    assert!(!adapter.output_guard.restart_required());
 }
 #[test]
 fn losing_pending_autonomous_payload_is_retired_by_fifo_only_replica() {
@@ -494,23 +695,26 @@ fn losing_pending_autonomous_payload_is_retired_by_fifo_only_replica() {
         descriptor.lane_incarnation,
         None,
     );
-    adapter
+    let unrelated = adapter
         .kura
         .persist_committed_lane_block_session_with_authority(
             &ordinary_session,
             &ordinary_pops,
             &ordinary_authority,
         )
-        .expect(
-            "a State-authorized ordinary winner may follow a Complete replica Queue disposition",
-        );
-    assert_eq!(
+        .expect_err("State authority cannot replace a retired replica slot with unrelated work");
+    assert!(
+        unrelated
+            .to_string()
+            .contains("not its authenticated canonical-hint promotion"),
+        "unexpected unrelated replica replacement error: {unrelated}",
+    );
+    assert!(
         adapter
             .kura
             .read_certified_lane_block_artifact(lane_id, lane_block_height)
-            .expect("read ordinary winner after replica terminalization")
-            .proposal,
-        ordinary_winner,
+            .is_none(),
+        "an unrelated State-authorized certificate must not occupy the replica-retired slot",
     );
     assert_eq!(
         accept_lane_message_from(

@@ -207,6 +207,38 @@ test('syncOpenApi rejects an empty generated stub before tracked writes', async 
   await assert.rejects(() => access(join(versionsDir, 'current')));
 });
 
+test('syncOpenApi rejects duplicate generated spec members before tracked writes', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-duplicate-spec-'));
+  const outputDir = join(tempRoot, 'static', 'openapi');
+  const versionsDir = join(outputDir, 'versions');
+  const sentinelPath = join(outputDir, 'sentinel.txt');
+  const duplicateSpec = releaseSpec('duplicate-spec').replace(
+    '"description": "ok"',
+    '"description": "first", "description": "second"',
+  );
+  await mkdir(outputDir, {recursive: true});
+  await writeFile(sentinelPath, 'unchanged', 'utf8');
+
+  await assert.rejects(
+    () =>
+      syncOpenApi(
+        {version: 'current', latest: true, mirrors: [], requireSigned: false},
+        {
+          repoRoot: tempRoot,
+          outputDir,
+          versionsDir,
+          async generateSpec(_, outputFile) {
+            await writeFile(outputFile, duplicateSpec, 'utf8');
+          },
+        },
+      ),
+    /duplicate JSON member "description"/i,
+  );
+
+  assert.equal(await readFile(sentinelPath, 'utf8'), 'unchanged');
+  await assert.rejects(() => access(join(versionsDir, 'current')));
+});
+
 test('syncOpenApi rejects unknown fields in the previous versions index', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-unknown-index-'));
   const outputDir = join(tempRoot, 'static', 'openapi');

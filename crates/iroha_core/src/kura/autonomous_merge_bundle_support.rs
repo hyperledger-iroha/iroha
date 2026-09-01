@@ -41,11 +41,12 @@ impl AutonomousLaneMergeBundleV1 {
 }
 /// Exact durable autonomous source admitted to canonical merge construction.
 ///
-/// Construction requires both the independently durable canonical bundle
-/// data/index slot and its separately durable autonomous attempt, READY
-/// certificate, certified slot, and execution-input slot. The bundle bytes
-/// must exactly reconstruct from those components under active lane geometry;
-/// neither the persisted copy nor the derived view is trusted on its own.
+/// Construction either requires the complete committee-owned lifecycle
+/// corridor (attempt, READY certificate, certified slot, execution input, and
+/// canonical bundle), or one non-owning canonical-replica record revalidated
+/// against the exact globally finalized carrier. Both paths reconstruct the
+/// bundle and deterministic input under authenticated lane geometry; no
+/// persisted copy or derived view is trusted on its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DurableAutonomousLaneMergeSource {
     /// Fully authenticated producer payload and lane certificate.

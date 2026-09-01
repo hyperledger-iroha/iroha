@@ -502,8 +502,7 @@ fn retain_validated_local_evidence(
     if snapshot.records.iter().any(|(committed_key, record)| {
         committed_key == &key
             || (!evidence_record_is_terminal(record)
-                && v2_evidence_offender(&record.evidence.equivocation).as_ref()
-                    == Some(&offender))
+                && v2_evidence_offender(&record.evidence.equivocation).as_ref() == Some(&offender))
     }) {
         return false;
     }
@@ -1039,18 +1038,27 @@ mod tests {
         params.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
         let mut world = World::default();
         world.parameters = Cell::new(params);
-        test_state_for_v2_fixture_with_world(fixture, world)
+        let mut state = new_test_state_for_v2_fixture_with_world(fixture, world);
+        super::super::penalties::configure_penalty_staking_state_for_tests(&mut state);
+        install_v2_finality_for_fixture(&state, fixture);
+        state
     }
-    fn test_state_for_v2_fixture_with_world(fixture: &V2EvidenceFixture, world: World) -> State {
+    fn new_test_state_for_v2_fixture_with_world(
+        fixture: &V2EvidenceFixture,
+        world: World,
+    ) -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain_and_network_id_for_testing(
+        State::new_with_chain_and_network_id_for_testing(
             world,
             kura,
             query,
             ChainId::from("sumeragi-v2-evidence-display-name"),
             fixture.context.network_id,
-        );
+        )
+    }
+    fn test_state_for_v2_fixture_with_world(fixture: &V2EvidenceFixture, world: World) -> State {
+        let state = new_test_state_for_v2_fixture_with_world(fixture, world);
         install_v2_finality_for_fixture(&state, fixture);
         state
     }
@@ -1415,6 +1423,16 @@ mod tests {
             .commit_world_overlay_for_testing()
             .expect("test admission block commits");
     }
+    fn penalty_derivation_header(height: u64) -> BlockHeader {
+        BlockHeader::new(
+            core::num::NonZeroU64::new(height).expect("non-zero penalty derivation height"),
+            None,
+            None,
+            None,
+            height.saturating_mul(10),
+            0,
+        )
+    }
     fn insert_terminal_v2_evidence_for_test(
         state: &State,
         evidence: SumeragiV2EquivocationEvidence,
@@ -1435,23 +1453,12 @@ mod tests {
         key
     }
     fn add_v2_penalty_validator(state: &State, peer: &PeerId) {
-        let validator = iroha_data_model::account::AccountId::new(peer.public_key().clone());
-        let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
-            lane_id: iroha_data_model::nexus::LaneId::SINGLE,
-            validator: validator.clone(),
-            peer_id: peer.clone(),
-            stake_account: validator.clone(),
-            total_stake: iroha_primitives::numeric::Quantity::from(100_u64),
-            self_stake: iroha_primitives::numeric::Quantity::from(100_u64),
-            metadata: iroha_data_model::metadata::Metadata::default(),
-            status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-            activation_epoch: None,
-            activation_height: None,
-            last_reward_epoch: None,
-        };
-        let mut validators = state.world.public_lane_validators.block();
-        validators.insert((iroha_data_model::nexus::LaneId::SINGLE, validator), record);
-        validators.commit();
+        super::super::penalties::seed_penalty_validator_for_tests(
+            state,
+            iroha_data_model::nexus::LaneId::SINGLE,
+            peer,
+            iroha_primitives::numeric::Quantity::from(100_u64),
+        );
     }
     #[test]
     fn sumeragi_v2_equivocation_validates_exact_proposal_vote_and_timeout_pairs() {
@@ -2096,7 +2103,7 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2)
+        .derive_npos_consensus_effects(&penalty_derivation_header(2))
         .expect("derive proposer pre-admission effects");
         let follower_precommit = super::super::penalties::PenaltyApplier::new(
             &follower,
@@ -2105,7 +2112,7 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2)
+        .derive_npos_consensus_effects(&penalty_derivation_header(2))
         .expect("derive follower pre-admission effects");
         assert_eq!(proposer_precommit.v2_evidence_admissions, admissions);
         assert!(follower_precommit.v2_evidence_admissions.is_empty());
@@ -2142,7 +2149,7 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2)
+        .derive_npos_consensus_effects(&penalty_derivation_header(2))
         .expect("derive proposer same-height effects");
         assert!(proposer_same_block.penalty_actions.is_empty());
         let proposer_effects = super::super::penalties::PenaltyApplier::new(
@@ -2152,7 +2159,7 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(3)
+        .derive_npos_consensus_effects(&penalty_derivation_header(3))
         .expect("derive proposer post-admission effects");
         let follower_effects = super::super::penalties::PenaltyApplier::new(
             &follower,
@@ -2161,7 +2168,7 @@ mod tests {
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(3)
+        .derive_npos_consensus_effects(&penalty_derivation_header(3))
         .expect("derive follower post-admission effects");
         assert_eq!(proposer_effects, follower_effects);
         assert!(

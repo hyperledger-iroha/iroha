@@ -1971,6 +1971,21 @@ impl Kura {
     }
     #[must_use]
     fn recover_indexed_sidecar_artifacts(data_path: &Path, index_path: &Path, kind: &str) -> bool {
+        let required_heights = BTreeSet::new();
+        Self::recover_indexed_sidecar_artifacts_with_required_heights(
+            data_path,
+            index_path,
+            &required_heights,
+            kind,
+        )
+    }
+    #[must_use]
+    fn recover_indexed_sidecar_artifacts_with_required_heights(
+        data_path: &Path,
+        index_path: &Path,
+        required_heights: &BTreeSet<u64>,
+        kind: &str,
+    ) -> bool {
         let temp_data_path = data_path.with_extension("norito.tmp");
         let temp_index_path = index_path.with_extension("index.tmp");
         let temp_index_exists = temp_index_path.exists();
@@ -1983,7 +1998,28 @@ impl Kura {
                 );
                 return false;
             }
-            return true;
+            if required_heights.is_empty() {
+                return true;
+            }
+            let data_len = match std::fs::metadata(data_path).map(|metadata| metadata.len()) {
+                Ok(data_len) => data_len,
+                Err(error) => {
+                    warn!(
+                        ?error,
+                        ?data_path,
+                        kind,
+                        "required terminal evidence has no readable canonical sidecar data"
+                    );
+                    return false;
+                }
+            };
+            return Self::sidecar_index_contains_required_heights(
+                index_path,
+                data_len,
+                required_heights,
+                kind,
+                "canonical",
+            );
         }
         // A temp index is the durable commit marker for a prune rewrite. When both files remain,
         // validate them as a pair. When only the index remains, the crash happened after data
@@ -2014,6 +2050,20 @@ impl Kura {
             );
             return false;
         }
+        if !Self::sidecar_index_contains_required_heights(
+            &temp_index_path,
+            data_len,
+            required_heights,
+            kind,
+            "temp",
+        ) {
+            warn!(
+                ?temp_index_path,
+                kind,
+                "refusing to promote a sidecar temp that omits required terminal evidence"
+            );
+            return false;
+        }
         if temp_data_exists && !Self::promote_sidecar_temp(&temp_data_path, data_path, kind, "data")
         {
             warn!(
@@ -2030,7 +2080,13 @@ impl Kura {
             );
             return false;
         }
-        true
+        Self::sidecar_index_contains_required_heights(
+            index_path,
+            data_len,
+            required_heights,
+            kind,
+            "recovered canonical",
+        )
     }
     #[must_use]
     fn promote_sidecar_temp(temp_path: &Path, main_path: &Path, kind: &str, label: &str) -> bool {
@@ -2216,6 +2272,124 @@ impl Kura {
                     kind,
                     label,
                     "sidecar index entry points past data file"
+                );
+                return false;
+            }
+        }
+        true
+    }
+
+    fn sidecar_index_contains_required_heights(
+        index_path: &Path,
+        data_len: u64,
+        required_heights: &BTreeSet<u64>,
+        kind: &str,
+        label: &str,
+    ) -> bool {
+        if required_heights.is_empty() {
+            return true;
+        }
+        let mut index = match std::fs::File::open(index_path) {
+            Ok(file) => file,
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?index_path,
+                    kind,
+                    label,
+                    "failed to open sidecar index while checking required terminal evidence"
+                );
+                return false;
+            }
+        };
+        let index_len = match index.metadata() {
+            Ok(metadata) => metadata.len(),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?index_path,
+                    kind,
+                    label,
+                    "failed to stat sidecar index while checking required terminal evidence"
+                );
+                return false;
+            }
+        };
+        let layout = match SidecarIndexLayout::read_from(&mut index, index_len) {
+            Ok(layout) if index_len == layout.aligned_len => layout,
+            Ok(_) => {
+                warn!(
+                    ?index_path,
+                    kind,
+                    label,
+                    "required terminal evidence index has trailing or misaligned bytes"
+                );
+                return false;
+            }
+            Err(reason) => {
+                warn!(
+                    reason,
+                    ?index_path,
+                    kind,
+                    label,
+                    "required terminal evidence index layout is malformed"
+                );
+                return false;
+            }
+        };
+        for height in required_heights {
+            let Some(relative) = height.checked_sub(layout.base_height) else {
+                warn!(
+                    height,
+                    base_height = layout.base_height,
+                    ?index_path,
+                    kind,
+                    label,
+                    "required terminal evidence predates the sidecar index"
+                );
+                return false;
+            };
+            if relative >= layout.entry_count {
+                warn!(
+                    height,
+                    base_height = layout.base_height,
+                    entry_count = layout.entry_count,
+                    ?index_path,
+                    kind,
+                    label,
+                    "required terminal evidence is outside the sidecar index"
+                );
+                return false;
+            }
+            let Some(offset) = relative
+                .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
+                .and_then(|offset| layout.entries_offset.checked_add(offset))
+            else {
+                return false;
+            };
+            if index.seek(SeekFrom::Start(offset)).is_err() {
+                return false;
+            }
+            let mut entry_bytes = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
+            if index.read_exact(&mut entry_bytes).is_err() {
+                return false;
+            }
+            let entry = SidecarIndexEntry::from_bytes(entry_bytes);
+            if entry.len == 0
+                || entry
+                    .offset
+                    .checked_add(entry.len)
+                    .is_none_or(|end| end > data_len)
+            {
+                warn!(
+                    height,
+                    offset = entry.offset,
+                    len = entry.len,
+                    data_len,
+                    ?index_path,
+                    kind,
+                    label,
+                    "required terminal evidence sidecar entry is absent or out of bounds"
                 );
                 return false;
             }

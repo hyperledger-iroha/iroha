@@ -47,17 +47,23 @@ impl Kura {
             kind,
         )
     }
-    fn prune_indexed_sidecars_through_terminal_frontier(
+    fn prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
         data_path: &Path,
         index_path: &Path,
         terminal_height: u64,
         retention: NonZeroUsize,
+        required_heights: &BTreeSet<u64>,
         kind: &str,
     ) -> bool {
         if !data_path.exists() && !index_path.exists() {
-            return true;
+            return required_heights.is_empty();
         }
-        if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
+        if !Self::recover_indexed_sidecar_artifacts_with_required_heights(
+            data_path,
+            index_path,
+            required_heights,
+            kind,
+        ) {
             return false;
         }
         Self::rewrite_indexed_sidecars(
@@ -66,7 +72,25 @@ impl Kura {
             IndexedSidecarRewrite::RetainAfterTerminalFrontier {
                 terminal_height,
                 retention,
+                required_heights,
             },
+            kind,
+        )
+    }
+    #[cfg(test)]
+    fn prune_indexed_sidecars_through_terminal_frontier(
+        data_path: &Path,
+        index_path: &Path,
+        terminal_height: u64,
+        retention: NonZeroUsize,
+        kind: &str,
+    ) -> bool {
+        Self::prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
+            data_path,
+            index_path,
+            terminal_height,
+            retention,
+            &BTreeSet::new(),
             kind,
         )
     }
@@ -74,7 +98,7 @@ impl Kura {
     fn rewrite_indexed_sidecars(
         data_path: &Path,
         index_path: &Path,
-        rewrite: IndexedSidecarRewrite,
+        rewrite: IndexedSidecarRewrite<'_>,
         kind: &str,
     ) -> bool {
         let mut index = match std::fs::File::open(index_path) {
@@ -132,6 +156,7 @@ impl Kura {
             mut output_entries,
             mut output_base_height,
             pinned_height,
+            required_heights,
             operation,
             window_data_byte_limit,
         ) = match rewrite {
@@ -149,6 +174,7 @@ impl Kura {
                     total_entries,
                     layout.base_height,
                     pinned_height,
+                    None,
                     "retention prune",
                     None,
                 )
@@ -173,6 +199,7 @@ impl Kura {
                     retention_u64,
                     output_base_height,
                     None,
+                    None,
                     "retention-window prune",
                     Some(DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES),
                 )
@@ -180,14 +207,21 @@ impl Kura {
             IndexedSidecarRewrite::RetainAfterTerminalFrontier {
                 terminal_height,
                 retention,
+                required_heights,
             } => {
                 let first_retained_height = terminal_height
                     .saturating_sub(retention.get() as u64)
                     .saturating_add(1);
-                if layout.base_height >= first_retained_height {
+                if required_heights.is_empty() && layout.base_height >= first_retained_height {
                     return true;
                 }
-                let source_start = first_retained_height
+                let output_base_target = required_heights
+                    .first()
+                    .copied()
+                    .map_or(first_retained_height, |height| {
+                        first_retained_height.min(height)
+                    });
+                let source_start = output_base_target
                     .saturating_sub(layout.base_height)
                     .min(total_entries);
                 let Some(output_base_height) = layout.base_height.checked_add(source_start) else {
@@ -201,11 +235,14 @@ impl Kura {
                     return false;
                 };
                 (
-                    source_start,
+                    first_retained_height
+                        .saturating_sub(layout.base_height)
+                        .min(total_entries),
                     source_start,
                     total_entries.saturating_sub(source_start),
                     output_base_height,
                     None,
+                    Some(required_heights),
                     "terminal-frontier prune",
                     None,
                 )
@@ -263,6 +300,59 @@ impl Kura {
                 return false;
             }
             entries.push(SidecarIndexEntry::from_bytes(entry_buf));
+        }
+        if let Some(required_heights) = required_heights {
+            for required_height in required_heights {
+                let Some(relative) = required_height.checked_sub(layout.base_height) else {
+                    iroha_logger::warn!(
+                        required_height,
+                        base_height = layout.base_height,
+                        ?index_path,
+                        kind,
+                        "required terminal evidence predates the retained sidecar index"
+                    );
+                    return false;
+                };
+                if relative >= total_entries {
+                    iroha_logger::warn!(
+                        required_height,
+                        base_height = layout.base_height,
+                        total_entries,
+                        ?index_path,
+                        kind,
+                        "required terminal evidence is outside the retained sidecar index"
+                    );
+                    return false;
+                }
+                let Some(vector_index) = relative
+                    .checked_sub(vector_base)
+                    .and_then(|index| usize::try_from(index).ok())
+                else {
+                    iroha_logger::warn!(
+                        required_height,
+                        vector_base,
+                        ?index_path,
+                        kind,
+                        "required terminal evidence is outside the rewrite input window"
+                    );
+                    return false;
+                };
+                if entries
+                    .get(vector_index)
+                    .is_none_or(|entry| entry.len == 0)
+                {
+                    iroha_logger::warn!(
+                        required_height,
+                        ?index_path,
+                        kind,
+                        "required terminal evidence has no indexed sidecar payload"
+                    );
+                    return false;
+                }
+            }
+            if source_start == 0 && keep_from == 0 {
+                return true;
+            }
         }
         if let Some(byte_limit) = window_data_byte_limit {
             let Ok(count_start) = usize::try_from(source_start.saturating_sub(vector_base)) else {
@@ -417,7 +507,8 @@ impl Kura {
                 vector_base.saturating_add(u64::try_from(vector_idx).unwrap_or(u64::MAX));
             let entry_height = layout.base_height.saturating_add(absolute_idx);
             let retained_by_policy = absolute_idx >= keep_from
-                || pinned_height.is_some_and(|height| height == entry_height);
+                || pinned_height.is_some_and(|height| height == entry_height)
+                || required_heights.is_some_and(|heights| heights.contains(&entry_height));
             if !retained_by_policy || entry.len == 0 {
                 if let Err(err) = new_index.write_all(&empty_entry) {
                     iroha_logger::warn!(
@@ -766,13 +857,35 @@ impl Kura {
         let retained = match rewrite {
             #[cfg(test)]
             IndexedSidecarRewrite::RetainNewestWindow { .. } => output_entries,
-            _ => output_entries
+            IndexedSidecarRewrite::RetainNewest { .. } => output_entries
                 .saturating_sub(keep_from)
                 .saturating_add(u64::from(pinned_height.is_some_and(|height| {
                     height
                         .checked_sub(layout.base_height)
                         .is_some_and(|relative| relative < output_entries && relative < keep_from)
                 }))),
+            IndexedSidecarRewrite::RetainAfterTerminalFrontier { .. } => {
+                let output_end = source_start.saturating_add(output_entries);
+                output_end
+                    .saturating_sub(keep_from.max(source_start))
+                    .saturating_add(required_heights.map_or(0, |heights| {
+                    u64::try_from(
+                        heights
+                            .iter()
+                            .filter(|height| {
+                                height
+                                    .checked_sub(layout.base_height)
+                                    .is_some_and(|relative| {
+                                        relative >= source_start
+                                            && relative < keep_from
+                                            && relative < source_start.saturating_add(output_entries)
+                                    })
+                            })
+                            .count(),
+                    )
+                    .unwrap_or(u64::MAX)
+                    }))
+            }
         };
         let pruned = total_entries.saturating_sub(retained);
         iroha_logger::debug!(

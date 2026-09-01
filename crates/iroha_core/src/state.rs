@@ -13224,6 +13224,11 @@ pub struct StateTransaction<'block, 'state> {
     /// State telemetry
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
+    /// Whether applying this transaction may publish process-local operational observability.
+    ///
+    /// Consensus-effect probes set this to `false`: they need sequential scratch-state
+    /// mutation without changing live status, metrics, fee counters, or slash reporting.
+    operational_observability: bool,
     /// Transaction-local operator-status updates, published only by [`Self::apply`].
     public_lane_staking_status_overlay: crate::sumeragi::status::PublicLaneStakingStatusOverlay,
     pub(crate) _curr_block: BlockHeader,
@@ -13567,21 +13572,21 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         );
         self.pending_nexus_fee_event = Some(event);
     }
-    /// Stage one public-lane slash metric update at the transaction commit boundary.
-    #[cfg(feature = "telemetry")]
-    pub(crate) fn stage_public_lane_slash_telemetry(
+    /// Stage one public-lane slash observability update for the block commit boundary.
+    pub(crate) fn stage_public_lane_slash_observability(
         &mut self,
         lane_id: LaneId,
         previous_status: iroha_data_model::nexus::PublicLaneValidatorStatus,
         slashed_status: iroha_data_model::nexus::PublicLaneValidatorStatus,
         amount: Quantity,
     ) {
-        self.pending_public_lane_slash_telemetry.push((
-            lane_id,
-            previous_status,
-            slashed_status,
-            amount,
-        ));
+        self.pending_public_lane_slash_observability
+            .push(PendingPublicLaneSlashObservability {
+                lane_id,
+                previous_status,
+                slashed_status,
+                amount,
+            });
     }
     /// Stage block fee amount so telemetry only reflects committed transactions.
     #[cfg(feature = "telemetry")]
@@ -29027,10 +29032,7 @@ impl State {
     ///
     /// The scope contains one generation-coherent parent world/Nexus snapshot,
     /// runs no start-of-block lifecycle effects, and must never be committed.
-    pub(crate) fn consensus_effects_probe_block(
-        &self,
-        curr_block: BlockHeader,
-    ) -> StateBlock<'_> {
+    pub(crate) fn consensus_effects_probe_block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.merge_preexecution_block(curr_block)
     }
     /// Create structure to execute a block while reverting changes made in the latest block
@@ -32446,6 +32448,74 @@ impl State {
         })?;
         Ok(executions)
     }
+    /// Resolve one execution-capable autonomous source without conflating a
+    /// canonical global replica with lane-committee lifecycle custody.
+    ///
+    /// Committee members retain the existing certified/input/bundle corridor.
+    /// A global validator outside that committee may instead use the separate
+    /// canonical-replica namespace, whose Kura reader rederives the record from
+    /// exact verified global finality. The committed epoch schedule is checked
+    /// after the replica reveals its certified proposal height.
+    fn durable_autonomous_merge_source_for_lane_slot(
+        &self,
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        frozen_mode: ConsensusMode,
+    ) -> Result<Option<crate::kura::DurableAutonomousLaneMergeSource>, String> {
+        if let Some(certified) = self
+            .kura
+            .read_certified_lane_block_artifact(lane_id, lane_block_height)
+        {
+            let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+                world,
+                certified.proposal.descriptor.proposal_height,
+                frozen_mode,
+            )
+            .map_err(|error| error.to_string())?;
+            let source = self
+                .kura
+                .durable_autonomous_lane_merge_source(
+                    lane_id,
+                    lane_block_height,
+                    self.network_id,
+                    expected_epoch,
+                )
+                .map_err(str::to_owned)?;
+            if source.bundle.certified != certified {
+                return Err(
+                    "durable autonomous merge source changed during exact slot selection"
+                        .to_owned(),
+                );
+            }
+            return Ok(Some(source));
+        }
+        let Some(source) = self
+            .kura
+            .durable_canonical_autonomous_lane_replica_for_network(
+                lane_id,
+                lane_block_height,
+                self.network_id,
+            )
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(None);
+        };
+        let payload = source.bundle.executable_payload();
+        let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+            world,
+            source.bundle.certified.proposal.descriptor.proposal_height,
+            frozen_mode,
+        )
+        .map_err(|error| error.to_string())?;
+        if payload.network_id != self.network_id || payload.epoch != expected_epoch {
+            return Err(
+                "canonical autonomous replica differs from the committed network or epoch"
+                    .to_owned(),
+            );
+        }
+        Ok(Some(source))
+    }
     #[cfg(test)]
     fn canonical_merge_execution_sources(
         &self,
@@ -32468,7 +32538,6 @@ impl State {
         if nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES {
             return None;
         }
-        let network_id = self.network_id;
         let world = self.world.view();
         let mut sources = Vec::new();
         for lane in nexus.lane_catalog.lanes() {
@@ -32490,25 +32559,43 @@ impl State {
                 }
             };
             let expected_height = frontier.0.checked_add(1)?;
-            let certified = self
-                .kura
-                .read_certified_lane_block_artifact(lane.id, expected_height)
-                .filter(|artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.lane_id == lane.id
-                        && descriptor.dataspace_id == lane.dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane.id,
-                            lane.dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                });
-            let Some(certified) = certified else {
-                continue;
+            let durable_source = match self.durable_autonomous_merge_source_for_lane_slot(
+                &world,
+                lane.id,
+                expected_height,
+                frozen_mode,
+            ) {
+                Ok(Some(source)) => source,
+                Ok(None) => continue,
+                Err(message) => {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        message,
+                        "certified lane block is missing its complete durable merge source"
+                    );
+                    return None;
+                }
             };
+            let certified = &durable_source.bundle.certified;
             let descriptor = &certified.proposal.descriptor;
+            if descriptor.lane_id != lane.id
+                || descriptor.dataspace_id != lane.dataspace_id
+                || descriptor.lane_incarnation != incarnation
+                || !lifecycle.lane_route_and_incarnation_matches(
+                    lane.id,
+                    lane.dataspace_id,
+                    descriptor.proposal_height,
+                    descriptor.lane_incarnation,
+                )
+            {
+                warn!(
+                    lane = %lane.id.as_u32(),
+                    lane_block_height = expected_height,
+                    "durable autonomous source differs from the active lane generation"
+                );
+                return None;
+            }
             if let Err(err) =
                 Self::validate_merge_execution_predecessor_against_frontier(&world, descriptor)
             {
@@ -32542,47 +32629,6 @@ impl State {
                 );
                 return None;
             }
-            let expected_epoch = match crate::sumeragi::epoch_for_height_from_world(
-                &world,
-                descriptor.proposal_height,
-                frozen_mode,
-            ) {
-                Ok(epoch) => epoch,
-                Err(error) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        %error,
-                        "deferring merge source selection because the committed epoch schedule is invalid"
-                    );
-                    return None;
-                }
-            };
-            let durable_source = match self.kura.durable_autonomous_lane_merge_source(
-                lane.id,
-                expected_height,
-                network_id,
-                expected_epoch,
-            ) {
-                Ok(source) if source.bundle.certified == certified => source,
-                Ok(_) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        "durable autonomous merge source changed during certified source selection"
-                    );
-                    return None;
-                }
-                Err(message) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        message,
-                        "certified lane block is missing its complete durable merge source"
-                    );
-                    return None;
-                }
-            };
             sources.push(MergeExecutionSource::from_durable(durable_source));
         }
         sources
@@ -32603,7 +32649,6 @@ impl State {
         let consensus = self.merge_consensus_snapshot();
         let lifecycle = &consensus.lifecycle;
         let nexus = &lifecycle.nexus;
-        let network_id = self.network_id;
         let world = self.world.view();
         for lane in nexus.lane_catalog.lanes() {
             let Some(incarnation) = lifecycle.incarnations.get(&lane.id).copied() else {
@@ -32620,49 +32665,35 @@ impl State {
             let Some(expected_height) = frontier.0.checked_add(1) else {
                 return false;
             };
-            let certified = self
-                .kura
-                .read_certified_lane_block_artifact(lane.id, expected_height)
-                .filter(|artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.lane_id == lane.id
-                        && descriptor.dataspace_id == lane.dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && descriptor.lane_block_height == expected_height
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane.id,
-                            lane.dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                        && Self::validate_merge_execution_predecessor_against_frontier(
-                            &world, descriptor,
-                        )
-                        .is_ok()
-                });
-            let Some(certified) = certified else {
+            let source = match self.durable_autonomous_merge_source_for_lane_slot(
+                &world,
+                lane.id,
+                expected_height,
+                frozen_mode,
+            ) {
+                Ok(source) => source,
+                Err(_) => return false,
+            };
+            let Some(source) = source else {
                 continue;
             };
-            let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
-                &world,
-                certified.proposal.descriptor.proposal_height,
-                frozen_mode,
-            );
-            let Ok(expected_epoch) = expected_epoch else {
-                return false;
-            };
-            let ready = self
-                .kura
-                .durable_autonomous_lane_merge_source(
+            let descriptor = &source.bundle.certified.proposal.descriptor;
+            if descriptor.lane_id == lane.id
+                && descriptor.dataspace_id == lane.dataspace_id
+                && descriptor.lane_incarnation == incarnation
+                && descriptor.lane_block_height == expected_height
+                && lifecycle.lane_route_and_incarnation_matches(
                     lane.id,
-                    expected_height,
-                    network_id,
-                    expected_epoch,
+                    lane.dataspace_id,
+                    descriptor.proposal_height,
+                    descriptor.lane_incarnation,
                 )
-                .is_ok_and(|source| source.bundle.certified == certified);
-            if ready {
+                && Self::validate_merge_execution_predecessor_against_frontier(&world, descriptor)
+                    .is_ok()
+            {
                 return true;
             }
+            return false;
         }
         false
     }
@@ -32795,7 +32826,6 @@ impl State {
             );
             return None;
         }
-        let network_id = self.network_id;
         let world = self.world.view();
         let mut sources = Vec::new();
         for lane in nexus.lane_catalog.lanes() {
@@ -32817,25 +32847,43 @@ impl State {
                 }
             };
             let expected_height = frontier.0.checked_add(1)?;
-            let certified = self
-                .kura
-                .read_certified_lane_block_artifact(lane.id, expected_height)
-                .filter(|artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.lane_id == lane.id
-                        && descriptor.dataspace_id == lane.dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane.id,
-                            lane.dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                });
-            let Some(certified) = certified else {
-                continue;
+            let durable_source = match self.durable_autonomous_merge_source_for_lane_slot(
+                &world,
+                lane.id,
+                expected_height,
+                frozen_mode,
+            ) {
+                Ok(Some(source)) => source,
+                Ok(None) => continue,
+                Err(message) => {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        message,
+                        "certified lane block is missing its complete durable merge source"
+                    );
+                    return None;
+                }
             };
+            let certified = &durable_source.bundle.certified;
             let descriptor = &certified.proposal.descriptor;
+            if descriptor.lane_id != lane.id
+                || descriptor.dataspace_id != lane.dataspace_id
+                || descriptor.lane_incarnation != incarnation
+                || !lifecycle.lane_route_and_incarnation_matches(
+                    lane.id,
+                    lane.dataspace_id,
+                    descriptor.proposal_height,
+                    descriptor.lane_incarnation,
+                )
+            {
+                warn!(
+                    lane = %lane.id.as_u32(),
+                    lane_block_height = expected_height,
+                    "durable autonomous source differs from the active lane generation"
+                );
+                return None;
+            }
             if let Err(err) =
                 Self::validate_merge_execution_predecessor_against_frontier(&world, descriptor)
             {
@@ -32869,47 +32917,6 @@ impl State {
                 );
                 return None;
             }
-            let expected_epoch = match crate::sumeragi::epoch_for_height_from_world(
-                &world,
-                descriptor.proposal_height,
-                frozen_mode,
-            ) {
-                Ok(epoch) => epoch,
-                Err(error) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        %error,
-                        "deferring merge batch construction because the committed epoch schedule is invalid"
-                    );
-                    return None;
-                }
-            };
-            let durable_source = match self.kura.durable_autonomous_lane_merge_source(
-                lane.id,
-                expected_height,
-                network_id,
-                expected_epoch,
-            ) {
-                Ok(source) if source.bundle.certified == certified => source,
-                Ok(_) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        "durable autonomous merge source changed during batch construction"
-                    );
-                    return None;
-                }
-                Err(message) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        message,
-                        "certified lane block is missing its complete durable merge source"
-                    );
-                    return None;
-                }
-            };
             sources.push(MergeExecutionSource::from_durable(durable_source));
         }
         if sources.is_empty() {
@@ -34798,6 +34805,7 @@ impl State {
             }
             remaining_native_evidence_scan =
                 remaining_native_evidence_scan.saturating_sub(certified.len());
+            let mut durable_sources = Vec::new();
             for artifact in certified {
                 let descriptor = &artifact.proposal.descriptor;
                 let Some(expected_epoch) = artifact
@@ -34833,6 +34841,60 @@ impl State {
                         continue;
                     }
                 };
+                durable_sources.push(source);
+            }
+            let replica_request = remaining_native_evidence_scan
+                .saturating_add(1)
+                .min(crate::kura::MAX_CANONICAL_AUTONOMOUS_LANE_REPLICA_MATCH_RESULTS);
+            let replicas = self
+                .kura
+                .latest_canonical_autonomous_lane_replicas_matching(
+                    lane_id,
+                    replica_request,
+                    |source| {
+                        let descriptor = &source.bundle.certified.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                )
+                .map_err(MergeLedgerCommitError::Persistence)?;
+            if replicas.len() == replica_request
+                && replica_request < remaining_native_evidence_scan.saturating_add(1)
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "canonical autonomous replica Native AMX diagnostics saturated the passive per-lane scan bound of {replica_request}",
+                )));
+            }
+            if replicas.len() > remaining_native_evidence_scan {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "canonical autonomous replica Native AMX diagnostics exceed the hard evidence-scan cap of {SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX}",
+                )));
+            }
+            remaining_native_evidence_scan =
+                remaining_native_evidence_scan.saturating_sub(replicas.len());
+            durable_sources.extend(replicas);
+            let mut source_hashes_by_slot = BTreeMap::new();
+            for source in durable_sources {
+                let artifact = &source.bundle.certified;
+                let descriptor = &artifact.proposal.descriptor;
+                let expected_epoch = source.bundle.executable_payload().epoch;
+                let slot = (descriptor.lane_id, descriptor.lane_block_height);
+                if let Some(existing) = source_hashes_by_slot.insert(slot, source.bundle_hash) {
+                    if existing == source.bundle_hash {
+                        continue;
+                    }
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "private and canonical-replica Native AMX evidence conflict for lane {} height {}",
+                        descriptor.lane_id.as_u32(),
+                        descriptor.lane_block_height,
+                    )));
+                }
                 if pending_native_source_hashes.contains(&source.bundle_hash) {
                     continue;
                 }
@@ -35479,6 +35541,78 @@ impl State {
                     insert(incoming);
                 }
             }
+            let replica_limit = per_route_limit
+                .min(crate::kura::MAX_CANONICAL_AUTONOMOUS_LANE_REPLICA_MATCH_RESULTS);
+            let replicas = self
+                .kura
+                .latest_canonical_autonomous_lane_replicas_matching(
+                    lane_id,
+                    replica_limit,
+                    |source| {
+                        let descriptor = &source.bundle.certified.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                )
+                .wrap_err("failed to read canonical autonomous replica diagnostics")?;
+            if replicas.len() == replica_limit && replica_limit < per_route_limit {
+                return Err(eyre!(
+                    "canonical autonomous replica diagnostics saturated the passive per-lane scan bound of {replica_limit}"
+                ));
+            }
+            for source in replicas {
+                let bundle = &source.bundle;
+                let payload = bundle.executable_payload();
+                let frozen_mode = frozen_mode.ok_or_else(|| {
+                    eyre!(
+                        "autonomous diagnostics lack a signed consensus mode at committed height {authority_height}"
+                    )
+                })?;
+                let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+                    &authority.world,
+                    bundle.certified.proposal.descriptor.proposal_height,
+                    frozen_mode,
+                )
+                .map_err(|error| {
+                    eyre!(
+                        "cannot resolve canonical-replica diagnostic epoch at proposal height {}: {error}",
+                        bundle.certified.proposal.descriptor.proposal_height
+                    )
+                })?;
+                if payload.network_id != network_id || payload.epoch != expected_epoch {
+                    return Err(eyre!(
+                        "canonical autonomous replica diagnostics differ from the committed network or epoch"
+                    ));
+                }
+                let mut incoming =
+                    AutonomousLaneDiagnosticEvidence::from_proposal_and_reservations(
+                        &bundle.certified.proposal,
+                        &payload.reservation_keys,
+                    )
+                    .wrap_err(
+                        "canonical autonomous replica has invalid reservation diagnostics identity",
+                    )?;
+                incoming.payload_durable = true;
+                incoming.availability_certified =
+                    bundle.autonomous.availability_certificate.is_some();
+                incoming.lane_certified = true;
+                incoming.bundle_durable = true;
+                incoming.row.executable_payload_hash = Some(payload.payload_hash);
+                incoming.row.source_bundle_hash = Some(source.bundle_hash);
+                if payload.reservation_keys.len() != payload.entrypoints.len()
+                    || incoming.row.transaction_count
+                        != u64::try_from(payload.entrypoints.len()).unwrap_or(u64::MAX)
+                {
+                    incoming.conflict = true;
+                }
+                insert(incoming);
+            }
         }
         let pending_entries = self
             .kura
@@ -35529,18 +35663,38 @@ impl State {
                 incoming.lane_certified = true;
                 incoming.merge_candidate = !committed;
                 incoming.globally_committed = committed;
-                incoming.bundle_durable = self
+                let descriptor = &execution.proposal.descriptor;
+                let durable_source = if self
                     .kura
-                    .durable_autonomous_lane_merge_source(
-                        execution.proposal.descriptor.lane_id,
-                        execution.proposal.descriptor.lane_block_height,
-                        execution.autonomous_network_id,
-                        execution.autonomous_epoch,
+                    .read_certified_lane_block_artifact(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
                     )
-                    .is_ok_and(|source| {
-                        source.bundle_hash == execution.source_bundle_hash
-                            && source.source_bundle == execution.source_bundle
-                    });
+                    .is_some()
+                {
+                    self.kura
+                        .durable_autonomous_lane_merge_source(
+                            descriptor.lane_id,
+                            descriptor.lane_block_height,
+                            execution.autonomous_network_id,
+                            execution.autonomous_epoch,
+                        )
+                        .ok()
+                } else {
+                    self.kura
+                        .durable_canonical_autonomous_lane_replica(
+                            descriptor.lane_id,
+                            descriptor.lane_block_height,
+                            execution.autonomous_network_id,
+                            execution.autonomous_epoch,
+                        )
+                        .ok()
+                        .flatten()
+                };
+                incoming.bundle_durable = durable_source.is_some_and(|source| {
+                    source.bundle_hash == execution.source_bundle_hash
+                        && source.source_bundle == execution.source_bundle
+                });
                 let source_bundle_revalidates =
                     match crate::kura::Kura::decode_autonomous_lane_merge_bundle(
                         &execution.source_bundle,
@@ -49158,6 +49312,20 @@ impl<'state> StateBlock<'state> {
     }
     /// Create struct to store changes during transaction or trigger execution
     pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
+        self.transaction_with_operational_observability(true)
+    }
+    /// Create a transaction for deterministic consensus-effect simulation.
+    ///
+    /// The returned overlay preserves normal state semantics, including sequential
+    /// application into its parent block, but cannot publish process-local telemetry,
+    /// status, fee, or slash observability.
+    pub(crate) fn consensus_effects_transaction(&mut self) -> StateTransaction<'_, 'state> {
+        self.transaction_with_operational_observability(false)
+    }
+    fn transaction_with_operational_observability(
+        &mut self,
+        operational_observability: bool,
+    ) -> StateTransaction<'_, 'state> {
         let axt_current_slot =
             current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
         let implicit_account_creations_in_block_so_far = self.implicit_account_creations_in_block;
@@ -49165,7 +49333,7 @@ impl<'state> StateBlock<'state> {
             axt_active_lane_map_at_height(&self.nexus, self._curr_block.height().get());
         let mut world = self.world.trasaction_with_axt_lane_map(
             #[cfg(feature = "telemetry")]
-            Some(self.telemetry),
+            operational_observability.then_some(self.telemetry),
             self.nexus.lane_config.clone(),
             axt_current_slot,
             axt_lane_map,
@@ -49203,6 +49371,7 @@ impl<'state> StateBlock<'state> {
             query_ledger_time_ms: self.query_ledger_time_ms,
             #[cfg(feature = "telemetry")]
             telemetry: self.telemetry,
+            operational_observability,
             public_lane_staking_status_overlay:
                 crate::sumeragi::status::begin_public_lane_staking_status_overlay(),
             _curr_block: self._curr_block,
@@ -49242,8 +49411,9 @@ impl<'state> StateBlock<'state> {
             pending_settlement_records: BTreeMap::new(),
             pending_nexus_fee_records: BTreeMap::new(),
             pending_nexus_fee_event: None,
-            #[cfg(feature = "telemetry")]
-            pending_public_lane_slash_telemetry: Vec::new(),
+            block_pending_public_lane_slash_observability: &mut self
+                .pending_public_lane_slash_observability,
+            pending_public_lane_slash_observability: Vec::new(),
             #[cfg(feature = "telemetry")]
             pending_block_fee_amount: Quantity::zero(),
             zk_confidential_ops_in_tx: 0,
@@ -50929,6 +51099,7 @@ impl<'state> StateBlock<'state> {
             mut canonical_wsv_merge_commit_authorization,
             mut canonical_carrier_commit_metadata_authorization,
             pending_nexus_fee_receipt_source_ids,
+            pending_public_lane_slash_observability,
             #[cfg(feature = "telemetry")]
             pending_parliament_telemetry_events,
             merge_carrier_entrypoints,
@@ -51490,6 +51661,32 @@ impl<'state> StateBlock<'state> {
             }
         }
         drop(autoscale_lifecycle_guard);
+        if block_metadata_committed && !replay_prevalidation {
+            for observation in pending_public_lane_slash_observability {
+                let PendingPublicLaneSlashObservability {
+                    lane_id,
+                    previous_status,
+                    slashed_status,
+                    amount,
+                } = observation;
+                crate::sumeragi::status::record_public_lane_bonded_delta(lane_id, &amount, false);
+                crate::sumeragi::status::record_public_lane_slash(lane_id);
+                #[cfg(not(feature = "telemetry"))]
+                let _ = (previous_status, slashed_status);
+                #[cfg(feature = "telemetry")]
+                {
+                    state_ref.telemetry.record_public_lane_validator_status(
+                        lane_id,
+                        Some(&previous_status),
+                        &slashed_status,
+                    );
+                    state_ref
+                        .telemetry
+                        .decrease_public_lane_bonded(lane_id, &amount);
+                    state_ref.telemetry.record_public_lane_slash(lane_id);
+                }
+            }
+        }
         #[cfg(feature = "telemetry")]
         if block_metadata_committed && !replay_prevalidation {
             // Canonical Kura replay rebuilds exact gauges but must not count a
@@ -54164,6 +54361,170 @@ mod soracloud_sequence_watermark_state_tests {
             write_set.windows(field.len()).any(|window| window == field),
             "Native AMX write set must commit to the persisted Soracloud sequence watermark"
         );
+    }
+}
+#[cfg(test)]
+mod public_lane_slash_observability_staging_tests {
+    use super::*;
+    use crate::{kura::Kura, query::store::LiveQueryStore};
+    use iroha_data_model::{block::BlockHeader, nexus::PublicLaneValidatorStatus};
+    use nonzero_ext::nonzero;
+
+    fn test_state() -> State {
+        State::with_telemetry(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            StateTelemetry::new(
+                std::sync::Arc::new(crate::telemetry::Metrics::default()),
+                true,
+            ),
+        )
+    }
+
+    #[test]
+    fn accepted_transaction_moves_slash_observability_to_the_block_boundary() {
+        let state = test_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let lane_id = LaneId::new(71);
+        let slash_id = Hash::new("block-boundary-slash");
+        {
+            let mut transaction = block.transaction();
+            transaction.stage_public_lane_slash_observability(
+                lane_id,
+                PublicLaneValidatorStatus::Active,
+                PublicLaneValidatorStatus::Slashed(slash_id),
+                Quantity::from(5_u64),
+            );
+            assert_eq!(transaction.pending_public_lane_slash_observability.len(), 1);
+            transaction.apply();
+        }
+
+        assert_eq!(block.pending_public_lane_slash_observability.len(), 1);
+        let observation = &block.pending_public_lane_slash_observability[0];
+        assert_eq!(observation.lane_id, lane_id);
+        assert_eq!(
+            observation.previous_status,
+            PublicLaneValidatorStatus::Active
+        );
+        assert_eq!(
+            observation.slashed_status,
+            PublicLaneValidatorStatus::Slashed(slash_id)
+        );
+        assert_eq!(observation.amount, Quantity::from(5_u64));
+    }
+
+    #[test]
+    fn dropped_transaction_discards_slash_observability() {
+        let state = test_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        {
+            let mut transaction = block.transaction();
+            transaction.stage_public_lane_slash_observability(
+                LaneId::new(72),
+                PublicLaneValidatorStatus::Active,
+                PublicLaneValidatorStatus::Slashed(Hash::new("discarded-slash")),
+                Quantity::from(3_u64),
+            );
+        }
+
+        assert!(block.pending_public_lane_slash_observability.is_empty());
+    }
+
+    #[test]
+    fn consensus_effects_apply_sequential_state_without_operational_observability() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        let state = test_state();
+        #[cfg(feature = "telemetry")]
+        {
+            state.telemetry.set_block_gas_used(17);
+            state
+                .telemetry
+                .add_block_fee_amount(&Quantity::from(11_u64));
+        }
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.consensus_effects_probe_block(header);
+        let lane_id = LaneId::new(73);
+        let status_before = crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests();
+
+        {
+            let mut transaction = block.consensus_effects_transaction();
+            #[cfg(feature = "telemetry")]
+            assert!(transaction.world.telemetry.is_none());
+            *transaction
+                .world
+                .governance_last_unlock_sweep_height
+                .get_mut() = 9;
+            transaction.last_tx_gas_used = 101;
+            transaction.stage_nexus_fee_event(crate::sumeragi::status::NexusFeeEvent::Charged {
+                payer_kind: crate::sumeragi::status::NexusFeePayer::Payer,
+                payer_id: "scratch-payer".to_owned(),
+                amount: Quantity::from(1_u64),
+                asset_id: "scratch#fee".to_owned(),
+            });
+            #[cfg(feature = "telemetry")]
+            transaction.stage_block_fee_amount(Quantity::from(4_u64));
+            transaction.stage_public_lane_slash_observability(
+                lane_id,
+                PublicLaneValidatorStatus::Active,
+                PublicLaneValidatorStatus::Slashed(Hash::new("scratch-only slash")),
+                Quantity::from(7_u64),
+            );
+            transaction.apply_consensus_effects();
+        }
+
+        {
+            let mut transaction = block.consensus_effects_transaction();
+            assert_eq!(
+                *transaction.world.governance_last_unlock_sweep_height, 9,
+                "a later consensus-effect transaction must observe earlier scratch writes"
+            );
+            *transaction
+                .world
+                .governance_last_unlock_sweep_height
+                .get_mut() = 10;
+            transaction.apply_consensus_effects();
+        }
+        assert_eq!(*block.world.governance_last_unlock_sweep_height, 10);
+        assert_eq!(block.committed_fragments, 2);
+        assert!(block.pending_public_lane_slash_observability.is_empty());
+        assert!(
+            crate::sumeragi::status::nexus_staking_snapshot()
+                .lanes
+                .iter()
+                .all(|lane| lane.lane_id != lane_id)
+        );
+        assert_eq!(
+            crate::sumeragi::status::nexus_fee_snapshot().charged_total,
+            0
+        );
+        assert_eq!(
+            crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests(),
+            status_before,
+            "consensus-effect probes must not publish process-global status"
+        );
+        #[cfg(feature = "telemetry")]
+        {
+            let metrics = block.telemetry.metrics_ref();
+            assert_eq!(metrics.block_gas_used.get(), 17);
+            assert_eq!(metrics.block_fee_total_units.get(), 11);
+            assert_eq!(metrics.block_fee_total_scale.get(), 0);
+            assert_eq!(
+                metrics
+                    .nexus_public_lane_slash_total
+                    .with_label_values(&["73"])
+                    .get(),
+                0
+            );
+        }
+
+        drop(block);
+        let live_world = state.world.view();
+        assert_eq!(*live_world.governance_last_unlock_sweep_height, 0);
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
     }
 }
 #[cfg(all(test, feature = "telemetry"))]
@@ -60594,9 +60955,23 @@ impl StateTransaction<'_, '_> {
             .ok_or("authority lifecycle transition ordinal overflow")?;
         Ok((execution_identity, ordinal))
     }
-    /// Apply transaction making it's changes visible
-    #[allow(clippy::too_many_lines)]
+    /// Apply transaction making its changes visible.
     pub fn apply(self) {
+        self.apply_inner();
+    }
+    /// Apply deterministic consensus effects into a disposable or canonical block overlay.
+    ///
+    /// Consensus-effect transactions deliberately suppress process-local operational
+    /// observability while preserving every consensus-state write.
+    pub(crate) fn apply_consensus_effects(self) {
+        assert!(
+            !self.operational_observability,
+            "consensus effects must use an observability-suppressed transaction"
+        );
+        self.apply_inner();
+    }
+    #[allow(clippy::too_many_lines)]
+    fn apply_inner(self) {
         // NOTE: intentionally destruct self not to forget apply some fields
         let Self {
             committed_fragments,
@@ -60636,8 +61011,8 @@ impl StateTransaction<'_, '_> {
             pending_settlement_records,
             pending_nexus_fee_records,
             pending_nexus_fee_event,
-            #[cfg(feature = "telemetry")]
-            pending_public_lane_slash_telemetry,
+            block_pending_public_lane_slash_observability,
+            mut pending_public_lane_slash_observability,
             #[cfg(feature = "telemetry")]
             pending_block_fee_amount,
             fastpq_transcripts,
@@ -60656,6 +61031,7 @@ impl StateTransaction<'_, '_> {
             current_lane_id,
             #[cfg(feature = "telemetry")]
             telemetry,
+            operational_observability,
             public_lane_staking_status_overlay,
             ..
         } = self;
@@ -60683,43 +61059,45 @@ impl StateTransaction<'_, '_> {
                 settlement_accumulator.record_nexus_fee(tx_hash, record);
             }
         }
-        if let Some(event) = pending_nexus_fee_event {
-            match event {
-                crate::sumeragi::status::NexusFeeEvent::Charged {
-                    payer_kind,
-                    payer_id,
-                    amount,
-                    asset_id,
-                } => {
-                    let payer_kind_label = match payer_kind {
-                        crate::sumeragi::status::NexusFeePayer::Payer => "payer",
-                        crate::sumeragi::status::NexusFeePayer::Sponsor => "sponsor",
-                    };
-                    debug!(
-                        target: "economics",
-                        payer_kind = payer_kind_label,
-                        payer = %payer_id,
-                        fee_amount = %amount,
-                        asset = %asset_id,
-                        sink = %nexus.fees.fee_sink_account_id,
-                        "nexus fee charged"
-                    );
-                    crate::sumeragi::status::record_nexus_fee_event(
-                        crate::sumeragi::status::NexusFeeEvent::Charged {
-                            payer_kind,
-                            payer_id,
-                            amount,
-                            asset_id,
-                        },
-                    );
-                }
-                other => {
-                    crate::sumeragi::status::record_nexus_fee_event(other);
+        if operational_observability {
+            if let Some(event) = pending_nexus_fee_event {
+                match event {
+                    crate::sumeragi::status::NexusFeeEvent::Charged {
+                        payer_kind,
+                        payer_id,
+                        amount,
+                        asset_id,
+                    } => {
+                        let payer_kind_label = match payer_kind {
+                            crate::sumeragi::status::NexusFeePayer::Payer => "payer",
+                            crate::sumeragi::status::NexusFeePayer::Sponsor => "sponsor",
+                        };
+                        debug!(
+                            target: "economics",
+                            payer_kind = payer_kind_label,
+                            payer = %payer_id,
+                            fee_amount = %amount,
+                            asset = %asset_id,
+                            sink = %nexus.fees.fee_sink_account_id,
+                            "nexus fee charged"
+                        );
+                        crate::sumeragi::status::record_nexus_fee_event(
+                            crate::sumeragi::status::NexusFeeEvent::Charged {
+                                payer_kind,
+                                payer_id,
+                                amount,
+                                asset_id,
+                            },
+                        );
+                    }
+                    other => {
+                        crate::sumeragi::status::record_nexus_fee_event(other);
+                    }
                 }
             }
         }
         #[cfg(feature = "telemetry")]
-        {
+        if operational_observability {
             let cumulative = gas_used_in_block_so_far.saturating_add(last_tx_gas_used);
             telemetry.set_block_gas_used(cumulative);
             if !pending_block_fee_amount.is_zero() {
@@ -60766,18 +61144,14 @@ impl StateTransaction<'_, '_> {
         committed_topology.apply();
         block_hashes.apply();
         world.apply();
-        public_lane_staking_status_overlay.commit();
-        #[cfg(feature = "telemetry")]
-        for (lane_id, previous_status, slashed_status, amount) in
-            pending_public_lane_slash_telemetry
-        {
-            telemetry.record_public_lane_validator_status(
-                lane_id,
-                Some(&previous_status),
-                &slashed_status,
-            );
-            telemetry.decrease_public_lane_bonded(lane_id, &amount);
-            telemetry.record_public_lane_slash(lane_id);
+        if operational_observability {
+            public_lane_staking_status_overlay.commit();
+            if !pending_public_lane_slash_observability.is_empty() {
+                block_pending_public_lane_slash_observability
+                    .append(&mut pending_public_lane_slash_observability);
+            }
+        } else {
+            drop(public_lane_staking_status_overlay);
         }
     }
     /// Get and cache the `NumericSpec` for an asset definition within this transaction.

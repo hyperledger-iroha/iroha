@@ -11246,7 +11246,9 @@ mod evidence_http_tests {
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
     use iroha_data_model::block::{
-        consensus::{Evidence, EvidenceRecord, SumeragiV2EquivocationEvidence},
+        consensus::{
+            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
+        },
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
             ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
@@ -13661,10 +13663,7 @@ mod evidence_http_tests {
             recorded_at_height: 42,
             recorded_at_view: 5,
             recorded_at_ms: 123_456,
-            penalty_applied: false,
-            penalty_cancelled: false,
-            penalty_cancelled_at_height: None,
-            penalty_applied_at_height: None,
+            penalty_status: EvidencePenaltyStatus::Pending,
         }
     }
     #[test]
@@ -16651,7 +16650,6 @@ impl Client {
             timeout_ms = %self.transaction_status_timeout.as_millis(),
             "starting tx confirmation listener"
         );
-        let deadline = tokio::time::Instant::now() + self.transaction_status_timeout;
         thread::scope(|scope| {
             let client = self;
             scope
@@ -16697,45 +16695,61 @@ impl Client {
                         };
                         let poll_interval =
                             Self::tx_confirmation_poll_interval(client.transaction_status_timeout);
-                        let mut submit_result_receiver = Some(submit_result_receiver);
                         let hash_for_check = hash;
-                        let result = if let Some(ref mut iterator) = event_iterator {
-                            tokio::time::timeout_at(
-                                deadline,
-                                Self::listen_for_tx_confirmation_loop(
-                                    iterator,
-                                    hash,
-                                    max_queued_duration,
-                                    poll_interval,
-                                    submit_result_receiver.take(),
-                                    || {
-                                        client.transaction_confirmation_status_with_rejection_details(
-                                            hash_for_check,
-                                            entrypoint_hash,
-                                        )
-                                    },
-                                ),
-                            )
-                            .await
-                        } else {
-                            let mut empty_stream = stream::empty::<Result<EventBox>>();
-                            tokio::time::timeout_at(
-                                deadline,
-                                listen_for_tx_confirmation_stream_with_status_check(
-                                    &mut empty_stream,
-                                    hash,
-                                    max_queued_duration,
-                                    poll_interval,
-                                    submit_result_receiver.take(),
-                                    || {
-                                        client.transaction_confirmation_status_with_rejection_details(
-                                            hash_for_check,
-                                            entrypoint_hash,
-                                        )
-                                    },
-                                ),
-                            )
-                            .await
+                        let submission = await_transaction_submission_disposition(
+                            hash,
+                            submit_result_receiver,
+                        )
+                        .await;
+                        let result = match submission {
+                            Ok(()) => {
+                                // The status timeout measures confirmation after Torii has either
+                                // acknowledged admission or reported an indeterminate durable
+                                // admission. Listener setup and the separately bounded HTTP POST
+                                // must not consume this deadline or trigger status reads while the
+                                // POST is still pending.
+                                let deadline = tokio::time::Instant::now()
+                                    + client.transaction_status_timeout;
+                                if let Some(ref mut iterator) = event_iterator {
+                                    tokio::time::timeout_at(
+                                        deadline,
+                                        Self::listen_for_tx_confirmation_loop(
+                                            iterator,
+                                            hash,
+                                            max_queued_duration,
+                                            poll_interval,
+                                            None,
+                                            || {
+                                                client.transaction_confirmation_status_with_rejection_details(
+                                                    hash_for_check,
+                                                    entrypoint_hash,
+                                                )
+                                            },
+                                        ),
+                                    )
+                                    .await
+                                } else {
+                                    let mut empty_stream = stream::empty::<Result<EventBox>>();
+                                    tokio::time::timeout_at(
+                                        deadline,
+                                        listen_for_tx_confirmation_stream_with_status_check(
+                                            &mut empty_stream,
+                                            hash,
+                                            max_queued_duration,
+                                            poll_interval,
+                                            None,
+                                            || {
+                                                client.transaction_confirmation_status_with_rejection_details(
+                                                    hash_for_check,
+                                                    entrypoint_hash,
+                                                )
+                                            },
+                                        ),
+                                    )
+                                    .await
+                                }
+                            }
+                            Err(error) => Ok(Err(error)),
                         };
                         if let Some(iterator) = event_iterator {
                             let close_timeout = Self::tx_confirmation_connect_timeout(
@@ -16894,8 +16908,9 @@ impl Client {
             Ok(outcome) => outcome,
             Err(error) if is_final_tx_confirmation_error(&error) => return Err(error),
             Err(error) => {
+                let diagnostic = format!("{context}; last fallback status error: {error:#}");
                 return Err(unresolved_tx_confirmation_report(
-                    error.wrap_err(context),
+                    fallback_err.wrap_err(diagnostic),
                     outcome_unknown,
                 ));
             }
@@ -17309,7 +17324,7 @@ impl Client {
     ) -> DefaultRequestBuilder {
         // Public Torii ingress accepts a versioned SignedTransaction; internal
         // TransactionEntrypoint wrapping happens on the server boundary.
-        DefaultRequestBuilder::new(
+        let mut request = DefaultRequestBuilder::new(
             HttpMethod::POST,
             join_torii_url(&self.torii_url, torii_uri::TRANSACTION),
         )
@@ -17317,7 +17332,11 @@ impl Client {
         .header("Content-Type", APPLICATION_NORITO)
         .header("Accept", self.wire_format_preference.accept_header())
         .body(payload.as_bytes().to_vec())
-        .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES)
+        .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES);
+        if self.torii_request_timeout != Duration::ZERO {
+            request = request.timeout(self.torii_request_timeout);
+        }
+        request
     }
     /// Submits and waits for globally resolved `Applied` finality.
     /// Returns rejection reason if the transaction is rejected.
@@ -24146,6 +24165,31 @@ fn authoritative_tx_confirmation_result(
         | TxConfirmationStatus::Committed => None,
     }
 }
+async fn await_transaction_submission_disposition(
+    hash: HashOf<SignedTransaction>,
+    submit_result_receiver: tokio::sync::oneshot::Receiver<
+        Result<TransactionSubmissionDisposition>,
+    >,
+) -> Result<()> {
+    match submit_result_receiver.await {
+        Ok(Ok(TransactionSubmissionDisposition::Accepted)) => {
+            debug!(%hash, "transaction submission acknowledged; awaiting terminal status");
+            Ok(())
+        }
+        Ok(Ok(TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(context))) => {
+            debug!(
+                %hash,
+                entrypoint_hash = %context.identity.entrypoint_hash,
+                "QueuePlanSynced admission outcome is unknown; reconciling through authoritative status polling"
+            );
+            Ok(())
+        }
+        Ok(Err(error)) => Err(tx_confirmation_final_report(error)),
+        Err(_recv_error) => Err(tx_confirmation_final_report(eyre!(
+            "transaction submitter thread exited before reporting submit result"
+        ))),
+    }
+}
 #[allow(clippy::too_many_lines)]
 async fn listen_for_tx_confirmation_stream_with_status_check<S, F>(
     event_iterator: &mut S,
@@ -24166,6 +24210,9 @@ where
             "transaction confirmation requires authoritative global status polling"
         )));
     }
+    if let Some(submit_result_receiver) = submit_result_receiver {
+        await_transaction_submission_disposition(hash, submit_result_receiver).await?;
+    }
     // Keep track of the block height in which the transaction was approved
     // so we can later detect the corresponding block finalization event.
     let mut block_height = None;
@@ -24175,37 +24222,9 @@ where
     let mut poll = tokio::time::interval_at(first_poll_at, poll_interval);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut stream_open = true;
-    let mut submit_result_receiver = submit_result_receiver;
     loop {
         tokio::select! {
             biased;
-            submit_outcome = async {
-                submit_result_receiver
-                    .as_mut()
-                    .expect("submit result branch is gated by receiver presence")
-                    .await
-            }, if submit_result_receiver.is_some() => {
-                match submit_outcome {
-                    Ok(Ok(TransactionSubmissionDisposition::Accepted)) => {
-                        debug!(%hash, "transaction submission acknowledged; awaiting terminal status");
-                        submit_result_receiver = None;
-                    }
-                    Ok(Ok(TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(context))) => {
-                        debug!(
-                            %hash,
-                            entrypoint_hash = %context.identity.entrypoint_hash,
-                            "QueuePlanSynced admission outcome is unknown; reconciling through authoritative status polling"
-                        );
-                        submit_result_receiver = None;
-                    }
-                    Ok(Err(err)) => {
-                        return Err(tx_confirmation_final_report(err));
-                    }
-                    Err(_recv_err) => return Err(tx_confirmation_final_report(eyre!(
-                        "transaction submitter thread exited before reporting submit result"
-                    ))),
-                }
-            }
             () = async move {
                 let queued_at =
                     queued_at.expect("queued timeout branch is gated by queued_at presence");
@@ -24727,6 +24746,41 @@ mod tx_hash_tests {
             err.to_string().contains("fallback error"),
             "unexpected error: {err:?}"
         );
+    }
+    #[tokio::test]
+    async fn fallback_status_error_preserves_original_confirmation_error() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([24_u8; Hash::LENGTH]));
+        for original in [
+            "confirmation deadline elapsed",
+            "Transaction status not finalized",
+        ] {
+            let err = super::Client::resolve_global_status_fallback(
+                || Err(eyre!("429 Too Many Requests: proxy_capacity_exceeded")),
+                hash,
+                Duration::ZERO,
+                0,
+                "transaction confirmation timed out; fallback status check failed",
+                eyre!("{original}"),
+                None,
+            )
+            .await
+            .expect_err("an exhausted fallback must preserve the original confirmation error");
+            let report = format!("{err:#}");
+            assert!(
+                report.contains(original),
+                "missing original error: {report}"
+            );
+            assert!(
+                report.contains("fallback status check failed"),
+                "missing fallback context: {report}"
+            );
+            assert!(report.contains("429"), "missing HTTP diagnostic: {report}");
+            assert!(
+                report.contains("proxy_capacity_exceeded"),
+                "missing structured Torii diagnostic: {report}"
+            );
+        }
     }
     #[tokio::test]
     async fn unresolved_outcome_unknown_fallback_preserves_both_identities() {
@@ -25445,10 +25499,10 @@ mod tx_confirmation_stream_tests {
         assert!(status_checks > 0);
     }
     #[tokio::test]
-    async fn peer_local_terminal_event_racing_before_outcome_unknown_waits_for_global_status() {
+    async fn peer_local_terminal_event_does_not_poll_before_outcome_unknown() {
         use std::sync::{
             Arc,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicUsize, Ordering},
         };
 
         let hash: HashOf<SignedTransaction> =
@@ -25468,47 +25522,37 @@ mod tx_confirmation_stream_tests {
             .expect("queue peer-local rejection before submission result");
         let mut events = UnboundedReceiverStream::new(event_receiver);
         let (submit_result_sender, submit_result_receiver) = oneshot::channel();
-        let first_global_check = Arc::new(tokio::sync::Notify::new());
-        let globally_applied = Arc::new(AtomicBool::new(false));
         let status_checks = Arc::new(AtomicUsize::new(0));
         let producer = {
-            let first_global_check = Arc::clone(&first_global_check);
-            let globally_applied = Arc::clone(&globally_applied);
+            let status_checks = Arc::clone(&status_checks);
             tokio::spawn(async move {
-                first_global_check.notified().await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                assert_eq!(
+                    status_checks.load(Ordering::SeqCst),
+                    0,
+                    "neither a buffered peer-local event nor the poll timer may query global status before the submission disposition"
+                );
                 submit_result_sender
                     .send(Ok(
                         super::TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(
                             identity.into(),
                         ),
                     ))
-                    .expect("publish outcome-unknown after the local rejection");
-                globally_applied.store(true, Ordering::SeqCst);
-                event_sender
-                    .send(Ok(transaction_event(
-                        hash,
-                        None,
-                        TransactionStatus::Expired,
-                    )))
-                    .expect("wake reconciliation with a peer-local expiry");
+                    .expect("publish outcome-unknown after proving status remained gated");
             })
         };
+        let status_checks_for_poll = Arc::clone(&status_checks);
         let result = tokio::time::timeout(
             Duration::from_millis(200),
             listen_for_tx_confirmation_stream_with_status_check(
                 &mut events,
                 hash,
                 Duration::from_secs(1),
-                Duration::from_secs(1),
+                Duration::from_millis(1),
                 Some(submit_result_receiver),
                 || {
-                    status_checks.fetch_add(1, Ordering::SeqCst);
-                    if globally_applied.load(Ordering::SeqCst) {
-                        Ok(Some(super::TxConfirmationStatus::Applied))
-                    } else {
-                        first_global_check.notify_one();
-                        Ok(None)
-                    }
+                    status_checks_for_poll.fetch_add(1, Ordering::SeqCst);
+                    Ok(Some(super::TxConfirmationStatus::Applied))
                 },
             ),
         )
@@ -25518,8 +25562,8 @@ mod tx_confirmation_stream_tests {
         producer.await.expect("event producer");
         assert_eq!(result, hash);
         assert!(
-            status_checks.load(Ordering::SeqCst) >= 2,
-            "both peer-local terminal events must be checked against global state"
+            status_checks.load(Ordering::SeqCst) >= 1,
+            "the buffered peer-local rejection must be reconciled after outcome-unknown is reported"
         );
     }
     #[tokio::test]
@@ -25643,7 +25687,7 @@ mod tx_confirmation_stream_tests {
                 &mut events,
                 hash,
                 Duration::from_secs(1),
-                Duration::from_millis(100),
+                Duration::from_millis(1),
                 Some(submit_result_receiver),
                 || {
                     status_polled_clone.store(true, Ordering::SeqCst);
@@ -33502,6 +33546,106 @@ mod tests {
                     .contains("missing gas limit in fee payment intent")
             );
         });
+    }
+    #[test]
+    fn submit_transaction_blocking_applies_configured_torii_request_timeout() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                snapshots.lock().expect("snapshot lock").push(snapshot);
+                match path.as_str() {
+                    p if p == torii_uri::TRANSACTION => Ok(json_response(
+                        StatusCode::BAD_REQUEST,
+                        r#"{"code":"transaction_rejected","message":"timeout snapshot rejection"}"#,
+                    )),
+                    "/v1/pipeline/transactions/status" => {
+                        Ok(empty_response(StatusCode::NO_CONTENT))
+                    }
+                    other => panic!("unexpected request path: {other}"),
+                }
+            }
+        };
+        let configured_timeout = Duration::from_millis(1_234);
+        with_mock_http(responder, || {
+            let mut client =
+                client_with_base_url(Url::parse("http://127.0.0.1:1/").expect("valid URL"));
+            mark_data_model_compatible(&client);
+            client.torii_request_timeout = configured_timeout;
+            client.transaction_status_timeout = Duration::from_millis(50);
+            let transaction = empty_transaction(&client);
+            let _ = client
+                .submit_transaction_blocking(&transaction)
+                .expect_err("the mock rejection must terminate blocking submission");
+        });
+
+        let snapshots = snapshots.lock().expect("snapshot lock");
+        let submission = snapshots
+            .iter()
+            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .expect("blocking submission must issue one transaction POST");
+        assert_eq!(submission.timeout, Some(configured_timeout));
+    }
+    #[test]
+    fn blocking_confirmation_does_not_poll_before_submit_disposition() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let mut client =
+            client_with_base_url(Url::parse("http://127.0.0.1:1/").expect("valid URL"));
+        mark_data_model_compatible(&client);
+        client.transaction_status_timeout = Duration::from_millis(25);
+        client.torii_request_timeout = Duration::from_secs(1);
+        let transaction = empty_transaction(&client);
+        let hash = transaction.hash();
+        let status = PipelineTransactionStatusResponse::new(
+            hash.to_string(),
+            iroha_torii_shared::PipelineTransactionStatus {
+                kind: "Applied".to_owned(),
+                block_height: Some(1),
+            },
+            "global".to_owned(),
+            "state".to_owned(),
+        );
+        let status_body = norito::json::to_string(&status).expect("encode global status");
+        let post_completed = Arc::new(AtomicBool::new(false));
+        let status_checks = Arc::new(AtomicUsize::new(0));
+        let premature_status_checks = Arc::new(AtomicUsize::new(0));
+        let responder = {
+            let post_completed = Arc::clone(&post_completed);
+            let status_checks = Arc::clone(&status_checks);
+            let premature_status_checks = Arc::clone(&premature_status_checks);
+            move |snapshot: RequestSnapshot| match snapshot.url.path() {
+                path if path == torii_uri::TRANSACTION => {
+                    std::thread::sleep(Duration::from_millis(75));
+                    post_completed.store(true, Ordering::SeqCst);
+                    Ok(empty_response(StatusCode::ACCEPTED))
+                }
+                "/v1/pipeline/transactions/status" => {
+                    status_checks.fetch_add(1, Ordering::SeqCst);
+                    if !post_completed.load(Ordering::SeqCst) {
+                        premature_status_checks.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(json_response(StatusCode::OK, &status_body))
+                }
+                other => panic!("unexpected request path: {other}"),
+            }
+        };
+
+        let resolved = with_mock_http(responder, || {
+            client.submit_transaction_blocking(&transaction)
+        })
+        .expect("state-resolved Applied must finish blocking confirmation");
+        assert_eq!(resolved, hash);
+        assert!(
+            status_checks.load(Ordering::SeqCst) >= 1,
+            "the post-admission timeout fallback must query global status"
+        );
+        assert_eq!(
+            premature_status_checks.load(Ordering::SeqCst),
+            0,
+            "global status must remain gated until the transaction POST reports its disposition"
+        );
     }
     #[test]
     fn nonblocking_queue_plan_exact_outcome_unknown_is_structured_and_never_retried() {

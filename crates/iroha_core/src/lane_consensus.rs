@@ -887,6 +887,45 @@ impl LaneExecutablePayloadV1 {
         }
         Ok(attached)
     }
+    /// Rebind an advisory global carrier hint without changing the
+    /// producer-authenticated payload identity.
+    ///
+    /// Unlike [`Self::attach_global_hint_exact`], this helper accepts an
+    /// already hinted payload. Callers must independently prove that the new
+    /// hint names a protected or canonical carrier before using the returned
+    /// value; this method proves only that every authenticated payload byte is
+    /// unchanged.
+    pub(crate) fn rebind_global_hint_exact(
+        &self,
+        hint: LaneBlockProposalPayloadHintV1,
+        expected_network_id: NetworkId,
+        expected_epoch: u64,
+    ) -> Result<Self, LaneAutonomousArtifactError> {
+        self.validate(expected_network_id, expected_epoch)?;
+        if self.origin_proposal.payload_block_hint.is_none()
+            || hint.proposal_height == 0
+            || hint.proposal_height != self.origin_proposal.descriptor.proposal_height
+            || protocol_hash_bytes_are_zero(hint.proposal_block_hash.as_ref())
+        {
+            return Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint);
+        }
+        let mut rebound = self.clone();
+        rebound.origin_proposal.payload_block_hint = Some(hint);
+        rebound.validate(expected_network_id, expected_epoch)?;
+        let mut normalized = rebound.clone();
+        normalized.origin_proposal.payload_block_hint = self.origin_proposal.payload_block_hint;
+        if normalized != *self
+            || rebound.payload_hash != self.payload_hash
+            || rebound.producer_signature != self.producer_signature
+            || !rebound
+                .origin_proposal
+                .same_consensus_identity(&self.origin_proposal)
+            || rebound.reservation_keys != self.reservation_keys
+        {
+            return Err(LaneAutonomousArtifactError::PayloadEnvelopeMismatch);
+        }
+        Ok(rebound)
+    }
     /// Return whether a proposal is the same view-neutral lane payload domain.
     pub(crate) fn matches_proposal_static(&self, proposal: &LaneBlockProposalV1) -> bool {
         if validate_lane_block_proposal(proposal).is_err() {
@@ -2914,7 +2953,6 @@ impl LaneBlockSessionCache {
     }
     /// Return whether the proposal's consensus identity is cached, ignoring its
     /// advisory global-block recovery hint.
-    #[cfg(test)]
     pub(crate) fn contains_proposal_identity(&self, proposal: &LaneBlockProposalV1) -> bool {
         let key = LaneBlockSessionKey::from_proposal(proposal);
         self.sessions
@@ -6156,10 +6194,25 @@ mod tests {
         assert_eq!(attached.payload_hash, payload_hash);
         assert_eq!(attached.producer_signature, producer_signature);
         assert_eq!(attached.reservation_keys.encode(), reservation_bytes);
+        let rebound = payload
+            .rebind_global_hint_exact(replacement_hint, network_id, epoch)
+            .expect("a protected carrier may replace only the advisory hint");
+        assert_eq!(
+            rebound.origin_proposal.payload_block_hint,
+            Some(replacement_hint)
+        );
+        assert_eq!(rebound.payload_hash, payload_hash);
+        assert_eq!(rebound.producer_signature, producer_signature);
+        assert_eq!(rebound.reservation_keys.encode(), reservation_bytes);
         assert_eq!(
             payload.attach_global_hint_exact(replacement_hint, network_id, epoch),
             Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint),
             "an already hinted payload cannot be rebound to another carrier"
+        );
+        assert_eq!(
+            hint_free.rebind_global_hint_exact(replacement_hint, network_id, epoch),
+            Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint),
+            "the protected rebind path cannot bootstrap hint-free custody"
         );
         let mut zero_height = replacement_hint;
         zero_height.proposal_height = 0;
@@ -6175,7 +6228,7 @@ mod tests {
             Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint)
         );
         let mut legacy = payload.clone();
-        legacy.version = 1;
+        legacy.version = 0;
         assert_eq!(
             legacy.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::UnsupportedVersion)

@@ -55,7 +55,8 @@ use crate::{
         AutonomousLaneRetirementQueueSnapshotPhaseV1, AutonomousLaneRetirementSnapshotEvidenceV1,
         AutonomousLaneSlotRetirementV1, AutonomousLifecycleCursorRead,
         AutonomousLifecyclePendingCanonicalCarrierRecovery,
-        AutonomousLifecyclePendingTerminalOutcomeRecovery, CommitManifest,
+        AutonomousLifecyclePendingTerminalOutcomeRecovery,
+        AutonomousLifecycleReplicaQueueDispositionV1, CommitManifest,
         HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS, HistoricalAutonomousLaneRecoveryPersistOutcome,
         HistoricalAutonomousLaneRecoveryRecordV1, Kura, KuraV2CommitReceipt,
         NativeAmxParticipantApplicationEvidenceByteBudgetError,
@@ -801,18 +802,18 @@ pub(crate) fn retire_autonomous_lane_replica_with_queue_disposition(
     cursor_read: AutonomousLifecycleCursorRead,
     expected_network_id: iroha_data_model::NetworkId,
     expected_epoch: u64,
-) -> Result<(), V2ReservationLifecycleError> {
+) -> Result<AutonomousLifecycleReplicaQueueDispositionV1, V2ReservationLifecycleError> {
     let barrier = retirement.queue_release_barrier()?;
     let authorization = queue
         .authorize_autonomous_lane_replica_queue_disposition(&cursor_read, &barrier.ordered_keys)?;
-    kura.retire_autonomous_lane_slot_with_replica_queue_disposition(
+    let disposition = kura.retire_autonomous_lane_slot_with_replica_queue_disposition(
         retirement,
         expected_network_id,
         expected_epoch,
         cursor_read,
         authorization,
     )?;
-    Ok(())
+    Ok(disposition)
 }
 /// Receipt-bound startup form of replicated-custody terminalization.
 ///

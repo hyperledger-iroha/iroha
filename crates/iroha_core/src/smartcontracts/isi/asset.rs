@@ -4172,24 +4172,24 @@ pub mod isi {
                 .unwrap_or_else(|| amount.as_numeric().scale());
             let normalized_amount =
                 normalized_numeric_to_u64(amount.as_numeric(), normalized_scale);
-            let prechecked_delta = if source_policy == NumericAssetTransferSourcePolicy::StakingSlash
-            {
-                state_transaction
-                    .world
-                    .precheck_protocol_custody_transfer_delta_exact(
-                        &source_id,
-                        &destination_id,
-                        &amount,
-                    )?
-            } else {
-                state_transaction
-                    .world
-                    .precheck_numeric_asset_transfer_delta_exact(
-                        &source_id,
-                        &destination_id,
-                        &amount,
-                    )?
-            };
+            let prechecked_delta =
+                if source_policy == NumericAssetTransferSourcePolicy::StakingSlash {
+                    state_transaction
+                        .world
+                        .precheck_protocol_custody_transfer_delta_exact(
+                            &source_id,
+                            &destination_id,
+                            &amount,
+                        )?
+                } else {
+                    state_transaction
+                        .world
+                        .precheck_numeric_asset_transfer_delta_exact(
+                            &source_id,
+                            &destination_id,
+                            &amount,
+                        )?
+                };
             Ok(Self {
                 source_id,
                 destination_id,

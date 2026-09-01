@@ -374,6 +374,10 @@ const LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE: &str = "execution_inputs.norito";
 const LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE: &str = "execution_inputs.index";
 const AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE: &str = "merge_source_bundles_v1.norito";
 const AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE: &str = "merge_source_bundles_v1.index";
+const CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE: &str =
+    "canonical_autonomous_replicas_v1.norito";
+const CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE: &str =
+    "canonical_autonomous_replicas_v1.index";
 const LANE_READY_EXECUTION_INPUT_AUTHORIZATION_DOMAIN_V1: &[u8] =
     b"iroha:kura:lane-ready-execution-input-authorization:v1\0";
 const LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE: &str = "execution_preflights.norito";
@@ -3189,6 +3193,7 @@ impl Kura {
                 kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
                 kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
                 kura.recover_lane_block_execution_input_pairs_on_startup()?;
+                kura.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
                 kura.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
                 let verified_finality = kura.validate_v2_finality_inventory_on_startup(true)?;
                 kura.install_v2_startup_finality_verification_inventory(verified_finality);
@@ -5505,6 +5510,7 @@ impl Kura {
         }
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_block_execution_input_pairs_on_startup()?;
+        self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
         self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
@@ -5588,6 +5594,7 @@ impl Kura {
         }
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_block_execution_input_pairs_on_startup()?;
+        self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
         self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
@@ -7485,6 +7492,74 @@ impl Kura {
             file,
             metadata,
         })
+    }
+    /// Return whether a progress pair's immediate directory is durably absent
+    /// beneath an unchanged canonical parent.
+    ///
+    /// Non-owning validators legitimately have no committee-private lane
+    /// artifact directory. Read-only consumers must interpret that cold-start
+    /// state as an empty namespace without weakening the no-follow checks used
+    /// once the namespace exists. A missing, replaced, symlinked, or mutated
+    /// parent remains an error.
+    fn bound_progress_sidecar_directory_is_absent(
+        &self,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<bool> {
+        let sidecar_dir = data_path.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar data path has no parent",
+                ),
+                data_path.to_path_buf(),
+            )
+        })?;
+        if index_path.parent() != Some(sidecar_dir) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar files do not share one parent directory",
+                ),
+                index_path.to_path_buf(),
+            ));
+        }
+        let parent = sidecar_dir.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar directory has no parent",
+                ),
+                sidecar_dir.to_path_buf(),
+            )
+        })?;
+        let bound_parent = Self::open_bound_progress_directory(&self.store_root, parent)?;
+        let observed = Self::canonical_sidecar_directory_for(&self.store_root, sidecar_dir)?;
+        let opened_parent = secure_file_metadata::from_file(&bound_parent.file)
+            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        let (current_parent_path, current_parent) =
+            Self::canonical_sidecar_directory_for(&self.store_root, parent)?.ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "progress sidecar parent disappeared while attesting an empty namespace",
+                    ),
+                    parent.to_path_buf(),
+                )
+            })?;
+        if current_parent_path != bound_parent.canonical_path
+            || !Self::sidecar_directory_metadata_unchanged(&bound_parent.metadata, &opened_parent)
+            || !Self::sidecar_directory_metadata_unchanged(&bound_parent.metadata, &current_parent)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar parent changed while attesting an empty namespace",
+                ),
+                parent.to_path_buf(),
+            ));
+        }
+        Ok(observed.is_none())
     }
     fn open_bound_progress_child_directory(
         store_root: &Path,
@@ -22554,6 +22629,7 @@ impl BlockStoreCommitMarker {
     }
 }
 include!("kura/pipeline_and_lane_artifacts.rs");
+include!("kura/canonical_autonomous_replica.rs");
 impl Kura {
     fn now_unix_secs() -> u64 {
         SystemTime::now()
@@ -25328,6 +25404,9 @@ impl Kura {
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _sidecar_guard = self.sidecar_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
+            return Ok(None);
+        }
         let frontier_read = self.read_latest_certified_lane_block_frontier_locked(&entry, false)?;
         let Some(frontier_read) = frontier_read else {
             let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
@@ -25454,6 +25533,9 @@ impl Kura {
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _sidecar_guard = self.sidecar_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
+            return Ok(None);
+        }
         let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
         self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
             &namespace,
@@ -27654,7 +27736,32 @@ impl Kura {
                     payload.epoch,
                 )
                 .is_ok_and(|promoted| promoted == *payload);
-        if !exact && !promotable {
+        let rebindable = !exact
+            && existing_payload
+                .origin_proposal
+                .payload_block_hint
+                .is_some()
+            && payload.origin_proposal.payload_block_hint.is_some()
+            && existing_payload
+                .rebind_global_hint_exact(
+                    payload
+                        .origin_proposal
+                        .payload_block_hint
+                        .expect("checked present"),
+                    payload.network_id,
+                    payload.epoch,
+                )
+                .is_ok_and(|rebound| rebound == *payload);
+        let rebind_authorized = Self::autonomous_payload_custody_source_authorizes_hint_rebind(
+            authorization.custody.source,
+        );
+        if rebindable && !rebind_authorized {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous carrier-hint rebind lacks protected or canonical custody",
+            ));
+        }
+        if !exact && !promotable && !rebindable {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "authenticated payload custody conflicts with the current durable lane slot",
@@ -27830,7 +27937,11 @@ impl Kura {
         )?;
         let payload_record_matches = payload_record.as_ref().is_none_or(|record| {
             record.artifact.executable_payload == *payload
-                || Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(record, payload)
+                || Self::autonomous_lifecycle_bootstrap_is_authorized_hint_update(
+                    record,
+                    payload,
+                    bootstrap.body.custody.source,
+                )
         });
         if !payload_record_matches {
             return Err(Self::invalid_lane_artifact_error(
@@ -27883,24 +27994,38 @@ impl Kura {
             )),
         }
     }
-    fn autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+    fn autonomous_payload_custody_source_authorizes_hint_rebind(
+        source: AutonomousLifecyclePayloadCustodySourceV1,
+    ) -> bool {
+        matches!(
+            source,
+            AutonomousLifecyclePayloadCustodySourceV1::ProtectedCarrierReceive
+                | AutonomousLifecyclePayloadCustodySourceV1::CanonicalCarrierRepair
+                | AutonomousLifecyclePayloadCustodySourceV1::CanonicalHistoricalRecoveryRecord
+        )
+    }
+    fn autonomous_lifecycle_bootstrap_is_authorized_hint_update(
         record: &AutonomousLaneBlockDurableRecord,
         payload: &LaneExecutablePayloadV1,
+        custody_source: AutonomousLifecyclePayloadCustodySourceV1,
     ) -> bool {
         let durable = &record.artifact.executable_payload;
-        record.retirement.is_none()
-            && durable.origin_proposal.payload_block_hint.is_none()
-            && payload.origin_proposal.payload_block_hint.is_some()
-            && durable
-                .attach_global_hint_exact(
-                    payload
-                        .origin_proposal
-                        .payload_block_hint
-                        .expect("checked present"),
-                    payload.network_id,
-                    payload.epoch,
-                )
-                .is_ok_and(|promoted| promoted == *payload)
+        let Some(hint) = payload.origin_proposal.payload_block_hint else {
+            return false;
+        };
+        if record.retirement.is_some()
+            || custody_source == AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue
+        {
+            return false;
+        }
+        let updated = if durable.origin_proposal.payload_block_hint.is_none() {
+            durable.attach_global_hint_exact(hint, payload.network_id, payload.epoch)
+        } else if Self::autonomous_payload_custody_source_authorizes_hint_rebind(custody_source) {
+            durable.rebind_global_hint_exact(hint, payload.network_id, payload.epoch)
+        } else {
+            return false;
+        };
+        updated.is_ok_and(|updated| updated == *payload)
     }
     fn autonomous_lifecycle_bootstrap_authority_locked(
         &self,
@@ -28396,13 +28521,13 @@ impl Kura {
             .regular_sidecar_metadata(&cursor_path, parent)?
             .is_some();
         // A producer first persists hint-free Queue custody because the global
-        // carrier does not exist yet. Once that exact payload is protected by
-        // a live lock, a signed non-Queue bootstrap may promote only the
-        // advisory carrier hint while retaining the same current-generation
-        // Live cursor. Persisting the bootstrap makes this promotion
-        // restartable; every other replay around existing payload/cursor state
-        // remains forbidden.
-        let live_carrier_hint_promotion = if payload_custody && attempt_exists && cursor_exists {
+        // carrier does not exist yet. A protected or canonical higher-view
+        // carrier may also replace an earlier advisory hint for the exact same
+        // payload. The signed non-Queue bootstrap makes either update
+        // restartable while retaining the current-generation Live cursor;
+        // every other replay around existing payload/cursor state remains
+        // forbidden.
+        let live_carrier_hint_update = if payload_custody && attempt_exists && cursor_exists {
             let current = self.read_autonomous_lane_block_attempt_record_locked(
                 &entry,
                 descriptor.lane_id,
@@ -28412,19 +28537,20 @@ impl Kura {
                 executable_payload.epoch,
                 Some(pending_canonical_bytes),
             )?;
-            let strict_hint_promotion = current.as_ref().is_some_and(|record| {
-                Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+            let authorized_hint_update = current.as_ref().is_some_and(|record| {
+                Self::autonomous_lifecycle_bootstrap_is_authorized_hint_update(
                     record,
                     executable_payload,
+                    bootstrap.body.custody.source,
                 )
             });
-            strict_hint_promotion
+            authorized_hint_update
                 && self.classify_autonomous_lifecycle_bootstrap_locked(&entry, &bootstrap)?
                     == AutonomousLifecycleBootstrapRecoveryStage::LiveDurable
         } else {
             false
         };
-        if (attempt_exists || cursor_exists) && !live_carrier_hint_promotion {
+        if (attempt_exists || cursor_exists) && !live_carrier_hint_update {
             return Err(Self::invalid_lane_artifact_error(
                 path,
                 "autonomous lifecycle bootstrap cannot be replayed around existing payload or cursor state",
@@ -30160,17 +30286,32 @@ impl Kura {
                             "autonomous lane proposal-height attempt already contains conflicting bytes",
                         ));
                     };
-                    let promoted_payload = existing_artifact
-                        .executable_payload
-                        .attach_global_hint_exact(hint, expected_network_id, expected_epoch)
-                        .map_err(|error| {
-                            Self::invalid_lane_artifact_error(
-                                artifact_path.clone(),
-                                format!(
-                                    "autonomous lane attempt cannot be promoted to the carrier hint: {error}"
-                                ),
-                            )
-                        })?;
+                    let existing_payload = &existing_artifact.executable_payload;
+                    let promoted_payload = if existing_payload
+                        .origin_proposal
+                        .payload_block_hint
+                        .is_none()
+                    {
+                        existing_payload.attach_global_hint_exact(
+                            hint,
+                            expected_network_id,
+                            expected_epoch,
+                        )
+                    } else {
+                        existing_payload.rebind_global_hint_exact(
+                            hint,
+                            expected_network_id,
+                            expected_epoch,
+                        )
+                    }
+                    .map_err(|error| {
+                        Self::invalid_lane_artifact_error(
+                            artifact_path.clone(),
+                            format!(
+                                "autonomous lane attempt cannot adopt the protected carrier hint: {error}"
+                            ),
+                        )
+                    })?;
                     let mut promoted_artifact = existing_artifact;
                     promoted_artifact.executable_payload = promoted_payload;
                     if promoted_artifact != *artifact {
@@ -32233,26 +32374,40 @@ impl Kura {
                 return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted);
             }
             if existing_record.retirement.is_none()
-                && existing_payload
+                && let Some(hint) = payload.origin_proposal.payload_block_hint
+                && (existing_payload
                     .origin_proposal
                     .payload_block_hint
                     .is_none()
-                && let Some(hint) = payload.origin_proposal.payload_block_hint
+                    || mode.authorizes_global_hint_rebind())
             {
-                let promoted = existing_payload
-                    .attach_global_hint_exact(hint, expected_network_id, expected_epoch)
-                    .map_err(|error| {
-                        Self::invalid_lane_artifact_error(
-                            attempt_path.clone(),
-                            format!(
-                                "autonomous lane carrier-hint promotion is not byte exact: {error}"
-                            ),
-                        )
-                    })?;
+                let promoted = if existing_payload
+                    .origin_proposal
+                    .payload_block_hint
+                    .is_none()
+                {
+                    existing_payload.attach_global_hint_exact(
+                        hint,
+                        expected_network_id,
+                        expected_epoch,
+                    )
+                } else {
+                    existing_payload.rebind_global_hint_exact(
+                        hint,
+                        expected_network_id,
+                        expected_epoch,
+                    )
+                }
+                .map_err(|error| {
+                    Self::invalid_lane_artifact_error(
+                        attempt_path.clone(),
+                        format!("autonomous lane carrier-hint update is not byte exact: {error}"),
+                    )
+                })?;
                 if promoted != *payload {
                     return Err(Self::invalid_lane_artifact_error(
                         attempt_path,
-                        "autonomous lane carrier-hint promotion changed authenticated payload bytes",
+                        "autonomous lane carrier-hint update changed authenticated payload bytes",
                     ));
                 }
                 let state = AutonomousLaneBlockViewState::from_artifact(&existing_record.artifact);
@@ -33954,14 +34109,14 @@ impl Kura {
                                 == bootstrap.body.executable_payload
                     })
                 });
-                let payload_promotable = bootstrap.body.custody.source
-                    != AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue
-                    && attempts.get(&identity.0).is_some_and(|attempts_at_height| {
+                let payload_promotable =
+                    attempts.get(&identity.0).is_some_and(|attempts_at_height| {
                         attempts_at_height.iter().any(|(pointer, record)| {
                             pointer.proposal_height == identity.1
-                                && Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+                                && Self::autonomous_lifecycle_bootstrap_is_authorized_hint_update(
                                     record,
                                     &bootstrap.body.executable_payload,
+                                    bootstrap.body.custody.source,
                                 )
                         })
                     });
@@ -44661,6 +44816,7 @@ pub(crate) mod tests {
     include!("kura/tests/07j_certified_bundle_capacity_tests.rs");
     include!("kura/tests/07k_historical_atomic_temp_recovery_tests.rs");
     include!("kura/tests/07l_pending_canonical_capacity_tests.rs");
+    include!("kura/tests/07m_canonical_autonomous_replica_tests.rs");
     include!("kura/tests/08_lane_receipts_and_artifacts.rs");
     include!("kura/tests/08a_certified_lane_block_read_tests.rs");
     include!("kura/tests/08b_lane_history_compaction_capacity_tests.rs");

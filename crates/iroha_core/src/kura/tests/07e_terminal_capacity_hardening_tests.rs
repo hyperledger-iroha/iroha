@@ -1039,7 +1039,6 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
         })
         .collect::<Vec<_>>();
     let network_id = payloads[0].network_id;
-    let epoch = payloads[0].epoch;
     let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("canonical terminal capacity Kura");
     kura.bind_local_peer_id(local_peer.clone())
@@ -1080,7 +1079,13 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
     }
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
-    let raw_carrier = blocks.next();
+    let raw_carrier: Arc<SignedBlock> = Arc::new(
+        BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+            .chain(parent.header().height().get(), Some(parent.as_ref()))
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .unpack(|_| {})
+            .into(),
+    );
     let entrypoint_count = executions
         .iter()
         .map(|execution| u64::try_from(execution.entrypoints.len()).expect("entrypoint count fits"))
@@ -1112,8 +1117,7 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
         batch_hash: Hash::prehashed([0; Hash::LENGTH]),
     };
     batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
-    let mut merge_entry = sample_merge_entry(epoch);
-    merge_entry.epoch_id = epoch;
+    let mut merge_entry = sample_merge_entry(1);
     merge_entry.execution_batch = Some(batch);
     let bound_carrier = bind_merge_entry_to_carrier(raw_carrier, &mut merge_entry);
     let mut executed_carrier = bound_carrier.as_ref().clone();
@@ -1182,8 +1186,12 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
             );
             let source = Kura::autonomous_lifecycle_terminal_source_from_merge_receipt(&receipt)
                 .expect("derive capacity Pending source");
-            let pending = AutonomousLifecycleTerminalOutcomeV1::pending(binding.clone(), source)
-                .expect("construct capacity Pending outcome");
+            let pending = AutonomousLifecycleTerminalOutcomeV1::pending(
+                binding.clone(),
+                AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle,
+                source,
+            )
+            .expect("construct capacity Pending outcome");
             u64::try_from(
                 pending
                     .encode_framed()

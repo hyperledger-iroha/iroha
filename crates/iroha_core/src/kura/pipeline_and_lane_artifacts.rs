@@ -2029,6 +2029,41 @@ impl AutonomousLifecycleTerminalOutcomeSourceV1 {
         }
     }
 }
+/// Durable evidence basis for one terminal source outcome.
+///
+/// `OwnedLifecycle` retains the original attempt plus signed-cursor custody
+/// rules. A canonical noncommittee replica is a separate, merge-only basis: it
+/// binds the exact revalidated replica bytes and must never be interpreted as
+/// local lifecycle ownership or retirement authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+pub(crate) enum AutonomousLifecycleTerminalOutcomeBasisV1 {
+    /// The local validator owns the exact payload attempt and signed cursor.
+    #[codec(index = 0)]
+    OwnedLifecycle,
+    /// A noncommittee node holds only the exact canonical merge replica.
+    #[codec(index = 1)]
+    CanonicalReplica { replica_hash: Hash },
+}
+impl AutonomousLifecycleTerminalOutcomeBasisV1 {
+    fn validate_for_source(
+        self,
+        source: AutonomousLifecycleTerminalOutcomeSourceV1,
+    ) -> Result<(), &'static str> {
+        match self {
+            Self::OwnedLifecycle => Ok(()),
+            Self::CanonicalReplica { replica_hash }
+                if replica_hash.as_ref().iter().all(|byte| *byte == 0) =>
+            {
+                Err("canonical replica terminal basis has a zero replica hash")
+            }
+            Self::CanonicalReplica { .. } if !source.is_canonical_carrier() => {
+                Err("canonical replica terminal basis requires a canonical carrier source")
+            }
+            Self::CanonicalReplica { .. } => Ok(()),
+        }
+    }
+}
 /// Crash-safe publication stage for one exact terminal outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -2051,6 +2086,7 @@ pub(crate) enum AutonomousLifecycleTerminalOutcomeStageV1 {
 struct AutonomousLifecycleTerminalOutcomeBodyV1 {
     version: u16,
     binding: AutonomousLifecycleAttemptBindingV1,
+    basis: AutonomousLifecycleTerminalOutcomeBasisV1,
     source: AutonomousLifecycleTerminalOutcomeSourceV1,
     stage: AutonomousLifecycleTerminalOutcomeStageV1,
 }
@@ -2072,11 +2108,13 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
     const VERSION: u16 = 1;
     fn pending(
         binding: AutonomousLifecycleAttemptBindingV1,
+        basis: AutonomousLifecycleTerminalOutcomeBasisV1,
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
     ) -> Result<Self, &'static str> {
         let body = AutonomousLifecycleTerminalOutcomeBodyV1 {
             version: Self::VERSION,
             binding,
+            basis,
             source,
             stage: AutonomousLifecycleTerminalOutcomeStageV1::Pending {
                 reserved_terminal:
@@ -2098,6 +2136,7 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         let body = AutonomousLifecycleTerminalOutcomeBodyV1 {
             version: Self::VERSION,
             binding: self.body.binding.clone(),
+            basis: self.body.basis,
             source: self.body.source.clone(),
             stage: AutonomousLifecycleTerminalOutcomeStageV1::Complete {
                 terminal: AutonomousLifecycleStableStateV1::from_production(terminal),
@@ -2119,6 +2158,16 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         }
         body.binding.validate_structure()?;
         body.source.validate_structure()?;
+        body.basis.validate_for_source(body.source)?;
+        if matches!(
+            body.basis,
+            AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+        ) && body.binding.local_actor() != body.binding.producer_actor()
+        {
+            return Err(
+                "canonical replica terminal binding must use the producer as its logical witness",
+            );
+        }
         match body.stage {
             AutonomousLifecycleTerminalOutcomeStageV1::Pending { reserved_terminal } => {
                 if !reserved_terminal.is_terminal_outcome_pending_reservation() {
@@ -2207,6 +2256,9 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
     }
     const fn binding(&self) -> &AutonomousLifecycleAttemptBindingV1 {
         &self.body.binding
+    }
+    const fn basis(&self) -> AutonomousLifecycleTerminalOutcomeBasisV1 {
+        self.body.basis
     }
     fn source(&self) -> AutonomousLifecycleTerminalOutcomeSourceV1 {
         self.body.source.clone()
@@ -3482,7 +3534,7 @@ struct SidecarIndexLayout {
     aligned_len: u64,
 }
 #[derive(Debug, Clone, Copy)]
-enum IndexedSidecarRewrite {
+enum IndexedSidecarRewrite<'a> {
     RetainNewest {
         retention: NonZeroUsize,
         pinned_height: Option<u64>,
@@ -3499,6 +3551,9 @@ enum IndexedSidecarRewrite {
     RetainAfterTerminalFrontier {
         terminal_height: u64,
         retention: NonZeroUsize,
+        /// Exact evidence heights that remain live even below the ordinary
+        /// diagnostic window.
+        required_heights: &'a BTreeSet<u64>,
     },
 }
 #[derive(Debug, Clone, Copy)]
