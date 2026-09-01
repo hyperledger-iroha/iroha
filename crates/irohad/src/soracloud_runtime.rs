@@ -15102,7 +15102,7 @@ fn acquire_inrou_write_lease(file: &fs::File) -> io::Result<InrouWriteLease<'_>>
     const F_SETOWN: i32 = 8;
     const F_SETSIG: i32 = 10;
     inrou_linux_fcntl_with_arg(file, F_SETOWN, rustix::process::getpid().as_raw_pid())?;
-    inrou_linux_fcntl_with_arg(file, F_SETSIG, rustix::runtime::Signal::URG.as_raw())?;
+    inrou_linux_fcntl_with_arg(file, F_SETSIG, rustix::process::Signal::URG.as_raw())?;
     set_inrou_linux_file_lease(file, rustix::process::FlockType::WriteLock)?;
     if let Err(error) = verify_inrou_linux_file_lease(file, rustix::process::FlockType::WriteLock) {
         let _ = set_inrou_linux_file_lease(file, rustix::process::FlockType::Unlocked);
