@@ -1012,7 +1012,44 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
             ".github/workflows/sorafs-fixtures-nightly.yml",
             "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
         ),
-        (".github/workflows/sorafs-orchestrator-sdk.yml", "runs-on: macos-14"),
+        (".github/workflows/sorafs-orchestrator-sdk.yml", "runs-on: macos-26"),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "Xcode 26.6\\nBuild version 17F113",
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "bridge and job Xcode identities differ",
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "persist-credentials: false",
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "  sdk-apple-slice:",
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            '--produce-slice "${{ matrix.slice }}"',
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            '--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"',
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "sorafs-norito-bridge-apple-slice-${{ github.run_id }}-"
+            "${{ github.run_attempt }}-${{ matrix.slice }}",
+        ),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "bash ci/sdk_sorafs_orchestrator.sh"),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "  mobile-parity:"),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "  csharp-parity:"),
@@ -1082,6 +1119,175 @@ def test_validate_release_automation_rejects_fail_open_parity_jobs(
     assert source.count(needle) == 1
     workflow.write_text(source.replace(needle, replacement, 1), encoding="utf-8")
     with pytest.raises(ValueError, match="fail-open marker"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_exact_apple_slice_matrix(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = "          - ios-sim-x64\n"
+    assert source.count(marker) == 1
+    workflow.write_text(source.replace(marker, "", 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="matrix must be exactly"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "injected_step",
+    (
+        "      - run: nohup scripts/build_norito_xcframework.sh &\n",
+        "      - run: scripts/build_norito_xcframework.sh &\n",
+        "      - run: scripts/build_norito_xcframework.sh & wait\n",
+    ),
+)
+def test_validate_release_automation_rejects_background_apple_slice_builds(
+    tmp_path: Path,
+    injected_step: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = "      - name: Build authenticated NoritoBridge slice\n"
+    assert source.count(marker) == 1
+    workflow.write_text(
+        source.replace(marker, injected_step + marker, 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must not launch background work"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_explicit_slice_xcode_failures(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = "            || { echo 'unexpected DEVELOPER_DIR' >&2; exit 1; }\n"
+    assert source.count(marker) == 2
+    workflow.write_text(
+        source.replace(
+            marker,
+            "            || echo 'unexpected DEVELOPER_DIR' >&2\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Xcode guards must explicitly fail closed"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("mutation", ("remove", "duplicate"))
+def test_validate_release_automation_requires_exactly_five_bound_slice_downloads(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = (
+        "      - name: Download macOS x86_64 slice\n"
+        "        uses: actions/download-artifact@"
+        "d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n"
+        "        with:\n"
+        "          name: sorafs-norito-bridge-apple-slice-${{ github.run_id }}-"
+        "${{ github.run_attempt }}-macos-x64\n"
+        "          path: ${{ runner.temp }}/iroha-sorafs-apple-slices/macos-x64\n"
+    )
+    assert source.count(marker) == 1
+    replacement = "" if mutation == "remove" else marker + marker
+    workflow.write_text(source.replace(marker, replacement, 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="download exactly five"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_misbound_slice_download(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = (
+        "          path: ${{ runner.temp }}/"
+        "iroha-sorafs-apple-slices/macos-x64\n"
+    )
+    assert source.count(marker) == 1
+    workflow.write_text(
+        source.replace(
+            marker,
+            "          path: ${{ runner.temp }}/"
+            "iroha-sorafs-apple-slices/macos-arm64\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing exact `macos-x64` slice"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "injected_step",
+    (
+        "      - run: for slice in forbidden; do true; done\n",
+        "      - run: scripts/build_norito_xcframework.sh\n",
+        "      - run: cargo build -p connect_norito_bridge\n",
+        "      - run: cargo rustc -p connect_norito_bridge\n",
+        "      - run: rustc forged.rs\n",
+    ),
+)
+def test_validate_release_automation_rejects_same_runner_slice_compilation(
+    tmp_path: Path,
+    injected_step: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = "      - name: Assemble authenticated ABI-22 NoritoBridge XCFramework\n"
+    assert source.count(marker) == 1
+    workflow.write_text(
+        source.replace(
+            marker,
+            injected_step + marker,
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="assembly must remain compile-free"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "injected_step",
+    (
+        "      - run: nohup scripts/build_norito_xcframework.sh &\n",
+        "      - run: scripts/build_norito_xcframework.sh &\n",
+        "      - run: scripts/build_norito_xcframework.sh & wait\n",
+    ),
+)
+def test_validate_release_automation_rejects_background_apple_assembly(
+    tmp_path: Path,
+    injected_step: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = "      - name: Assemble authenticated ABI-22 NoritoBridge XCFramework\n"
+    assert source.count(marker) == 1
+    workflow.write_text(
+        source.replace(marker, injected_step + marker, 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must not launch background work"):
         automation.validate_release_automation(tmp_path)
 
 

@@ -224,10 +224,11 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
     assert workflow.count("ci/privacy_sdk_cargo_lockfile.sh provision-ci") == 4
     assert workflow.count("ci/privacy_sdk_cargo_lockfile.sh verify-ci") == 8
     assert workflow.count("run: cargo fetch --locked") == 5
-    assert workflow.count("cargo fetch --locked") == 6
+    assert workflow.count("cargo fetch --locked") == 7
     assert "Swatinem/rust-cache@" not in workflow
     assert workflow.count("id: privacy-python") == 2
     for setup_id, expected_count in {
+        "privacy-swift-slice-python": 1,
         "privacy-swift-python": 1,
         "privacy-jvm-python": 4,
         "privacy-csharp-python": 3,
@@ -237,8 +238,8 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         assert workflow.count(
             f"${{{{ steps.{setup_id}.outputs.python-path }}}}"
         ) == expected_count
-    assert workflow.count('python-version: "3.12"') == 6
-    assert workflow.count("update-environment: false") == 6
+    assert workflow.count('python-version: "3.12"') == 7
+    assert workflow.count("update-environment: false") == 7
     assert "cache: pip" not in workflow
     assert "cache-dependency-path: python/iroha_python/requirements-ci.lock" not in workflow
     for job, policy in cargo_jobs.items():
@@ -275,6 +276,11 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
             "Prime privacy N-API dependencies from the frozen lock",
             "run: ci/check_privacy_js_sdk.sh",
             "Revalidate frozen JavaScript lock inputs",
+        ),
+        "privacy_swift_sdk_slice": (
+            "Install Apple Rust targets and prime frozen slice dependencies",
+            "--produce-slice",
+            "Revalidate frozen privacy Swift slice inputs",
         ),
         "privacy_swift_sdk_parse": (
             "Install Apple Rust targets and prime frozen dependencies",

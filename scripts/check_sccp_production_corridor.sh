@@ -57,6 +57,12 @@ Environment:
                                The swift-sdk phase requires an existing
                                canonical absolute directory outside the Iroha
                                source tree and never reuses packaged bridge bytes.
+  SCCP_SWIFT_BRIDGE_MODE       Defaults to source-build. The authenticated CI
+                               slice assembler sets this to assembled so the
+                               Swift phase revalidates, but never rebuilds, the
+                               external XCFramework produced in the same run.
+  MOBILE_SDK_SWIFT_SCRATCH_DIR
+                               Optional existing external SwiftPM scratch root.
   NORITO_SKIP_BINDINGS_SYNC    Defaults to 1 for focused Rust validation.
   JAVA_HOME                    JDK 21 for Gradle phases. Falls back to
                                target/java/jdk-21/Contents/Home, then
@@ -1307,7 +1313,9 @@ PY
 ensure_swift_bridge_artifact() {
   local bridge_dir="$ROOT/dist/NoritoBridge.xcframework"
   local bridge_manifest="$bridge_dir/NoritoBridge.artifacts.json"
-  local canonical_target installed_targets target
+  local bridge_mode="${SCCP_SWIFT_BRIDGE_MODE:-source-build}"
+  local artifact_root="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}"
+  local canonical_artifact_root canonical_target installed_targets target
   local rust_targets=(
     aarch64-apple-ios
     aarch64-apple-ios-sim
@@ -1315,6 +1323,46 @@ ensure_swift_bridge_artifact() {
     aarch64-apple-darwin
     x86_64-apple-darwin
   )
+
+  if [[ "$bridge_mode" == assembled ]]; then
+    if [[ "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != 1 ]]; then
+      echo "assembled swift-sdk requires MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1." >&2
+      return 1
+    fi
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      run_cmd bash "$ROOT/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT" --apple-only
+      return 0
+    fi
+    if [[ "$artifact_root" != /* \
+      || ! -d "$artifact_root" \
+      || -L "$artifact_root" ]]; then
+      echo "assembled swift-sdk requires a canonical external MOBILE_SDK_APPLE_ARTIFACT_DIR." >&2
+      return 1
+    fi
+    canonical_artifact_root="$(cd "$artifact_root" && pwd -P)"
+    if [[ "$canonical_artifact_root" != "$artifact_root" ]]; then
+      echo "assembled swift-sdk artifact root must be free of symbolic traversal." >&2
+      return 1
+    fi
+    case "$canonical_artifact_root/" in
+      "$ROOT/"*)
+        echo "assembled swift-sdk artifact root must be outside the Iroha source tree." >&2
+        return 1
+        ;;
+    esac
+    bridge_dir="$canonical_artifact_root/NoritoBridge.xcframework"
+    bridge_manifest="$bridge_dir/NoritoBridge.artifacts.json"
+    if [[ ! -f "$bridge_dir/Info.plist" || ! -f "$bridge_manifest" ]]; then
+      echo "assembled NoritoBridge.xcframework is incomplete at $bridge_dir." >&2
+      return 1
+    fi
+    run_cmd bash "$ROOT/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT" --apple-only
+    return 0
+  fi
+  if [[ "$bridge_mode" != source-build ]]; then
+    echo "SCCP_SWIFT_BRIDGE_MODE must be exactly source-build or assembled." >&2
+    return 1
+  fi
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     run_cmd rustup target list --toolchain 1.93.1 --installed
@@ -1541,13 +1589,42 @@ phase_python_sdk() {
 }
 
 phase_swift_sdk() {
+  local canonical_scratch
+  local swift_test=(
+    swift test
+    --disable-automatic-resolution
+    --filter SccpV1Tests
+    --disable-swift-testing
+  )
   ensure_swift_bridge_artifact
   if [[ "$DRY_RUN" -ne 1 && ! -f "$ROOT/IrohaSwift/Package.resolved" ]]; then
     echo "swift-sdk requires the committed IrohaSwift/Package.resolved." >&2
     return 1
   fi
-  run_in_dir "$ROOT/IrohaSwift" \
-    swift test --disable-automatic-resolution --filter SccpV1Tests --disable-swift-testing
+  if [[ -n "${MOBILE_SDK_SWIFT_SCRATCH_DIR:-}" ]]; then
+    if [[ "$DRY_RUN" -ne 1 ]]; then
+      if [[ "$MOBILE_SDK_SWIFT_SCRATCH_DIR" != /* \
+        || ! -d "$MOBILE_SDK_SWIFT_SCRATCH_DIR" \
+        || -L "$MOBILE_SDK_SWIFT_SCRATCH_DIR" \
+        || ! -w "$MOBILE_SDK_SWIFT_SCRATCH_DIR" ]]; then
+        echo "swift-sdk requires an existing writable external SwiftPM scratch directory." >&2
+        return 1
+      fi
+      canonical_scratch="$(cd "$MOBILE_SDK_SWIFT_SCRATCH_DIR" && pwd -P)"
+      if [[ "$canonical_scratch" != "$MOBILE_SDK_SWIFT_SCRATCH_DIR" ]]; then
+        echo "swift-sdk scratch directory must be free of symbolic traversal." >&2
+        return 1
+      fi
+      case "$canonical_scratch/" in
+        "$ROOT/"*)
+          echo "swift-sdk scratch directory must be outside the Iroha source tree." >&2
+          return 1
+          ;;
+      esac
+    fi
+    swift_test+=(--scratch-path "$MOBILE_SDK_SWIFT_SCRATCH_DIR")
+  fi
+  run_in_dir "$ROOT/IrohaSwift" "${swift_test[@]}"
 }
 
 phase_kotlin_sdk() {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -26,6 +27,13 @@ PHASES = (
     "tvm-contract-smoke",
     "core-admission",
     "runtime-api",
+)
+APPLE_SLICES = (
+    "ios-arm64",
+    "ios-sim-arm64",
+    "ios-sim-x64",
+    "macos-arm64",
+    "macos-x64",
 )
 RETIRED_STEMS = (
     "source_bridge_evidence",
@@ -63,6 +71,24 @@ def workflow_job(text: str, name: str) -> str:
     )
     assert match is not None
     return match.group(0)
+
+
+def has_background_command(text: str) -> bool:
+    """Return whether a shell body contains a standalone background operator."""
+
+    return re.search(r"(?<![>&])&(?![>&])", text) is not None
+
+
+def has_native_compile(text: str) -> bool:
+    """Return whether an Apple assembler job directly invokes a compiler."""
+
+    return (
+        re.search(
+            r"(?m)(?:^|[ \t])cargo[ \t]+(?:build|rustc)(?:[ \t]|$)", text
+        )
+        is not None
+        or re.search(r"(?m)(?:^|[ \t])rustc(?:[ \t]|$)", text) is not None
+    )
 
 
 def test_runner_is_valid_bash_and_lists_exact_phase_set() -> None:
@@ -246,8 +272,24 @@ def test_swift_phase_always_builds_fresh_and_rejects_relative_cargo_target() -> 
     for retired in ("bridge_zip", "unzip", "target add", "return 0\n  fi\n\n  if [[ -f"):
         assert retired not in swift_builder
 
+    assembled_environment = os.environ.copy()
+    assembled_environment.update(
+        {
+            "MOBILE_SDK_APPLE_ARTIFACT_DIR": "/authenticated/apple-artifacts",
+            "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT": "1",
+            "MOBILE_SDK_SWIFT_SCRATCH_DIR": "/authenticated/swift-scratch",
+            "SCCP_SWIFT_BRIDGE_MODE": "assembled",
+        }
+    )
+    assembled_trace = dry_run("swift-sdk", env=assembled_environment).stdout
+    assert "scripts/check_mobile_sdk_artifacts.sh" in assembled_trace
+    assert "--apple-only" in assembled_trace
+    assert "scripts/build_norito_xcframework.sh" not in assembled_trace
+    assert "--scratch-path /authenticated/swift-scratch" in assembled_trace
+
     environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = "target/relative-is-forbidden"
+    environment["SCCP_SWIFT_BRIDGE_MODE"] = "source-build"
     result = subprocess.run(
         ["bash", str(RUNNER), "--phase", "swift-sdk"],
         cwd=ROOT,
@@ -259,6 +301,138 @@ def test_swift_phase_always_builds_fresh_and_rejects_relative_cargo_target() -> 
     )
     assert result.returncode != 0
     assert "requires CARGO_TARGET_DIR" in result.stderr
+
+
+def test_assembled_swift_mode_rejects_untrusted_artifact_roots(
+    tmp_path: Path,
+) -> None:
+    real_artifact = tmp_path / "real-artifact"
+    real_artifact.mkdir()
+    symlink_artifact = tmp_path / "symlink-artifact"
+    symlink_artifact.symlink_to(real_artifact, target_is_directory=True)
+    incomplete_artifact = tmp_path / "incomplete-artifact"
+    incomplete_artifact.mkdir()
+    cases = (
+        ({"MOBILE_SDK_APPLE_ARTIFACT_DIR": str(incomplete_artifact)}, "requires MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1"),
+        (
+            {
+                "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT": "1",
+                "MOBILE_SDK_APPLE_ARTIFACT_DIR": "relative-artifact",
+            },
+            "requires a canonical external MOBILE_SDK_APPLE_ARTIFACT_DIR",
+        ),
+        (
+            {
+                "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT": "1",
+                "MOBILE_SDK_APPLE_ARTIFACT_DIR": str(symlink_artifact),
+            },
+            "requires a canonical external MOBILE_SDK_APPLE_ARTIFACT_DIR",
+        ),
+        (
+            {
+                "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT": "1",
+                "MOBILE_SDK_APPLE_ARTIFACT_DIR": str(ROOT / "scripts"),
+            },
+            "must be outside the Iroha source tree",
+        ),
+        (
+            {
+                "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT": "1",
+                "MOBILE_SDK_APPLE_ARTIFACT_DIR": str(incomplete_artifact),
+            },
+            "assembled NoritoBridge.xcframework is incomplete",
+        ),
+    )
+    for overrides, expected in cases:
+        environment = os.environ.copy()
+        environment.update(overrides)
+        environment["SCCP_SWIFT_BRIDGE_MODE"] = "assembled"
+        result = subprocess.run(
+            ["bash", str(RUNNER), "--phase", "swift-sdk"],
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert result.returncode != 0
+        assert expected in result.stderr
+
+    invalid_environment = os.environ.copy()
+    invalid_environment["SCCP_SWIFT_BRIDGE_MODE"] = "invalid"
+    invalid = subprocess.run(
+        ["bash", str(RUNNER), "--phase", "swift-sdk"],
+        cwd=ROOT,
+        env=invalid_environment,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert invalid.returncode != 0
+    assert "must be exactly source-build or assembled" in invalid.stderr
+
+
+@pytest.mark.parametrize("scratch_kind", ("relative", "symlink", "in-tree"))
+def test_assembled_swift_mode_rejects_untrusted_scratch_roots(
+    tmp_path: Path,
+    scratch_kind: str,
+) -> None:
+    fixture_root = tmp_path / "fixture-repo"
+    fixture_scripts = fixture_root / "scripts"
+    fixture_scripts.mkdir(parents=True)
+    (fixture_root / "IrohaSwift").mkdir()
+    (fixture_root / "IrohaSwift" / "Package.resolved").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    fixture_runner = fixture_scripts / RUNNER.name
+    shutil.copy2(RUNNER, fixture_runner)
+    (fixture_scripts / "check_mobile_sdk_artifacts.sh").write_text(
+        "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
+    )
+
+    artifact_root = tmp_path / "authenticated-artifact"
+    bridge = artifact_root / "NoritoBridge.xcframework"
+    bridge.mkdir(parents=True)
+    (bridge / "Info.plist").write_text("fixture\n", encoding="utf-8")
+    (bridge / "NoritoBridge.artifacts.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    real_scratch = tmp_path / "real-scratch"
+    real_scratch.mkdir()
+    if scratch_kind == "relative":
+        scratch = "relative-scratch"
+        expected = "requires an existing writable external SwiftPM scratch directory"
+    elif scratch_kind == "symlink":
+        scratch_link = tmp_path / "scratch-link"
+        scratch_link.symlink_to(real_scratch, target_is_directory=True)
+        scratch = str(scratch_link)
+        expected = "requires an existing writable external SwiftPM scratch directory"
+    else:
+        scratch = str(fixture_scripts)
+        expected = "scratch directory must be outside the Iroha source tree"
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "MOBILE_SDK_APPLE_ARTIFACT_DIR": str(artifact_root),
+            "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT": "1",
+            "MOBILE_SDK_SWIFT_SCRATCH_DIR": scratch,
+            "SCCP_SWIFT_BRIDGE_MODE": "assembled",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(fixture_runner), "--phase", "swift-sdk"],
+        cwd=fixture_root,
+        env=environment,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert result.returncode != 0
+    assert expected in result.stderr
 
 
 def test_contract_phase_contains_only_direct_contract_smoke() -> None:
@@ -316,6 +490,9 @@ def test_production_attachments_never_enable_fixture_feature() -> None:
 
 def test_workflow_exposes_every_phase_and_strict_aggregate() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "permissions:\n  contents: read\n" in workflow
+    assert workflow.count("actions/checkout@") == 14
+    assert workflow.count("persist-credentials: false") == 14
     for phase in PHASES:
         assert f"          - {phase}" in workflow
         job = workflow_job(workflow, phase)
@@ -323,6 +500,8 @@ def test_workflow_exposes_every_phase_and_strict_aggregate() -> None:
             assert "needs: [runner-self-check, contract-smoke]" in job
             assert "bash scripts/contract_tvm_runner.sh" in job
             assert "tronbox/tre@sha256:" in job
+        elif phase == "swift-sdk":
+            assert "needs: [runner-self-check, swift-apple-slice]" in job
         else:
             assert "needs: runner-self-check" in job
             assert f"--phase {phase}" in job
@@ -343,29 +522,196 @@ def test_evidence_workflow_installs_rust_and_runs_real_corridor() -> None:
     assert "bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts" in job
 
 
-def test_swift_workflow_binds_the_exact_first_release_bridge_envelope() -> None:
-    job = workflow_job(WORKFLOW.read_text(encoding="utf-8"), "swift-sdk")
+def test_swift_workflow_splits_five_authenticated_apple_slices() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    producer = workflow_job(workflow, "swift-apple-slice")
+    manual_guard = (
+        "if: ${{ github.event_name != 'workflow_dispatch' || "
+        "github.event.inputs.phase == 'all' || "
+        "github.event.inputs.phase == 'swift-sdk' }}"
+    )
     for required in (
-        "actions/setup-python@",
+        manual_guard,
+        "needs: runner-self-check",
+        "runs-on: macos-26",
+        "timeout-minutes: 180",
+        "fail-fast: false",
+        "max-parallel: 5",
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "persist-credentials: false",
+        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
         'python-version: "3.12"',
-        "dtolnay/rust-toolchain@",
-        "toolchain: 1.93.1",
+        "DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+        "NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+        "NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}",
+        "Require the exact Xcode 26.6 release toolchain",
+        "Xcode 26.6\\nBuild version 17F113",
+        "unexpected DEVELOPER_DIR",
+        "bridge and job Xcode identities differ",
+        "unable to query Xcode identity",
+        "unexpected Xcode identity",
         "rustup target add --toolchain 1.93.1",
+        "x86_64-apple-darwin",
         "cargo fetch --locked",
+        "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32",
+        'cache-bin: "false"',
+        'cache-on-failure: "false"',
+        'cache-targets: "false"',
+        'key: "sccp-apple-slice-registry-v1"',
+        'artifact_dir="$RUNNER_TEMP/iroha-sccp-apple-slice-artifacts"',
+        'build_dir="$RUNNER_TEMP/iroha-sccp-apple-slice-build"',
+        'cargo_target="$RUNNER_TEMP/iroha-sccp-apple-slice-cargo"',
+        'slice_root="$RUNNER_TEMP/iroha-sccp-apple-slice-output"',
+        'chmod 0700 "$artifact_dir" "$build_dir" "$cargo_target" "$slice_root"',
         "CARGO_BUILD_JOBS=1",
         "CARGO_INCREMENTAL=0",
         "CARGO_NET_OFFLINE=true",
-        "CARGO_TARGET_DIR=$cargo_target",
         "MOBILE_SDK_PYTHON_BINARY=$mobile_python",
-        "NORITO_BRIDGE_BUILD_DIR=$bridge_build",
         "RUSTC=$rustc_path",
         "RUSTC_BOOTSTRAP=1",
         "RUSTDOC=$rustdoc_path",
-        "$RUNNER_TEMP/iroha-sccp-apple-cargo",
+        'chmod -R a-w "$GITHUB_WORKSPACE"',
+        '--produce-slice "${{ matrix.slice }}"',
+        '--slice-output-root "$NORITO_BRIDGE_SLICE_OUTPUT_ROOT"',
+        "sccp-norito-bridge-apple-slice-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slice }}",
+        "iroha-sccp-apple-slice-output/${{ matrix.slice }}/*",
+        "if-no-files-found: error",
+    ):
+        assert required in producer
+    matrix = producer.split("      matrix:\n", 1)[1].split("    env:\n", 1)[0]
+    assert tuple(
+        line.removeprefix("          - ")
+        for line in matrix.splitlines()
+        if line.startswith("          - ")
+    ) == APPLE_SLICES
+    assert producer.count("persist-credentials: false") == 1
+    assert producer.count("exit 1; }") == 4
+    assert producer.count("scripts/build_norito_xcframework.sh") == 1
+    assert "workspaces:" not in producer
+    assert 'cache-targets: "true"' not in producer
+    assert "--assemble-slices" not in producer
+    assert "nohup" not in producer
+    assert not has_background_command(producer)
+
+
+def test_swift_workflow_assembles_and_consumes_all_five_slices_without_building() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    job = workflow_job(workflow, "swift-sdk")
+    for required in (
+        "needs: [runner-self-check, swift-apple-slice]",
+        "runs-on: macos-26",
+        "timeout-minutes: 180",
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "persist-credentials: false",
+        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+        'python-version: "3.12"',
+        "DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+        "NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+        "NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}",
+        "Require the exact Xcode 26.6 release toolchain",
+        "Xcode 26.6\\nBuild version 17F113",
+        "unexpected DEVELOPER_DIR",
+        "bridge and job Xcode identities differ",
+        "unable to query Xcode identity",
+        "unexpected Xcode identity",
+        "toolchain: 1.93.1",
+        "rustup target add --toolchain 1.93.1",
+        "x86_64-apple-darwin",
+        "cargo fetch --locked",
+        "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32",
+        'cache-bin: "false"',
+        'cache-on-failure: "false"',
+        'cache-targets: "false"',
+        'key: "sccp-apple-assembly-registry-v1"',
+        'artifact_dir="$RUNNER_TEMP/iroha-sccp-apple-artifacts"',
+        'build_dir="$RUNNER_TEMP/iroha-sccp-apple-build"',
+        'cargo_target="$RUNNER_TEMP/iroha-sccp-apple-assembly-cargo"',
+        'slice_root="$RUNNER_TEMP/iroha-sccp-apple-slices"',
+        'swift_scratch_dir="$RUNNER_TEMP/iroha-sccp-swift-build"',
+        'chmod 0700 "$artifact_dir" "$build_dir" "$cargo_target" "$slice_root" "$swift_scratch_dir"',
+        "CARGO_BUILD_JOBS=1",
+        "CARGO_INCREMENTAL=0",
+        "CARGO_NET_OFFLINE=true",
+        "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir",
+        "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1",
+        "MOBILE_SDK_SWIFT_SCRATCH_DIR=$swift_scratch_dir",
+        "MOBILE_SDK_PYTHON_BINARY=$mobile_python",
+        "NORITO_BRIDGE_BUILD_DIR=$build_dir",
+        "NORITO_BRIDGE_SLICE_INPUT_ROOT=$slice_root",
+        "SCCP_SWIFT_BRIDGE_MODE=assembled",
+        "RUSTC=$rustc_path",
+        "RUSTC_BOOTSTRAP=1",
+        "RUSTDOC=$rustdoc_path",
+        'chmod -R a-w "$GITHUB_WORKSPACE"',
+        '--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"',
+        "bash scripts/check_mobile_sdk_artifacts.sh --apple-only",
         "bash scripts/check_sccp_production_corridor.sh --phase swift-sdk",
+        "tee dist/sccp-production-corridor/swift-sdk.log",
     ):
         assert required in job
+    for slice_id in APPLE_SLICES:
+        artifact_name = (
+            "sccp-norito-bridge-apple-slice-${{ github.run_id }}-"
+            f"${{{{ github.run_attempt }}}}-{slice_id}"
+        )
+        assert artifact_name in job
+        assert f"iroha-sccp-apple-slices/{slice_id}" in job
+    assert job.count("actions/download-artifact@") == len(APPLE_SLICES)
+    assert job.count("persist-credentials: false") == 1
+    assert job.count("exit 1; }") == 4
+    assert job.count("scripts/build_norito_xcframework.sh") == 1
+    assert "workspaces:" not in job
+    assert 'cache-targets: "true"' not in job
+    assert "--produce-slice" not in job
+    assert not has_native_compile(job)
+    assert "nohup" not in job
+    assert not has_background_command(job)
+    assert job.index("Require the exact Xcode 26.6 release toolchain") < job.index(
+        '--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"'
+    ) < job.index("bash scripts/check_sccp_production_corridor.sh --phase swift-sdk")
     assert "target/sccp-production-corridor" not in job
+
+
+@pytest.mark.parametrize(
+    ("job_name", "marker"),
+    (
+        (
+            "swift-apple-slice",
+            '            --slice-output-root "$NORITO_BRIDGE_SLICE_OUTPUT_ROOT"\n',
+        ),
+        (
+            "swift-sdk",
+            '            --assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"\n',
+        ),
+    ),
+)
+def test_swift_workflow_contract_detects_multiline_background_builds(
+    job_name: str,
+    marker: str,
+) -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert workflow.count(marker) == 1
+    for suffix in (" &\n", " & wait\n"):
+        changed = workflow.replace(marker, marker.rstrip("\n") + suffix, 1)
+        assert has_background_command(workflow_job(changed, job_name))
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        "cargo build -p connect_norito_bridge",
+        "cargo   rustc -p connect_norito_bridge",
+        "rustc forged.rs",
+    ),
+)
+def test_swift_workflow_contract_detects_direct_consumer_compilation(
+    command: str,
+) -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    marker = "      - name: Assemble authenticated SCCP NoritoBridge XCFramework\n"
+    assert workflow.count(marker) == 1
+    changed = workflow.replace(marker, f"      - run: {command}\n{marker}", 1)
+    assert has_native_compile(workflow_job(changed, "swift-sdk"))
 
 
 @pytest.mark.parametrize(
@@ -392,6 +738,9 @@ def test_workflow_guard_detects_weakened_attachment(mutation) -> None:
         (
             "needs: [runner-self-check, contract-smoke]" in workflow_job(changed, phase)
             if phase == "tvm-contract-smoke"
+            else "needs: [runner-self-check, swift-apple-slice]"
+            in workflow_job(changed, phase)
+            if phase == "swift-sdk"
             else "needs: runner-self-check" in workflow_job(changed, phase)
         )
         for phase in PHASES

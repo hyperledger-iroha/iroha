@@ -662,6 +662,9 @@ def _check_cargo_workflow(
     setup_python_action = (
         "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
     )
+    apple_setup_python_action = (
+        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6"
+    )
     setup_python_path = "${{ steps.privacy-python.outputs.python-path }}"
     install_run = "\n".join(
         (
@@ -711,6 +714,7 @@ def _check_cargo_workflow(
         ),
     }
     setup_python_ids = {
+        "privacy_swift_sdk_slice": "privacy-swift-slice-python",
         "privacy_swift_sdk_parse": "privacy-swift-python",
         "privacy_jvm_sdk_tests": "privacy-jvm-python",
         "privacy_csharp_sdk_tests": "privacy-csharp-python",
@@ -896,6 +900,18 @@ def _check_cargo_workflow(
                 ),
             },
         ),
+        "privacy_swift_sdk_slice": (
+            {
+                "name": "Install host-qualified privacy Swift slice Rust toolchain",
+                "shell": "bash",
+                "run": swift_install_run,
+            },
+            {
+                "name": "Install Apple Rust targets and prime frozen slice dependencies",
+                "env": (("RUSTC_BOOTSTRAP", '"1"'),),
+                "run": swift_fetch_run,
+            },
+        ),
         "privacy_swift_sdk_parse": (
             {
                 "name": "Install host-qualified privacy Swift Rust toolchain",
@@ -910,7 +926,8 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "2503e4f9423147a7673cd8a1d35f9b68e0ac5b914997f183b37033ad716ef28f",
+        "privacy_swift_sdk_slice": "9bb9b609507c77261670b58d6c6fe60dce63c015d4f4c756865da64346cf2d65",
+        "privacy_swift_sdk_parse": "03930a0eaf507bb21edaa58f8ecd623a5bd7300e186098268b8f98db6dbbf268",
         "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
         "privacy_csharp_sdk_tests": "3ba46c1d0cc8f20fed30bcfac3db06f36583eff0aa9eae5930cdb28fb792ade4",
         "privacy_javascript_sdk_tests": "81709f95b24685e6f4d7e2b73e65f89cc20e8926d2d39a3a8765c14d0da299b8",
@@ -940,11 +957,22 @@ def _check_cargo_workflow(
         and all(
             _exact_step(
                 step,
-                {**setup_python_step, "id": setup_python_ids[job_name]},
+                {
+                    **setup_python_step,
+                    "id": setup_python_ids[job_name],
+                    "uses": (
+                        apple_setup_python_action
+                        if job_name in {
+                            "privacy_swift_sdk_slice",
+                            "privacy_swift_sdk_parse",
+                        }
+                        else setup_python_action
+                    ),
+                },
             )
             for job_name, _, step in setup_python_steps
         ),
-        "all six native privacy jobs that consume Python must use only their "
+        "all seven native privacy jobs that consume Python must use only their "
         "exact pinned setup-python 3.12 step with update-environment false "
         "and no cache fields",
         errors,
@@ -1220,6 +1248,7 @@ def _check_cargo_workflow(
         errors,
     )
     expected_python_output_counts = {
+        "privacy-swift-slice-python": 1,
         "privacy-swift-python": 1,
         "privacy-jvm-python": 4,
         "privacy-csharp-python": 3,
@@ -1250,7 +1279,7 @@ def _check_cargo_workflow(
             unexpected_cargo_steps.append(f"{job_name}[{step_index}]")
     require(
         not rogue_cargo_jobs,
-        "Cargo policy commands may appear only in the six authenticated "
+        "Cargo policy commands may appear only in the seven authenticated "
         "privacy Cargo jobs; rogue jobs: "
         + ", ".join(sorted(rogue_cargo_jobs)),
         errors,

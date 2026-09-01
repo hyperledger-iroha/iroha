@@ -1220,6 +1220,105 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
         checker.probe_python_abi(complete, checker.REQUIRED_SYMBOLS["python"])
 
 
+def run_host_cargo_hermetic_probe(
+    *,
+    cargo_build_jobs: str | None,
+    profile: str = "host-environment-probe",
+    arguments: tuple[str, ...] = (),
+    executable: str = "/usr/bin/true",
+) -> subprocess.CompletedProcess[str]:
+    """Probe the closed host Cargo profile without starting a Cargo build."""
+
+    python = Path(sys.executable).resolve(strict=True)
+    environment = {
+        "CARGO": "/usr/bin/true",
+        "CARGO_HOME": "/tmp/reviewed-cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_TARGET_DIR": "/tmp/reviewed-cargo-target",
+        "HOME": "/tmp/reviewed-home",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "NORITO_SKIP_BINDINGS_SYNC": "1",
+        "PATH": "/usr/bin:/bin",
+        "RUSTC": "/usr/bin/false",
+        "RUSTUP_HOME": "/tmp/reviewed-rustup-home",
+        "TMPDIR": "/tmp",
+    }
+    if cargo_build_jobs is not None:
+        environment["CARGO_BUILD_JOBS"] = cargo_build_jobs
+    command = [
+        str(python),
+        "-I",
+        "-S",
+        str(REPO_ROOT / "scripts/run_mobile_hermetic_command.py"),
+        "--profile",
+        profile,
+    ]
+    for name, value in sorted(environment.items()):
+        command.extend(("--set", f"{name}={value}"))
+    command.extend(("--", executable, *arguments))
+    return subprocess.run(command, check=False, capture_output=True, text=True)
+
+
+def test_host_cargo_hermetic_profile_requires_serial_execution() -> None:
+    accepted = run_host_cargo_hermetic_probe(cargo_build_jobs="1")
+    assert accepted.returncode == 0, accepted.stderr
+
+    rejected_value = run_host_cargo_hermetic_probe(cargo_build_jobs="2")
+    assert rejected_value.returncode == 1
+    assert "CARGO_BUILD_JOBS must be exactly '1'" in rejected_value.stderr
+
+    rejected_missing = run_host_cargo_hermetic_probe(cargo_build_jobs=None)
+    assert rejected_missing.returncode == 1
+    assert "environment inventory is not exact" in rejected_missing.stderr
+    assert "missing=['CARGO_BUILD_JOBS']" in rejected_missing.stderr
+
+
+def test_host_cargo_authenticates_cargo_and_rejects_job_overrides() -> None:
+    accepted_build = run_host_cargo_hermetic_probe(
+        cargo_build_jobs="1",
+        profile="host-cargo",
+        arguments=("build", "--jobs", "1"),
+    )
+    assert accepted_build.returncode == 0, accepted_build.stderr
+    accepted_clean = run_host_cargo_hermetic_probe(
+        cargo_build_jobs="1",
+        profile="host-cargo",
+        arguments=("clean",),
+    )
+    assert accepted_clean.returncode == 0, accepted_clean.stderr
+
+    mismatched_executable = run_host_cargo_hermetic_probe(
+        cargo_build_jobs="1",
+        profile="host-cargo",
+        arguments=("build", "--jobs", "1"),
+        executable="/usr/bin/false",
+    )
+    assert mismatched_executable.returncode == 1
+    assert "does not match the authenticated CARGO executable" in mismatched_executable.stderr
+
+    rejected_arguments = (
+        ("build",),
+        ("build", "--jobs", "8"),
+        ("build", "--jobs=8"),
+        ("build", "-j", "8"),
+        ("build", "-j8"),
+        ("build", "--jobs", "1", "--jobs", "8"),
+        ("build", "--jobs", "1", "--config", "build.jobs=8"),
+        ("build", "--jobs", "1", "--config=build.jobs=8"),
+        ("clean", "--jobs", "1"),
+    )
+    for arguments in rejected_arguments:
+        rejected = run_host_cargo_hermetic_probe(
+            cargo_build_jobs="1",
+            profile="host-cargo",
+            arguments=arguments,
+        )
+        assert rejected.returncode == 1, arguments
+        assert "host-cargo" in rejected.stderr
+
+
 def run_gradle_jvm_hermetic_probe(
     tmp_path: Path,
     *,
@@ -1382,7 +1481,7 @@ def test_kotlin_localnet_release_lane_is_mandatory_and_payload_free() -> None:
         '--profile gradle-jvm-localnet',
         '--set "IROHA_LOCALNET_DIR=$LOCALNET_DIR"',
         '--set "IROHA_LOCALNET_TEST=1"',
-        '"$CARGO_BINARY" build --locked --offline --target "$HOST_TRIPLE"',
+        '"$CARGO_BINARY" build --locked --offline --jobs 1 --target "$HOST_TRIPLE"',
         "-p iroha_kagami -p irohad -p iroha_cli",
         "--peers 4",
         "verify_four_peer_localnet",
@@ -1458,6 +1557,9 @@ def test_jvm_native_gate_reuses_only_a_scrubbed_external_dependency_cache() -> N
     localnet_build = gate.index("building fresh four-peer localnet tools")
     assert cache_admission < scrub < snapshot < bridge_build < localnet_build
     assert gate.count("verify_external_cargo_target_tree") == 4
+    assert gate.count('--set "CARGO_BUILD_JOBS=1"') == 4
+    assert gate.count('    "CARGO_BUILD_JOBS",') == 1
+    assert 'cargo["CARGO_BUILD_JOBS"] != "1"' in gate
     for cargo_sink in (scrub, bridge_build, localnet_build):
         recursive_recheck = gate.index("verify_external_cargo_target_tree", cargo_sink)
         hermetic_run = gate.index('"$HERMETIC_RUNNER"', recursive_recheck)
@@ -2130,6 +2232,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
 
     mobile_checker = read("scripts/check_mobile_sdk_artifacts.sh")
     mobile_workflow = read(".github/workflows/mobile_sdk_artifacts.yml")
+    assert mobile_workflow.count("persist-credentials: false") == 5
     for apple_pytest_fixture in (
         "pytests/scripts/build_norito_xcframework_fallback_test.py",
         "pytests/scripts/norito_bridge_source_seal_test.py",
@@ -2155,6 +2258,25 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     android_job = mobile_workflow[android_job_start:publish_job_start]
     publish_job = mobile_workflow[publish_job_start:]
     assert "timeout-minutes: 180" in apple_slice_job
+    assert "runs-on: macos-26" in apple_slice_job
+    assert apple_slice_job.count("persist-credentials: false") == 1
+    assert apple_slice_job.count(
+        "      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer\n"
+    ) == 1
+    assert apple_slice_job.count(
+        "      NORITO_BRIDGE_DEVELOPER_DIR: "
+        "/Applications/Xcode_26.6.app/Contents/Developer\n"
+    ) == 1
+    assert "Xcode 26.6\\nBuild version 17F113" in apple_slice_job
+    assert (
+        '[[ "$DEVELOPER_DIR" == "/Applications/Xcode_26.6.app/Contents/Developer" ]] \\\n'
+        "            || { echo 'unexpected DEVELOPER_DIR' >&2; exit 1; }"
+    ) in apple_slice_job
+    assert (
+        '[[ "$NORITO_BRIDGE_DEVELOPER_DIR" == "$DEVELOPER_DIR" ]] \\\n'
+        "            || { echo 'bridge and job Xcode identities differ' >&2; exit 1; }"
+    ) in apple_slice_job
+    assert apple_slice_job.count("exit 1; }") == 4
     assert "max-parallel: 5" in apple_slice_job
     assert "fail-fast: false" in apple_slice_job
     for slice_id in (
@@ -2172,6 +2294,25 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert 'cache-on-failure: "false"' in apple_slice_job
     assert 'workspaces: ". ->' not in apple_slice_job
     assert "timeout-minutes: 300" in apple_job
+    assert "runs-on: macos-26" in apple_job
+    assert apple_job.count("persist-credentials: false") == 1
+    assert apple_job.count(
+        "      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer\n"
+    ) == 1
+    assert apple_job.count(
+        "      NORITO_BRIDGE_DEVELOPER_DIR: "
+        "/Applications/Xcode_26.6.app/Contents/Developer\n"
+    ) == 1
+    assert "Xcode 26.6\\nBuild version 17F113" in apple_job
+    assert (
+        '[[ "$DEVELOPER_DIR" == "/Applications/Xcode_26.6.app/Contents/Developer" ]] \\\n'
+        "            || { echo 'unexpected DEVELOPER_DIR' >&2; exit 1; }"
+    ) in apple_job
+    assert (
+        '[[ "$NORITO_BRIDGE_DEVELOPER_DIR" == "$DEVELOPER_DIR" ]] \\\n'
+        "            || { echo 'bridge and job Xcode identities differ' >&2; exit 1; }"
+    ) in apple_job
+    assert apple_job.count("exit 1; }") == 4
     assert "NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}" in apple_job
     assert '--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"' in apple_job
     assert apple_job.count("actions/download-artifact@") == 5
@@ -2180,6 +2321,23 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     )
     assert apple_slice_job.count(intermediate_prefix) == 1
     assert apple_job.count(intermediate_prefix) == 5
+    for slice_id in (
+        "ios-arm64",
+        "ios-sim-arm64",
+        "ios-sim-x64",
+        "macos-arm64",
+        "macos-x64",
+    ):
+        expected_download = (
+            f"          name: {intermediate_prefix}{slice_id}\n"
+            f"          path: ${{{{ runner.temp }}}}/iroha-mobile-apple-slices/{slice_id}\n"
+        )
+        assert apple_job.count(expected_download) == 1
+    assert apple_job.count("scripts/build_norito_xcframework.sh") == 1
+    assert "--produce-slice" not in apple_job
+    assert "for slice" not in apple_job
+    assert "nohup" not in apple_job
+    assert re.search(r"(?<![>&])&(?![>&])", apple_job) is None
     assert "mobile-sdk-apple-slice-" not in mobile_workflow
     assert "pattern: mobile-sdk-*" in publish_job
     assert "norito-bridge-apple-slice-" not in publish_job

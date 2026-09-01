@@ -654,8 +654,9 @@ run_adversarial_environment_self_test() {
     CC="$fake_bin/cc" \
     SDKROOT="$fake_home/forged-sdk" \
     "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
-      --profile host-cargo \
+      --profile host-environment-probe \
       --set "CARGO=$CARGO_BINARY" \
+      --set "CARGO_BUILD_JOBS=1" \
       --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
       --set "CARGO_INCREMENTAL=0" \
       --set "CARGO_NET_OFFLINE=true" \
@@ -718,6 +719,7 @@ cargo.pop("__CF_USER_TEXT_ENCODING", None)
 gradle.pop("__CF_USER_TEXT_ENCODING", None)
 expected_cargo = {
     "CARGO",
+    "CARGO_BUILD_JOBS",
     "CARGO_HOME",
     "CARGO_INCREMENTAL",
     "CARGO_NET_OFFLINE",
@@ -753,7 +755,8 @@ if set(cargo) != expected_cargo or set(gradle) != expected_gradle:
         f"(cargo={sorted(cargo)}, gradle={sorted(gradle)})"
     )
 if (
-    cargo["CARGO_NET_OFFLINE"] != "true"
+    cargo["CARGO_BUILD_JOBS"] != "1"
+    or cargo["CARGO_NET_OFFLINE"] != "true"
     or gradle["IROHA_REQUIRE_KAGEMUSHA_NATIVE"] != "1"
     or gradle["IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"] != "1"
 ):
@@ -789,6 +792,7 @@ scrub_external_workspace_outputs() {
   "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
     --profile host-cargo \
     --set "CARGO=$CARGO_BINARY" \
+    --set "CARGO_BUILD_JOBS=1" \
     --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
     --set "CARGO_INCREMENTAL=0" \
     --set "CARGO_NET_OFFLINE=true" \
@@ -908,6 +912,7 @@ verify_external_cargo_target_tree
 "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
   --profile host-cargo \
   --set "CARGO=$CARGO_BINARY" \
+  --set "CARGO_BUILD_JOBS=1" \
   --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
   --set "CARGO_INCREMENTAL=0" \
   --set "CARGO_NET_OFFLINE=true" \
@@ -920,7 +925,7 @@ verify_external_cargo_target_tree
   --set "RUSTC=$RUSTC_BINARY" \
   --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME" \
   --set "TMPDIR=$MOBILE_TMPDIR" \
-  -- "$CARGO_BINARY" build --locked --offline --target "$HOST_TRIPLE" \
+  -- "$CARGO_BINARY" build --locked --offline --jobs 1 --target "$HOST_TRIPLE" \
     -p connect_norito_bridge --lib
 verify_cargo_target_identity
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
@@ -1036,6 +1041,7 @@ verify_external_cargo_target_tree
 "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
   --profile host-cargo \
   --set "CARGO=$CARGO_BINARY" \
+  --set "CARGO_BUILD_JOBS=1" \
   --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
   --set "CARGO_INCREMENTAL=0" \
   --set "CARGO_NET_OFFLINE=true" \
@@ -1048,7 +1054,7 @@ verify_external_cargo_target_tree
   --set "RUSTC=$RUSTC_BINARY" \
   --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME" \
   --set "TMPDIR=$MOBILE_TMPDIR" \
-  -- "$CARGO_BINARY" build --locked --offline --target "$HOST_TRIPLE" \
+  -- "$CARGO_BINARY" build --locked --offline --jobs 1 --target "$HOST_TRIPLE" \
     -p iroha_kagami -p irohad -p iroha_cli \
     --bin kagami --bin iroha3d --bin iroha
 verify_cargo_target_identity

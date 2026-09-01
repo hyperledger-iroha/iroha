@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import fcntl
 import hashlib
 import importlib.util
@@ -25,7 +26,7 @@ VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
 NORMALIZED_ZIP_TIME = (2023, 11, 14, 22, 13, 20)
 KNOWN_FIXTURE_ARCHIVE_SHA256 = (
-    "e8a533b44cd78e37694908d8b6c3adb4b8ff09d2500faf6056405fa6a41372bc"
+    "aedf1d70ee5251ca1d69bc65eee70ed279cb62e3ecbc48e829bd971122663daa"
 )
 SLICE_METADATA = {
     "ios-arm64": ("ios", ["arm64"], None),
@@ -64,6 +65,56 @@ def load_validator_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def load_builder_nm_inspectors():
+    builder = (ROOT / "scripts/build_norito_xcframework.sh").read_text(
+        encoding="utf-8"
+    )
+    spans = (
+        (
+            "slice production",
+            "write_slice_bundle() {",
+            "<<'PY'\n",
+            "\nPY\n}",
+        ),
+        (
+            "slice assembly",
+            "assemble_slice_bundles() {",
+            "<<'PY_ASSEMBLE_SLICES'\n",
+            "\nPY_ASSEMBLE_SLICES\n}",
+        ),
+    )
+    inspectors = []
+    for label, owner_marker, start_marker, end_marker in spans:
+        owner_offset = builder.index(owner_marker)
+        start = builder.index(start_marker, owner_offset) + len(start_marker)
+        end = builder.index(end_marker, start)
+        snippet = builder[start:end]
+        tree = ast.parse(snippet, filename=f"build_norito_xcframework.sh:{label}")
+        definitions = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "inspect_required_defined_symbols"
+        ]
+        if len(definitions) != 1:
+            raise AssertionError(f"{label} must define exactly one nm inspector")
+        call_sites = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "inspect_required_defined_symbols"
+        ]
+        if len(call_sites) != 1:
+            raise AssertionError(f"{label} must call its nm inspector exactly once")
+        module = ast.Module(body=definitions, type_ignores=[])
+        ast.fix_missing_locations(module)
+        namespace = {"subprocess": subprocess}
+        exec(compile(module, f"<{label}-nm-inspector>", "exec"), namespace)
+        inspectors.append((label, namespace["inspect_required_defined_symbols"]))
+    return inspectors
 
 
 class ArchiveNoritoXcframeworkTests(unittest.TestCase):
@@ -828,6 +879,103 @@ print(f"{digest} {size}")
         )
         self.assertNotIn("write_embedded_manifest", builder)
         self.assertNotIn("after migration", builder)
+
+    def test_builder_inline_nm_inspectors_are_strict_and_fail_closed(self) -> None:
+        archive = Path("/fixture/libconnect_norito_bridge.a")
+        nm_binary = "/authenticated/Xcode/usr/bin/nm"
+        environment = {"LC_ALL": "C.UTF-8"}
+        required = {"connect_norito_bridge_abi_version"}
+
+        for label, inspector in load_builder_nm_inspectors():
+            with self.subTest(inspector=label, case="defined export"):
+                calls = []
+
+                def defined_export(command, **kwargs):
+                    calls.append((command, kwargs))
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout=b"_connect_norito_bridge_abi_version\n",
+                        stderr=b"",
+                    )
+
+                with mock.patch.object(subprocess, "run", side_effect=defined_export):
+                    self.assertEqual(
+                        inspector(
+                            nm_binary,
+                            archive,
+                            environment,
+                            required,
+                            "fixture nm inspection",
+                            "missing required exports: ",
+                        ),
+                        ["connect_norito_bridge_abi_version"],
+                    )
+                self.assertEqual(calls[0][0], [nm_binary, "-gUj", str(archive)])
+                self.assertIs(calls[0][1]["stdout"], subprocess.PIPE)
+                self.assertIs(calls[0][1]["stderr"], subprocess.PIPE)
+                self.assertFalse(calls[0][1]["check"])
+                self.assertEqual(calls[0][1]["env"], environment)
+
+            with self.subTest(inspector=label, case="undefined-only export"):
+                calls = []
+
+                def undefined_only(command, **kwargs):
+                    calls.append((command, kwargs))
+                    # A strict -U query suppresses the archive's undefined reference.
+                    # Any weaker flag set exposes it and would create a false positive.
+                    stdout = (
+                        b""
+                        if command[1] == "-gUj"
+                        else b"_connect_norito_bridge_abi_version\n"
+                    )
+                    return subprocess.CompletedProcess(
+                        command, 0, stdout=stdout, stderr=b""
+                    )
+
+                with (
+                    mock.patch.object(subprocess, "run", side_effect=undefined_only),
+                    self.assertRaisesRegex(SystemExit, "missing required exports"),
+                ):
+                    inspector(
+                        nm_binary,
+                        archive,
+                        environment,
+                        required,
+                        "fixture nm inspection",
+                        "missing required exports: ",
+                    )
+                self.assertEqual(calls[0][0], [nm_binary, "-gUj", str(archive)])
+
+            with self.subTest(inspector=label, case="nonzero nm"):
+                calls = []
+                stdout = b"visible stdout " + b"x" * 2048 + b"hidden stdout tail"
+                stderr = b"visible stderr " + b"y" * 2048 + b"hidden stderr tail"
+
+                def rejected(command, **kwargs):
+                    calls.append((command, kwargs))
+                    return subprocess.CompletedProcess(
+                        command, 23, stdout=stdout, stderr=stderr
+                    )
+
+                with mock.patch.object(subprocess, "run", side_effect=rejected):
+                    with self.assertRaises(SystemExit) as captured:
+                        inspector(
+                            nm_binary,
+                            archive,
+                            environment,
+                            required,
+                            "fixture nm inspection",
+                            "missing required exports: ",
+                        )
+                message = str(captured.exception)
+                self.assertEqual(calls[0][0], [nm_binary, "-gUj", str(archive)])
+                self.assertIn("exit status 23", message)
+                self.assertIn("visible stdout", message)
+                self.assertIn("visible stderr", message)
+                self.assertEqual(message.count("<truncated>"), 2)
+                self.assertNotIn("hidden stdout tail", message)
+                self.assertNotIn("hidden stderr tail", message)
 
     def test_checker_nested_source_seal_is_no_site_and_no_bytecode(self) -> None:
         checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(

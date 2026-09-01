@@ -701,20 +701,108 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert "swift test --filter SorafsOrchestratorParityTests" in parity_runner
     assert "swift test --filter CancelAssetLockV1Tests" in parity_runner
     assert "swift test --filter SorafsReferenceValidatorsTests" in parity_runner
-    assert "name: Build exact ABI-22 NoritoBridge XCFramework" in parity
+    assert "name: Build authenticated NoritoBridge slice" in parity
+    assert "name: Assemble authenticated ABI-22 NoritoBridge XCFramework" in parity
     assert "check_mobile_sdk_artifacts.sh --apple-only" in parity
+    slice_job = parity[
+        parity.index("  sdk-apple-slice:") : parity.index("  sdk-parity:")
+    ]
+    sdk_parity = parity[
+        parity.index("  sdk-parity:") : parity.index("  mobile-parity:")
+    ]
+    assert "runs-on: macos-26" in slice_job
+    assert "timeout-minutes: 180" in slice_job
+    assert slice_job.count("persist-credentials: false") == 1
+    assert "fail-fast: false" in slice_job
+    assert "max-parallel: 5" in slice_job
+    assert slice_job.count(
+        "      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer\n"
+    ) == 1
+    assert slice_job.count(
+        "      NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer\n"
+    ) == 1
+    assert "NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}" in slice_job
+    for slice_id in (
+        "ios-arm64",
+        "ios-sim-arm64",
+        "ios-sim-x64",
+        "macos-arm64",
+        "macos-x64",
+    ):
+        assert slice_job.count(f"          - {slice_id}\n") == 1
+    assert '--produce-slice "${{ matrix.slice }}"' in slice_job
+    assert '--slice-output-root "$NORITO_BRIDGE_SLICE_OUTPUT_ROOT"' in slice_job
+    artifact_prefix = (
+        "sorafs-norito-bridge-apple-slice-${{ github.run_id }}-"
+        "${{ github.run_attempt }}-"
+    )
+    assert slice_job.count(artifact_prefix) == 1
+    assert 'cache-targets: "false"' in slice_job
+    assert 'cache-on-failure: "false"' in slice_job
+    assert "Xcode 26.6\\nBuild version 17F113" in slice_job
+    assert "unexpected DEVELOPER_DIR" in slice_job
+    assert "bridge and job Xcode identities differ" in slice_job
+    assert slice_job.count("exit 1; }") == 4
+    assert "nohup" not in slice_job
+    assert re.search(r"(?<![>&])&(?![>&])", slice_job) is None
+    assert "chmod -R a-w" in slice_job
+    assert "runs-on: macos-26" in sdk_parity
+    assert "timeout-minutes: 300" in sdk_parity
+    assert "needs: sdk-apple-slice" in sdk_parity
+    assert sdk_parity.count("persist-credentials: false") == 1
+    assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in sdk_parity
+    assert "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1" in sdk_parity
+    assert sdk_parity.count(
+        "      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer\n"
+    ) == 1
+    assert sdk_parity.count(
+        "      NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer\n"
+    ) == 1
+    assert "Xcode 26.6\\nBuild version 17F113" in sdk_parity
+    assert "unexpected DEVELOPER_DIR" in sdk_parity
+    assert "bridge and job Xcode identities differ" in sdk_parity
+    assert sdk_parity.count("exit 1; }") == 4
+    assert "NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}" in sdk_parity
+    assert sdk_parity.count("actions/download-artifact@") == 5
+    assert sdk_parity.count(artifact_prefix) == 5
+    assert '--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"' in sdk_parity
+    assert "--produce-slice" not in sdk_parity
+    assert "for slice" not in sdk_parity
+    assert re.search(
+        r"(?m)(?:^|[ \t])cargo[ \t]+(?:build|rustc)(?:[ \t]|$)", sdk_parity
+    ) is None
+    assert re.search(r"(?m)(?:^|[ \t])rustc(?:[ \t]|$)", sdk_parity) is None
+    assert "nohup" not in sdk_parity
+    assert re.search(r"(?<![>&])&(?![>&])", sdk_parity) is None
+    assert 'cache-targets: "false"' in sdk_parity
+    assert 'cache-on-failure: "false"' in sdk_parity
+    assert sdk_parity.index("Require the exact Xcode 26.6 release toolchain") < (
+        sdk_parity.index("Download iOS arm64 slice")
+    )
+    assert sdk_parity.index("Download macOS x86_64 slice") < sdk_parity.index(
+        "Make reviewed Iroha source read-only for assembly"
+    )
+    assert sdk_parity.index("Make reviewed Iroha source read-only for assembly") < (
+        sdk_parity.index('--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"')
+    )
+    assert sdk_parity.index('--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"') < (
+        sdk_parity.index("Authenticate Apple native artifact")
+    )
+    assert sdk_parity.index("Authenticate Apple native artifact") < sdk_parity.index(
+        "Restore workspace write access for parity outputs"
+    )
     assert parity.count("IROHA_JS_NATIVE_BUILD_PROFILE:") == 1
     assert 'IROHA_JS_NATIVE_BUILD_PROFILE: "release"' in parity
-    assert parity.count('IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"') == 3
+    assert parity.count('IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"') == 4
     assert '"crates/iroha_js_host/**"' in parity
     assert '"python/iroha_torii_client/**"' in parity
     assert "bash ci/sdk_sorafs_orchestrator.sh" in parity
     assert "  mobile-parity:" in parity
     assert "  csharp-parity:" in parity
-    assert parity.count("name: Bind the canonical mobile Python") == 2
+    assert parity.count("name: Bind the canonical mobile Python") == 3
     assert parity.count(
         'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"'
-    ) == 2
+    ) == 3
     assert 'NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"' in parity
     assert 'NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"' in parity
     assert 'sdkmanager_status="${PIPESTATUS[1]}"' in parity

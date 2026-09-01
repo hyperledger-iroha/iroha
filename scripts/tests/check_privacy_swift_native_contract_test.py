@@ -89,7 +89,11 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         authenticated = "privacy Swift external Cargo.lock is not the frozen release lock"
         self.assertIn(authenticated, source)
         for invocation in (
+            'if [[ -z "${DEVELOPER_DIR:-}" ]]; then',
             'DEVELOPER_DIR="$(xcode-select -p)"',
+            "export DEVELOPER_DIR",
+            '"${NORITO_BRIDGE_DEVELOPER_DIR}" != "${DEVELOPER_DIR}"',
+            "privacy Swift Xcode does not match the authenticated Apple artifact toolchain",
             "xcodebuild -version",
             'bash "${APPLE_ARTIFACT_CHECKER}" --apple-only',
             '"${SWIFTC_BIN}" --version',
@@ -177,6 +181,8 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                 "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH": str(release),
                 "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN": str(fixture),
             }
+            environment.pop("DEVELOPER_DIR", None)
+            environment.pop("NORITO_BRIDGE_DEVELOPER_DIR", None)
             shutil.copy2(
                 REPO_ROOT / "ci/privacy_sdk_cargo_lockfile.sh",
                 root / "ci/privacy_sdk_cargo_lockfile.sh",
@@ -190,6 +196,42 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             calls = log.read_text(encoding="utf-8")
             for invocation in ("xcode-select", "xcodebuild", "artifact-checker", "swiftc", "swift"):
                 self.assertIn(invocation, calls)
+
+            log.unlink()
+            pinned_environment = {
+                **environment,
+                "DEVELOPER_DIR": "/Applications/Xcode_26.6.app/Contents/Developer",
+                "NORITO_BRIDGE_DEVELOPER_DIR": "/Applications/Xcode_26.6.app/Contents/Developer",
+            }
+            pinned = subprocess.run(
+                ["bash", str(gate)],
+                env=pinned_environment,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(pinned.returncode, 0, pinned.stderr)
+            pinned_calls = log.read_text(encoding="utf-8")
+            self.assertNotIn("xcode-select", pinned_calls)
+            for invocation in ("xcodebuild", "artifact-checker", "swiftc", "swift"):
+                self.assertIn(invocation, pinned_calls)
+
+            log.unlink()
+            mismatched_environment = {
+                **pinned_environment,
+                "NORITO_BRIDGE_DEVELOPER_DIR": "/Applications/Xcode_25.app/Contents/Developer",
+            }
+            rejected = subprocess.run(
+                ["bash", str(gate)],
+                env=mismatched_environment,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(rejected.returncode, 1)
+            self.assertIn(
+                "does not match the authenticated Apple artifact toolchain",
+                rejected.stderr,
+            )
+            self.assertFalse(log.exists(), "mismatched Xcode allowed tool execution")
 
             log.unlink(missing_ok=True)
             missing_fixture_environment = dict(environment)
@@ -497,16 +539,19 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             self.assertNotIn("offline lint", source.lower())
             self.assertNotIn("offline consumer compilation", source.lower())
 
-    def test_workflow_builds_authenticates_and_tests_exact_apple_artifact(self) -> None:
+    def test_workflow_produces_authenticated_slices_then_assembles_and_tests(self) -> None:
         source = read(".github/workflows/pr_privacy_sdk_guard.yml")
-        job = workflow_job(source, "privacy_swift_sdk_parse")
-        self.assertIn("Build authoritative Offline Cash Swift fixture", job)
-        self.assertIn("build_offline_cash_swift_fixture.sh", job)
-        self.assertIn("--lockfile-path", job)
-        self.assertIn("IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN=$fixture", job)
+        slice_job = workflow_job(source, "privacy_swift_sdk_slice")
+        assembly_job = workflow_job(source, "privacy_swift_sdk_parse")
+        self.assertIn("permissions:\n  contents: read", source)
+        self.assertIn('APPLE_PRIVACY_PRODUCTION_ENABLED: "false"', source)
+        self.assertIn("Build authoritative Offline Cash Swift fixture", assembly_job)
+        self.assertIn("build_offline_cash_swift_fixture.sh", assembly_job)
+        self.assertIn("--lockfile-path", assembly_job)
+        self.assertIn("IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN=$fixture", assembly_job)
         self.assertLess(
-            job.index("build_offline_cash_swift_fixture.sh"),
-            job.index("ci/check_privacy_swift_sdk.sh"),
+            assembly_job.index("build_offline_cash_swift_fixture.sh"),
+            assembly_job.index("ci/check_privacy_swift_sdk.sh"),
         )
         for trigger in (
             ".github/workflows/mobile_sdk_artifacts.yml",
@@ -542,36 +587,144 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "specs/sorafs_reference_sdk_plan.md",
         ):
             self.assertIn(f'      - "{trigger}"', source)
+        for job in (slice_job, assembly_job):
+            for marker in (
+                "runs-on: macos-26",
+                "timeout-minutes: 180",
+                "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "persist-credentials: false",
+                "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+                'python-version: "3.12"',
+                "update-environment: false",
+                "DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+                "NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+                "NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}",
+                "Bind reviewed Apple privacy mode",
+                'case "${APPLE_PRIVACY_PRODUCTION_ENABLED:-}" in',
+                "APPLE_PRIVACY_PRODUCTION_ENABLED must be exactly true or false",
+                'echo "PRIVACY_PRODUCTION_ENABLED=$APPLE_PRIVACY_PRODUCTION_ENABLED" >> "$GITHUB_ENV"',
+                "Require the exact Xcode 26.6 release toolchain",
+                "Xcode 26.6\\nBuild version 17F113",
+                "unexpected DEVELOPER_DIR",
+                "bridge and job Xcode identities differ",
+                "unable to query Xcode identity",
+                "unexpected Xcode identity",
+                "MOBILE_SDK_PYTHON_BINARY",
+                '"${HOME}/.cargo/bin/rustup" toolchain install',
+                '"1.93.1-aarch64-apple-darwin"',
+                "aarch64-apple-ios-sim",
+                "x86_64-apple-darwin",
+                "cargo fetch --locked",
+                "privacy-jvm-native-abi22-${{ github.sha }}",
+                "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH",
+                "SOURCE_DATE_EPOCH",
+                '[[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]',
+                "MOBILE_SDK_APPLE_ARTIFACT_DIR",
+                "NORITO_BRIDGE_OUT_DIR",
+                "NORITO_BRIDGE_BUILD_DIR",
+                'chmod -R a-w "$GITHUB_WORKSPACE"',
+                "scripts/build_norito_xcframework.sh",
+                'build_args+=(--privacy-production-enabled)',
+            ):
+                self.assertIn(marker, job)
+            for forbidden in (
+                "--allow-dirty-source",
+                "NORITO_BRIDGE_TEST_PREBUILT_SLICES",
+                "MOBILE_SDK_SKIP_BINARY_INSPECTION",
+                "NORITO_BRIDGE_PRESERVE_CARGO_TARGETS",
+            ):
+                self.assertNotIn(forbidden, job)
+            self.assertLess(
+                job.index("Require the exact Xcode 26.6 release toolchain"),
+                job.index("scripts/build_norito_xcframework.sh"),
+            )
+            self.assertLess(
+                job.index('chmod -R a-w "$GITHUB_WORKSPACE"'),
+                job.index("scripts/build_norito_xcframework.sh"),
+            )
+            self.assertEqual(job.count("exit 1; }"), 4)
+            self.assertEqual(job.count("persist-credentials: false"), 1)
+            self.assertEqual(job.count("scripts/build_norito_xcframework.sh"), 1)
+
+        self.assertIn("needs: privacy_jvm_sdk_tests", slice_job)
+        self.assertIn("fail-fast: false", slice_job)
+        self.assertIn("max-parallel: 5", slice_job)
+        for slice_id in (
+            "ios-arm64",
+            "ios-sim-arm64",
+            "ios-sim-x64",
+            "macos-arm64",
+            "macos-x64",
+        ):
+            self.assertEqual(slice_job.count(f"          - {slice_id}\n"), 1)
+        self.assertIn('--produce-slice "${{ matrix.slice }}"', slice_job)
+        self.assertIn(
+            '--slice-output-root "$NORITO_BRIDGE_SLICE_OUTPUT_ROOT"',
+            slice_job,
+        )
+        self.assertNotIn("--assemble-slices", slice_job)
+        self.assertIn("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", slice_job)
+        self.assertIn(
+            "name: privacy-swift-apple-slice-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slice }}",
+            slice_job,
+        )
+        self.assertIn(
+            "path: ${{ runner.temp }}/iroha-privacy-swift-slice-output/${{ matrix.slice }}/*",
+            slice_job,
+        )
+        self.assertIn("Revalidate frozen privacy Swift slice inputs", slice_job)
+        for job in (slice_job, assembly_job):
+            self.assertNotIn("nohup", job)
+            self.assertIsNone(re.search(r"(?<![>&])&(?![>&])", job))
+
+        self.assertIn("needs: privacy_swift_sdk_slice", assembly_job)
+        self.assertIn('--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"', assembly_job)
+        self.assertNotIn("--produce-slice", assembly_job)
+        self.assertNotIn("run: scripts/build_norito_xcframework.sh", assembly_job)
+        self.assertEqual(
+            assembly_job.count(
+                "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+            ),
+            6,
+        )
+        for slice_id in (
+            "ios-arm64",
+            "ios-sim-arm64",
+            "ios-sim-x64",
+            "macos-arm64",
+            "macos-x64",
+        ):
+            self.assertIn(
+                f"name: privacy-swift-apple-slice-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-{slice_id}",
+                assembly_job,
+            )
+            self.assertIn(
+                f"path: ${{{{ runner.temp }}}}/iroha-privacy-swift-slices/{slice_id}",
+                assembly_job,
+            )
         for marker in (
-            "runs-on: macos-14",
-            "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-            'python-version: "3.12"',
-            "update-environment: false",
-            "MOBILE_SDK_PYTHON_BINARY",
-            '"${HOME}/.cargo/bin/rustup" toolchain install',
-            '"1.93.1-aarch64-apple-darwin"',
-            "aarch64-apple-ios-sim",
-            "x86_64-apple-darwin",
-            "cargo fetch --locked",
-            "MOBILE_SDK_APPLE_ARTIFACT_DIR",
             "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1",
             "MOBILE_SDK_SWIFT_SCRATCH_DIR",
-            "NORITO_BRIDGE_OUT_DIR",
-            "NORITO_BRIDGE_BUILD_DIR",
-            'chmod -R a-w "$GITHUB_WORKSPACE"',
-            "scripts/build_norito_xcframework.sh",
-            "scripts/check_mobile_sdk_artifacts.sh --apple-only",
-            "python3 -I -B scripts/tests/check_privacy_swift_native_contract_test.py",
+            "NORITO_BRIDGE_SLICE_INPUT_ROOT",
+            '"$MOBILE_SDK_PYTHON_BINARY" -I -S -B scripts/tests/check_privacy_swift_native_contract_test.py',
+            "Build authoritative Offline Cash Swift fixture",
             "run: ci/check_privacy_swift_sdk.sh",
+            "Revalidate frozen Swift inputs and ABI22 artifacts",
+            "scripts/check_mobile_sdk_artifacts.sh --apple-only",
+            "NoritoBridge.xcframework/.privacy-production-enabled",
         ):
-            self.assertIn(marker, job)
-        for forbidden in (
-            "--allow-dirty-source",
-            "NORITO_BRIDGE_TEST_PREBUILT_SLICES",
-            "MOBILE_SDK_SKIP_BINARY_INSPECTION",
-            "NORITO_BRIDGE_PRESERVE_CARGO_TARGETS",
-        ):
-            self.assertNotIn(forbidden, job)
+            self.assertIn(marker, assembly_job)
+        background_mutation = assembly_job.replace(
+            '            "${build_args[@]}"\n',
+            '            "${build_args[@]}" & wait\n',
+            1,
+        )
+        self.assertNotEqual(background_mutation, assembly_job)
+        self.assertIsNotNone(re.search(r"(?<![>&])&(?![>&])", background_mutation))
+        self.assertLess(
+            assembly_job.index("Download iOS arm64 privacy Swift slice"),
+            assembly_job.index("--assemble-slices"),
+        )
 
 
 if __name__ == "__main__":

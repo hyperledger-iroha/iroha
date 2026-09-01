@@ -80,8 +80,9 @@ test_hermetic_command_environment() {
     CC="$TMP_DIR/forged-cc" \
     SDKROOT="$TMP_DIR/forged-sdk" \
     "$TEST_PYTHON_BINARY" -I -S -B "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
-      --profile host-cargo \
+      --profile host-environment-probe \
       --set "CARGO=/reviewed/cargo" \
+      --set "CARGO_BUILD_JOBS=1" \
       --set "CARGO_HOME=/reviewed/cargo-home" \
       --set "CARGO_INCREMENTAL=0" \
       --set "CARGO_NET_OFFLINE=true" \
@@ -110,6 +111,7 @@ for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
 environment.pop("__CF_USER_TEXT_ENCODING", None)
 expected = {
     "CARGO",
+    "CARGO_BUILD_JOBS",
     "CARGO_HOME",
     "CARGO_INCREMENTAL",
     "CARGO_NET_OFFLINE",
@@ -127,10 +129,12 @@ if set(environment) != expected:
     raise SystemExit(f"hermetic Cargo environment is not exact: {sorted(environment)}")
 if environment["CARGO_NET_OFFLINE"] != "true":
     raise SystemExit("hermetic Cargo environment is not offline")
+if environment["CARGO_BUILD_JOBS"] != "1":
+    raise SystemExit("hermetic host Cargo environment is not serialized")
 PY
   if rejected_output="$(
       "$TEST_PYTHON_BINARY" -I -S -B "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
-        --profile host-cargo \
+        --profile host-environment-probe \
         --set "RUSTFLAGS=forged" \
         -- "$probe" "$output" 2>&1
     )"; then

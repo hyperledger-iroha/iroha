@@ -58,6 +58,15 @@ def swift_job(workflow: str) -> str:
     return match.group(1)
 
 
+def swift_slice_job(workflow: str) -> str:
+    match = re.search(
+        r"(?ms)^  privacy_swift_sdk_slice:\n(.*?)(?=^  privacy_swift_sdk_parse:)",
+        workflow,
+    )
+    assert match is not None
+    return match.group(1)
+
+
 def require_fail_closed_tests(kotlin: str, java: str) -> None:
     assert "IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE" not in kotlin
     assert "IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE" not in java
@@ -332,42 +341,106 @@ def test_python_lane_authenticates_and_executes_real_pyo3_abi22() -> None:
     )
 
 
-def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi22() -> None:
+def test_swift_lanes_produce_slices_then_assemble_external_native_abi22() -> None:
     workflow = read(".github/workflows/pr_privacy_sdk_guard.yml")
-    job = swift_job(workflow)
-    assert "needs: privacy_jvm_sdk_tests" in job
-    assert "runs-on: macos-14" in job
-    assert "timeout-minutes: 180" in job
-    assert "dtolnay/rust-toolchain" not in job
-    assert '"1.93.1-aarch64-apple-darwin"' in job
-    assert "RUSTUP_TOOLCHAIN=1.93.1-aarch64-apple-darwin" in job
-    assert "python3 -I -S" not in job
-    assert "actions/download-artifact@" in job
-    assert FROZEN_LOCK_SHA256 in job
-    assert TRACKED_ROOT_LOCK_SHA256 in job
-    assert "not yet requalified" not in job
-    assert "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" in job
-    assert '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"' in job
-    assert "install -m 600" not in job
-    assert "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" in job
-    assert "NORITO_BRIDGE_OUT_DIR=" in job
-    assert "NORITO_BRIDGE_BUILD_DIR=" in job
-    assert "cargo fetch --locked" in job
-    fetch_step = job[job.index(
-        "- name: Install Apple Rust targets and prime frozen dependencies"
-    ) : job.index("- name: Bind the external privacy Swift Cargo envelope")]
-    assert 'RUSTC_BOOTSTRAP: "1"' in fetch_step
-    assert "chmod -R a-w" in job
-    assert "scripts/build_norito_xcframework.sh" in job
-    assert "run: ci/check_privacy_swift_sdk.sh" in job
-    assert "Revalidate frozen Swift inputs and ABI22 artifacts" in job
-    assert job.count("scripts/check_mobile_sdk_artifacts.sh --apple-only") == 1
+    slice_job = swift_slice_job(workflow)
+    assembly_job = swift_job(workflow)
+    assert "permissions:\n  contents: read" in workflow
+    assert 'APPLE_PRIVACY_PRODUCTION_ENABLED: "false"' in workflow
+    for job in (slice_job, assembly_job):
+        assert "runs-on: macos-26" in job
+        assert "timeout-minutes: 180" in job
+        assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in job
+        assert job.count("persist-credentials: false") == 1
+        assert "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1" in job
+        assert job.count(
+            "      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer\n"
+        ) == 1
+        assert job.count(
+            "      NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer\n"
+        ) == 1
+        assert job.count(
+            "      NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}\n"
+        ) == 1
+        assert "Bind reviewed Apple privacy mode" in job
+        assert 'case "${APPLE_PRIVACY_PRODUCTION_ENABLED:-}" in' in job
+        assert 'build_args+=(--privacy-production-enabled)' in job
+        assert "Xcode 26.6\\nBuild version 17F113" in job
+        assert "unexpected DEVELOPER_DIR" in job
+        assert "bridge and job Xcode identities differ" in job
+        assert job.count("exit 1; }") == 4
+        assert "dtolnay/rust-toolchain" not in job
+        assert '"1.93.1-aarch64-apple-darwin"' in job
+        assert "RUSTUP_TOOLCHAIN=1.93.1-aarch64-apple-darwin" in job
+        assert "python3 -I -S" not in job
+        assert "actions/download-artifact@" in job
+        assert FROZEN_LOCK_SHA256 in job
+        assert TRACKED_ROOT_LOCK_SHA256 in job
+        assert "not yet requalified" not in job
+        assert "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" in job
+        assert '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"' in job
+        assert '[[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]' in job
+        assert "install -m 600" not in job
+        assert "NORITO_BRIDGE_OUT_DIR=" in job
+        assert "NORITO_BRIDGE_BUILD_DIR=" in job
+        assert "cargo fetch --locked" in job
+        assert "chmod -R a-w" in job
+        assert job.count("scripts/build_norito_xcframework.sh") == 1
+        assert job.index("Require the exact Xcode 26.6 release toolchain") < job.index(
+            "scripts/build_norito_xcframework.sh"
+        )
+
+    assert "needs: privacy_jvm_sdk_tests" in slice_job
+    assert "max-parallel: 5" in slice_job
+    assert slice_job.count("          - ios-") == 3
+    assert slice_job.count("          - macos-") == 2
+    assert '--produce-slice "${{ matrix.slice }}"' in slice_job
+    assert "--assemble-slices" not in slice_job
+    assert "actions/upload-artifact@" in slice_job
+    assert (
+        "privacy-swift-apple-slice-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slice }}"
+        in slice_job
+    )
+    for job in (slice_job, assembly_job):
+        assert "nohup" not in job
+        assert re.search(r"(?<![>&])&(?![>&])", job) is None
+
+    assert "needs: privacy_swift_sdk_slice" in assembly_job
+    assert "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" in assembly_job
+    assert '--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"' in assembly_job
+    assert "--produce-slice" not in assembly_job
+    assert assembly_job.count("actions/download-artifact@") == 6
+    for slice_id in (
+        "ios-arm64",
+        "ios-sim-arm64",
+        "ios-sim-x64",
+        "macos-arm64",
+        "macos-x64",
+    ):
+        assert (
+            f"privacy-swift-apple-slice-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-{slice_id}"
+            in assembly_job
+        )
+        assert f"iroha-privacy-swift-slices/{slice_id}" in assembly_job
+    assert "run: ci/check_privacy_swift_sdk.sh" in assembly_job
+    assert "Build authoritative Offline Cash Swift fixture" in assembly_job
+    assert "Revalidate frozen Swift inputs and ABI22 artifacts" in assembly_job
+    assert assembly_job.count("scripts/check_mobile_sdk_artifacts.sh --apple-only") == 1
+    background_mutation = assembly_job.replace(
+        '            "${build_args[@]}"\n',
+        '            "${build_args[@]}" & wait\n',
+        1,
+    )
+    assert background_mutation != assembly_job
+    assert re.search(r"(?<![>&])&(?![>&])", background_mutation) is not None
 
     gate = read("ci/check_privacy_swift_sdk.sh")
     assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
     assert 'MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1"' in gate
     assert "must remain outside the source tree" in gate
-    assert "xcode-select -p" in gate
+    assert 'if [[ -z "${DEVELOPER_DIR:-}" ]]; then' in gate
+    assert 'DEVELOPER_DIR="$(xcode-select -p)"' in gate
+    assert "does not match the authenticated Apple artifact toolchain" in gate
     assert "xcodebuild -version" in gate
     assert 'bash "${APPLE_ARTIFACT_CHECKER}" --apple-only' in gate
     assert "--disable-automatic-resolution" in gate

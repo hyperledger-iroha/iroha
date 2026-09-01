@@ -118,6 +118,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Reject a noncanonical release tag before setup or build
         if: github.ref_type == 'tag'
         shell: bash
@@ -183,7 +185,7 @@ jobs:
 
   apple-slice:
     needs: checker-self-test
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -196,10 +198,14 @@ jobs:
           - macos-arm64
           - macos-x64
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
+      NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Bind reviewed Apple privacy mode
         shell: bash
         run: |
@@ -218,6 +224,17 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
+      - name: Require the exact Xcode 26.6 release toolchain
+        shell: bash
+        run: |
+          [[ "$DEVELOPER_DIR" == "/Applications/Xcode_26.6.app/Contents/Developer" ]] \
+            || { echo 'unexpected DEVELOPER_DIR' >&2; exit 1; }
+          [[ "$NORITO_BRIDGE_DEVELOPER_DIR" == "$DEVELOPER_DIR" ]] \
+            || { echo 'bridge and job Xcode identities differ' >&2; exit 1; }
+          xcode_identity="$(/usr/bin/xcodebuild -version)" \
+            || { echo 'unable to query Xcode identity' >&2; exit 1; }
+          [[ "$xcode_identity" == $'Xcode 26.6\nBuild version 17F113' ]] \
+            || { echo "unexpected Xcode identity: $xcode_identity" >&2; exit 1; }
       - name: Bind the canonical mobile Python
         shell: bash
         run: |
@@ -305,13 +322,17 @@ jobs:
 
   apple-mobile-sdk:
     needs: apple-slice
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 300
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
+      NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Bind reviewed Apple privacy mode
         shell: bash
         run: |
@@ -330,6 +351,17 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
+      - name: Require the exact Xcode 26.6 release toolchain
+        shell: bash
+        run: |
+          [[ "$DEVELOPER_DIR" == "/Applications/Xcode_26.6.app/Contents/Developer" ]] \
+            || { echo 'unexpected DEVELOPER_DIR' >&2; exit 1; }
+          [[ "$NORITO_BRIDGE_DEVELOPER_DIR" == "$DEVELOPER_DIR" ]] \
+            || { echo 'bridge and job Xcode identities differ' >&2; exit 1; }
+          xcode_identity="$(/usr/bin/xcodebuild -version)" \
+            || { echo 'unable to query Xcode identity' >&2; exit 1; }
+          [[ "$xcode_identity" == $'Xcode 26.6\nBuild version 17F113' ]] \
+            || { echo "unexpected Xcode identity: $xcode_identity" >&2; exit 1; }
       - name: Bind the canonical mobile Python
         shell: bash
         run: |
@@ -543,6 +575,8 @@ jobs:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Bind reviewed Android privacy mode
         shell: bash
         run: |
@@ -784,6 +818,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: mobile-sdk-*

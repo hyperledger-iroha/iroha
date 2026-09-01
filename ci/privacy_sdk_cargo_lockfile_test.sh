@@ -4310,26 +4310,30 @@ PYTHON_IMPORT_FALLBACK_PATH="${SOURCE_ROOT}/python/iroha_python/tests/package_im
 PYTHON_PYPROJECT_PATH="${SOURCE_ROOT}/python/iroha_python/pyproject.toml"
 [[ "$(grep -Fc 'ci/privacy_sdk_cargo_lockfile.sh provision-ci \' "${WORKFLOW_PATH}")" -eq 4 ]]
 [[ "$(grep -Fc 'ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}"' "${WORKFLOW_PATH}")" -eq 8 ]]
-[[ "$(grep -Fc 'python-version: "3.12"' "${WORKFLOW_PATH}")" -eq 6 ]]
+[[ "$(grep -Fc 'python-version: "3.12"' "${WORKFLOW_PATH}")" -eq 7 ]]
 [[ "$(grep -Fc 'id: privacy-python' "${WORKFLOW_PATH}")" -eq 2 ]]
+[[ "$(grep -Fc 'id: privacy-swift-slice-python' "${WORKFLOW_PATH}")" -eq 1 ]]
 [[ "$(grep -Fc 'id: privacy-swift-python' "${WORKFLOW_PATH}")" -eq 1 ]]
 [[ "$(grep -Fc 'id: privacy-jvm-python' "${WORKFLOW_PATH}")" -eq 1 ]]
 [[ "$(grep -Fc 'id: privacy-csharp-python' "${WORKFLOW_PATH}")" -eq 1 ]]
 [[ "$(grep -Fc 'id: privacy-js-python' "${WORKFLOW_PATH}")" -eq 1 ]]
-[[ "$(grep -Fc 'update-environment: false' "${WORKFLOW_PATH}")" -eq 6 ]]
+[[ "$(grep -Fc 'update-environment: false' "${WORKFLOW_PATH}")" -eq 7 ]]
 [[ "$(grep -Fc '${{ steps.privacy-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 8 ]]
+[[ "$(grep -Fc '${{ steps.privacy-swift-slice-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 1 ]]
 [[ "$(grep -Fc '${{ steps.privacy-swift-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 1 ]]
 [[ "$(grep -Fc '${{ steps.privacy-jvm-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 4 ]]
 [[ "$(grep -Fc '${{ steps.privacy-csharp-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 3 ]]
 [[ "$(grep -Fc '${{ steps.privacy-js-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 3 ]]
+[[ "$(grep -Fc '"$MOBILE_SDK_PYTHON_BINARY" -I -S -B scripts/tests/check_privacy_swift_native_contract_test.py' "${WORKFLOW_PATH}")" -eq 1 ]]
+! grep -Fq 'run: python3 -I -B scripts/tests/check_privacy_swift_native_contract_test.py' "${WORKFLOW_PATH}"
 if grep -Fq 'cache-dependency-path: python/iroha_python/requirements-ci.lock' \
   "${WORKFLOW_PATH}" || grep -Fq 'Swatinem/rust-cache@' "${WORKFLOW_PATH}"; then
   echo "privacy workflow retained a forbidden pip or Rust cache action" >&2
   exit 1
 fi
-[[ "$(grep -Fc 'cargo fetch --locked' "${WORKFLOW_PATH}")" -eq 6 ]]
-[[ "$(grep -Fc 'RUSTUP_DIST_SERVER="https://static.rust-lang.org" \' "${WORKFLOW_PATH}")" -eq 6 ]]
-[[ "$(grep -Fc '"${HOME}/.cargo/bin/rustup" toolchain install \' "${WORKFLOW_PATH}")" -eq 6 ]]
+[[ "$(grep -Fc 'cargo fetch --locked' "${WORKFLOW_PATH}")" -eq 7 ]]
+[[ "$(grep -Fc 'RUSTUP_DIST_SERVER="https://static.rust-lang.org" \' "${WORKFLOW_PATH}")" -eq 7 ]]
+[[ "$(grep -Fc '"${HOME}/.cargo/bin/rustup" toolchain install \' "${WORKFLOW_PATH}")" -eq 7 ]]
 grep -Fq 'RUSTC_BOOTSTRAP=1 \' "${LOCK_HELPER_PATH}"
 grep -Fq '"${real_cargo}" -Z unstable-options generate-lockfile \' \
   "${LOCK_HELPER_PATH}"
@@ -4629,6 +4633,7 @@ private = {
 }
 artifact = {
     "privacy_javascript_sdk_tests": ("Prime privacy N-API dependencies from the frozen lock", "ci/check_privacy_js_sdk.sh"),
+    "privacy_swift_sdk_slice": ("Install Apple Rust targets and prime frozen slice dependencies", "--produce-slice"),
     "privacy_swift_sdk_parse": ("Install Apple Rust targets and prime frozen dependencies", "ci/check_privacy_swift_sdk.sh"),
 }
 def job_match(source: str, name: str) -> re.Match[str]:
@@ -4645,15 +4650,16 @@ def validate(source: str) -> None:
     counts = {
         "ci/privacy_sdk_cargo_lockfile.sh provision-ci": 4,
         "ci/privacy_sdk_cargo_lockfile.sh verify-ci": 8,
-        "cargo fetch --locked": 6,
-        'python-version: "3.12"': 6,
-        "update-environment: false": 6,
+        "cargo fetch --locked": 7,
+        'python-version: "3.12"': 7,
+        "update-environment: false": 7,
     }
     if any(source.count(marker) != count for marker, count in counts.items()):
         raise AssertionError("workflow aggregate lock policy drifted")
     if "Swatinem/rust-cache@" in source or "cache: pip" in source:
         raise AssertionError("workflow restored an unauthenticated cache")
     setup_counts = {
+        "privacy-swift-slice-python": 1,
         "privacy-swift-python": 1,
         "privacy-jvm-python": 4,
         "privacy-csharp-python": 3,

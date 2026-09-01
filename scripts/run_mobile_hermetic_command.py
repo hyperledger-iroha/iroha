@@ -38,6 +38,7 @@ APPLE_CARGO_ENVIRONMENT = COMMON_CARGO_ENVIRONMENT | {
     "RUSTC_BOOTSTRAP",
     "RUSTDOC",
 }
+HOST_CARGO_ENVIRONMENT = COMMON_CARGO_ENVIRONMENT | {"CARGO_BUILD_JOBS"}
 ANDROID_CARGO_ENVIRONMENT = APPLE_CARGO_ENVIRONMENT | {
     "ANDROID_NDK_HOME",
     "ANDROID_NDK_ROOT",
@@ -89,7 +90,8 @@ PROFILES = {
         "SDKROOT",
     },
     "android-cargo": ANDROID_CARGO_ENVIRONMENT,
-    "host-cargo": COMMON_CARGO_ENVIRONMENT,
+    "host-cargo": HOST_CARGO_ENVIRONMENT,
+    "host-environment-probe": HOST_CARGO_ENVIRONMENT,
     "gradle-jvm": GRADLE_JVM_ENVIRONMENT,
     "gradle-jvm-localnet": GRADLE_JVM_ENVIRONMENT
     | {
@@ -272,6 +274,37 @@ def authenticate_android_cargo_arguments(
     return root_lock, lock_identity
 
 
+def authenticate_host_cargo_arguments(command: list[str]) -> None:
+    """Require one closed, serialized host Cargo invocation."""
+
+    arguments = command[1:]
+    if not arguments or arguments[0] not in {"build", "clean"}:
+        raise RuntimeError("host-cargo permits only the build and clean subcommands")
+    if any(
+        value == "-j"
+        or value.startswith("-j")
+        or value.startswith("--jobs=")
+        or value == "--config"
+        or value.startswith("--config=")
+        for value in arguments
+    ):
+        raise RuntimeError(
+            "host-cargo rejects alternate job and Cargo configuration overrides"
+        )
+    jobs_positions = [
+        index for index, value in enumerate(arguments) if value == "--jobs"
+    ]
+    if arguments[0] == "build":
+        if (
+            len(jobs_positions) != 1
+            or jobs_positions[0] + 1 >= len(arguments)
+            or arguments[jobs_positions[0] + 1] != "1"
+        ):
+            raise RuntimeError("host-cargo build requires exactly one --jobs 1")
+    elif jobs_positions:
+        raise RuntimeError("host-cargo clean must not carry a jobs override")
+
+
 def main() -> int:
     args = parse_args()
     expected = PROFILES[args.profile]
@@ -288,11 +321,21 @@ def main() -> int:
             f"{args.profile} environment inventory is not exact "
             f"(missing={missing}, unexpected={unexpected})"
         )
+    if (
+        args.profile in {"host-cargo", "host-environment-probe"}
+        and environment["CARGO_BUILD_JOBS"] != "1"
+    ):
+        raise RuntimeError(f"{args.profile} CARGO_BUILD_JOBS must be exactly '1'")
 
     authenticated_tools: dict[str, tuple[pathlib.Path, tuple[int, ...]]] = {}
     authenticated_files: dict[str, tuple[pathlib.Path, tuple[int, ...]]] = {}
     if args.profile in AUTHENTICATED_CARGO_PROFILES:
         authenticated_tools = authenticate_cargo_environment(environment)
+    if args.profile == "host-cargo":
+        authenticated_tools["CARGO"] = authenticate_regular_executable(
+            "CARGO", environment["CARGO"]
+        )
+        authenticate_host_cargo_arguments(args.command)
     if args.profile == "android-cargo":
         authenticated_files["Android root Cargo.lock"] = authenticate_android_cargo_arguments(
             args.command
@@ -304,10 +347,7 @@ def main() -> int:
     resolved = executable.resolve(strict=True)
     if not resolved.is_file() or not os.access(resolved, os.X_OK):
         raise RuntimeError(f"hermetic command executable is not a regular executable: {resolved}")
-    if (
-        args.profile in AUTHENTICATED_CARGO_PROFILES
-        and resolved != authenticated_tools["CARGO"][0]
-    ):
+    if "CARGO" in authenticated_tools and resolved != authenticated_tools["CARGO"][0]:
         raise RuntimeError(
             "Cargo command does not match the authenticated CARGO executable"
         )

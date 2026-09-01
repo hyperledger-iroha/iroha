@@ -392,13 +392,22 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "test_consumer_drop_in_hardlink_is_rejected",
     ),
     "crates/irohad/src/runtime_provider_broker.rs": (
+        'include!("runtime_provider_broker/protocol.rs");',
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform.rs": (
         "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock",
         "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+        'include!("platform_operation_dispatch.rs");',
+        'include!("platform_server_transport.rs");',
+        'include!("pop_recipient_client.rs");',
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform_server_transport.rs": (
         "endpoint_recovery::prepare_endpoint",
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform_operation_dispatch.rs": (
         "OPERATION_POP_RUNTIME_OPEN_V1",
         "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1",
         "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1",
-        'include!("runtime_provider_broker/pop_recipient_client.rs");',
     ),
     "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs": (
         "OPERATION_POP_RUNTIME_OPEN_V1: u16 = 118",
@@ -938,14 +947,27 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/package_mobile_sdk_artifacts.sh"',
         '- "scripts/tests/deploy_localnet_test.py"',
         '- "vendor/**"',
-        "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "persist-credentials: false",
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
         'python-version: "3.12"',
         "name: Bind the canonical mobile Python",
         'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"',
         "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
         'node-version: "24"',
-        "runs-on: macos-14",
+        "runs-on: macos-26",
+        "DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+        "NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+        "NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}",
+        "Require the exact Xcode 26.6 release toolchain",
+        "Xcode 26.6\\nBuild version 17F113",
+        "  sdk-apple-slice:",
+        "--produce-slice \"${{ matrix.slice }}\"",
+        "--assemble-slices \"$NORITO_BRIDGE_SLICE_INPUT_ROOT\"",
+        (
+            "sorafs-norito-bridge-apple-slice-${{ github.run_id }}-"
+            "${{ github.run_attempt }}-${{ matrix.slice }}"
+        ),
         "  mobile-parity:",
         "  csharp-parity:",
         "actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9",
@@ -997,9 +1019,10 @@ NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
         '- "scripts/tests/check_sorafs_release_automation_test.py"',
         '- "java/iroha_android/**"',
         '- "fixtures/sorafs_manifest/governance/**"',
-        "name: Build host SoraFS reference native bridge",
-        "run: cargo build --locked -p connect_norito_bridge",
-        "IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug",
+        "name: Require fresh ABI-22 JNI bridge in complete Kotlin and Java suites",
+        'KAGEMUSHA_JVM_NATIVE_RETAIN_DIR="$retained_native"',
+        'test -d "$retained_native"',
+        'echo "IROHA_NATIVE_LIBRARY_PATH=$retained_native" >> "$GITHUB_ENV"',
         JAVA_GOVERNANCE_WORKFLOW_STEP_NAME,
         *JAVA_GOVERNANCE_WORKFLOW_STEP_MARKERS,
     ),
@@ -1285,7 +1308,7 @@ def _validate_native_governance_sdk_contract(root: Path) -> list[str]:
     required_env_marker = (
         f'{NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV}: "1"'
     )
-    for job_name in ("apple-mobile-sdk", "android-mobile-sdk"):
+    for job_name in ("apple-slice", "apple-mobile-sdk", "android-mobile-sdk"):
         job = _workflow_job(workflow, job_name)
         if job is None:
             errors.append(
@@ -1296,10 +1319,10 @@ def _validate_native_governance_sdk_contract(root: Path) -> list[str]:
                 f"{MOBILE_SDK_ARTIFACTS_WORKFLOW}: `{job_name}` must require "
                 "native Governance DAG validation"
             )
-    if workflow.count(required_env_marker) != 2:
+    if workflow.count(required_env_marker) != 3:
         errors.append(
             f"{MOBILE_SDK_ARTIFACTS_WORKFLOW}: native Governance DAG validation "
-            "must be required exactly once in each release SDK job"
+            "must be required exactly once in each authenticated release SDK job"
         )
     java_workflow_section = _contract_section(
         workflow,
@@ -1838,6 +1861,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             re.findall(r"(?m)^  ([A-Za-z0-9_-]+):\n", jobs_source)
         )
         expected_job_inventory = (
+            "sdk-apple-slice",
             "sdk-parity",
             "mobile-parity",
             "csharp-parity",
@@ -1848,8 +1872,52 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 f"{expected_job_inventory}"
             )
         required_job_markers = {
+            "sdk-apple-slice": (
+                "runs-on: macos-26",
+                "timeout-minutes: 180",
+                "fail-fast: false",
+                "max-parallel: 5",
+                "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "persist-credentials: false",
+                "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+                "DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+                "NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+                "NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}",
+                "Require the exact Xcode 26.6 release toolchain",
+                "Xcode 26.6\\nBuild version 17F113",
+                "unexpected DEVELOPER_DIR",
+                "bridge and job Xcode identities differ",
+                "unable to query Xcode identity",
+                "unexpected Xcode identity",
+                'cache-targets: "false"',
+                '--produce-slice "${{ matrix.slice }}"',
+                '--slice-output-root "$NORITO_BRIDGE_SLICE_OUTPUT_ROOT"',
+                (
+                    "sorafs-norito-bridge-apple-slice-${{ github.run_id }}-"
+                    "${{ github.run_attempt }}-${{ matrix.slice }}"
+                ),
+                "if-no-files-found: error",
+            ),
             "sdk-parity": (
-                "runs-on: macos-14",
+                "runs-on: macos-26",
+                "timeout-minutes: 300",
+                "needs: sdk-apple-slice",
+                "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "persist-credentials: false",
+                "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+                "DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+                "NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer",
+                "NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}",
+                "Require the exact Xcode 26.6 release toolchain",
+                "Xcode 26.6\\nBuild version 17F113",
+                "unexpected DEVELOPER_DIR",
+                "bridge and job Xcode identities differ",
+                "unable to query Xcode identity",
+                "unexpected Xcode identity",
+                "NORITO_BRIDGE_SLICE_INPUT_ROOT=$slice_root",
+                "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+                '--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"',
+                "Authenticate Apple native artifact",
                 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"',
                 "bash ci/check_sorafs_python_native_sdk.sh",
                 "bash ci/sdk_sorafs_orchestrator.sh",
@@ -1894,6 +1962,101 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                     errors.append(
                         f"{relative}: `{job_name}` missing contract marker `{marker}`"
                     )
+        slice_job = _workflow_job(source, "sdk-apple-slice")
+        sdk_job = _workflow_job(source, "sdk-parity")
+        expected_slices = (
+            "ios-arm64",
+            "ios-sim-arm64",
+            "ios-sim-x64",
+            "macos-arm64",
+            "macos-x64",
+        )
+        artifact_prefix = (
+            "sorafs-norito-bridge-apple-slice-${{ github.run_id }}-"
+            "${{ github.run_attempt }}-"
+        )
+        if slice_job is not None:
+            actual_slices = tuple(
+                re.findall(r"(?m)^          - ([a-z0-9-]+)$", slice_job)
+            )
+            if actual_slices != expected_slices:
+                errors.append(
+                    f"{relative}: `sdk-apple-slice` matrix must be exactly "
+                    f"{expected_slices}"
+                )
+            if slice_job.count(artifact_prefix) != 1:
+                errors.append(
+                    f"{relative}: `sdk-apple-slice` must upload one "
+                    "run-attempt-bound matrix artifact"
+                )
+            if (
+                re.search(r"(?m)(?:^|[ \t])nohup(?:[ \t]|$)", slice_job)
+                or re.search(r"(?<![>&])&(?![>&])", slice_job)
+            ):
+                errors.append(
+                    f"{relative}: `sdk-apple-slice` must not launch "
+                    "background work"
+                )
+            if slice_job.count("exit 1; }") != 4:
+                errors.append(
+                    f"{relative}: `sdk-apple-slice` exact Xcode guards must "
+                    "explicitly fail closed"
+                )
+        if sdk_job is not None:
+            if sdk_job.count(
+                "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+            ) != 5 or sdk_job.count(artifact_prefix) != 5:
+                errors.append(
+                    f"{relative}: `sdk-parity` must download exactly five "
+                    "run-attempt-bound authenticated slices"
+                )
+            for slice_id in expected_slices:
+                expected_download = (
+                    f"name: {artifact_prefix}{slice_id}\n"
+                    f"          path: ${{{{ runner.temp }}}}/"
+                    f"iroha-sorafs-apple-slices/{slice_id}\n"
+                )
+                if sdk_job.count(expected_download) != 1:
+                    errors.append(
+                        f"{relative}: `sdk-parity` missing exact `{slice_id}` "
+                        "slice download binding"
+                    )
+            if (
+                "--produce-slice" in sdk_job
+                or "for slice" in sdk_job
+                or sdk_job.count("scripts/build_norito_xcframework.sh") != 1
+                or re.search(
+                    r"(?m)(?:^|[ \t])cargo[ \t]+(?:build|rustc)(?:[ \t]|$)",
+                    sdk_job,
+                )
+                or re.search(r"(?m)(?:^|[ \t])rustc(?:[ \t]|$)", sdk_job)
+            ):
+                errors.append(
+                    f"{relative}: `sdk-parity` assembly must remain compile-free"
+                )
+            if (
+                re.search(r"(?m)(?:^|[ \t])nohup(?:[ \t]|$)", sdk_job)
+                or re.search(r"(?<![>&])&(?![>&])", sdk_job)
+            ):
+                errors.append(
+                    f"{relative}: `sdk-parity` must not launch background work"
+                )
+            ordered_markers = (
+                "Download iOS arm64 slice",
+                "Make reviewed Iroha source read-only for assembly",
+                '--assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT"',
+                "Authenticate Apple native artifact",
+                "Restore workspace write access for parity outputs",
+                "bash ci/sdk_sorafs_orchestrator.sh",
+            )
+            if not all(marker in sdk_job for marker in ordered_markers) or any(
+                sdk_job.index(left) >= sdk_job.index(right)
+                for left, right in zip(ordered_markers, ordered_markers[1:])
+                if left in sdk_job and right in sdk_job
+            ):
+                errors.append(
+                    f"{relative}: `sdk-parity` authenticated assembly ordering drifted"
+                )
 
     if relative.endswith("sorafs-cli-release.yml"):
         jobs_source = source[source.index("jobs:\n") + len("jobs:\n") :]

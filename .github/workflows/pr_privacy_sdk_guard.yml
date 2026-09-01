@@ -298,6 +298,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
+env:
+  APPLE_PRIVACY_PRODUCTION_ENABLED: "false"
+
 jobs:
   privacy_native_bridge_tests:
     runs-on: ubuntu-latest
@@ -336,17 +342,191 @@ jobs:
       - name: Verify final privacy SDK Cargo lock isolation
         if: always()
         run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}"
-  privacy_swift_sdk_parse:
+  privacy_swift_sdk_slice:
     needs: privacy_jvm_sdk_tests
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        slice:
+          - ios-arm64
+          - ios-sim-arm64
+          - ios-sim-x64
+          - macos-arm64
+          - macos-x64
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - id: privacy-swift-python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bind reviewed Apple privacy mode
+        shell: bash
+        run: |
+          if [[ -z "${GITHUB_ENV:-}" ]]; then
+            echo "GITHUB_ENV is unavailable; refusing to guess the Apple privacy mode" >&2
+            exit 1
+          fi
+          case "${APPLE_PRIVACY_PRODUCTION_ENABLED:-}" in
+            true|false) ;;
+            *)
+              echo "APPLE_PRIVACY_PRODUCTION_ENABLED must be exactly true or false" >&2
+              exit 1
+              ;;
+          esac
+          echo "PRIVACY_PRODUCTION_ENABLED=$APPLE_PRIVACY_PRODUCTION_ENABLED" >> "$GITHUB_ENV"
+      - id: privacy-swift-slice-python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           update-environment: false
+      - name: Require the exact Xcode 26.6 release toolchain
+        shell: bash
+        run: |
+          [[ "$DEVELOPER_DIR" == "/Applications/Xcode_26.6.app/Contents/Developer" ]] \
+            || { echo 'unexpected DEVELOPER_DIR' >&2; exit 1; }
+          [[ "$NORITO_BRIDGE_DEVELOPER_DIR" == "$DEVELOPER_DIR" ]] \
+            || { echo 'bridge and job Xcode identities differ' >&2; exit 1; }
+          xcode_identity="$(/usr/bin/xcodebuild -version)" \
+            || { echo 'unable to query Xcode identity' >&2; exit 1; }
+          [[ "$xcode_identity" == $'Xcode 26.6\nBuild version 17F113' ]] \
+            || { echo "unexpected Xcode identity: $xcode_identity" >&2; exit 1; }
+      - name: Bind the canonical privacy Swift slice Python
+        env:
+          SETUP_PYTHON_PATH: ${{ steps.privacy-swift-slice-python.outputs.python-path }}
+        run: |
+          mobile_python="$("$SETUP_PYTHON_PATH" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - name: Install host-qualified privacy Swift slice Rust toolchain
+        shell: bash
+        run: |
+          env -i \
+            HOME="${HOME}" \
+            RUSTUP_DIST_SERVER="https://static.rust-lang.org" \
+            "${HOME}/.cargo/bin/rustup" toolchain install \
+              "1.93.1-aarch64-apple-darwin" \
+              --profile minimal \
+              --no-self-update
+          echo "RUSTUP_TOOLCHAIN=1.93.1-aarch64-apple-darwin" >> "$GITHUB_ENV"
+      - name: Download frozen source-bound privacy lock input
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: privacy-jvm-native-abi22-${{ github.sha }}
+          path: ${{ runner.temp }}/privacy-jvm-native-abi22
+      - name: Authenticate distinct privacy release lock
+        run: |
+          release_lock="$RUNNER_TEMP/privacy-jvm-native-abi22/Cargo.lock"
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7" ]]
+          ! cmp -s "$release_lock" Cargo.lock
+          source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          echo "SOURCE_DATE_EPOCH=$source_date_epoch" >> "$GITHUB_ENV"
+          echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
+      - name: Prepare external privacy Swift slice roots
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-privacy-swift-slice-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-privacy-swift-slice-build"
+          cargo_target="$RUNNER_TEMP/iroha-privacy-swift-slice-cargo"
+          slice_root="$RUNNER_TEMP/iroha-privacy-swift-slice-output"
+          mkdir -p "$artifact_dir" "$build_dir" "$cargo_target" "$slice_root"
+          chmod 0700 "$artifact_dir" "$build_dir" "$cargo_target" "$slice_root"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_SLICE_OUTPUT_ROOT=$slice_root" >> "$GITHUB_ENV"
+      - name: Install Apple Rust targets and prime frozen slice dependencies
+        env:
+          RUSTC_BOOTSTRAP: "1"
+        run: |
+          rustup target add --toolchain 1.93.1-aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
+          cargo fetch --locked -Z unstable-options --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
+      - name: Bind the external privacy Swift slice Cargo envelope
+        run: |
+          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$CARGO_TARGET_DIR")"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "RUSTC=$(rustup which --toolchain 1.93.1-aarch64-apple-darwin rustc)" >> "$GITHUB_ENV"
+          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
+          echo "RUSTDOC=$(rustup which --toolchain 1.93.1-aarch64-apple-darwin rustdoc)" >> "$GITHUB_ENV"
+      - name: Make reviewed privacy Swift slice source read-only
+        run: chmod -R a-w "$GITHUB_WORKSPACE"
+      - name: Build authenticated privacy Swift NoritoBridge slice
+        run: |
+          build_args=()
+          if [[ "$PRIVACY_PRODUCTION_ENABLED" == "true" ]]; then
+            build_args+=(--privacy-production-enabled)
+          fi
+          scripts/build_norito_xcframework.sh \
+            --produce-slice "${{ matrix.slice }}" \
+            --slice-output-root "$NORITO_BRIDGE_SLICE_OUTPUT_ROOT" \
+            "${build_args[@]}"
+      - name: Revalidate frozen privacy Swift slice inputs
+        if: always()
+        run: |
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")" == "ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0" ]]
+      - name: Upload authenticated privacy Swift NoritoBridge slice
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: privacy-swift-apple-slice-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slice }}
+          path: ${{ runner.temp }}/iroha-privacy-swift-slice-output/${{ matrix.slice }}/*
+          if-no-files-found: error
+          retention-days: 1
+
+  privacy_swift_sdk_parse:
+    needs: privacy_swift_sdk_slice
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      NORITO_BRIDGE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      NORITO_BRIDGE_SLICE_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bind reviewed Apple privacy mode
+        shell: bash
+        run: |
+          if [[ -z "${GITHUB_ENV:-}" ]]; then
+            echo "GITHUB_ENV is unavailable; refusing to guess the Apple privacy mode" >&2
+            exit 1
+          fi
+          case "${APPLE_PRIVACY_PRODUCTION_ENABLED:-}" in
+            true|false) ;;
+            *)
+              echo "APPLE_PRIVACY_PRODUCTION_ENABLED must be exactly true or false" >&2
+              exit 1
+              ;;
+          esac
+          echo "PRIVACY_PRODUCTION_ENABLED=$APPLE_PRIVACY_PRODUCTION_ENABLED" >> "$GITHUB_ENV"
+      - id: privacy-swift-python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          update-environment: false
+      - name: Require the exact Xcode 26.6 release toolchain
+        shell: bash
+        run: |
+          [[ "$DEVELOPER_DIR" == "/Applications/Xcode_26.6.app/Contents/Developer" ]] \
+            || { echo 'unexpected DEVELOPER_DIR' >&2; exit 1; }
+          [[ "$NORITO_BRIDGE_DEVELOPER_DIR" == "$DEVELOPER_DIR" ]] \
+            || { echo 'bridge and job Xcode identities differ' >&2; exit 1; }
+          xcode_identity="$(/usr/bin/xcodebuild -version)" \
+            || { echo 'unable to query Xcode identity' >&2; exit 1; }
+          [[ "$xcode_identity" == $'Xcode 26.6\nBuild version 17F113' ]] \
+            || { echo "unexpected Xcode identity: $xcode_identity" >&2; exit 1; }
       - name: Bind the canonical privacy Swift Python
         env:
           SETUP_PYTHON_PATH: ${{ steps.privacy-swift-python.outputs.python-path }}
@@ -379,19 +559,25 @@ jobs:
           ! cmp -s "$release_lock" Cargo.lock
           source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
           [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           echo "SOURCE_DATE_EPOCH=$source_date_epoch" >> "$GITHUB_ENV"
           echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
-      - name: Prepare external privacy Swift build and artifact roots
+      - name: Prepare external privacy Swift assembly and artifact roots
         run: |
           artifact_dir="$RUNNER_TEMP/iroha-privacy-swift-artifacts"
           build_dir="$RUNNER_TEMP/iroha-privacy-swift-build"
+          cargo_target="$RUNNER_TEMP/iroha-privacy-swift-assembly-cargo"
           scratch_dir="$RUNNER_TEMP/iroha-privacy-swift-tests"
-          mkdir -p "$artifact_dir" "$build_dir" "$scratch_dir"
+          slice_root="$RUNNER_TEMP/iroha-privacy-swift-slices"
+          mkdir -p "$artifact_dir" "$build_dir" "$cargo_target" "$scratch_dir" "$slice_root"
+          chmod 0700 "$artifact_dir" "$build_dir" "$cargo_target" "$scratch_dir" "$slice_root"
           echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
           echo "MOBILE_SDK_SWIFT_SCRATCH_DIR=$scratch_dir" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_SLICE_INPUT_ROOT=$slice_root" >> "$GITHUB_ENV"
       - name: Install Apple Rust targets and prime frozen dependencies
         env:
           RUSTC_BOOTSTRAP: "1"
@@ -400,9 +586,7 @@ jobs:
           cargo fetch --locked -Z unstable-options --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
       - name: Bind the external privacy Swift Cargo envelope
         run: |
-          cargo_target="$RUNNER_TEMP/iroha-privacy-swift-cargo"
-          mkdir -p "$cargo_target"
-          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
+          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$CARGO_TARGET_DIR")"
           echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
           echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
@@ -410,12 +594,49 @@ jobs:
           echo "RUSTC=$(rustup which --toolchain 1.93.1-aarch64-apple-darwin rustc)" >> "$GITHUB_ENV"
           echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
           echo "RUSTDOC=$(rustup which --toolchain 1.93.1-aarch64-apple-darwin rustdoc)" >> "$GITHUB_ENV"
+      - name: Download iOS arm64 privacy Swift slice
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: privacy-swift-apple-slice-${{ github.run_id }}-${{ github.run_attempt }}-ios-arm64
+          path: ${{ runner.temp }}/iroha-privacy-swift-slices/ios-arm64
+      - name: Download iOS simulator arm64 privacy Swift slice
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: privacy-swift-apple-slice-${{ github.run_id }}-${{ github.run_attempt }}-ios-sim-arm64
+          path: ${{ runner.temp }}/iroha-privacy-swift-slices/ios-sim-arm64
+      - name: Download iOS simulator x86_64 privacy Swift slice
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: privacy-swift-apple-slice-${{ github.run_id }}-${{ github.run_attempt }}-ios-sim-x64
+          path: ${{ runner.temp }}/iroha-privacy-swift-slices/ios-sim-x64
+      - name: Download macOS arm64 privacy Swift slice
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: privacy-swift-apple-slice-${{ github.run_id }}-${{ github.run_attempt }}-macos-arm64
+          path: ${{ runner.temp }}/iroha-privacy-swift-slices/macos-arm64
+      - name: Download macOS x86_64 privacy Swift slice
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: privacy-swift-apple-slice-${{ github.run_id }}-${{ github.run_attempt }}-macos-x64
+          path: ${{ runner.temp }}/iroha-privacy-swift-slices/macos-x64
       - name: Make reviewed privacy Swift source read-only
         run: chmod -R a-w "$GITHUB_WORKSPACE"
       - name: Swift privacy native fail-closed contract
-        run: python3 -I -B scripts/tests/check_privacy_swift_native_contract_test.py
-      - name: Rebuild exact ABI22 XCFramework under full Xcode
-        run: scripts/build_norito_xcframework.sh
+        run: '"$MOBILE_SDK_PYTHON_BINARY" -I -S -B scripts/tests/check_privacy_swift_native_contract_test.py'
+      - name: Assemble authenticated exact ABI22 XCFramework under full Xcode
+        run: |
+          build_args=()
+          if [[ "$PRIVACY_PRODUCTION_ENABLED" == "true" ]]; then
+            build_args+=(--privacy-production-enabled)
+          fi
+          scripts/build_norito_xcframework.sh \
+            --assemble-slices "$NORITO_BRIDGE_SLICE_INPUT_ROOT" \
+            "${build_args[@]}"
+          if [[ "$PRIVACY_PRODUCTION_ENABLED" == "true" ]]; then
+            test -f "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.xcframework/.privacy-production-enabled"
+          else
+            test ! -e "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.xcframework/.privacy-production-enabled"
+          fi
       - name: Build authoritative Offline Cash Swift fixture
         shell: bash
         run: |
@@ -430,6 +651,7 @@ jobs:
       - name: Revalidate frozen Swift inputs and ABI22 artifacts
         if: always()
         run: |
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7" ]]
           [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")" == "ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0" ]]
           scripts/check_mobile_sdk_artifacts.sh --apple-only

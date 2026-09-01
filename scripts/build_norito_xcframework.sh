@@ -1648,6 +1648,47 @@ tool_environment = {
     "LC_ALL": "C.UTF-8",
     "DEVELOPER_DIR": developer_dir,
 }
+
+def inspect_required_defined_symbols(
+    nm_binary,
+    archive,
+    environment,
+    required,
+    failure_label,
+    missing_prefix,
+):
+    result = subprocess.run(
+        [nm_binary, "-gUj", str(archive)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+    )
+    if result.returncode != 0:
+        details = []
+        for stream_name, payload in (("stdout", result.stdout), ("stderr", result.stderr)):
+            clipped = payload[:1024]
+            rendered = clipped.decode("utf-8", "backslashreplace")
+            if len(payload) > len(clipped):
+                rendered += "<truncated>"
+            if rendered:
+                details.append(f"{stream_name}={rendered!r}")
+        context = f": {'; '.join(details)}" if details else ""
+        raise SystemExit(
+            f"{failure_label} failed with exit status {result.returncode}{context}"
+        )
+    symbols = sorted(
+        {
+            line.strip().removeprefix("_")
+            for line in result.stdout.decode("utf-8", "strict").splitlines()
+            if line.strip()
+        }
+    )
+    missing = sorted(required - set(symbols))
+    if missing:
+        raise SystemExit(missing_prefix + ", ".join(missing))
+    return symbols
+
 actual_architectures = subprocess.run(
     [lipo_raw, "-archs", str(library)],
     check=True,
@@ -1660,26 +1701,19 @@ if actual_architectures != [architecture]:
     raise SystemExit(
         f"slice {slice_id} architecture is not exact: {actual_architectures!r}"
     )
-symbols_output = subprocess.run(
-    [nm_raw, "-gUj", str(library)],
-    check=True,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    env=tool_environment,
-).stdout.decode("utf-8", "strict")
-symbols = sorted(
-    {
-        line.strip().removeprefix("_")
-        for line in symbols_output.splitlines()
-        if line.strip()
-    }
-)
 validator = runpy.run_path(validator_raw)
 if validator.get("REQUIRED_NATIVE_BRIDGE_ABI_VERSION") != 22:
     raise SystemExit("Apple artifact validator does not require exact native ABI 22")
 required_symbols = set(validator["EXPECTED_REQUIRED_SYMBOLS"])
 forbidden_symbols = set(validator["EXPECTED_FORBIDDEN_SYMBOLS"])
-missing = sorted(required_symbols - set(symbols))
+symbols = inspect_required_defined_symbols(
+    nm_raw,
+    library,
+    tool_environment,
+    required_symbols,
+    f"slice {slice_id} Xcode nm inspection",
+    "slice is missing ABI22 required exports: ",
+)
 forbidden = sorted(forbidden_symbols & set(symbols))
 expected_kagemusha = {
     symbol for symbol in required_symbols
@@ -1689,8 +1723,6 @@ actual_kagemusha = {
     symbol for symbol in symbols
     if symbol.startswith("connect_norito_kagemusha_")
 }
-if missing:
-    raise SystemExit("slice is missing ABI22 required exports: " + ", ".join(missing))
 if forbidden:
     raise SystemExit("slice contains forbidden exports: " + ", ".join(forbidden))
 if actual_kagemusha != expected_kagemusha:
@@ -1845,6 +1877,47 @@ tool_environment = {
     "LC_ALL": "C.UTF-8",
     "DEVELOPER_DIR": developer_dir,
 }
+
+def inspect_required_defined_symbols(
+    nm_binary,
+    archive,
+    environment,
+    required,
+    failure_label,
+    missing_prefix,
+):
+    result = subprocess.run(
+        [nm_binary, "-gUj", str(archive)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+    )
+    if result.returncode != 0:
+        details = []
+        for stream_name, payload in (("stdout", result.stdout), ("stderr", result.stderr)):
+            clipped = payload[:1024]
+            rendered = clipped.decode("utf-8", "backslashreplace")
+            if len(payload) > len(clipped):
+                rendered += "<truncated>"
+            if rendered:
+                details.append(f"{stream_name}={rendered!r}")
+        context = f": {'; '.join(details)}" if details else ""
+        raise SystemExit(
+            f"{failure_label} failed with exit status {result.returncode}{context}"
+        )
+    symbols = sorted(
+        {
+            line.strip().removeprefix("_")
+            for line in result.stdout.decode("utf-8", "strict").splitlines()
+            if line.strip()
+        }
+    )
+    missing = sorted(required - set(symbols))
+    if missing:
+        raise SystemExit(missing_prefix + ", ".join(missing))
+    return symbols
+
 for slice_id, expected in slices.items():
     bundle = root / slice_id
     bundle_metadata = bundle.lstat()
@@ -1992,32 +2065,20 @@ for slice_id, expected in slices.items():
     ).stdout.split()
     if architectures != [expected["architecture"]] or library_evidence["architectures"] != architectures:
         raise SystemExit(f"slice {slice_id} has the wrong architecture")
-    symbols_output = subprocess.run(
-        [nm, "-gUj", str(destination)],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=tool_environment,
-    ).stdout.decode("utf-8", "strict")
-    symbols = sorted(
-        {
-            line.strip().removeprefix("_")
-            for line in symbols_output.splitlines()
-            if line.strip()
-        }
+    symbols = inspect_required_defined_symbols(
+        nm,
+        destination,
+        tool_environment,
+        required_symbols,
+        f"slice {slice_id} Xcode nm inspection",
+        f"slice {slice_id} is missing ABI22 required exports: ",
     )
     symbol_bytes = (("\n".join(symbols) + "\n") if symbols else "").encode("utf-8")
-    missing = sorted(required_symbols - set(symbols))
     forbidden = sorted(forbidden_symbols & set(symbols))
     actual_kagemusha = {
         symbol for symbol in symbols
         if symbol.startswith("connect_norito_kagemusha_")
     }
-    if missing:
-        raise SystemExit(
-            f"slice {slice_id} is missing ABI22 required exports: "
-            + ", ".join(missing)
-        )
     if forbidden:
         raise SystemExit(
             f"slice {slice_id} contains forbidden exports: "

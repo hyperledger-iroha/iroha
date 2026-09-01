@@ -151,11 +151,22 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-DEVELOPER_DIR="$(xcode-select -p)"
+if [[ -z "${DEVELOPER_DIR:-}" ]]; then
+  DEVELOPER_DIR="$(xcode-select -p)" || {
+    echo "error: privacy Swift native execution could not resolve Xcode" >&2
+    exit 1
+  }
+fi
+export DEVELOPER_DIR
 [[ "${DEVELOPER_DIR}" == */Xcode*.app/Contents/Developer ]] || {
   echo "error: privacy Swift native execution requires full Xcode" >&2
   exit 1
 }
+if [[ -n "${NORITO_BRIDGE_DEVELOPER_DIR:-}" && \
+  "${NORITO_BRIDGE_DEVELOPER_DIR}" != "${DEVELOPER_DIR}" ]]; then
+  echo "error: privacy Swift Xcode does not match the authenticated Apple artifact toolchain" >&2
+  exit 1
+fi
 xcodebuild -version
 
 cd "${ROOT_DIR}"
