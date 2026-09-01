@@ -18,6 +18,49 @@ from scripts import check_native_sdk_abi22_artifact as checker
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_repository_gitlinks_have_exact_gitmodules_mappings() -> None:
+    """Reject orphaned gitlinks before hosted checkout encounters them."""
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "--stage"],
+        cwd=REPO_ROOT,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    ).stdout
+    gitlinks = {
+        line.partition("\t")[2]
+        for line in tracked.splitlines()
+        if line.partition("\t")[0].split(maxsplit=1)[0] == "160000"
+    }
+    gitmodules = REPO_ROOT / ".gitmodules"
+    configured_paths: set[str] = set()
+    if gitmodules.is_file():
+        configured = subprocess.run(
+            [
+                "git",
+                "config",
+                "--file",
+                str(gitmodules),
+                "--get-regexp",
+                r"^submodule\..*\.path$",
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert configured.returncode in {0, 1}, configured.stderr
+        configured_paths = {
+            line.split(maxsplit=1)[1] for line in configured.stdout.splitlines()
+        }
+    assert gitlinks == configured_paths, (
+        f"gitlink/.gitmodules inventory differs: gitlinks={sorted(gitlinks)}, "
+        f"configured={sorted(configured_paths)}"
+    )
+
+
 def test_checker_loads_under_exact_isolated_ci_invocation() -> None:
     result = subprocess.run(
         [
