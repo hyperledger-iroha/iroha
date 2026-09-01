@@ -310,7 +310,7 @@ POP_BROKER_WIRE_FIELD_INVENTORIES: dict[str, tuple[tuple[str, str], ...]] = {
 }
 RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
     "configs/sorafs/runtime_provider_broker/README.md": (
-        "it does not supply a concrete HSM, KMS,",
+        "it does not supply a concrete signing backend,",
         "statically link a reviewed deployment-owned",
         "Do not add credential, private-key, token, plugin, test-provider, or socket",
         "The expected executable digest must come",

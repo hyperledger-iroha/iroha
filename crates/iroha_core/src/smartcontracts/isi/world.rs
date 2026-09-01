@@ -11522,6 +11522,30 @@ pub mod isi {
         };
         Ok((prev_id, prev_record))
     }
+    fn ensure_consensus_key_not_bound_to_retained_validator(
+        world: &WorldTransaction<'_, '_>,
+        public_key: &PublicKey,
+        block_height: u64,
+        operation: &str,
+    ) -> Result<(), Error> {
+        let Some((_, record)) = world.public_lane_validators.iter().find(|(_, record)| {
+            record.peer_id.public_key() == public_key
+                && record
+                    .deactivation_height
+                    .is_none_or(|deactivation_height| {
+                        deactivation_height < record.activation_height
+                            || block_height < deactivation_height
+                    })
+        }) else {
+            return Ok(());
+        };
+        Err(InstructionExecutionError::InvalidParameter(
+            InvalidParameterError::SmartContract(format!(
+                "cannot {operation} consensus key while peer remains bound to validator {} on lane {}; exit the validator and wait for its deactivation height first",
+                record.validator, record.lane_id,
+            )),
+        ))
+    }
     fn validate_rotation_pair(
         new_record: &ConsensusKeyRecord,
         prev_record: &ConsensusKeyRecord,
@@ -11625,6 +11649,12 @@ pub mod isi {
             }
             let (prev_id, mut prev_record) =
                 load_prev_record_for_rotation(&new_record, state_transaction)?;
+            ensure_consensus_key_not_bound_to_retained_validator(
+                &state_transaction.world,
+                &prev_record.public_key,
+                block_height,
+                "rotate",
+            )?;
             validate_consensus_key_record(
                 &new_record,
                 &params.sumeragi,
@@ -11663,6 +11693,12 @@ pub mod isi {
                     InvalidParameterError::SmartContract("consensus key not found".into()),
                 ));
             };
+            ensure_consensus_key_not_bound_to_retained_validator(
+                &state_transaction.world,
+                &record.public_key,
+                state_transaction.block_height(),
+                "disable",
+            )?;
             record.status = ConsensusKeyStatus::Disabled;
             record
                 .expiry_height
@@ -16951,43 +16987,40 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let peer_id = self.object().clone();
+            let block_height = state_transaction._curr_block.height().get();
+            if state_transaction
+                .commit_topology
+                .iter()
+                .any(|topology_peer| topology_peer == &peer_id)
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "cannot unregister a peer from the current authenticated consensus roster"
+                            .to_owned(),
+                    ),
+                ));
+            }
             let world = &mut state_transaction.world;
             let Some(index) = world.peers.iter().position(|id| id == &peer_id) else {
                 return Err(FindError::Peer(peer_id).into());
             };
-            world.peers.remove(index);
-            // Mark any validators tied to this peer as exited to avoid dangling roster entries.
-            let exited_keys: Vec<_> = world
-                .public_lane_validators
-                .iter()
-                .filter(|(key, record)| {
+            if let Some(((lane_id, validator), _)) =
+                world.public_lane_validators.iter().find(|(key, record)| {
                     public_lane_validator_record_matches_key(key, record)
-                        && record
-                            .validator
-                            .try_signatory()
-                            .is_some_and(|pk| pk == peer_id.public_key())
-                })
-                .map(|(key, _)| key.clone())
-                .collect();
-            for key in exited_keys {
-                if let Some(record) = world.public_lane_validators.get_mut(&key) {
-                    record.status = iroha_data_model::nexus::PublicLaneValidatorStatus::Exited;
-                    // Prune stake shares so roster/state snapshots do not retain exited validators.
-                    let share_keys: Vec<_> = world
-                        .public_lane_stake_shares
-                        .iter()
-                        .filter(|((lane, validator_id, _), _)| {
-                            *lane == key.0 && validator_id == &record.validator
+                        && record.peer_id == peer_id
+                        && record.deactivation_height.is_none_or(|height| {
+                            height < record.activation_height || block_height < height
                         })
-                        .map(|(share_key, _)| share_key.clone())
-                        .collect();
-                    for share_key in share_keys {
-                        world.public_lane_stake_shares.remove(share_key);
-                    }
-                }
+                })
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "peer remains bound to validator {validator} on lane {lane_id}; exit the validator and wait for its deactivation height before unregistering the peer"
+                    )),
+                ));
             }
+            world.peers.remove(index);
             let key_label = peer_id.public_key().to_string();
-            let block_height = state_transaction._curr_block.height().get();
             let candidate_id = derive_validator_key_id(peer_id.public_key());
             let existing_pop = world
                 .consensus_keys
@@ -19649,6 +19682,11 @@ pub mod isi {
                 .get(&domain_id)
                 .cloned()
                 .unwrap_or_default();
+            crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_transfer_controls(
+                state_transaction,
+                &remove_asset_definitions,
+                &format!("unregister domain {domain_id}"),
+            )?;
             if let Some((proposal_id, reference_kind, asset_definition_id)) =
                 crate::validation_fee::retained_enacted_validation_fee_asset_reference_in(
                     state_transaction,
@@ -20605,6 +20643,52 @@ pub mod isi {
                                         )),
                                     )
                                 })?;
+                                if let Some(previous_custom) = state_transaction
+                                    .world
+                                    .parameters
+                                    .get()
+                                    .custom()
+                                    .get(next.id())
+                                {
+                                    let previous = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(previous_custom)
+                                        .ok_or_else(|| {
+                                            InstructionExecutionError::InvalidParameter(
+                                                InvalidParameterError::SmartContract(
+                                                    "installed signed NPoS parameters are invalid"
+                                                        .to_owned(),
+                                                ),
+                                            )
+                                        })?;
+                                    if npos.evidence_horizon_blocks
+                                        != previous.evidence_horizon_blocks
+                                    {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(format!(
+                                                "SumeragiNposParameters.reconfig.evidence_horizon_blocks is immutable after installation: {} -> {}",
+                                                previous.evidence_horizon_blocks,
+                                                npos.evidence_horizon_blocks,
+                                            )),
+                                        ));
+                                    }
+                                    if npos.slashing_delay_blocks != previous.slashing_delay_blocks {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(format!(
+                                                "SumeragiNposParameters.reconfig.slashing_delay_blocks is immutable after installation: {} -> {}",
+                                                previous.slashing_delay_blocks,
+                                                npos.slashing_delay_blocks,
+                                            )),
+                                        ));
+                                    }
+                                    if npos.epoch_length_blocks != previous.epoch_length_blocks {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(format!(
+                                                "SumeragiNposParameters.reconfig.epoch_length_blocks is immutable after installation: {} -> {}",
+                                                previous.epoch_length_blocks,
+                                                npos.epoch_length_blocks,
+                                            )),
+                                        ));
+                                    }
+                                }
                             }
                             let previous = {
                                 let params = state_transaction.world.parameters.get_mut();
@@ -32440,6 +32524,75 @@ seiyaku GovernanceLifecycle {
                 "asset metadata should be removed with assets"
             );
         });
+        world_test!(unregister_domain_rejects_retained_native_transfer_controls_atomically {
+            alice_state_transaction!(state, block, state_block, stx);
+            let domain_id =
+                DomainId::try_new("transfer-controls", "world").expect("domain id parses");
+            Register::domain(Domain::new(domain_id.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register controlled domain");
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "rose".parse().expect("asset name parses"),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "rose",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "register controlled asset definition");
+            SetAssetTransferBlacklist::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                true,
+            )
+            .expect_execute(&ALICE_ID, &mut stx, "install native transfer control");
+            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("transfer-control metadata key parses");
+            let transfer_controls_before = stx
+                .world
+                .account(&ALICE_ID)
+                .expect("Alice account exists")
+                .metadata()
+                .get(&metadata_key)
+                .cloned()
+                .expect("dedicated instruction persists transfer controls");
+            stx.world.take_external_events();
+
+            let error = Unregister::domain(domain_id.clone()).expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "domain removal must not orphan native transfer-control state",
+            );
+
+            assert_contains!(
+                error.to_string(),
+                "retains native asset transfer-control state",
+                "unexpected domain-removal rejection: {error}"
+            );
+            assert!(
+                stx.world.domain(&domain_id).is_ok(),
+                "rejected removal must preserve the domain"
+            );
+            assert!(
+                stx.world.asset_definition(&asset_definition_id).is_ok(),
+                "rejected removal must preserve the referenced asset definition"
+            );
+            assert_eq!(
+                stx.world
+                    .account(&ALICE_ID)
+                    .expect("Alice account remains")
+                    .metadata()
+                    .get(&metadata_key),
+                Some(&transfer_controls_before),
+                "rejected removal must preserve the canonical transfer-control store"
+            );
+            assert!(
+                stx.world.take_external_events().is_empty(),
+                "rejected removal must not emit events"
+            );
+        });
         world_test!(unregister_domain_preserves_surviving_account_foreign_ownerships {
             let state = blank_state();
             let domain_id: DomainId =
@@ -33268,8 +33421,8 @@ seiyaku GovernanceLifecycle {
                     self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                    activation_epoch: Some(1),
-                    activation_height: Some(1),
+                    activation_height: 1,
+                    deactivation_height: None,
                     last_reward_epoch: None,
                 },
             );
@@ -33941,6 +34094,202 @@ seiyaku GovernanceLifecycle {
             // World should not contain the peer
             assert!(stx.world.peers().iter().all(|p| p != &peer_id));
         });
+        world_test!(unregister_peer_rejects_live_validator_and_preserves_stake_custody {
+            blank_state_transaction!(state, block, state_block, stx);
+            let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = PeerId::new(keypair.public_key().clone());
+            let validator = AccountId::new(keypair.public_key().clone());
+            let delegator = AccountId::new(
+                checked_keypair_with_algorithm(Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            );
+            let request_id = Hash::new(b"peer-unregister-preserves-pending-unbond");
+            let _ = stx.world.peers.push(peer_id.clone());
+            stx.world.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                iroha_data_model::nexus::PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    peer_id: peer_id.clone(),
+                    stake_account: validator.clone(),
+                    total_stake: iroha_primitives::numeric::Quantity::from(9_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(5_u32),
+                    metadata: Metadata::default(),
+                    status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
+                    activation_height: 1,
+                    deactivation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            let self_share = iroha_data_model::nexus::PublicLaneStakeShare {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: validator.clone(),
+                bonded: iroha_primitives::numeric::Quantity::from(5_u32),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
+            };
+            let delegated_share = iroha_data_model::nexus::PublicLaneStakeShare {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: delegator.clone(),
+                bonded: iroha_primitives::numeric::Quantity::from(4_u32),
+                pending_unbonds: BTreeMap::from([(
+                    request_id,
+                    iroha_data_model::nexus::PublicLaneUnbonding {
+                        request_id,
+                        amount: iroha_primitives::numeric::Quantity::from(3_u32),
+                        release_at_ms: 10,
+                        slashable_through_height: 2,
+                        liability_release_height: 20,
+                    },
+                )]),
+                metadata: Metadata::default(),
+            };
+            stx.world.public_lane_stake_shares.insert(
+                (LaneId::SINGLE, validator.clone(), validator.clone()),
+                self_share.clone(),
+            );
+            stx.world.public_lane_stake_shares.insert(
+                (LaneId::SINGLE, validator.clone(), delegator.clone()),
+                delegated_share.clone(),
+            );
+
+            let error = Unregister::<Peer>::peer(peer_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("a peer in a live validator tenure must not unregister");
+            assert!(
+                format!("{error}").contains("wait for its deactivation height"),
+                "unexpected rejection: {error}"
+            );
+
+            assert!(stx.world.peers().iter().any(|peer| peer == &peer_id));
+            assert!(matches!(
+                stx.world
+                    .public_lane_validators
+                    .get(&(LaneId::SINGLE, validator.clone()))
+                    .expect("matching validator record remains")
+                    .status,
+                iroha_data_model::nexus::PublicLaneValidatorStatus::Active
+            ));
+            assert_eq!(
+                stx.world.public_lane_stake_shares.get(&(
+                    LaneId::SINGLE,
+                    validator.clone(),
+                    validator.clone(),
+                )),
+                Some(&self_share),
+                "peer removal must preserve self stake custody"
+            );
+            assert_eq!(
+                stx.world.public_lane_stake_shares.get(&(
+                    LaneId::SINGLE,
+                    validator,
+                    delegator,
+                )),
+                Some(&delegated_share),
+                "peer removal must preserve delegated and pending-unbond custody"
+            );
+        });
+        world_test!(unregister_peer_rejects_current_authenticated_roster_member {
+            blank_state_transaction!(state, block, state_block, stx);
+            let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = PeerId::new(keypair.public_key().clone());
+            let _ = stx.world.peers.push(peer_id.clone());
+            stx.commit_topology.get_mut().push(peer_id.clone());
+
+            let error = Unregister::<Peer>::peer(peer_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("an authenticated roster member must not unregister");
+
+            assert_contains!(
+                error.to_string(),
+                "current authenticated consensus roster",
+                "unexpected rejection: {error}"
+            );
+            assert!(stx.world.peers().iter().any(|peer| peer == &peer_id));
+        });
+        world_test!(unregister_peer_allows_a_completed_validator_tenure {
+            blank_state_transaction!(state, block, state_block, stx);
+            let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = PeerId::new(keypair.public_key().clone());
+            let validator = AccountId::new(keypair.public_key().clone());
+            let current_height = stx.block_height();
+            assert!(current_height > 0);
+            let _ = stx.world.peers.push(peer_id.clone());
+            stx.world.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                iroha_data_model::nexus::PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    peer_id: peer_id.clone(),
+                    stake_account: validator.clone(),
+                    total_stake: iroha_primitives::numeric::Quantity::zero(),
+                    self_stake: iroha_primitives::numeric::Quantity::zero(),
+                    metadata: Metadata::default(),
+                    status: iroha_data_model::nexus::PublicLaneValidatorStatus::Exited,
+                    activation_height: current_height,
+                    deactivation_height: Some(current_height),
+                    last_reward_epoch: None,
+                },
+            );
+
+            Unregister::<Peer>::peer(peer_id.clone()).expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "a peer whose validator tenure has ended should unregister",
+            );
+
+            assert!(stx.world.peers().iter().all(|peer| peer != &peer_id));
+            let record = stx
+                .world
+                .public_lane_validators
+                .get(&(LaneId::SINGLE, validator))
+                .expect("historical validator tenure remains retained");
+            assert_eq!(record.deactivation_height, Some(current_height));
+        });
+        world_test!(unregister_peer_uses_authoritative_validator_peer_binding {
+            blank_state_transaction!(state, block, state_block, stx);
+            let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = PeerId::new(keypair.public_key().clone());
+            let validator = AccountId::new(keypair.public_key().clone());
+            let other_peer = PeerId::new(
+                checked_keypair_with_algorithm(Algorithm::BlsNormal)
+                    .public_key()
+                    .clone(),
+            );
+            let _ = stx.world.peers.push(peer_id.clone());
+            stx.world.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                iroha_data_model::nexus::PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    peer_id: other_peer,
+                    stake_account: validator.clone(),
+                    total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
+                    metadata: Metadata::default(),
+                    status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
+                    activation_height: 1,
+                    deactivation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+
+            Unregister::<Peer>::peer(peer_id)
+                .expect_execute(&ALICE_ID, &mut stx, "registered peer should unregister");
+
+            let record = stx
+                .world
+                .public_lane_validators
+                .get(&(LaneId::SINGLE, validator))
+                .expect("validator associated with another peer remains");
+            assert!(matches!(
+                record.status,
+                iroha_data_model::nexus::PublicLaneValidatorStatus::Active
+            ));
+        });
         world_test!(unregister_peer_ignores_mismatched_public_lane_validator_rows {
             blank_state_transaction!(state, block, state_block, stx);
             let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -33958,8 +34307,8 @@ seiyaku GovernanceLifecycle {
                     self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                    activation_epoch: Some(1),
-                    activation_height: Some(1),
+                    activation_height: 1,
+                    deactivation_height: None,
                     last_reward_epoch: None,
                 },
             );
@@ -38047,6 +38396,82 @@ seiyaku GovernanceLifecycle {
             assert_eq!(prev.status, ConsensusKeyStatus::Retiring);
             assert_eq!(next.public_key, record_b.public_key);
         });
+        world_test!(validator_tenure_rejects_consensus_key_disable_and_rotation {
+            let state = blank_state();
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let params = consensus_test_parameters!(state_block);
+            let mut stx = state_block.transaction();
+            let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = PeerId::new(keypair.public_key().clone());
+            let validator = AccountId::new(keypair.public_key().clone());
+            let block_height = stx.block_height();
+            let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "retained-validator");
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: keypair.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                        .expect("validator proof of possession"),
+                ),
+                activation_height: block_height,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            upsert_consensus_key(&mut stx.world, &id, record);
+            stx.world.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                iroha_data_model::nexus::PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    peer_id,
+                    stake_account: validator,
+                    total_stake: Quantity::from(1_u32),
+                    self_stake: Quantity::from(1_u32),
+                    metadata: Metadata::default(),
+                    status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
+                    activation_height: block_height,
+                    deactivation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+
+            let disable_error = consensus_keys::DisableConsensusKey { id: id.clone() }
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("retained validator key must not be disabled");
+            assert_contains!(disable_error.to_string(), "cannot disable consensus key");
+            assert_eq!(
+                stx.world.consensus_keys.get(&id).expect("key remains").status,
+                ConsensusKeyStatus::Active
+            );
+
+            let replacement = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let replacement_id =
+                ConsensusKeyId::new(ConsensusKeyRole::Validator, "retained-validator-next");
+            let replacement_record = ConsensusKeyRecord {
+                id: replacement_id.clone(),
+                public_key: replacement.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(replacement.private_key())
+                        .expect("replacement proof of possession"),
+                ),
+                activation_height: stx
+                    .block_height()
+                    .saturating_add(params.key_activation_lead_blocks),
+                expiry_height: None,
+                replaces: Some(id.clone()),
+                status: ConsensusKeyStatus::Pending,
+            };
+            let rotate_error = consensus_keys::RotateConsensusKey {
+                id: replacement_id.clone(),
+                record: replacement_record,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("retained validator key must not rotate");
+            assert_contains!(rotate_error.to_string(), "cannot rotate consensus key");
+            assert!(stx.world.consensus_keys.get(&replacement_id).is_none());
+        });
         world_test!(set_parameter_updates_mutable_max_clock_drift {
             blank_state_transaction!(state, block, state_block, stx);
             SetParameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
@@ -38334,6 +38759,220 @@ seiyaku GovernanceLifecycle {
                     other => panic!("unexpected error type: {other:?}"),
                 }
             }
+        });
+        world_test!(set_parameter_keeps_npos_evidence_horizon_immutable {
+            blank_state_transaction!(state, block, state_block, stx);
+            let initial = SumeragiNposParameters {
+                evidence_horizon_blocks: 100,
+                ..Default::default()
+            };
+            SetParameter::new(Parameter::Custom(initial.into_custom_parameter())).expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "initial signed NPoS parameters should install",
+            );
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("installed NPoS parameters decode")
+                    .evidence_horizon_blocks,
+                100
+            );
+
+            let decreased = SumeragiNposParameters {
+                evidence_horizon_blocks: 80,
+                ..Default::default()
+            };
+            let error = SetParameter::new(Parameter::Custom(decreased.into_custom_parameter()))
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "an installed evidence horizon must not discard previously admissible proofs",
+                );
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_eq!(
+                        message,
+                        "SumeragiNposParameters.reconfig.evidence_horizon_blocks is immutable after installation: 100 -> 80"
+                    );
+                }
+                other => panic!("unexpected error type: {other:?}"),
+            }
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("rejected replacement must preserve installed parameters")
+                    .evidence_horizon_blocks,
+                100
+            );
+
+            let increased = SumeragiNposParameters {
+                evidence_horizon_blocks: 120,
+                ..Default::default()
+            };
+            let error = SetParameter::new(Parameter::Custom(increased.into_custom_parameter()))
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "an installed evidence horizon must not expand retained-state geometry",
+                );
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_eq!(
+                        message,
+                        "SumeragiNposParameters.reconfig.evidence_horizon_blocks is immutable after installation: 100 -> 120"
+                    );
+                }
+                other => panic!("unexpected error type: {other:?}"),
+            }
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("rejected increase must preserve installed parameters")
+                    .evidence_horizon_blocks,
+                100
+            );
+        });
+        world_test!(set_parameter_keeps_npos_slashing_delay_immutable {
+            blank_state_transaction!(state, block, state_block, stx);
+            let initial = SumeragiNposParameters {
+                evidence_horizon_blocks: 2,
+                slashing_delay_blocks: 2,
+                ..Default::default()
+            };
+            SetParameter::new(Parameter::Custom(
+                initial.clone().into_custom_parameter(),
+            ))
+            .expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "initial signed NPoS parameters should install",
+            );
+
+            let decreased = SumeragiNposParameters {
+                slashing_delay_blocks: 1,
+                ..initial
+            };
+            let error = SetParameter::new(Parameter::Custom(
+                decreased.clone().into_custom_parameter(),
+            ))
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "an installed slashing delay must preserve auditable liability deadlines",
+            );
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_eq!(
+                        message,
+                        "SumeragiNposParameters.reconfig.slashing_delay_blocks is immutable after installation: 2 -> 1"
+                    );
+                }
+                other => panic!("unexpected error type: {other:?}"),
+            }
+            let installed = stx
+                .world
+                .sumeragi_npos_parameters()
+                .expect("rejected replacement must preserve installed parameters");
+            assert_eq!(installed.evidence_horizon_blocks, 2);
+            assert_eq!(installed.slashing_delay_blocks, 2);
+
+            let increased = SumeragiNposParameters {
+                slashing_delay_blocks: 3,
+                ..decreased
+            };
+            let error = SetParameter::new(Parameter::Custom(increased.into_custom_parameter()))
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "an installed slashing delay must not expand retained-state geometry",
+                );
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_eq!(
+                        message,
+                        "SumeragiNposParameters.reconfig.slashing_delay_blocks is immutable after installation: 2 -> 3"
+                    );
+                }
+                other => panic!("unexpected error type: {other:?}"),
+            }
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("rejected increase must preserve installed parameters")
+                    .slashing_delay_blocks,
+                2
+            );
+        });
+        world_test!(set_parameter_allows_idempotent_npos_reinstallation {
+            blank_state_transaction!(state, block, state_block, stx);
+            let parameters = SumeragiNposParameters {
+                evidence_horizon_blocks: 100,
+                slashing_delay_blocks: 50,
+                ..Default::default()
+            };
+            let update = || {
+                SetParameter::new(Parameter::Custom(
+                    parameters.clone().into_custom_parameter(),
+                ))
+            };
+
+            update().expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "initial signed NPoS parameters should install",
+            );
+            update().expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "an exact signed NPoS parameter replay should be idempotent",
+            );
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("idempotently reinstalled NPoS parameters decode"),
+                parameters
+            );
+        });
+        world_test!(set_parameter_keeps_npos_epoch_length_immutable {
+            blank_state_transaction!(state, block, state_block, stx);
+            let initial = SumeragiNposParameters::default();
+            let installed_epoch_length = initial.epoch_length_blocks;
+            SetParameter::new(Parameter::Custom(
+                initial.clone().into_custom_parameter(),
+            ))
+            .expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "initial signed NPoS parameters should install",
+            );
+            let changed_epoch_length = NonZeroU64::new(
+                installed_epoch_length.get().saturating_add(1),
+            )
+            .expect("incremented epoch length remains non-zero");
+            let changed = SumeragiNposParameters {
+                epoch_length_blocks: changed_epoch_length,
+                ..initial
+            };
+
+            let error = SetParameter::new(Parameter::Custom(changed.into_custom_parameter()))
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "epoch geometry must not change after installation",
+                );
+
+            assert_contains!(
+                error.to_string(),
+                "epoch_length_blocks is immutable after installation"
+            );
+            assert_eq!(
+                stx.world
+                    .sumeragi_npos_parameters()
+                    .expect("installed NPoS parameters decode")
+                    .epoch_length_blocks,
+                installed_epoch_length
+            );
         });
         world_test!(malformed_manage_verifying_keys_payload_does_not_authorize_registration {
             alice_state_transaction!(state, block, state_block, stx);

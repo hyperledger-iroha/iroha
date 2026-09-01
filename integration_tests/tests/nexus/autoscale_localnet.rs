@@ -1839,10 +1839,10 @@ struct LaneValidatorSnapshot {
     total: u64,
     active: u64,
     pending_activation: u64,
-    jailed: u64,
     exiting: u64,
-    max_activation_epoch: u64,
+    retained_tenures: u64,
     max_activation_height: u64,
+    max_deactivation_height: u64,
 }
 #[derive(Clone, Default)]
 struct PeerStatusSnapshot {
@@ -1907,6 +1907,7 @@ impl std::fmt::Debug for PeerStatusSnapshot {
 fn decode_lane_validator_snapshot(
     payload: &norito::json::Value,
     lane_id: u32,
+    current_height: u64,
 ) -> Option<LaneValidatorSnapshot> {
     let root = payload.as_object()?;
     let items = root.get("items").and_then(norito::json::Value::as_array);
@@ -1917,13 +1918,35 @@ fn decode_lane_validator_snapshot(
         .unwrap_or_default();
     let mut active = 0_u64;
     let mut pending_activation = 0_u64;
-    let mut jailed = 0_u64;
     let mut exiting = 0_u64;
-    let mut max_activation_epoch = 0_u64;
+    let mut retained_tenures = 0_u64;
     let mut max_activation_height = 0_u64;
+    let mut max_deactivation_height = 0_u64;
     if let Some(entries) = items {
         for entry in entries {
             let entry_obj = entry.as_object();
+            let activation_height = entry_obj
+                .and_then(|item| item.get("activation_height"))
+                .and_then(norito::json::Value::as_u64);
+            let deactivation_height = entry_obj
+                .and_then(|item| item.get("deactivation_height"))
+                .and_then(norito::json::Value::as_u64);
+            let tenure_is_malformed = match (activation_height, deactivation_height) {
+                (Some(activation), Some(deactivation)) => deactivation < activation,
+                (None, _) => true,
+                (Some(_), None) => false,
+            };
+            let tenure_is_retained = tenure_is_malformed
+                || deactivation_height.is_none()
+                || deactivation_height.is_some_and(|height| current_height < height);
+            if tenure_is_retained {
+                retained_tenures = retained_tenures.saturating_add(1);
+            }
+            if tenure_is_malformed || deactivation_height.is_none() {
+                max_deactivation_height = u64::MAX;
+            } else if let Some(height) = deactivation_height {
+                max_deactivation_height = max_deactivation_height.max(height);
+            }
             let status_type = entry
                 .as_object()
                 .and_then(|item| item.get("status"))
@@ -1935,41 +1958,44 @@ fn decode_lane_validator_snapshot(
                 Some("PendingActivation") => {
                     pending_activation = pending_activation.saturating_add(1);
                 }
-                Some("Jailed") => jailed = jailed.saturating_add(1),
                 Some("Exiting") => exiting = exiting.saturating_add(1),
                 _ => {}
             }
-            if let Some(epoch) = entry_obj
-                .and_then(|item| item.get("activation_epoch"))
-                .and_then(norito::json::Value::as_u64)
-            {
-                max_activation_epoch = max_activation_epoch.max(epoch);
-            }
-            if let Some(height) = entry_obj
-                .and_then(|item| item.get("activation_height"))
-                .and_then(norito::json::Value::as_u64)
-            {
+            if let Some(height) = activation_height {
                 max_activation_height = max_activation_height.max(height);
             }
         }
+    }
+    let observed_entries = items
+        .and_then(|entries| u64::try_from(entries.len()).ok())
+        .unwrap_or_default();
+    if observed_entries != total {
+        // A truncated or internally inconsistent response cannot prove that
+        // every retained tenure reached its exclusive end.
+        retained_tenures = retained_tenures.max(1);
+        max_deactivation_height = u64::MAX;
     }
     Some(LaneValidatorSnapshot {
         lane_id,
         total,
         active,
         pending_activation,
-        jailed,
         exiting,
-        max_activation_epoch,
+        retained_tenures,
         max_activation_height,
+        max_deactivation_height,
     })
 }
 fn is_not_found_lane_validator_error(message: &str) -> bool {
     message.contains("404") || message.contains("Not Found")
 }
-fn fetch_lane_validator_snapshot(client: &Client, lane_id: u32) -> Option<LaneValidatorSnapshot> {
+fn fetch_lane_validator_snapshot(
+    client: &Client,
+    lane_id: u32,
+    current_height: u64,
+) -> Option<LaneValidatorSnapshot> {
     match client.get_public_lane_validators(LaneId::new(lane_id)) {
-        Ok(payload) => decode_lane_validator_snapshot(&payload, lane_id),
+        Ok(payload) => decode_lane_validator_snapshot(&payload, lane_id, current_height),
         Err(err) => {
             let message = err.to_string();
             if is_not_found_lane_validator_error(&message) {
@@ -1978,10 +2004,10 @@ fn fetch_lane_validator_snapshot(client: &Client, lane_id: u32) -> Option<LaneVa
                     total: 0,
                     active: 0,
                     pending_activation: 0,
-                    jailed: 0,
                     exiting: 0,
-                    max_activation_epoch: 0,
+                    retained_tenures: 0,
                     max_activation_height: 0,
+                    max_deactivation_height: 0,
                 })
             } else {
                 None
@@ -2103,7 +2129,9 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                 .unwrap_or((0, 0, false, false, false, false, 0));
             let lane_validators = OBSERVED_AUTOSCALE_LANE_IDS
                 .iter()
-                .filter_map(|lane_id| fetch_lane_validator_snapshot(&client, *lane_id))
+                .filter_map(|lane_id| {
+                    fetch_lane_validator_snapshot(&client, *lane_id, status.blocks)
+                })
                 .into_iter()
                 .collect::<Vec<_>>();
             let commit_signatures_required = status
@@ -2514,10 +2542,10 @@ fn lane_validator_snapshots_equivalent(
         && left.total == right.total
         && left.active == right.active
         && left.pending_activation == right.pending_activation
-        && left.jailed == right.jailed
         && left.exiting == right.exiting
-        && left.max_activation_epoch == right.max_activation_epoch
+        && left.retained_tenures == right.retained_tenures
         && left.max_activation_height == right.max_activation_height
+        && left.max_deactivation_height == right.max_deactivation_height
 }
 fn peer_lane_validator_evidence(
     peer: &PeerStatusSnapshot,
@@ -2552,7 +2580,7 @@ fn peer_lane_validator_snapshot(
     }
 }
 fn lane_validator_has_live_activity(lane: &LaneValidatorSnapshot) -> bool {
-    lane.active > 0 || lane.pending_activation > 0 || lane.jailed > 0 || lane.exiting > 0
+    lane.retained_tenures > 0
 }
 fn peer_has_lane_declaration(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
     peer_has_active_lane_capacity(peer, lane_id)
@@ -2649,7 +2677,6 @@ fn peer_has_lane_progress_transition(
         (Some(current), Some(baseline)) if lane_validator_has_live_activity(current) => {
             current.active > baseline.active
                 || current.pending_activation > baseline.pending_activation
-                || current.jailed > baseline.jailed
                 || current.exiting > baseline.exiting
         }
         _ => false,
@@ -3699,7 +3726,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
         thread::sleep(heartbeat_interval);
     }
     Err(eyre!(
-        "{context}: timed out waiting for expanded lane profile (lane {elastic_lane_id} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, public-lane validator lifecycle activity (`active || pending_activation || jailed || exiting`), baseline transition via lane declaration/progress, or deterministic autoscale scale-out transitions on >= {quorum_required}/{TOTAL_PEERS} peers{}; storage lane count={expanded_provisioned_lanes} accepted only as fallback after grace {:?} + post-storage status window {:?} when elastic lane storage progresses on >= {quorum_required}/{TOTAL_PEERS} peers and scale-out transition quorum is not required); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last elastic storage snapshot: {last_elastic_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-out transition peers: {last_scale_out_transition_peers}/{TOTAL_PEERS}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
+        "{context}: timed out waiting for expanded lane profile (lane {elastic_lane_id} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, retained public-lane validator tenure, baseline transition via lane declaration/progress, or deterministic autoscale scale-out transitions on >= {quorum_required}/{TOTAL_PEERS} peers{}; storage lane count={expanded_provisioned_lanes} accepted only as fallback after grace {:?} + post-storage status window {:?} when elastic lane storage progresses on >= {quorum_required}/{TOTAL_PEERS} peers and scale-out transition quorum is not required); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last elastic storage snapshot: {last_elastic_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-out transition peers: {last_scale_out_transition_peers}/{TOTAL_PEERS}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
         if require_scale_out_transition {
             if require_expansion_status {
                 "; strict mode requires fresh deterministic scale-out transition quorum after the cycle baseline and expanded-lane status evidence"
@@ -7641,7 +7668,8 @@ mod tests {
         commit_quorum_observation, committed_lane_block_has_canonical_quorum_metadata,
         committed_lane_block_is_certified, contraction_observed_on_quorum_peers,
         contraction_observed_on_quorum_peers_for_profile, decode_block_index_entry,
-        elastic_lane_storage_progressed, expansion_observed_on_quorum_or_scale_out_transition,
+        decode_lane_validator_snapshot, elastic_lane_storage_progressed,
+        expansion_observed_on_quorum_or_scale_out_transition,
         expansion_observed_on_quorum_or_scale_out_transition_for_lane,
         expansion_observed_on_quorum_peers, expansion_observed_on_quorum_peers_for_lane,
         expansion_observed_on_storage, expansion_observed_on_storage_for_count,
@@ -10151,30 +10179,30 @@ mod tests {
                 total: 4,
                 active: 0,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 0,
-                max_activation_epoch: 7,
+                retained_tenures: 0,
                 max_activation_height: 42,
+                max_deactivation_height: 0,
             });
             baseline_peer.lane_validators.push(LaneValidatorSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 total: 4,
                 active: 1,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 0,
-                max_activation_epoch: 7,
+                retained_tenures: 1,
                 max_activation_height: 42,
+                max_deactivation_height: 0,
             });
             repaired_peer.lane_validators.push(LaneValidatorSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 total: 4,
                 active: 2,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 0,
-                max_activation_epoch: 8,
+                retained_tenures: 2,
                 max_activation_height: 43,
+                max_deactivation_height: 0,
             });
         }
         assert_eq!(
@@ -10523,10 +10551,10 @@ mod tests {
                 total: 4,
                 active: 1,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 0,
-                max_activation_epoch: 1,
+                retained_tenures: 1,
                 max_activation_height: 42,
+                max_deactivation_height: 0,
             });
         }
         assert!(!contraction_observed_on_quorum_peers_for_profile(
@@ -10936,6 +10964,72 @@ mod tests {
         );
     }
     #[test]
+    fn validator_snapshot_retention_is_status_independent_until_exact_deactivation_height() {
+        let payload = norito::json!({
+            "total": 3_u64,
+            "items": [
+                {
+                    "status": { "type": "Exiting" },
+                    "activation_height": 1_u64,
+                    "deactivation_height": 42_u64,
+                },
+                {
+                    "status": { "type": "Exited" },
+                    "activation_height": 1_u64,
+                    "deactivation_height": 42_u64,
+                },
+                {
+                    "status": { "type": "Slashed", "content": "00" },
+                    "activation_height": 1_u64,
+                    "deactivation_height": 42_u64,
+                },
+            ],
+        });
+        let before = decode_lane_validator_snapshot(&payload, 9, 41)
+            .expect("decode pre-deactivation validator snapshot");
+        assert_eq!(before.exiting, 1);
+        assert_eq!(before.retained_tenures, 3);
+        assert_eq!(before.max_deactivation_height, 42);
+
+        let at_boundary = decode_lane_validator_snapshot(&payload, 9, 42)
+            .expect("decode at-deactivation validator snapshot");
+        assert_eq!(at_boundary.exiting, 1);
+        assert_eq!(at_boundary.retained_tenures, 0);
+        assert_eq!(at_boundary.max_deactivation_height, 42);
+
+        let missing_boundary = norito::json!({
+            "total": 1_u64,
+            "items": [{
+                "status": { "type": "Exited" },
+                "activation_height": 1_u64,
+                "deactivation_height": null,
+            }],
+        });
+        let malformed = decode_lane_validator_snapshot(&missing_boundary, 9, 42)
+            .expect("decode malformed exit conservatively");
+        assert_eq!(malformed.retained_tenures, 1);
+        assert_eq!(malformed.max_deactivation_height, u64::MAX);
+
+        let inverted_boundary = norito::json!({
+            "total": 1_u64,
+            "items": [{
+                "status": { "type": "Slashed", "content": "00" },
+                "activation_height": 42_u64,
+                "deactivation_height": 41_u64,
+            }],
+        });
+        let malformed = decode_lane_validator_snapshot(&inverted_boundary, 9, 42)
+            .expect("decode inverted tenure conservatively");
+        assert_eq!(malformed.retained_tenures, 1);
+        assert_eq!(malformed.max_deactivation_height, u64::MAX);
+
+        let truncated = norito::json!({ "total": 1_u64, "items": [] });
+        let malformed = decode_lane_validator_snapshot(&truncated, 9, 42)
+            .expect("decode truncated validator snapshot conservatively");
+        assert_eq!(malformed.retained_tenures, 1);
+        assert_eq!(malformed.max_deactivation_height, u64::MAX);
+    }
+    #[test]
     fn public_profile_contraction_allows_terminal_validator_audit_rows() {
         let contracted_public_profile = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         let mut terminal_validator_rows = contracted_public_profile.clone();
@@ -10945,10 +11039,10 @@ mod tests {
                 total: 4,
                 active: 0,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 0,
-                max_activation_epoch: 7,
+                retained_tenures: 0,
                 max_activation_height: 42,
+                max_deactivation_height: 42,
             });
         }
         assert!(contraction_observed_on_quorum_peers_for_profile(
@@ -10977,20 +11071,20 @@ mod tests {
                 total: 4,
                 active: 0,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 0,
-                max_activation_epoch: 7,
+                retained_tenures: 0,
                 max_activation_height: 42,
+                max_deactivation_height: 42,
             });
             peer.lane_validators.push(LaneValidatorSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 total: 4,
                 active: 1,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 0,
-                max_activation_epoch: 7,
+                retained_tenures: 1,
                 max_activation_height: 42,
+                max_deactivation_height: 0,
             });
         }
         assert!(
@@ -11026,10 +11120,10 @@ mod tests {
                 total: 4,
                 active: 0,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 0,
-                max_activation_epoch: 7,
+                retained_tenures: 0,
                 max_activation_height: 42,
+                max_deactivation_height: 42,
             };
             peer.lane_validators.push(terminal.clone());
             peer.lane_validators.push(terminal);
@@ -11055,49 +11149,48 @@ mod tests {
     #[test]
     fn public_profile_contraction_rejects_revivable_validator_rows() {
         let contracted_public_profile = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
-        let mut jailed_validator_rows = contracted_public_profile.clone();
-        for peer in jailed_validator_rows.iter_mut().take(3) {
+        let mut pending_validator_rows = contracted_public_profile.clone();
+        for peer in pending_validator_rows.iter_mut().take(3) {
             peer.lane_validators.push(LaneValidatorSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 total: 4,
                 active: 0,
-                pending_activation: 0,
-                jailed: 1,
+                pending_activation: 1,
                 exiting: 0,
-                max_activation_epoch: 7,
+                retained_tenures: 1,
                 max_activation_height: 42,
+                max_deactivation_height: 0,
             });
         }
         assert!(!contraction_observed_on_quorum_peers_for_profile(
-            &jailed_validator_rows,
+            &pending_validator_rows,
             PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
             PUBLIC_PROFILE_ELASTIC_LANE_ID,
             3
         ));
         assert_eq!(
             peers_with_expanded_lane_signal(
-                &jailed_validator_rows,
+                &pending_validator_rows,
                 Some(&contracted_public_profile),
                 PUBLIC_PROFILE_ELASTIC_LANE_ID
             ),
             3,
-            "jailed public validators remain live lane-scoped state"
+            "pending public validators remain live lane-scoped state"
         );
-        let mut jailed_with_terminal_noise = jailed_validator_rows.clone();
-        for peer in jailed_with_terminal_noise.iter_mut().take(3) {
+        let mut pending_with_terminal_noise = pending_validator_rows.clone();
+        for peer in pending_with_terminal_noise.iter_mut().take(3) {
             let validator = peer
                 .lane_validators
                 .iter_mut()
                 .find(|validator| validator.lane_id == PUBLIC_PROFILE_ELASTIC_LANE_ID)
                 .expect("elastic lane validator snapshot");
             validator.total = validator.total.saturating_add(3);
-            validator.max_activation_epoch = validator.max_activation_epoch.saturating_add(3);
             validator.max_activation_height = validator.max_activation_height.saturating_add(30);
         }
         assert_eq!(
             peers_with_expanded_lane_signal(
-                &jailed_with_terminal_noise,
-                Some(&jailed_validator_rows),
+                &pending_with_terminal_noise,
+                Some(&pending_validator_rows),
                 PUBLIC_PROFILE_ELASTIC_LANE_ID
             ),
             0,
@@ -11110,10 +11203,10 @@ mod tests {
                 total: 4,
                 active: 0,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 1,
-                max_activation_epoch: 7,
+                retained_tenures: 1,
                 max_activation_height: 42,
+                max_deactivation_height: 43,
             });
         }
         assert!(!contraction_observed_on_quorum_peers_for_profile(
@@ -11129,7 +11222,7 @@ mod tests {
                 PUBLIC_PROFILE_ELASTIC_LANE_ID
             ),
             3,
-            "exiting public validators remain live until release"
+            "exiting public validators remain live until their exact deactivation height"
         );
     }
     #[test]
@@ -11517,10 +11610,9 @@ mod tests {
         total: u64,
         active: u64,
         pending_activation: u64,
-        jailed: u64,
         exiting: u64,
-        max_activation_epoch: u64,
         max_activation_height: u64,
+        max_deactivation_height: u64,
     }
 
     impl ExpansionValidatorSpec {
@@ -11528,10 +11620,9 @@ mod tests {
             total: 4,
             active: 0,
             pending_activation: 0,
-            jailed: 0,
             exiting: 0,
-            max_activation_epoch: 1,
             max_activation_height: 100,
+            max_deactivation_height: 0,
         };
     }
 
@@ -11620,10 +11711,13 @@ mod tests {
                 total: validator.total,
                 active: validator.active,
                 pending_activation: validator.pending_activation,
-                jailed: validator.jailed,
                 exiting: validator.exiting,
-                max_activation_epoch: validator.max_activation_epoch,
+                retained_tenures: validator
+                    .active
+                    .saturating_add(validator.pending_activation)
+                    .saturating_add(validator.exiting),
                 max_activation_height: validator.max_activation_height,
+                max_deactivation_height: validator.max_deactivation_height,
             }]
         } else {
             Vec::new()
@@ -11821,7 +11915,6 @@ mod tests {
                 });
                 current[2] = current[2].with_validator(ExpansionValidatorSpec {
                     active: 1,
-                    max_activation_epoch: 2,
                     max_activation_height: 102,
                     ..ExpansionValidatorSpec::INACTIVE
                 });
@@ -11882,20 +11975,20 @@ mod tests {
                 total: 4,
                 active: 0,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 0,
-                max_activation_epoch: 1,
+                retained_tenures: 0,
                 max_activation_height: 100,
+                max_deactivation_height: 100,
             });
             peer.lane_validators.push(LaneValidatorSnapshot {
                 lane_id: 1,
                 total: 4,
                 active: 1,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 0,
-                max_activation_epoch: 1,
+                retained_tenures: 1,
                 max_activation_height: 100,
+                max_deactivation_height: 0,
             });
         }
         assert!(
@@ -11917,10 +12010,10 @@ mod tests {
                 total: 4,
                 active: 1,
                 pending_activation: 0,
-                jailed: 0,
                 exiting: 0,
-                max_activation_epoch: 1,
+                retained_tenures: 1,
                 max_activation_height: 100,
+                max_deactivation_height: 0,
             };
             peer.lane_validators.push(live.clone());
             peer.lane_validators.push(live);

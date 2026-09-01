@@ -1,17 +1,19 @@
 # Roadmap
 
-Last updated: 2026-08-31
+Last updated: 2026-09-01
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
 Signing and key-custody release gates are provider-neutral. Iroha will not add
 HSM- or PKCS#11-specific product modes, APIs, configuration, schemas, or named
-release gates, and it will never require an HSM. A deployment may place the
-provider-neutral signing service behind its own custody boundary. Qualification
-still requires authenticated provider binding, runtime-only non-persistent
-secret handling, rotation and revocation, sealed-CAS durability where state is
-retained, failover and recovery evidence, and independent review.
+release gates. Software signing and custody are valid for every Iroha
+deployment; no deployment or release gate requires an HSM. Custody-provider
+selection remains outside Iroha. A deployment may place the provider-neutral
+signing service behind its own custody boundary. Qualification still requires
+authenticated provider binding, runtime-only non-persistent secret handling,
+rotation and revocation, sealed-CAS durability where state is retained, failover
+and recovery evidence, and independent review.
 
 ## Python SDK first-release follow-up
 
@@ -1019,9 +1021,11 @@ to:
   an unplanned eighth `network-scale-soak` operation; this source repair is not
   a substitute for operator approval.
 
-## Kagemusha production evidence closeout
+## Kagemusha feature evidence closeout
 
-Public Taira remains the deployment gate rather than a source-code toggle:
+Public Taira remains the Kagemusha feature-qualification environment rather
+than a source-code toggle. This section is not a general Iroha/Taira deployment
+gate and does not require HSM-backed signing or custody:
 
 - Restore `taira.sora.org:443`, render the four validator configurations with
   the reviewed `[settlement.offline]` release, deploy the exact eight-role
@@ -1032,7 +1036,8 @@ Public Taira remains the deployment gate rather than a source-code toggle:
   command authority with `CanManageOfflineEscrow`, install the verifier records
   and register Digital Shekel (`ds#boi.is`) as the Kagemusha ZK asset while
   retaining XOR for command fees, complete governed Stage/Enable activation,
-  activate the device policy, and enroll qualified hardware-backed users.
+  activate the device policy, and enroll qualified hardware-backed users for
+  Kagemusha's feature-specific anti-double-spend/device-attestation evidence.
 - Supply the authenticated external privacy-SDK Cargo lock with frozen digest
   `cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79`,
   or explicitly requalify the freshly generated lock for the
@@ -1044,7 +1049,8 @@ Public Taira remains the deployment gate rather than a source-code toggle:
   authorization and retain their four-validator finality/liveness evidence.
 
 The exact V4 lifecycle source corridor is implemented end to end. One shared
-data-model classifier admits exactly one direct native Kagemusha instruction in
+Core classifier backed by the data-model direct-carrier primitive admits
+exactly one direct native Kagemusha instruction in
 an `External` transaction; mixed, multiple, nested, Batch, IVM, proved-overlay,
 and sealed-reveal lookalikes fail closed. Consensus now separates
 authority-scoped Pending/Rejected attempts from the sole global Applied record,
@@ -1059,19 +1065,21 @@ newer exact Queue attempt supersede stale local admission, and retries only an
 exact configured-authority Rejected attempt with a checked nonce increment;
 exhaustion is the definitive `offline_operation_retry_exhausted` conflict.
 Maintained SDKs submit Kagemusha POSTs once, reconcile ambiguity through the
-immutable status URI, and allow only the transaction identity and Pending
-timestamp to advance for a newer attempt or foreign-authority Applied winner.
+immutable status URI, and allow only the active carrier transaction hash to
+advance for a newer attempt or foreign-authority Applied winner. The signed
+request timestamp remains immutable with the operation id, kind, and URI.
 Focused mutable-tree validation passes the data-model library check, four Queue
-bijection regressions, twelve Core finality/retry regressions, the grouped JSON value
-contract, all 24 JavaScript lifecycle cases against source and generated
-distribution exports, Python source parsing, Swift parsing, the ABI-21 SDK
-hard-cut self-test, scoped formatting, and the retired-codec guard. The three
-OpenAPI mirrors are byte-identical and contain the corrected contract, but their
-development manifests and version index still bind the preceding bytes pending
-the final source-stable double generation. The locked Torii library check
-passes; its exact retry/OpenAPI tests cannot yet compile because the shared
-library-test harness contains unrelated errors owned outside this audit. These
-are not full-workspace, Clippy, signed-release, or
+bijection regressions, twelve Core finality/retry regressions, the grouped JSON
+value contract, all 28 JavaScript lifecycle cases against source and generated
+distribution exports, focused Kotlin and Java identity/parser tests, the C# SDK
+gate with 4,779 cases, Python and Swift parsing, the ABI-21 SDK hard-cut self-test,
+the ABI-23 bridge/JNI guards, scoped formatting, and the retired-codec guard.
+The three OpenAPI mirrors are byte-identical and contain the corrected contract.
+Both development manifests and the version index bind the current canonical
+bytes produced identically by two consecutive generation runs. The focused
+Torii-shared operation-status test is blocked by six unrelated missing
+Parliament test imports in the shared test harness. These are not
+full-workspace, Clippy, signed-release, or
 immutable-candidate results. A clean source seal, signed OpenAPI provenance, and
 the complete immutable-candidate gate remain internal release blockers.
 Production readiness is not complete. The remaining work is internal release
@@ -3106,6 +3114,9 @@ bridge ABI 23 or manifest V4, while its nested compact profile is V5. The
 boundary is the complete 138-limb canonical state, including the public
 append-only `next_zero_leaf_index`; each fixed Eq/Ep public-input schema is 66
 field elements.
+The typed recursive proof envelope and opaque canonical Eq/Ep proof-pair archive
+both use exact internal version 5. These internal versions do not alter the
+ABI-21/V4 chain lifecycle or the independently versioned ABI 23 native bridge.
 There is no fallback for the former layout. All earlier V4 candidate keys,
 bootstrap witnesses, proofs, manifests, and schema digests are invalid and must
 be regenerated after the frontier substitution matrix passes.
@@ -3113,17 +3124,20 @@ Core and Torii resolve the exact V4 release selected by each transaction's
 artifact binding. Admission requires that release's authenticated Eq/Ep
 registry records and immutable native verifier; top-up and redemption-change
 also require an active issuance window, while full redemption remains available
-after issuance withdrawal. The legacy global backend constant is retained only
-as a compatibility marker and is not a V4 admission selector. Branch paths
+after issuance withdrawal. The global `halo2/ipa` identifier names the
+independent transparent top-up and unshield proof circuits; it is not a
+recursive V4 release selector or compatibility path. Branch paths
 retain depth 64, while peer spends permit at most eight hops and each transition
 consumes at most two recursive inputs. Redemption-change extends proof lineage
 without adding a peer hop. These are protocol bounds, not availability signals.
 Wallet-facing partial-redemption change opening preparation now has a single
 native secret boundary. Callers provide the authenticated input branch, its
-owned opening, the smaller same-scale change amount, a nonzero operation id,
-and fresh entropy; native code revalidates the full bundle and input note,
-derives rho with the fixed V4 keyed-BLAKE3 transcript, and selects the protocol
-diversifier. The C result uses a dedicated zeroizing allocator, while Swift,
+owned opening, the smaller same-scale change amount, the recipient, a fresh
+nonzero nonce, and fresh entropy. Native code revalidates the full bundle and
+input note, derives the canonical operation id from the recipient's standalone
+`AccountId` archive plus nonce, derives rho with the fixed V4 keyed-BLAKE3
+transcript, and selects the protocol diversifier. The C result uses a dedicated
+zeroizing allocator, while Swift,
 Kotlin/JVM, and Android Java copy or transfer the opening under explicit
 single-owner lifetimes and wipe temporary archives. This implementation does
 not change production availability or count as review, device evidence, or a
@@ -3165,16 +3179,12 @@ stays false.
 The historical ABI-19/V3 path had a 1,600-byte per-step limit. Its degree-18 prototype produced 7,296-byte ordinary and
 7,328-byte augmented proofs even before full confidential/output-membership
 composition; it is not the current artifact/readiness contract. V4's
-authenticated profiles retain defensive ceilings of 192 KiB per step and
-384 KiB per canonical pair. The `[220]` advice / `[25, 0, 0]` profile and its
-93,120-byte per-role, 186,852-byte initialization-pair, and 191,862-byte
-recursive-pair figures were reviewed projections, but the authenticated graph
-never reached `calculate_params`. A replacement binding must first produce a
-usable shape; authentic generation must then derive the actual values, and the
-manifest must authenticate the measured recursive maximum rather than a stale
-projection.
-Those ceilings are not availability signals; promotion must pin the
-candidate's exact values and pass independent review and device evidence.
+authenticated compact-V5 `[220]` advice / `[25, 0, 0]` profile fixes
+93,120-byte proofs per role, an exact 186,852-byte initialization pair, and an
+exact 191,862-byte release maximum. Its 192 KiB per-step and 384 KiB
+(393,216-byte) per-pair limits are separate defensive admission ceilings, not
+release sizes or availability signals. Promotion must pin those exact release
+values and pass independent review and device evidence.
 
 ## SORA Economic Constitution
 
@@ -21645,10 +21655,11 @@ operator-provided rollout bundles.
   lifecycle gates: committed-autoscale drift revalidation, the broader core
   autoscale transition suite, the core lane lifecycle suite, and the grouped
   Torii `nexus_lifecycle_endpoint` module all pass on this snapshot.
-- NPoS lane-scope inference now ignores inactive public-lane validator records
-  when deriving live recovery candidates and active topologies, so stale
-  `Jailed`, `Exiting`, `Exited`, `PendingActivation`, or `Slashed` records from
-  a retired/rebound lane cannot pin independent-lane recovery to a dead scope.
+- NPoS lane-scope inference now uses each public-lane validator's exact retained
+  `[activation_height, deactivation_height)` tenure when deriving live recovery
+  candidates and active topologies, so lifecycle labels cannot prematurely
+  revoke authority and stale records from a retired or rebound lane cannot pin
+  independent-lane recovery to a dead scope.
   Public-lane validator rows must now also have storage key `(lane_id,
   validator)` fields that match the embedded `PublicLaneValidatorRecord` before
   live topology, stake snapshots, validator-election profiles, due activation,
@@ -21657,8 +21668,8 @@ operator-provided rollout bundles.
   stale rows from auto-promoting to active, inflating quorum weight, joining an
   NPoS roster, reserving validator capacity or peer bindings, granting runtime
   authority, or redirecting penalties to a mismatched validator slot.
-  Lane reset paths now also mark revivable `PendingActivation`, `Active`, and
-  `Jailed` public-lane validator records for reset lanes as `Exited`, covering
+  Lane reset paths now also bound and retire revivable public-lane validator
+  records for reset lanes, covering
   direct config swaps, manual lifecycle retirement, and autoscale scale-in.
   Authoritative lane validator and peer resolution now also rejects lanes
   absent from the active lane config, or whose dataspace is absent from the
@@ -22187,13 +22198,12 @@ operator-provided rollout bundles.
   resolves the live Nexus full plan before enforcing lane policies, preventing
   direct validation entrypoints from collapsing autoscaled default-route traffic
   back to the catalog-only base lane.
-- Autoscale localnet expansion/contraction evidence now treats public-lane
-  validator lifecycle state by status: `Active`, `PendingActivation`, `Jailed`,
-  and `Exiting` rows count as live elastic-lane evidence, while terminal
-  `Exited`/`Slashed` audit rows exposed by Torii do not fake expansion progress
-  or block contraction. Adversarial harness coverage pins terminal audit rows,
-  revivable validator rows, and terminal-count/activation-watermark noise beside
-  an already-live validator baseline. The same localnet harness now parses
+- Autoscale localnet expansion/contraction evidence now derives live
+  elastic-lane evidence from retained validator tenures rather than lifecycle
+  labels, while terminal audit rows exposed by Torii do not fake expansion
+  progress or block contraction. Adversarial harness coverage pins terminal
+  audit rows, revivable validator rows, and terminal-count/activation-watermark
+  noise beside an already-live validator baseline. The same localnet harness now parses
   structured `lane` fields from autoscale transition logs before using
   deterministic scale-out/scale-in quorum evidence, and requires the producer's
   structured `height`, `active_lanes`, and `autoscale_capacity_lanes` fields on

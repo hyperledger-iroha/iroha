@@ -65,9 +65,10 @@ async fn sumeragi_tel_subrouter_rejects_retired_endpoints() {
         telemetry_handle,
     )
     .expect("valid Torii Sumeragi-telemetry fixture");
-    let app = torii
+    let runtime = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
+    let app = runtime.router();
     for retired in [
         "/v1/sumeragi/pacemaker",
         "/v1/sumeragi/rbc",
@@ -85,4 +86,5 @@ async fn sumeragi_tel_subrouter_rejects_retired_endpoints() {
             .expect("retired route response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{retired}");
     }
+    runtime.shutdown().await;
 }

@@ -1,10 +1,9 @@
 //! Stake-backed validator eligibility helpers for Sumeragi v2.
-use crate::state::{WorldReadOnly, public_lane_validator_record_matches_key};
-use iroha_data_model::{
-    block::consensus_v2,
-    nexus::{LaneId, PublicLaneValidatorStatus},
-    peer::PeerId,
+use crate::{
+    smartcontracts::isi::staking::validator_election_eligible_at_height,
+    state::{WorldReadOnly, public_lane_validator_record_matches_key},
 };
+use iroha_data_model::{block::consensus_v2, nexus::LaneId, peer::PeerId};
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,13 +11,14 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 #[must_use]
 pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerId, Quantity> {
-    stake_map_from_world_with_active_lanes(world, None)
+    stake_map_from_world_with_active_lanes(world, None, 1)
 }
 /// Build a stake map using only active validator records from active Nexus lanes.
 #[must_use]
 pub(super) fn stake_map_from_world_with_active_lanes(
     world: &impl WorldReadOnly,
     active_lane_ids: Option<&BTreeSet<LaneId>>,
+    eligibility_height: u64,
 ) -> BTreeMap<PeerId, Quantity> {
     let mut stake_map: BTreeMap<PeerId, Quantity> = BTreeMap::new();
     for (key, record) in world.public_lane_validators().iter() {
@@ -29,7 +29,7 @@ pub(super) fn stake_map_from_world_with_active_lanes(
         {
             continue;
         }
-        if !matches!(record.status, PublicLaneValidatorStatus::Active) {
+        if !validator_election_eligible_at_height(record, eligibility_height) {
             continue;
         }
         let peer_id = record.peer_id.clone();
@@ -57,6 +57,7 @@ pub(crate) fn strict_v2_voting_roster(
     world: &impl WorldReadOnly,
     elected_roster: &[PeerId],
     active_lane_ids: Option<&BTreeSet<LaneId>>,
+    eligibility_height: u64,
 ) -> Result<Vec<consensus_v2::ValidatorPower>, StrictV2StakeSnapshotError> {
     if elected_roster.is_empty() {
         return Err(StrictV2StakeSnapshotError::EmptyRoster);
@@ -65,7 +66,8 @@ pub(crate) fn strict_v2_voting_roster(
     if unique.len() != elected_roster.len() {
         return Err(StrictV2StakeSnapshotError::DuplicateValidator);
     }
-    let stake_map = stake_map_from_world_with_active_lanes(world, active_lane_ids);
+    let stake_map =
+        stake_map_from_world_with_active_lanes(world, active_lane_ids, eligibility_height);
     let mut roster = Vec::with_capacity(elected_roster.len());
     for validator in elected_roster {
         let stake = stake_map
@@ -134,8 +136,8 @@ mod tests {
             self_stake: Quantity::from(stake),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
-            activation_epoch: None,
-            activation_height: None,
+            activation_height: 1,
+            deactivation_height: None,
             last_reward_epoch: None,
         }
     }
@@ -172,6 +174,7 @@ mod tests {
             state.view().world(),
             &[peer_b.clone(), peer_a.clone()],
             Some(&BTreeSet::from([LaneId::SINGLE])),
+            1,
         )
         .expect("strict frozen powers");
         assert!(
@@ -193,15 +196,20 @@ mod tests {
         let missing = PeerId::new(checked_random_keypair().public_key().clone());
 
         assert_eq!(
-            strict_v2_voting_roster(state.view().world(), &[], None),
+            strict_v2_voting_roster(state.view().world(), &[], None, 1),
             Err(StrictV2StakeSnapshotError::EmptyRoster)
         );
         assert_eq!(
-            strict_v2_voting_roster(state.view().world(), &[peer.clone(), peer.clone()], None),
+            strict_v2_voting_roster(state.view().world(), &[peer.clone(), peer.clone()], None, 1,),
             Err(StrictV2StakeSnapshotError::DuplicateValidator)
         );
         assert_eq!(
-            strict_v2_voting_roster(state.view().world(), std::slice::from_ref(&missing), None),
+            strict_v2_voting_roster(
+                state.view().world(),
+                std::slice::from_ref(&missing),
+                None,
+                1,
+            ),
             Err(StrictV2StakeSnapshotError::MissingStake)
         );
 
@@ -214,7 +222,7 @@ mod tests {
             block.commit();
         }
         assert_eq!(
-            strict_v2_voting_roster(state.view().world(), std::slice::from_ref(&peer), None),
+            strict_v2_voting_roster(state.view().world(), std::slice::from_ref(&peer), None, 1,),
             Err(StrictV2StakeSnapshotError::ZeroStake)
         );
     }

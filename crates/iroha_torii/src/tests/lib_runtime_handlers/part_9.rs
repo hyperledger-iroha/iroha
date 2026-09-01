@@ -1096,6 +1096,11 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
             validator_two_peer_id.clone(),
         ),
     ] {
+        let deactivation_height = matches!(
+            &status,
+            iroha_data_model::nexus::staking::PublicLaneValidatorStatus::Exited
+        )
+        .then_some(2);
         world.public_lane_validators_mut_for_testing().insert(
             (
                 iroha_data_model::nexus::LaneId::SINGLE,
@@ -1110,8 +1115,8 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
                 self_stake: Quantity::from(1_u64),
                 metadata: iroha_data_model::metadata::Metadata::default(),
                 status,
-                activation_epoch: Some(0),
-                activation_height: Some(0),
+                activation_height: 1,
+                deactivation_height,
                 last_reward_epoch: None,
             },
         );
@@ -1646,7 +1651,7 @@ async fn app_api_get_by_id_not_found_returns_404() {
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
 }
 struct RuntimeApiRouterFixture {
-    router: axum::Router,
+    router: crate::TestApiRouterRuntime,
     _kiso_child: iroha_futures::supervisor::Child,
 }
 impl RuntimeApiRouterFixture {
@@ -1702,6 +1707,10 @@ impl RuntimeApiRouterFixture {
             _kiso_child: child,
         }
     }
+
+    async fn shutdown(self) {
+        self.router.shutdown().await;
+    }
 }
 #[cfg(not(feature = "app_api"))]
 #[tokio::test]
@@ -1736,6 +1745,7 @@ async fn public_sorafs_gateway_routes_are_mounted_without_app_api() {
             "GET-only public gateway path must remain mounted without app_api: {path}"
         );
     }
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -1772,6 +1782,7 @@ async fn retired_server_contract_deploy_routes_are_absent() {
             .expect("response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "path {path}");
     }
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -1819,6 +1830,7 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
     let response = fixture
         .router
+        .router()
         .oneshot(request)
         .await
         .expect("retired-route response");
@@ -1833,6 +1845,7 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
         0,
         "an HTTP request must not create pre-commit pin-registry state"
     );
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -1857,7 +1870,7 @@ async fn appeal_finance_publication_routes_are_read_only() {
         key_pair: KeyPair,
     }
     impl RouterGovernanceDagSigner {
-        const HANDLE: &'static str = "pkcs11:governance-dag:retired-appeal-route-primary";
+        const HANDLE: &'static str = "provider:governance-dag:retired-appeal-route-primary";
         const PEER_ID: &'static [u8] = b"12D3KooWRetiredAppealRoutePublisher";
         fn new() -> Self {
             Self {
@@ -2072,7 +2085,7 @@ async fn appeal_finance_publication_routes_are_read_only() {
         state,
         runtime_deps,
     );
-    let router = fixture.router;
+    let router = fixture.router.router();
     let files_before = snapshot_files(&storage_root);
     let pending_before = sorafs_node.pending_governance_publication_count();
     for path in [
@@ -2105,6 +2118,7 @@ async fn appeal_finance_publication_routes_are_read_only() {
         files_before,
         "retired publication routes must not mutate the Governance DAG, publish index, or durable outbox"
     );
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2116,7 +2130,7 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
     };
     use tower::ServiceExt as _;
     let fixture = RuntimeApiRouterFixture::standard("contracts-aliases-router-test");
-    let router = fixture.router;
+    let router = fixture.router.router();
     for path in ["/v1/contracts/aliases", "/v1/contracts/call/simulate"] {
         let mut request = Request::builder()
             .method(Method::POST)
@@ -2152,6 +2166,7 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
         .await
         .expect("public query response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2172,8 +2187,14 @@ async fn sorafs_capacity_declare_route_is_mounted_in_api_router() {
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-    let response = fixture.router.oneshot(request).await.expect("response");
+    let response = fixture
+        .router
+        .router()
+        .oneshot(request)
+        .await
+        .expect("response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2185,7 +2206,7 @@ async fn retired_sorafs_mutation_routes_are_absent() {
     };
     use tower::ServiceExt as _;
     let fixture = RuntimeApiRouterFixture::standard("sorafs-retired-por-router-test");
-    let router = fixture.router;
+    let router = fixture.router.router();
     for path in [
         "/v1/sorafs/capacity/dispute",
         "/v1/sorafs/capacity/schedule",
@@ -2247,6 +2268,7 @@ async fn retired_sorafs_mutation_routes_are_absent() {
             "live SoraFS route was removed accidentally: {method} {path}"
         );
     }
+    fixture.shutdown().await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2265,7 +2287,12 @@ async fn sccp_recent_messages_route_survives_soracloud_fallback() {
             [127, 0, 0, 1],
             0,
         ))));
-    let response = fixture.router.oneshot(request).await.expect("response");
+    let response = fixture
+        .router
+        .router()
+        .oneshot(request)
+        .await
+        .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
     let body = torii_body_bytes(response, "body").await;
     let text = String::from_utf8(body.to_vec()).expect("utf8");
@@ -2273,6 +2300,7 @@ async fn sccp_recent_messages_route_survives_soracloud_fallback() {
         text.contains("\"items\""),
         "expected SCCP recent-messages JSON payload, got: {text}"
     );
+    fixture.shutdown().await;
 }
 #[test]
 fn iso_error_mapping_returns_expected_variants() {

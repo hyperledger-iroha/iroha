@@ -69,6 +69,15 @@ IOS6_SMOKE_DEST_IPHONE_SIM="${IOS6_SMOKE_DEST_IPHONE_SIM:-$(read_matrix_value "i
 IOS6_SMOKE_DEST_IPAD_SIM="${IOS6_SMOKE_DEST_IPAD_SIM:-$(read_matrix_value "ipad_sim" "platform=iOS Simulator,name=iPad (10th generation)")}"
 IOS6_SMOKE_DEST_STRONGBOX="${IOS6_SMOKE_DEST_STRONGBOX:-$(read_matrix_value "strongbox" "platform=iOS,name=iPhone 14 Pro")}"
 IOS6_SMOKE_DEST_MAC_FALLBACK="${IOS6_SMOKE_DEST_MAC_FALLBACK:-$(read_matrix_value "mac_fallback" "platform=macOS,arch=arm64,variant=Designed for iPad")}"
+IOS6_SMOKE_ENABLE_HARDWARE="${IOS6_SMOKE_ENABLE_HARDWARE:-false}"
+
+case "$IOS6_SMOKE_ENABLE_HARDWARE" in
+  true|false) ;;
+  *)
+    log "error: IOS6_SMOKE_ENABLE_HARDWARE must be exactly 'true' or 'false'"
+    exit 1
+    ;;
+esac
 
 ensure_disk_budget() {
   local target="$1"
@@ -323,7 +332,10 @@ run_lane() {
       fallback_required=true
     fi
   elif [[ "$kind" == "strongbox" ]]; then
-    if [[ -z "$dest" ]]; then
+    if [[ "$IOS6_SMOKE_ENABLE_HARDWARE" != "true" ]]; then
+      message="optional hardware lane not requested"
+      status=skip
+    elif [[ -z "$dest" ]]; then
       message="IOS6_SMOKE_DEST_STRONGBOX not set"
       status=skip
     fi
@@ -446,7 +458,7 @@ for lane in "${LANE_ORDER[@]}"; do
 done
 
 strongbox_lane_index="$(lane_index_for "strongbox")"
-if [[ "${LANE_STATUS[$strongbox_lane_index]}" == "skip" ]]; then
+if [[ "$IOS6_SMOKE_ENABLE_HARDWARE" == "true" && "${LANE_STATUS[$strongbox_lane_index]}" == "skip" ]]; then
   open_incidents+=("xcframework_smoke_strongbox_unavailable")
 fi
 
@@ -485,7 +497,7 @@ with os.fdopen(3, "r", encoding="utf-8") as lane_stream:
         if kind == "strongbox":
             if success:
                 sb_pass += 1
-            else:
+            elif status == "fail":
                 sb_fail += 1
         lane_entry = {
             "name": f"ci/xcframework-smoke:{name}",
@@ -535,16 +547,18 @@ log "[xcframework] anomaly summary written to $ANOMALY_PATH"
 smoke_failed=0
 for lane in "${LANE_ORDER[@]}"; do
   lane_index="$(lane_index_for "$lane")"
-  if [[ "${LANE_STATUS[$lane_index]}" == "fail" ]]; then
+  if [[ "${LANE_STATUS[$lane_index]}" == "fail" && "$lane" != "strongbox" ]]; then
     smoke_failed=1
   fi
 done
 strongbox_lane_index="$(lane_index_for "strongbox")"
-if [[ "${LANE_STATUS[$strongbox_lane_index]}" != "pass" ]]; then
-  log "[xcframework] required StrongBox lane did not pass"
+if [[ "$IOS6_SMOKE_ENABLE_HARDWARE" == "true" && "${LANE_STATUS[$strongbox_lane_index]}" != "pass" ]]; then
+  log "[xcframework] requested optional hardware lane did not pass"
   smoke_failed=1
+elif [[ "$IOS6_SMOKE_ENABLE_HARDWARE" != "true" ]]; then
+  log "[xcframework] optional hardware lane was not requested"
 fi
 if (( smoke_failed != 0 )); then
-  log "[xcframework] mandatory smoke evidence failed"
+  log "[xcframework] required software/simulator smoke evidence failed"
   exit 1
 fi

@@ -48,6 +48,7 @@ async fn kaigi_relay_diagnostics_reject_legacy_or_precomputed_auth_headers() {
         .await
         .expect("legacy-auth response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    harness.shutdown().await;
 }
 fn foreign_network_id() -> NetworkId {
     "hash:0000000000000000000000000000000000000000000000000000000000000003#E54C"
@@ -255,4 +256,5 @@ async fn kaigi_relay_diagnostics_reject_missing_or_inexact_auth_before_handlers(
         .await
         .expect("query-mismatch response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    harness.shutdown().await;
 }

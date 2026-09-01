@@ -3278,6 +3278,96 @@ pub(crate) fn ensure_contract_invocation_code_hash(
     }
     Ok(())
 }
+/// Bind a top-level by-reference contract invocation to the exact human-reviewable
+/// transaction metadata carried by the same signed payload.
+///
+/// Wallets can validate canonical JSON metadata without embedding a Kotodama ABI
+/// encoder. Consensus therefore reconstructs the schema-bound argument record
+/// from that metadata and refuses any executable whose opaque argument bytes
+/// encode a different payload.
+fn ensure_contract_invocation_metadata_binding(
+    invocation: &ContractInvocation,
+    metadata: &Metadata,
+    contract: &ivm::PreparedContract,
+) -> Result<(), ValidationFail> {
+    let carries_reviewable_binding = [
+        "contract_address",
+        "contract_code_hash",
+        "contract_entrypoint",
+        "contract_payload",
+    ]
+    .iter()
+    .any(|key| metadata.get(*key).is_some());
+    if !carries_reviewable_binding {
+        return Ok(());
+    }
+    let metadata_address = requested_contract_address(metadata)?.ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "top-level ContractCall requires contract_address metadata".to_owned(),
+        )
+    })?;
+    if metadata_address != invocation.contract_address {
+        return Err(ValidationFail::NotPermitted(
+            "top-level ContractCall address differs from contract_address metadata".to_owned(),
+        ));
+    }
+    let code_hash_literal = metadata
+        .get("contract_code_hash")
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "top-level ContractCall requires contract_code_hash metadata".to_owned(),
+            )
+        })?
+        .try_into_any_norito::<String>()
+        .map_err(|error| {
+            ValidationFail::NotPermitted(format!("invalid contract_code_hash metadata: {error}"))
+        })?;
+    if code_hash_literal.trim() != code_hash_literal {
+        return Err(ValidationFail::NotPermitted(
+            "contract_code_hash metadata must use canonical spelling".to_owned(),
+        ));
+    }
+    let metadata_code_hash = code_hash_literal
+        .parse::<iroha_crypto::Hash>()
+        .map_err(|error| {
+            ValidationFail::NotPermitted(format!(
+                "invalid contract_code_hash metadata literal `{code_hash_literal}`: {error}"
+            ))
+        })?;
+    if metadata_code_hash != invocation.expected_code_hash {
+        return Err(ValidationFail::NotPermitted(
+            "top-level ContractCall code hash differs from contract_code_hash metadata".to_owned(),
+        ));
+    }
+    let metadata_entrypoint = requested_contract_entrypoint(metadata)?.ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "top-level ContractCall requires contract_entrypoint metadata".to_owned(),
+        )
+    })?;
+    if metadata_entrypoint != invocation.entrypoint {
+        return Err(ValidationFail::NotPermitted(
+            "top-level ContractCall entrypoint differs from contract_entrypoint metadata"
+                .to_owned(),
+        ));
+    }
+    let descriptor = contract
+        .entrypoint_descriptor(&metadata_entrypoint)
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!(
+                "unknown contract entrypoint `{metadata_entrypoint}`"
+            ))
+        })?;
+    let payload = metadata.get("contract_payload");
+    let canonical_arguments =
+        encode_contract_argument_record(descriptor.argument_schema.as_ref(), payload)?;
+    if canonical_arguments.as_deref() != invocation.arguments.as_deref() {
+        return Err(ValidationFail::NotPermitted(
+            "top-level ContractCall arguments differ from the canonical contract_payload metadata"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
 fn requested_contract_address(
     metadata: &Metadata,
 ) -> Result<Option<iroha_data_model::smart_contract::ContractAddress>, ValidationFail> {
@@ -9573,12 +9663,29 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // Public-validator mutations have the explicit CanManagePeers gate above.
+    // Public-validator administration has the explicit CanManagePeers gate above.
     if is_any!(
         iroha_data_model::isi::staking::RegisterPublicLaneValidator,
         iroha_data_model::isi::staking::ActivatePublicLaneValidator,
         iroha_data_model::isi::staking::ExitPublicLaneValidator,
     ) {
+        return true;
+    }
+    // User-owned staking and reward actions bind the signed authority to the
+    // validator, staker, or reward recipient inside Core. They must reach those
+    // exact stateful checks while the fail-safe Initial executor is installed.
+    if is_any!(
+        iroha_data_model::isi::staking::RebindPublicLaneValidatorPeer,
+        iroha_data_model::isi::staking::BondPublicLaneStake,
+        iroha_data_model::isi::staking::SchedulePublicLaneUnbond,
+        iroha_data_model::isi::staking::FinalizePublicLaneUnbond,
+        iroha_data_model::isi::staking::ClaimPublicLaneRewards,
+    ) {
+        return true;
+    }
+    // Pending evidence cancellation is separately gated by CanManagePeers in
+    // the Initial executor authority check below.
+    if is_any!(iroha_data_model::isi::staking::CancelConsensusEvidencePenalty) {
         return true;
     }
     // The Initial executor is a deliberately narrow CBDC bootstrap profile.
@@ -9615,7 +9722,6 @@ fn initial_genesis_instruction_is_explicitly_admitted(instruction: &InstructionB
         iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition,
         iroha_data_model::isi::zk::CancelConfidentialPolicyTransition,
         iroha_data_model::isi::staking::SlashPublicLaneValidator,
-        iroha_data_model::isi::staking::CancelConsensusEvidencePenalty,
         iroha_data_model::isi::staking::RecordPublicLaneRewards,
     )
 }
@@ -9752,6 +9858,18 @@ fn validate_initial_native_instruction_authority(
         return deny("public validator lifecycle requires CanManagePeers");
     }
     if any
+        .downcast_ref::<iroha_data_model::isi::staking::CancelConsensusEvidencePenalty>()
+        .is_some()
+        && !is_genesis
+        && !initial_authority_has_exact_permission(
+            state_transaction,
+            authority,
+            executor_permission::peer::CanManagePeers.into(),
+        )?
+    {
+        return deny("consensus evidence penalty cancellation requires CanManagePeers");
+    }
+    if any
         .downcast_ref::<iroha_data_model::isi::register::RegisterPeerWithPop>()
         .is_some()
         && !is_genesis
@@ -9782,16 +9900,42 @@ fn validate_initial_native_instruction_authority(
                 authority,
                 register.object().id().domain(),
             )?,
-            RegisterBox::Account(_)
-            | RegisterBox::AssetDefinition(_)
-            | RegisterBox::Role(_)
-            | RegisterBox::Trigger(_) => true,
+            RegisterBox::Account(register) => {
+                if [
+                    iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY,
+                    iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+                ]
+                .into_iter()
+                .any(|key| register.object().metadata.get(key).is_some())
+                {
+                    return deny("account registration cannot seed reserved native metadata");
+                }
+                true
+            }
+            RegisterBox::AssetDefinition(_) | RegisterBox::Role(_) | RegisterBox::Trigger(_) => {
+                true
+            }
         };
         if !allowed {
             return deny("authority cannot register this resource");
         }
     }
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
+        if let UnregisterBox::Account(unregister) = unregister
+            && state_transaction
+                .world
+                .account(unregister.object())
+                .is_ok_and(|account| {
+                    account
+                        .metadata()
+                        .get(iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY)
+                        .is_some()
+                })
+        {
+            return deny(
+                "account with native asset transfer-control state must clear it through dedicated instructions before removal",
+            );
+        }
         let allowed = match unregister {
             UnregisterBox::Peer(_) => {
                 is_genesis
@@ -10285,6 +10429,11 @@ where
                 &identity,
             )
             .map(drop)?;
+            ensure_contract_invocation_metadata_binding(
+                call,
+                transaction.metadata(),
+                summary.prepared_contract(),
+            )?;
             validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
             let manifest = state
                 .world()
@@ -11101,7 +11250,10 @@ mod tests {
     use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        asset::{AssetTransferAvailability, AssetTransferControlWindow},
+        asset::{
+            ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetTransferAvailability,
+            AssetTransferControlRecord, AssetTransferControlStoreV1, AssetTransferControlWindow,
+        },
         events::data::prelude::{AssetBatchTransferLegStatus, AssetBatchTransferRejectionCode},
         executor::{self as data_model_executor, ExecutorDataModel},
         isi::{
@@ -12190,6 +12342,76 @@ mod tests {
         }
     }
     #[test]
+    fn initial_executor_rejects_reserved_native_metadata_during_account_registration() {
+        let authority = checked_account_id();
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+        for key in [
+            ASSET_TRANSFER_CONTROL_METADATA_KEY,
+            iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+        ] {
+            let target = checked_account_id();
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                key.parse().expect("reserved metadata key"),
+                Json::new(7_u64),
+            );
+            let instruction: InstructionBox =
+                Register::account(NewAccount::new(target.clone()).with_metadata(metadata)).into();
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &authority, instruction)
+                .expect_err("Initial executor must reject native metadata seeding");
+            assert!(
+                error.to_string().contains("reserved native metadata"),
+                "unexpected Initial-executor rejection: {error}"
+            );
+            assert!(state_transaction.world.account(&target).is_err());
+        }
+    }
+    #[test]
+    fn initial_executor_rejects_account_removal_with_transfer_control_state() {
+        let target = checked_account_id();
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("transfer", "controls").expect("domain id"),
+            "rose".parse().expect("asset name"),
+        );
+        let mut record = AssetTransferControlRecord::new(asset_definition);
+        record.blacklisted = true;
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("transfer-control metadata key"),
+            Json::new(AssetTransferControlStoreV1 {
+                controls: vec![record],
+            }),
+        );
+        let world = World::with(
+            [],
+            [Account::new(target.clone())
+                .with_metadata(metadata)
+                .build(&target)],
+            [],
+        );
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+        let error = super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &target,
+                Unregister::account(target.clone()).into(),
+            )
+            .expect_err("Initial executor must preserve native transfer-control history");
+        assert!(
+            error.to_string().contains("dedicated instructions"),
+            "unexpected Initial-executor rejection: {error}"
+        );
+        assert!(state_transaction.world.account(&target).is_ok());
+    }
+    #[test]
     fn initial_executor_keeps_the_complete_vpn_lifecycle_allowlisted() {
         let source = include_str!("executor.rs");
         let start = source
@@ -12210,6 +12432,278 @@ mod tests {
                 "Initial executor VPN lifecycle allowlist omitted {instruction}"
             );
         }
+    }
+    #[test]
+    fn initial_executor_routes_self_authorized_public_lane_user_actions_to_core() {
+        use iroha_data_model::isi::staking::{
+            BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,
+            RebindPublicLaneValidatorPeer, SchedulePublicLaneUnbond,
+        };
+
+        let validator = checked_account_id();
+        let staker = checked_account_id();
+        let peer = iroha_data_model::peer::PeerId::new(checked_keypair().public_key().clone());
+        let request_id = Hash::prehashed([0xA5; Hash::LENGTH]);
+        let instructions: [InstructionBox; 5] = [
+            RebindPublicLaneValidatorPeer::new(
+                iroha_data_model::nexus::LaneId::SINGLE,
+                validator.clone(),
+                peer,
+            )
+            .into(),
+            BondPublicLaneStake {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: staker.clone(),
+                amount: Quantity::from(1_u32),
+                metadata: Metadata::default(),
+            }
+            .into(),
+            SchedulePublicLaneUnbond {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: staker.clone(),
+                request_id,
+                amount: Quantity::from(1_u32),
+                release_at_ms: 1,
+            }
+            .into(),
+            FinalizePublicLaneUnbond {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                validator,
+                staker: staker.clone(),
+                request_id,
+            }
+            .into(),
+            ClaimPublicLaneRewards {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                account: staker,
+                upto_epoch: None,
+            }
+            .into(),
+        ];
+        for instruction in &instructions {
+            assert!(
+                initial_native_instruction_is_explicitly_admitted(instruction),
+                "{} must reach its exact self-authority and state checks in Core",
+                instruction.id()
+            );
+            assert!(
+                !initial_genesis_instruction_is_explicitly_admitted(instruction),
+                "{} is an ordinary signed user action, not a genesis-only administrative path",
+                instruction.id()
+            );
+        }
+    }
+    fn initial_executor_consensus_evidence_fixture() -> iroha_data_model::block::consensus::Evidence
+    {
+        use iroha_data_model::block::{
+            consensus::{Evidence, SumeragiV2EquivocationEvidence},
+            consensus_v2::{
+                ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum, HeightContext,
+                PROTOCOL_VERSION, PayloadEncoding, SumeragiV2Equivocation, TimeoutVote,
+                ValidatorPower,
+            },
+        };
+
+        let peer = |seed: u8| {
+            let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("derive checked Initial-executor evidence peer keypair");
+            iroha_data_model::peer::PeerId::new(key_pair.public_key().clone())
+        };
+        let mut peers = (0xE1_u8..=0xE4).map(peer).collect::<Vec<_>>();
+        peers.sort();
+        let roster = peers
+            .into_iter()
+            .map(|validator| ValidatorPower {
+                validator,
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let context = HeightContext {
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
+            ),
+            protocol_version: PROTOCOL_VERSION,
+            height: 1,
+            epoch: 0,
+            epoch_end_height: 1,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"Initial executor evidence nexus context"),
+            execution_policy_hash: Hash::new(b"Initial executor evidence execution policy"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 4,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 1024,
+                max_chunk_count: 512,
+            },
+            leader_seed: [0xA5; 32],
+        };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        Evidence {
+            equivocation: SumeragiV2EquivocationEvidence {
+                context,
+                proofs_of_possession: vec![vec![0xC1; 96]; 4],
+                conflict: SumeragiV2Equivocation::TimeoutVote {
+                    first: TimeoutVote {
+                        round,
+                        highest_prepare_qc: None,
+                        signer: 0,
+                        signature: vec![0xD1; 96],
+                    },
+                    second: TimeoutVote {
+                        round,
+                        highest_prepare_qc: None,
+                        signer: 0,
+                        signature: vec![0xD2; 96],
+                    },
+                },
+            },
+        }
+    }
+    fn initial_executor_seed_pending_consensus_evidence(
+        world: &mut World,
+        evidence: &iroha_data_model::block::consensus::Evidence,
+    ) -> Hash {
+        use iroha_data_model::block::consensus::{EvidencePenaltyStatus, EvidenceRecord};
+
+        let key = crate::sumeragi::evidence::evidence_key(evidence);
+        world.consensus_evidence.insert(
+            key.clone(),
+            EvidenceRecord {
+                evidence: evidence.clone(),
+                recorded_at_height: 1,
+                recorded_at_view: 0,
+                recorded_at_ms: 0,
+                penalty_status: EvidencePenaltyStatus::Pending,
+            },
+        );
+        key
+    }
+    #[test]
+    fn initial_executor_denies_evidence_penalty_cancel_without_can_manage_peers() {
+        use iroha_data_model::{
+            block::consensus::EvidencePenaltyStatus, isi::staking::CancelConsensusEvidencePenalty,
+        };
+
+        let authority = checked_account_id();
+        let evidence = initial_executor_consensus_evidence_fixture();
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let evidence_key = initial_executor_seed_pending_consensus_evidence(&mut world, &evidence);
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+
+        let error = super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &authority,
+                CancelConsensusEvidencePenalty { evidence }.into(),
+            )
+            .expect_err("post-genesis cancellation must require CanManagePeers");
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(ref message)
+                if message == "consensus evidence penalty cancellation requires CanManagePeers"
+        ));
+        assert_eq!(
+            state_transaction
+                .world
+                .consensus_evidence
+                .get(&evidence_key)
+                .expect("pending evidence record")
+                .penalty_status,
+            EvidencePenaltyStatus::Pending,
+            "denied cancellation must not mutate the penalty record"
+        );
+    }
+    #[test]
+    fn initial_executor_routes_evidence_penalty_cancel_with_direct_can_manage_peers() {
+        use iroha_data_model::{
+            block::consensus::EvidencePenaltyStatus, isi::staking::CancelConsensusEvidencePenalty,
+        };
+
+        let authority = checked_account_id();
+        let evidence = initial_executor_consensus_evidence_fixture();
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let evidence_key = initial_executor_seed_pending_consensus_evidence(&mut world, &evidence);
+        world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([Permission::from(executor_permission::peer::CanManagePeers)]),
+        );
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &authority,
+                CancelConsensusEvidencePenalty { evidence }.into(),
+            )
+            .expect("exact direct CanManagePeers must route cancellation through Core");
+        assert_eq!(
+            state_transaction
+                .world
+                .consensus_evidence
+                .get(&evidence_key)
+                .expect("cancelled evidence record")
+                .penalty_status,
+            EvidencePenaltyStatus::Cancelled { height: 2 }
+        );
+    }
+    #[test]
+    fn initial_executor_routes_evidence_penalty_cancel_with_role_can_manage_peers() {
+        use iroha_data_model::{
+            block::consensus::EvidencePenaltyStatus, isi::staking::CancelConsensusEvidencePenalty,
+        };
+
+        let authority = checked_account_id();
+        let evidence = initial_executor_consensus_evidence_fixture();
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let evidence_key = initial_executor_seed_pending_consensus_evidence(&mut world, &evidence);
+        let role_id: RoleId = "consensus_evidence_penalty_manager"
+            .parse()
+            .expect("role id");
+        let role = Role::new(role_id.clone(), authority.clone())
+            .add_permission(Permission::from(executor_permission::peer::CanManagePeers))
+            .build(&authority);
+        world.roles.insert(role_id.clone(), role);
+        world.account_roles.insert(
+            crate::role::RoleIdWithOwner::new(authority.clone(), role_id),
+            (),
+        );
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &authority,
+                CancelConsensusEvidencePenalty { evidence }.into(),
+            )
+            .expect("role-held exact CanManagePeers must route cancellation through Core");
+        assert_eq!(
+            state_transaction
+                .world
+                .consensus_evidence
+                .get(&evidence_key)
+                .expect("cancelled evidence record")
+                .penalty_status,
+            EvidencePenaltyStatus::Cancelled { height: 2 }
+        );
     }
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -20340,6 +20834,84 @@ seiyaku IdentityRequired {
                 if message.contains(&signed_hash.to_string())
                     && message.contains(&live_hash.to_string())),
             "unexpected binding error: {error}"
+        );
+    }
+    #[test]
+    fn reviewable_contract_metadata_binds_exact_invocation_arguments() {
+        let (program, _) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku ReviewedValue {
+  kotoage fn write(int value) authorize("CanInvokeContractEntrypoint") {}
+}
+"#,
+            )
+            .expect("compile reviewed contract");
+        let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program.clone()))
+            .expect("prepare reviewed contract");
+        let schema = prepared
+            .entrypoint_descriptor("write")
+            .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
+            .expect("reviewed argument schema");
+        let reviewed_payload = Json::from(norito::json!({ "value": "7" }));
+        let reviewed_arguments = ivm::encode_argument_record_from_json(schema, &reviewed_payload)
+            .expect("encode reviewed arguments");
+        let swapped_arguments = ivm::encode_argument_record_from_json(
+            schema,
+            &Json::from(norito::json!({ "value": "8" })),
+        )
+        .expect("encode swapped arguments");
+        let contract_address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &ALICE_ID,
+            78,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let code_hash = ivm::contract_code_hash(&program);
+        let mut metadata = Metadata::default();
+        for (key, value) in [
+            ("contract_address", Json::new(contract_address.to_string())),
+            ("contract_code_hash", Json::new(code_hash.to_string())),
+            ("contract_entrypoint", Json::new("write".to_owned())),
+        ] {
+            metadata.insert(key.parse().expect("static contract metadata key"), value);
+        }
+        metadata.insert(
+            "contract_payload"
+                .parse()
+                .expect("static contract payload metadata key"),
+            reviewed_payload,
+        );
+        let invocation = |arguments: Vec<u8>| ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: code_hash,
+            entrypoint: "write".to_owned(),
+            arguments: Some(
+                iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
+                    arguments,
+                )
+                .expect("bounded reviewed arguments"),
+            ),
+        };
+        super::ensure_contract_invocation_metadata_binding(
+            &invocation(reviewed_arguments),
+            &metadata,
+            &prepared,
+        )
+        .expect("matching reviewed metadata and arguments");
+        let error = super::ensure_contract_invocation_metadata_binding(
+            &invocation(swapped_arguments),
+            &metadata,
+            &prepared,
+        )
+        .expect_err("swapped argument bytes must be rejected");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message)
+                if message.contains("arguments differ from the canonical contract_payload")),
+            "unexpected swapped-arguments error: {error}"
         );
     }
     #[test]

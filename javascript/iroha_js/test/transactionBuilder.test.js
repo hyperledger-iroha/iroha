@@ -3151,7 +3151,6 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         proposal: {
-          proposalOperator: AUTHORITY_ID_INPUT,
           contractAddress:
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           codeHash: "aa".repeat(32),
@@ -3162,7 +3161,7 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
   );
   assert.equal(captures.length, 1);
   const propose = captures[0].instructions[0].ProposeDeployContract;
-  assert.equal(propose.proposal_operator, AUTHORITY_ID);
+  assert.equal(Object.hasOwn(propose, "proposal_operator"), false);
   assert.equal(
     propose.contract_address,
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
@@ -3174,7 +3173,7 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
   assert.equal(Object.hasOwn(propose, "mode"), false);
 });
 
-baseTest("buildProposeDeployContractTransaction rejects an operator distinct from authority", () => {
+baseTest("buildProposeDeployContractTransaction rejects the retired operator field", () => {
   let nativeCalls = 0;
   assert.throws(
     () => withTransactionApi(
@@ -3198,7 +3197,7 @@ baseTest("buildProposeDeployContractTransaction rejects an operator distinct fro
         privateKey: PRIVATE_KEY,
       }),
     ),
-    /proposalOperator must equal the exact transaction authority/u,
+    /proposalOperator/u,
   );
   assert.equal(nativeCalls, 0);
 });

@@ -4367,7 +4367,7 @@ fields {
     pub nexus_scheduler_dataspace_virtual_finish: gauge_vec(&["lane", "dataspace"],);
     /// Nexus scheduler: per-dataspace TEU snapshots exposed via `/status`.
     pub nexus_scheduler_dataspace_teu_status: raw(Arc<RwLock<BTreeMap<(u32, u64), NexusDataspaceTeuStatus>>>);
-    /// Nexus public-lane validator counts grouped by lifecycle status (pending, active, jailed, exiting, exited, slashed).
+    /// Nexus public-lane validator counts grouped by lifecycle status (pending, active, exiting, exited, slashed).
     pub nexus_public_lane_validator_total: int_gauge_vec(&["lane", "status"]);
     /// Nexus public-lane validator activations grouped by lane.
     pub nexus_public_lane_validator_activation_total: int_counter_vec(&["lane"]);

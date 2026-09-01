@@ -111,6 +111,10 @@ CHALLENGE_TABLE_COLUMNS = (
     "apple_risk_metric",
     "consumed_at_unix_ms",
 )
+AUTHORITY_METADATA_TABLE_COLUMNS = (
+    "singleton",
+    "schema_version",
+)
 APP_ATTEST_KEY_TABLE_COLUMNS = (
     "key_id",
     "public_key_sha256",
@@ -131,15 +135,99 @@ CATALOG_REVALIDATION_TABLE_COLUMNS = (
     "state",
     "retired_at_unix_ms",
 )
-LEGACY_CATALOG_REVALIDATION_TABLE_COLUMNS_V2 = (
-    "promotion_id",
-    "catalog_sha256",
-    "receipt_id",
-    "issued_at_unix_ms",
-    "expires_at_unix_ms",
-    "authority_key_id",
-    "authority_public_key_sha256",
-    "receipt_payload",
+AUTHORITY_SCHEMA_DEFINITIONS = (
+    (
+        "table",
+        "authority_metadata",
+        "authority_metadata",
+        """CREATE TABLE authority_metadata (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            schema_version INTEGER NOT NULL
+        )""",
+    ),
+    (
+        "table",
+        "challenges",
+        "challenges",
+        """CREATE TABLE challenges (
+            challenge_id TEXT PRIMARY KEY,
+            consumption_id TEXT NOT NULL UNIQUE,
+            issued_at_unix_ms INTEGER NOT NULL,
+            expires_at_unix_ms INTEGER NOT NULL,
+            request_sha256 TEXT NOT NULL UNIQUE,
+            request_json BLOB NOT NULL,
+            attestation_nonce BLOB NOT NULL UNIQUE,
+            assertion_nonce BLOB NOT NULL UNIQUE,
+            state TEXT NOT NULL CHECK (state IN ('issued', 'consumed')),
+            evidence_sha256 TEXT UNIQUE,
+            receipt_id TEXT UNIQUE,
+            key_id TEXT,
+            assertion_counter INTEGER,
+            receipt_payload BLOB,
+            apple_receipt BLOB,
+            apple_risk_metric INTEGER,
+            consumed_at_unix_ms INTEGER,
+            CHECK (expires_at_unix_ms > issued_at_unix_ms)
+        )""",
+    ),
+    (
+        "table",
+        "app_attest_keys",
+        "app_attest_keys",
+        """CREATE TABLE app_attest_keys (
+            key_id TEXT PRIMARY KEY,
+            public_key_sha256 TEXT NOT NULL,
+            assertion_counter INTEGER NOT NULL,
+            apple_receipt BLOB NOT NULL,
+            apple_risk_metric INTEGER NOT NULL,
+            updated_at_unix_ms INTEGER NOT NULL
+        )""",
+    ),
+    (
+        "table",
+        "catalog_revalidations",
+        "catalog_revalidations",
+        """CREATE TABLE catalog_revalidations (
+            promotion_id TEXT PRIMARY KEY,
+            catalog_sha256 TEXT NOT NULL,
+            receipt_id TEXT NOT NULL UNIQUE,
+            issued_at_unix_ms INTEGER NOT NULL,
+            expires_at_unix_ms INTEGER NOT NULL,
+            authority_key_id TEXT NOT NULL,
+            authority_public_key_sha256 TEXT NOT NULL,
+            receipt_payload BLOB NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('active', 'expired')),
+            retired_at_unix_ms INTEGER,
+            CHECK (expires_at_unix_ms > issued_at_unix_ms),
+            CHECK (
+                (state = 'active' AND retired_at_unix_ms IS NULL)
+                OR (state = 'expired' AND retired_at_unix_ms > expires_at_unix_ms)
+            )
+        )""",
+    ),
+    (
+        "index",
+        "challenges_state_expiry_v1",
+        "challenges",
+        """CREATE INDEX challenges_state_expiry_v1
+            ON challenges(state, expires_at_unix_ms)""",
+    ),
+)
+
+
+def _normalized_schema_sql(sql: str) -> str:
+    """Return the whitespace-independent identity of one canonical DDL statement."""
+
+    return " ".join(sql.split())
+
+
+AUTHORITY_SCHEMA_OBJECTS = frozenset(
+    (object_type, name)
+    for object_type, name, _table_name, _sql in AUTHORITY_SCHEMA_DEFINITIONS
+)
+AUTHORITY_SCHEMA_IDENTITY = frozenset(
+    (object_type, name, table_name, _normalized_schema_sql(sql))
+    for object_type, name, table_name, sql in AUTHORITY_SCHEMA_DEFINITIONS
 )
 CATALOG_REVALIDATION_REQUEST_FIELDS = frozenset(
     {"schema", "version", "promotion_id", "releases"}
@@ -473,121 +561,63 @@ class AuthorityState:
         self.connection.close()
 
     def _initialize(self) -> None:
-        self.connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS authority_metadata (
-                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-                schema_version INTEGER NOT NULL
-            );
-            INSERT OR IGNORE INTO authority_metadata(singleton, schema_version)
-                VALUES (1, 3);
-            CREATE TABLE IF NOT EXISTS challenges (
-                challenge_id TEXT PRIMARY KEY,
-                consumption_id TEXT NOT NULL UNIQUE,
-                issued_at_unix_ms INTEGER NOT NULL,
-                expires_at_unix_ms INTEGER NOT NULL,
-                request_sha256 TEXT NOT NULL UNIQUE,
-                request_json BLOB NOT NULL,
-                attestation_nonce BLOB NOT NULL UNIQUE,
-                assertion_nonce BLOB NOT NULL UNIQUE,
-                state TEXT NOT NULL CHECK (state IN ('issued', 'consumed')),
-                evidence_sha256 TEXT UNIQUE,
-                receipt_id TEXT UNIQUE,
-                key_id TEXT,
-                assertion_counter INTEGER,
-                receipt_payload BLOB,
-                apple_receipt BLOB,
-                apple_risk_metric INTEGER,
-                consumed_at_unix_ms INTEGER,
-                CHECK (expires_at_unix_ms > issued_at_unix_ms)
-            );
-            CREATE TABLE IF NOT EXISTS app_attest_keys (
-                key_id TEXT PRIMARY KEY,
-                public_key_sha256 TEXT NOT NULL,
-                assertion_counter INTEGER NOT NULL,
-                apple_receipt BLOB NOT NULL,
-                apple_risk_metric INTEGER NOT NULL,
-                updated_at_unix_ms INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS catalog_revalidations (
-                promotion_id TEXT PRIMARY KEY,
-                catalog_sha256 TEXT NOT NULL,
-                receipt_id TEXT NOT NULL UNIQUE,
-                issued_at_unix_ms INTEGER NOT NULL,
-                expires_at_unix_ms INTEGER NOT NULL,
-                authority_key_id TEXT NOT NULL,
-                authority_public_key_sha256 TEXT NOT NULL,
-                receipt_payload BLOB NOT NULL,
-                state TEXT NOT NULL CHECK (state IN ('active', 'expired')),
-                retired_at_unix_ms INTEGER,
-                CHECK (expires_at_unix_ms > issued_at_unix_ms),
-                CHECK (
-                    (state = 'active' AND retired_at_unix_ms IS NULL)
-                    OR (state = 'expired' AND retired_at_unix_ms > expires_at_unix_ms)
-                )
-            );
-            CREATE INDEX IF NOT EXISTS challenges_state_expiry_v1
-                ON challenges(state, expires_at_unix_ms);
-            """
+        schema_objects = frozenset(
+            self.connection.execute(
+                """
+                SELECT type, name FROM sqlite_schema
+                 WHERE name NOT LIKE 'sqlite_%'
+                """
+            )
         )
-        row = self.connection.execute(
-            "SELECT schema_version FROM authority_metadata WHERE singleton = 1"
-        ).fetchone()
-        if row in ((1,), (2,)):
-            self.connection.execute("BEGIN IMMEDIATE")
-            try:
-                row = self.connection.execute(
-                    "SELECT schema_version FROM authority_metadata WHERE singleton = 1"
-                ).fetchone()
-                if row in ((1,), (2,)):
-                    catalog_revalidation_columns = tuple(
-                        value[1]
-                        for value in self.connection.execute(
-                            "PRAGMA table_info(catalog_revalidations)"
-                        )
-                    )
-                    if (
-                        catalog_revalidation_columns
-                        == LEGACY_CATALOG_REVALIDATION_TABLE_COLUMNS_V2
-                    ):
-                        self.connection.execute(
-                            """
-                            ALTER TABLE catalog_revalidations
-                            ADD COLUMN state TEXT NOT NULL DEFAULT 'active'
-                                CHECK (state IN ('active', 'expired'))
-                            """
-                        )
-                        self.connection.execute(
-                            """
-                            ALTER TABLE catalog_revalidations
-                            ADD COLUMN retired_at_unix_ms INTEGER
-                            """
-                        )
-                    elif (
-                        catalog_revalidation_columns
-                        != CATALOG_REVALIDATION_TABLE_COLUMNS
-                    ):
-                        raise AuthorityError(
-                            "authority catalog revalidation table schema is not migratable"
-                        )
-                    self.connection.execute(
-                        """
-                        UPDATE authority_metadata
-                           SET schema_version = 3 WHERE singleton = 1
-                        """
-                    )
-                self.connection.execute("COMMIT")
-            except BaseException:
-                try:
-                    self.connection.execute("ROLLBACK")
-                except sqlite3.Error:
-                    pass
-                raise
-            row = self.connection.execute(
-                "SELECT schema_version FROM authority_metadata WHERE singleton = 1"
-            ).fetchone()
-        if row != (STATE_SCHEMA_VERSION,):
-            raise AuthorityError("authority database schema version is unsupported")
+        if not schema_objects:
+            canonical_ddl = ";\n".join(
+                sql
+                for _object_type, _name, _table_name, sql in AUTHORITY_SCHEMA_DEFINITIONS
+            )
+            self.connection.executescript(
+                f"""
+            BEGIN IMMEDIATE;
+            {canonical_ddl};
+            INSERT INTO authority_metadata(singleton, schema_version)
+                VALUES (1, {STATE_SCHEMA_VERSION});
+            COMMIT;
+            """
+            )
+            schema_objects = frozenset(
+                self.connection.execute(
+                    """
+                    SELECT type, name FROM sqlite_schema
+                     WHERE name NOT LIKE 'sqlite_%'
+                    """
+                )
+            )
+        schema_error = (
+            "authority database schema is not the current release; archive or remove "
+            "the state directory and reinitialize it"
+        )
+        if schema_objects != AUTHORITY_SCHEMA_OBJECTS:
+            raise AuthorityError(schema_error)
+        schema_identity = frozenset(
+            (
+                object_type,
+                name,
+                table_name,
+                _normalized_schema_sql(sql),
+            )
+            for object_type, name, table_name, sql in self.connection.execute(
+                """
+                SELECT type, name, tbl_name, sql FROM sqlite_schema
+                 WHERE name NOT LIKE 'sqlite_%'
+                """
+            )
+            if sql is not None
+        )
+        if schema_identity != AUTHORITY_SCHEMA_IDENTITY:
+            raise AuthorityError(schema_error)
+        metadata_columns = tuple(
+            row[1]
+            for row in self.connection.execute("PRAGMA table_info(authority_metadata)")
+        )
         challenge_columns = tuple(
             row[1] for row in self.connection.execute("PRAGMA table_info(challenges)")
         )
@@ -600,12 +630,29 @@ class AuthorityState:
                 "PRAGMA table_info(catalog_revalidations)"
             )
         )
+        metadata_rows = tuple(
+            self.connection.execute(
+                "SELECT singleton, schema_version FROM authority_metadata ORDER BY singleton"
+            )
+        )
+        expiry_index_columns = tuple(
+            row[2]
+            for row in self.connection.execute(
+                "PRAGMA index_info(challenges_state_expiry_v1)"
+            )
+        )
+        if metadata_columns != AUTHORITY_METADATA_TABLE_COLUMNS:
+            raise AuthorityError(schema_error)
+        if metadata_rows != ((1, STATE_SCHEMA_VERSION),):
+            raise AuthorityError(schema_error)
         if challenge_columns != CHALLENGE_TABLE_COLUMNS:
-            raise AuthorityError("authority challenge table schema is not exact")
+            raise AuthorityError(schema_error)
         if key_columns != APP_ATTEST_KEY_TABLE_COLUMNS:
-            raise AuthorityError("authority App Attest key table schema is not exact")
+            raise AuthorityError(schema_error)
         if catalog_revalidation_columns != CATALOG_REVALIDATION_TABLE_COLUMNS:
-            raise AuthorityError("authority catalog revalidation table schema is not exact")
+            raise AuthorityError(schema_error)
+        if expiry_index_columns != ("state", "expires_at_unix_ms"):
+            raise AuthorityError(schema_error)
 
     def _validate_database_configuration(self) -> None:
         expected = {

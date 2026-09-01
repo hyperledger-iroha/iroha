@@ -11560,7 +11560,7 @@ fn moderation_dead_letter_resolution_fixture(
         action: ModerationDeadLetterResolutionActionV1::Acknowledge,
         source_record_digest: [0x55; 32],
         authorized_at_unix_ms: 1_725_000_000_123,
-        attestor_handle: "hsm:moderation:checkpoint-primary".to_owned(),
+        attestor_handle: "provider:moderation:checkpoint-primary".to_owned(),
         attestor_revision: 3,
         attestor_policy_digest: [0x66; 32],
         attestor_public_key,
@@ -14919,20 +14919,26 @@ mod appeal_finance_authoritative_outcome_tests {
 pub(crate) fn spawn_sorafs_appeal_finance_forwarder_worker(
     state: SharedAppState,
     shutdown_signal: ShutdownSignal,
-) {
+) -> Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
     let Some(submitter) = state.sorafs_appeal_settlement_submitter.as_ref() else {
         debug!("SoraFS appeal-finance forwarder disabled: storage is disabled");
-        return;
+        return None;
     };
     let worker_interval = submitter.worker_scan_interval();
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let mut interval = tokio::time::interval(worker_interval);
         let mut cursor = SorafsAppealFinanceForwarderCursorV1::default();
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                () = shutdown_signal.receive() => break,
+                biased;
+                () = shutdown_signal.receive() => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
                 _ = interval.tick() => {
+                    if shutdown_signal.is_sent() {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
                     let scan = run_sorafs_appeal_finance_forwarder_scan(&state, &mut cursor).await;
                     if scan.scanned != 0 {
                         debug!(
@@ -14949,7 +14955,7 @@ pub(crate) fn spawn_sorafs_appeal_finance_forwarder_worker(
                 }
             }
         }
-    });
+    }))
 }
 pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
     state: &SharedAppState,
@@ -16258,10 +16264,10 @@ fn proof_outcome_authority_has_provider_permission(
 pub(crate) fn spawn_sorafs_proof_outcome_forwarder_worker(
     state: SharedAppState,
     shutdown_signal: ShutdownSignal,
-) {
+) -> Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
     if !state.sorafs_node.is_enabled() {
         debug!("SoraFS proof-outcome forwarder disabled: SoraFS storage is disabled");
-        return;
+        return None;
     }
     if state.sorafs_proof_outcome_signer.is_none() {
         warn!(
@@ -16273,14 +16279,20 @@ pub(crate) fn spawn_sorafs_proof_outcome_forwarder_worker(
         .config()
         .runtime_retention()
         .proof_outcome_forwarder_interval();
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let mut interval = tokio::time::interval(worker_interval);
         let mut cursor = SorafsProofOutcomeForwarderCursorV1::default();
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                () = shutdown_signal.receive() => break,
+                biased;
+                () = shutdown_signal.receive() => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
                 _ = interval.tick() => {
+                    if shutdown_signal.is_sent() {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
                     let scan = run_sorafs_proof_outcome_forwarder_scan(&state, &mut cursor).await;
                     if scan.scanned != 0 {
                         debug!(
@@ -16297,7 +16309,7 @@ pub(crate) fn spawn_sorafs_proof_outcome_forwarder_worker(
                 }
             }
         }
-    });
+    }))
 }
 pub(crate) async fn run_sorafs_proof_outcome_forwarder_scan(
     state: &SharedAppState,
@@ -17939,10 +17951,10 @@ fn resume_sorafs_protocol_repair_handoffs(
 pub(crate) fn spawn_sorafs_repair_transaction_forwarder_worker(
     state: SharedAppState,
     shutdown_signal: ShutdownSignal,
-) {
+) -> Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
     if !state.sorafs_node.is_enabled() {
         debug!("SoraFS repair transaction forwarder disabled: SoraFS storage is disabled");
-        return;
+        return None;
     }
     if state.sorafs_repair_transaction_signer.is_none() {
         warn!(
@@ -17954,14 +17966,20 @@ pub(crate) fn spawn_sorafs_repair_transaction_forwarder_worker(
         .config()
         .runtime_retention()
         .proof_outcome_forwarder_interval();
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let mut interval = tokio::time::interval(worker_interval);
         let mut cursor = SorafsRepairTransactionForwarderCursorV1::default();
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                () = shutdown_signal.receive() => break,
+                biased;
+                () = shutdown_signal.receive() => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
                 _ = interval.tick() => {
+                    if shutdown_signal.is_sent() {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
                     let scan =
                         run_sorafs_repair_transaction_forwarder_scan(&state, &mut cursor).await;
                     if scan.scanned != 0
@@ -17987,7 +18005,7 @@ pub(crate) fn spawn_sorafs_repair_transaction_forwarder_worker(
                 }
             }
         }
-    });
+    }))
 }
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
@@ -18650,34 +18668,55 @@ fn finish_sorafs_moderation_maintenance_pass(
         "reconciled finalized SoraFS moderation state and deadline maintenance",
     );
 }
+/// Start the finalized-chain moderation worker under Torii lifecycle supervision.
+///
+/// # Errors
+///
+/// Returns an error when the operational worker configuration and constructed runtime disagree.
 pub(crate) fn spawn_sorafs_moderation_orchestrator_worker(
     state: SharedAppState,
     shutdown_signal: ShutdownSignal,
-) {
-    let Some(runtime) = state.sorafs_moderation_orchestrator.clone() else {
-        debug!("SoraFS finalized-chain moderation orchestrator worker disabled");
-        return;
-    };
-    let Some(config) = state.sorafs_moderation_orchestrator_worker.clone() else {
-        warn!(
-            "SoraFS finalized-chain moderation orchestrator exists without its operational worker configuration"
-        );
-        return;
+) -> Result<Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>>, String> {
+    let runtime = state.sorafs_moderation_orchestrator.clone();
+    let config = state.sorafs_moderation_orchestrator_worker.clone();
+    let (runtime, config) = match (runtime, config) {
+        (None, None) => {
+            debug!("SoraFS finalized-chain moderation orchestrator worker disabled");
+            return Ok(None);
+        }
+        (Some(runtime), Some(config)) => (runtime, config),
+        (Some(_), None) => {
+            return Err(
+                "SoraFS finalized-chain moderation orchestrator exists without its operational worker configuration"
+                    .to_owned(),
+            );
+        }
+        (None, Some(_)) => {
+            return Err(
+                "SoraFS moderation worker configuration exists without its finalized-chain orchestrator runtime"
+                    .to_owned(),
+            );
+        }
     };
     let maintenance_authority = config.maintenance_authority;
     let maintenance_batch_limit = config.maintenance_batch_limit;
     let worker_interval = config.worker_interval;
     let worker_deadline = super::moderation_runtime::moderation_worker_deadline(worker_interval);
-    tokio::spawn(async move {
+    Ok(Some(tokio::spawn(async move {
         let mut interval = tokio::time::interval(worker_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
+                biased;
                 () = shutdown_signal.receive() => {
                     runtime.mark_worker_stopped();
-                    break;
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
                 },
                 _ = interval.tick() => {
+                    if shutdown_signal.is_sent() {
+                        runtime.mark_worker_stopped();
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
                     if !runtime.begin_maintenance() {
                         runtime.mark_deadline_exceeded();
                         warn!(
@@ -18696,41 +18735,48 @@ pub(crate) fn spawn_sorafs_moderation_orchestrator_worker(
                             )
                         }),
                     ));
-                    let result = tokio::select! {
-                        () = shutdown_signal.receive() => {
-                            runtime.mark_worker_stopped();
-                            break;
-                        }
-                        result = tokio::time::timeout(worker_deadline, &mut blocking) => result,
+                    let mut shutdown_requested = false;
+                    let first_wait = tokio::select! {
+                        biased;
+                        () = shutdown_signal.receive() => None,
+                        result = tokio::time::timeout(worker_deadline, &mut blocking) => Some(result),
                     };
-                    match result {
-                        Ok(result) => {
-                            finish_sorafs_moderation_maintenance_pass(runtime.as_ref(), result);
+                    let result = match first_wait {
+                        None => {
+                            shutdown_requested = true;
+                            blocking.await
                         }
-                        Err(_) => {
+                        Some(Ok(result)) => result,
+                        Some(Err(_)) => {
                             runtime.mark_deadline_exceeded();
                             warn!(
                                 deadline_ms = u64::try_from(worker_deadline.as_millis())
                                     .unwrap_or(u64::MAX),
                                 "SoraFS moderation maintenance exceeded its deadline; pass remains exclusively fenced",
                             );
-                            let result = tokio::select! {
-                                () = shutdown_signal.receive() => {
-                                    runtime.mark_worker_stopped();
-                                    break;
-                                }
-                                result = &mut blocking => result,
+                            let second_wait = tokio::select! {
+                                biased;
+                                () = shutdown_signal.receive() => None,
+                                result = &mut blocking => Some(result),
                             };
-                            finish_sorafs_moderation_maintenance_pass(
-                                runtime.as_ref(),
-                                result,
-                            );
+                            match second_wait {
+                                Some(result) => result,
+                                None => {
+                                    shutdown_requested = true;
+                                    blocking.await
+                                }
+                            }
                         }
+                    };
+                    finish_sorafs_moderation_maintenance_pass(runtime.as_ref(), result);
+                    if shutdown_requested {
+                        runtime.mark_worker_stopped();
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
                     }
                 }
             }
         }
-    });
+    })))
 }
 pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_reconcile(
     State(state): State<SharedAppState>,
@@ -24072,41 +24118,56 @@ fn reconcile_sorafs_capacity_projection(
     Err("finalized capacity snapshot changed during every bounded collection attempt".to_owned())
 }
 /// Supervise the finalized-ledger projection consumed by the embedded provider scheduler.
+///
+/// # Errors
+///
+/// Returns an error when an active provider cannot read its durable finalized cursor.
 pub(crate) fn spawn_sorafs_capacity_reconciler_worker(
     state: SharedAppState,
     shutdown_signal: iroha_futures::supervisor::ShutdownSignal,
-) {
+) -> Result<Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>>, String> {
     if !state.sorafs_node.is_enabled() {
-        return;
+        return Ok(None);
     }
     if state.sorafs_node.capacity_provider_id().is_none() {
-        iroha_logger::error!(
-            "SoraFS capacity reconciler is disabled because torii.sorafs.storage.provider_id_hex is not configured"
+        iroha_logger::debug!(
+            "SoraFS capacity reconciler is inactive because this storage node has no configured provider identity"
         );
-        return;
+        return Ok(None);
     }
     let initial_mode = match state.sorafs_node.capacity_finalized_cursor() {
         Ok(Some(_)) => sorafs_node::capacity::CapacityReconcileModeV1::Advance,
         Ok(None) => sorafs_node::capacity::CapacityReconcileModeV1::FullRebuild,
         Err(error) => {
-            iroha_logger::error!(
-                %error,
-                "SoraFS capacity reconciler is disabled because the durable finalized cursor could not be read"
-            );
-            return;
+            return Err(format!(
+                "failed to read the durable SoraFS capacity finalized cursor: {error}"
+            ));
         }
     };
-    tokio::spawn(async move {
+    Ok(Some(tokio::spawn(async move {
         const RECONCILIATION_INTERVAL_SECS: u64 = 1;
         let mut mode = initial_mode;
         let mut ticker = tokio::time::interval(Duration::from_secs(RECONCILIATION_INTERVAL_SECS));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
-                _ = shutdown_signal.receive() => break,
+                biased;
+                _ = shutdown_signal.receive() => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
                 _ = ticker.tick() => {
-                    match reconcile_sorafs_capacity_projection(&state, mode) {
-                        Ok(outcome) => {
+                    if shutdown_signal.is_sent() {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
+                    let worker_state = state.clone();
+                    let reconciliation = crate::panic_recovery::join_recoverable(
+                        crate::panic_recovery::spawn_blocking_recoverable(move || {
+                            reconcile_sorafs_capacity_projection(&worker_state, mode)
+                        }),
+                    )
+                    .await;
+                    match reconciliation {
+                        Ok(Ok(outcome)) => {
                             mode = sorafs_node::capacity::CapacityReconcileModeV1::Advance;
                             if outcome.changed {
                                 iroha_logger::info!(
@@ -24118,18 +24179,26 @@ pub(crate) fn spawn_sorafs_capacity_reconciler_worker(
                                 );
                             }
                         }
-                        Err(error) => {
+                        Ok(Err(error)) => {
                             iroha_logger::error!(
                                 %error,
                                 mode = ?mode,
                                 "failed closed while reconciling SoraFS capacity scheduler from finalized ledger state"
                             );
                         }
+                        Err(error) => {
+                            iroha_logger::error!(
+                                ?error,
+                                mode = ?mode,
+                                "SoraFS capacity reconciliation blocking worker failed"
+                            );
+                            return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                        }
                     }
                 }
             }
         }
-    });
+    })))
 }
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_get_sorafs_storage_state(
@@ -32148,7 +32217,7 @@ mod advert_tests {
         }
     }
     impl ApiTestGovernanceDagSigner {
-        const HANDLE: &'static str = "pkcs11:governance-dag:torii-api-primary";
+        const HANDLE: &'static str = "provider:governance-dag:torii-api-primary";
         const PEER_ID: &'static [u8] = b"12D3KooWToriiApiTestGovernancePublisher";
         fn new() -> Self {
             Self {
@@ -38733,7 +38802,7 @@ mod advert_tests {
         qualification_calls: std::sync::atomic::AtomicUsize,
     }
     impl ApiTestStreamTokenSigner {
-        const HANDLE: &'static str = "pkcs11:prod/stream-token/api-tests";
+        const HANDLE: &'static str = "provider:prod/stream-token/api-tests";
         fn new(mode: ApiTestStreamTokenSignerMode) -> Self {
             Self {
                 signing_key: SigningKey::from_bytes(&[0x51; 32]),

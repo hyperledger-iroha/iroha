@@ -80,6 +80,7 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 
 export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 23;
+export const KAGEMUSHA_REQUIRED_NATIVE_CONTRACT_REVISION: 1;
 export const KAGEMUSHA_MANIFEST_VERSION: 4;
 export const KAGEMUSHA_MAX_HOPS: 8;
 export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY: "cash_handoff_v1";
@@ -92,8 +93,7 @@ export interface KagemushaNoritoRequestV4 {
 }
 
 export interface NormalizedKagemushaNoritoRequestV4 extends KagemushaNoritoRequestV4 {
-  readonly operationId: string;
-  readonly issuedAtMs: number | bigint;
+  readonly identity: KagemushaOperationIdentity;
 }
 
 export interface OfflineStatus {
@@ -108,13 +108,20 @@ export type KagemushaOperationKind = Readonly<{
   value: null;
 }>;
 
-export interface KagemushaOperationReference {
+export interface KagemushaOperationIdentity {
   readonly operation_id: string;
+  readonly request_authority_digest: string;
+  readonly canonical_request_digest: string;
   readonly kind: KagemushaOperationKind;
+  readonly issued_at_ms: number | bigint;
+  readonly expires_at_ms: number | bigint;
+}
+
+export interface KagemushaOperationReference {
+  readonly identity: KagemushaOperationIdentity;
   readonly state: Readonly<{ state: "pending"; value: null }>;
   readonly transaction_hash: string;
   readonly status_uri: string;
-  readonly submitted_at_ms: number | bigint;
 }
 
 export interface KagemushaTopUpAnchorRef {
@@ -189,24 +196,21 @@ export type KagemushaOperationStatus =
   | Readonly<{
       state: "pending";
       value: Readonly<{
-        operation_id: string;
-        kind: KagemushaOperationKind;
+        identity: KagemushaOperationIdentity;
         transaction_hash: string;
-        submitted_at_ms: number | bigint;
       }>;
     }>
   | Readonly<{
       state: "applied";
       value: Readonly<{
-        operation_id: string;
+        identity: KagemushaOperationIdentity;
         result: KagemushaOperationResult;
       }>;
     }>
   | Readonly<{
       state: "rejected";
       value: Readonly<{
-        operation_id: string;
-        kind: KagemushaOperationKind;
+        identity: KagemushaOperationIdentity;
         transaction_hash: string;
         error: Readonly<{
           code: string;
@@ -222,7 +226,7 @@ export type KagemushaPortableOperationStatus =
   | Readonly<{
       state: "applied";
       value: Readonly<{
-        operation_id: string;
+        identity: KagemushaOperationIdentity;
         result: Extract<KagemushaOperationResult, Readonly<{ kind: "redeem" }>>;
       }>;
     }>;
@@ -242,9 +246,7 @@ export function normalizeOfflineStatus(
 export function normalizeKagemushaOperationReference(
   payload: Record<string, unknown>,
   expected?: {
-    expectedOperationId: string;
-    expectedKind: "top_up" | "redeem";
-    expectedSubmittedAtMs: number | bigint;
+    expectedIdentity: KagemushaOperationIdentity;
     location: string | null;
     retryAfter: string | null;
   },
@@ -8349,7 +8351,6 @@ export interface ReportKaigiRelayHealthInput {
 }
 
 export interface ProposeDeployContractInstructionInput {
-  proposalOperator: string;
   contractAddress: string;
   codeHash: HashLike;
   abiHash: HashLike;

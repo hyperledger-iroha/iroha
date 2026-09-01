@@ -42,8 +42,31 @@ fn conn_scheme_defaults_to_http_for_json() {
     ));
 }
 #[test]
-fn conn_scheme_flags_websocket_upgrade() {
-    let mut request = axum::http::Request::builder()
+fn conn_scheme_flags_every_catalogued_websocket_upgrade() {
+    let websocket_routes = [
+        route_catalog::streaming::SUBSCRIPTION_WS,
+        route_catalog::streaming::BLOCKS_WS,
+        route_catalog::connect::WEBSOCKET,
+        route_catalog::sorafs::REPUTATION_EVENTS_WEBSOCKET,
+        route_catalog::application_api::SORAFS_ORDERBOOK_EVENTS_WS_GET,
+        route_catalog::application_api::SORAFS_RESERVE_EVENTS_WS_GET,
+    ];
+    for descriptor in websocket_routes {
+        let mut request = complete_websocket_upgrade_request();
+        request
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(descriptor));
+        assert_eq!(
+            ConnScheme::from_request(&request),
+            ConnScheme::Ws,
+            "{} must be classified from catalog transport metadata",
+            descriptor.stable_route_id()
+        );
+    }
+}
+
+fn complete_websocket_upgrade_request() -> axum::http::Request<()> {
+    axum::http::Request::builder()
         .method(axum::http::Method::GET)
         .header(axum::http::header::CONNECTION, "keep-alive, Upgrade")
         .header(axum::http::header::UPGRADE, "websocket")
@@ -53,13 +76,7 @@ fn conn_scheme_flags_websocket_upgrade() {
             "dGhlIHNhbXBsZSBub25jZQ==",
         )
         .body(())
-        .unwrap();
-    request
-        .extensions_mut()
-        .insert(MatchedRouteMetadata::from_descriptor(
-            route_catalog::streaming::SUBSCRIPTION_WS,
-        ));
-    assert!(matches!(ConnScheme::from_request(&request), ConnScheme::Ws));
+        .unwrap()
 }
 
 #[test]
@@ -94,6 +111,22 @@ fn conn_scheme_rejects_incomplete_or_uncatalogued_websocket_upgrades() {
         ConnScheme::from_request(&uncatalogued),
         ConnScheme::Http
     ));
+
+    for descriptor in [
+        route_catalog::streaming::EVENTS_SSE,
+        route_catalog::core::HEALTH,
+    ] {
+        let mut wrong_transport = complete_websocket_upgrade_request();
+        wrong_transport
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(descriptor));
+        assert_eq!(
+            ConnScheme::from_request(&wrong_transport),
+            ConnScheme::Http,
+            "{} must not be classified as a WebSocket",
+            descriptor.stable_route_id()
+        );
+    }
 }
 
 #[test]

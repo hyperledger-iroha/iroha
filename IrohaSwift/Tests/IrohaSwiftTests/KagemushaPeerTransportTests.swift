@@ -221,6 +221,28 @@ final class KagemushaPeerTransportTests: XCTestCase {
         ), text)
     }
 
+    func testTextCodecTemporaryArchiveWipePreservesOwnedPayloadBytes() throws {
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
+        let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
+        let payload = KagemushaPeerPayload.acknowledgement(
+            try KagemushaPeerTransportTestFixtures.acknowledgement(
+                request: request,
+                payment: payment
+            )
+        )
+        let expectedArchive = payload.archive
+
+        let text = try KagemushaPeerTextCodec.encode(payload)
+        XCTAssertEqual(payload.archive, expectedArchive)
+
+        let decoded = try KagemushaPeerTextCodec.decode(
+            text,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+        XCTAssertEqual(decoded.archive, expectedArchive)
+        XCTAssertEqual(try KagemushaPeerTextCodec.encode(decoded), text)
+    }
+
     func testCanonicalPaymentFixtureUsesFirstReleaseABI21Envelope() throws {
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)

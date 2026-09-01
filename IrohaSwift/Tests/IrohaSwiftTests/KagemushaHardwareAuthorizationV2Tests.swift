@@ -6,8 +6,9 @@ import XCTest
 final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
     func testHardwareAuthorizationAbiInventoryIsExactAndHasNoCompatibilityFinalizer() {
         let strictSymbols = [
-            "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
-            "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
+            "connect_norito_kagemusha_request_authorization_signing_bytes_v3",
+            "connect_norito_kagemusha_request_authorization_finalize_hardware_v3",
+            "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3",
         ]
         for symbol in strictSymbols {
             XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(symbol))
@@ -15,6 +16,13 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
         XCTAssertFalse(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
             "connect_norito_kagemusha_request_authorization_create_v2"
         ))
+        for retired in [
+            "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
+            "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
+            "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
+        ] {
+            XCTAssertFalse(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(retired))
+        }
     }
 
     func testPreparationArchiveIsNotAnAuthorizationAndBindsPlatform() throws {
@@ -37,7 +45,7 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
         XCTAssertNotEqual(androidArchive, iosArchive)
         XCTAssertNoThrow(try KagemushaRecursiveSpend.requireArchive(
             androidArchive,
-            schema: KagemushaRecursiveSpend.authorizationPreparationWireName,
+            schema: KagemushaRecursiveSpend.authorizationPreparationWireNameV3,
             field: "authorizationPreparation"
         ))
         XCTAssertThrowsError(try KagemushaRecursiveSpend.requireArchive(
@@ -56,7 +64,6 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
             authority: valid.authority,
             deviceID: valid.deviceID,
             assetDefinitionID: "not-an-asset-definition",
-            operationID: valid.operationID,
             issuedAtMilliseconds: valid.issuedAtMilliseconds,
             expiresAtMilliseconds: valid.expiresAtMilliseconds,
             nonce: valid.nonce,
@@ -68,7 +75,6 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
             authority: valid.authority,
             deviceID: valid.deviceID,
             assetDefinitionID: valid.assetDefinitionID,
-            operationID: valid.operationID,
             issuedAtMilliseconds: valid.issuedAtMilliseconds,
             expiresAtMilliseconds: valid.expiresAtMilliseconds,
             nonce: valid.nonce,
@@ -171,7 +177,6 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
             authority: authority,
             deviceID: "physical-device-1",
             assetDefinitionID: assetDefinitionID(),
-            operationID: fixed32(0x31),
             issuedAtMilliseconds: 1_000,
             expiresAtMilliseconds: 2_000,
             nonce: fixed32(0x32),
@@ -204,7 +209,7 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
             .deletingLastPathComponent()
         let path = repositoryRoot
             .appendingPathComponent("crates/connect_norito_bridge/tests/fixtures")
-            .appendingPathComponent("kagemusha_request_authorization_v2_hardware.hex")
+            .appendingPathComponent("kagemusha_request_authorization_v3_hardware.hex")
         let raw = try String(contentsOf: path, encoding: .utf8)
         var values: [String: String] = [:]
         for line in raw.split(separator: "\n") {
@@ -222,6 +227,7 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
         XCTAssertEqual(Set(values.keys), [
             "authority_public_key",
             "registration_hash",
+            "operation_id",
             "android_preparation",
             "android_signing_preimage",
             "ios_preparation",
@@ -234,6 +240,18 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
         XCTAssertEqual(
             try hex(try XCTUnwrap(values["registration_hash"])),
             try registrationHash()
+        )
+        let authority = try AccountAddress
+            .fromAccount(publicKey: authorityPublicKey())
+            .toI105(networkPrefix: 0x02F1)
+        XCTAssertEqual(
+            try XCTUnwrap(values["operation_id"]),
+            try KagemushaOperationIdentityDerivation.operationID(
+                compactAuthorityPayload: AccountAddress
+                    .fromI105(authority)
+                    .compactNoritoAccountControllerPayload(),
+                nonce: fixed32(0x32)
+            )
         )
         return values
     }

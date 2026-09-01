@@ -24,15 +24,64 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
     }
 
+    func testOperationIdentityRequiresMarkedDigestsAndBoundLifetime() throws {
+        XCTAssertNoThrow(try operationIdentity(kind: .topUp))
+        for (operationID, authorityDigest, requestDigest, issuedAt, expiresAt, field) in [
+            (String(repeating: "10", count: 32), Self.authorityDigest, Self.requestDigest, 1, 2, "identity.operation_id"),
+            (Self.operationId, String(repeating: "20", count: 32), Self.requestDigest, 1, 2, "identity.request_authority_digest"),
+            (Self.operationId, Self.authorityDigest, String(repeating: "40", count: 32), 1, 2, "identity.canonical_request_digest"),
+            (Self.operationId, Self.authorityDigest, Self.requestDigest, 0, 1, "identity.issued_at_ms"),
+            (Self.operationId, Self.authorityDigest, Self.requestDigest, 2, 2, "identity.expires_at_ms"),
+            (
+                Self.operationId,
+                Self.authorityDigest,
+                Self.requestDigest,
+                1,
+                KagemushaRecursiveSpend.maximumAuthorizationTTLMilliseconds + 2,
+                "identity.expires_at_ms"
+            ),
+        ] {
+            XCTAssertThrowsError(try KagemushaOperationIdentity(
+                operationID: operationID,
+                requestAuthorityDigest: authorityDigest,
+                canonicalRequestDigest: requestDigest,
+                kind: .topUp,
+                issuedAtMs: issuedAt,
+                expiresAtMs: expiresAt
+            )) { error in
+                XCTAssertEqual(
+                    error as? KagemushaOperationError,
+                    .invalidField(field)
+                )
+            }
+        }
+
+        let encoded = try JSONEncoder().encode(operationIdentity(kind: .redeem))
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(
+            Set(object.keys),
+            [
+                "operation_id", "request_authority_digest",
+                "canonical_request_digest", "kind", "issued_at_ms",
+                "expires_at_ms",
+            ]
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode(KagemushaOperationIdentity.self, from: encoded),
+            try operationIdentity(kind: .redeem)
+        )
+    }
+
     func testOperationReferenceNoritoRoundTrips() throws {
         for kind in [KagemushaOperationKind.topUp, .redeem] {
+            let identity = try operationIdentity(kind: kind)
             let expected = try KagemushaOperationReference(
-                operationId: Self.operationId,
-                kind: kind,
+                identity: identity,
                 state: .pending,
                 transactionHash: Self.transactionHash,
-                statusUri: "/v1/offline/operations/\(Self.operationId)",
-                submittedAtMs: UInt64.max
+                statusUri: "/v1/offline/operations/\(identity.operationID)"
             )
 
             XCTAssertEqual(
@@ -74,38 +123,17 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         }
     }
 
-    func testOperationReferenceMatchesRustNoritoGoldenVector() throws {
+    func testLegacyFlatOperationReferenceVectorIsRejected() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustOperationReferenceArchiveHex))
-        let expected = try KagemushaOperationReference(
-            operationId: Self.operationId,
-            kind: .topUp,
-            state: .pending,
-            transactionHash: Self.transactionHash,
-            statusUri: "/v1/offline/operations/\(Self.operationId)",
-            submittedAtMs: UInt64.max
-        )
-
-        XCTAssertEqual(try KagemushaOperationCodec.decodeReference(archive), expected)
-        XCTAssertEqual(KagemushaOperationCodec.encodeReference(expected), archive)
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeReference(archive))
     }
 
-    func testPendingOperationStatusMatchesRustNoritoGoldenVector() throws {
+    func testLegacyFlatPendingStatusVectorIsRejected() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustPendingStatusArchiveHex))
-
-        let status = try KagemushaOperationCodec.decodeStatus(
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeStatus(
             archive,
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-        )
-        XCTAssertEqual(status.kind, .topUp)
-        XCTAssertEqual(
-            status,
-            .pending(try .init(
-                operationId: Self.operationId,
-                kind: .topUp,
-                transactionHash: Self.transactionHash,
-                submittedAtMs: UInt64.max
-            ))
-        )
+        ))
     }
 
     func testNativeWholeStatusValidatorRejectsZeroSubmittedTime() throws {
@@ -114,21 +142,18 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             KagemushaRecursiveSpend.hasRequiredNativeSymbols,
             "whole-status validation bridge is not linked in this test host"
         )
-        let valid = try XCTUnwrap(Data(hexString: Self.rustPendingStatusArchiveHex))
-        XCTAssertEqual(
-            try NoritoNativeBridge.shared
-                .kagemushaOfflineOperationStatusValidateV1(statusArchive: valid),
-            true
+        let invalidIdentity = try KagemushaOperationIdentity(
+            operationID: Self.operationId,
+            requestAuthorityDigest: Self.authorityDigest,
+            canonicalRequestDigest: Self.requestDigest,
+            kind: .topUp,
+            issuedAtMs: 1,
+            expiresAtMs: 2
         )
-
-        var zeroTime = CompactNoritoWriter()
-        zeroTime.writeUInt64LE(0)
         var status = CompactNoritoWriter()
         status.writeUInt32LE(0)
-        status.writeField(CompactNorito.encodeString(Self.operationId))
-        status.writeField(CompactNorito.encodeUInt32(0))
+        status.writeField(encodedIdentity(invalidIdentity, issuedAtMs: 0))
         status.writeField(CompactNorito.encodeString(Self.transactionHash))
-        status.writeField(zeroTime.data)
         let invalid = noritoEncode(
             typeName: "iroha_torii_shared::offline_api::OfflineOperationStatus",
             payload: status.data,
@@ -137,33 +162,19 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
         XCTAssertThrowsError(
             try NoritoNativeBridge.shared
-                .kagemushaOfflineOperationStatusValidateV1(statusArchive: invalid)
+                .kagemushaOfflineOperationStatusValidateV2(statusArchive: invalid)
         ) { error in
             XCTAssertEqual(error as? NativeBridgeError, .kagemushaProve)
         }
         #endif
     }
 
-    func testRejectedOperationStatusMatchesRustNoritoGoldenVector() throws {
+    func testLegacyFlatRejectedStatusVectorIsRejected() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustRejectedStatusArchiveHex))
-
-        let status = try KagemushaOperationCodec.decodeStatus(
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeStatus(
             archive,
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-        )
-        XCTAssertEqual(status.kind, .redeem)
-        XCTAssertEqual(
-            status,
-            .rejected(try .init(
-                operationId: Self.operationId,
-                kind: .redeem,
-                transactionHash: Self.transactionHash,
-                error: try KagemushaOperationErrorEnvelope(
-                    code: "offline_operation_rejected",
-                    message: "rejected"
-                )
-            ))
-        )
+        ))
     }
 
     func testRejectedOperationErrorDetailsDecodeEntrypointBeforeTransactionHash() throws {
@@ -179,24 +190,12 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         XCTAssertEqual(details.transactionHash, Self.transactionHash)
     }
 
-    func testAppliedRedeemStatusMatchesRustNoritoGoldenVector() throws {
+    func testLegacyFlatAppliedStatusVectorIsRejected() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustAppliedRedeemStatusArchiveHex))
-
-        let status = try KagemushaOperationCodec.decodeStatus(
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeStatus(
             archive,
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-        )
-        XCTAssertEqual(status.kind, .redeem)
-        XCTAssertEqual(
-            status,
-            .applied(try .init(
-                operationId: Self.operationId,
-                result: .redeem(try KagemushaRedeemResult(
-                    transactionHash: Self.transactionHash,
-                    finalizedBlockHeight: UInt64.max
-                ))
-            ))
-        )
+        ))
     }
 
     func testOperationStatusRequiresExactSharedSchema() throws {
@@ -383,11 +382,14 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             canonicalTopUpFinalityProofArchive()
         )
         XCTAssertNoThrow(try KagemushaOperationStatus.Applied(
-            operationId: String(repeating: "d5", count: 32),
+            identity: operationIdentity(
+                kind: .topUp,
+                operationID: String(repeating: "d5", count: 32)
+            ),
             result: .topUp(result)
         ))
         XCTAssertThrowsError(try KagemushaOperationStatus.Applied(
-            operationId: Self.operationId,
+            identity: operationIdentity(kind: .topUp),
             result: .topUp(result)
         ))
         XCTAssertThrowsError(try KagemushaTopUpResult(
@@ -430,6 +432,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     }
 
     func testOperationReferencesRequireCanonicalHashAndBoundStatusUri() throws {
+        let identity = try operationIdentity(kind: .topUp)
         for invalidHash in [
             "",
             String(repeating: "22", count: 32),
@@ -441,12 +444,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             " \(Self.transactionHash)",
         ] {
             XCTAssertThrowsError(try KagemushaOperationReference(
-                operationId: Self.operationId,
-                kind: .topUp,
+                identity: identity,
                 state: .pending,
                 transactionHash: invalidHash,
-                statusUri: "/v1/offline/operations/\(Self.operationId)",
-                submittedAtMs: 1
+                statusUri: "/v1/offline/operations/\(identity.operationID)"
             )) { error in
                 XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
             }
@@ -459,60 +460,50 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             " /v1/offline/operations/\(Self.operationId)",
         ] {
             XCTAssertThrowsError(try KagemushaOperationReference(
-                operationId: Self.operationId,
-                kind: .topUp,
+                identity: identity,
                 state: .pending,
                 transactionHash: Self.transactionHash,
-                statusUri: invalidUri,
-                submittedAtMs: 1
+                statusUri: invalidUri
             )) { error in
                 XCTAssertEqual(error as? KagemushaOperationError, .invalidField("status_uri"))
             }
         }
 
-        XCTAssertThrowsError(try KagemushaOperationReference(
-            operationId: Self.operationId,
-            kind: .topUp,
-            state: .pending,
-            transactionHash: Self.transactionHash,
-            statusUri: "/v1/offline/operations/\(Self.operationId)",
-            submittedAtMs: 0
-        )) { error in
-            XCTAssertEqual(
-                error as? KagemushaOperationError,
-                .invalidField("submitted_at_ms")
-            )
-        }
     }
 
     func testTaggedOperationStatePayloadsCannotBypassValidation() throws {
-        XCTAssertThrowsError(try KagemushaOperationStatus.Pending(
-            operationId: String(repeating: "0", count: 64),
+        XCTAssertThrowsError(try KagemushaOperationIdentity(
+            operationID: String(repeating: "0", count: 64),
+            requestAuthorityDigest: Self.authorityDigest,
+            canonicalRequestDigest: Self.requestDigest,
             kind: .topUp,
-            transactionHash: Self.transactionHash,
-            submittedAtMs: 1
+            issuedAtMs: 1,
+            expiresAtMs: 2
         )) { error in
-            XCTAssertEqual(error as? KagemushaOperationError, .invalidField("operation_id"))
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidField("identity.operation_id")
+            )
         }
 
         XCTAssertThrowsError(try KagemushaOperationStatus.Pending(
-            operationId: Self.operationId,
-            kind: .topUp,
-            transactionHash: String(repeating: "F", count: 64),
-            submittedAtMs: 1
+            identity: operationIdentity(kind: .topUp),
+            transactionHash: String(repeating: "F", count: 64)
         )) { error in
             XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
         }
 
-        XCTAssertThrowsError(try KagemushaOperationStatus.Pending(
-            operationId: Self.operationId,
+        XCTAssertThrowsError(try KagemushaOperationIdentity(
+            operationID: Self.operationId,
+            requestAuthorityDigest: Self.authorityDigest,
+            canonicalRequestDigest: Self.requestDigest,
             kind: .topUp,
-            transactionHash: Self.transactionHash,
-            submittedAtMs: 0
+            issuedAtMs: 0,
+            expiresAtMs: 1
         )) { error in
             XCTAssertEqual(
                 error as? KagemushaOperationError,
-                .invalidField("submitted_at_ms")
+                .invalidField("identity.issued_at_ms")
             )
         }
 
@@ -552,12 +543,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         }
 
         let valid = try KagemushaOperationStatus.Pending(
-            operationId: Self.operationId,
-            kind: .redeem,
-            transactionHash: Self.transactionHash,
-            submittedAtMs: UInt64.max
+            identity: operationIdentity(kind: .redeem),
+            transactionHash: Self.transactionHash
         )
-        XCTAssertEqual(KagemushaOperationStatus.pending(valid).operationId, Self.operationId)
+        XCTAssertEqual(KagemushaOperationStatus.pending(valid).identity.operationID, Self.operationId)
     }
 
     func testTypedErrorsRequireStableCodesAndExactText() throws {
@@ -645,15 +634,14 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         invalidString.writeLength(1)
         invalidString.writeBytes(Data([0xff]))
 
+        let identity = try operationIdentity(kind: .topUp)
         var payload = CompactNoritoWriter()
-        payload.writeField(CompactNorito.encodeString(Self.operationId))
-        payload.writeField(CompactNorito.encodeUInt32(0))
+        payload.writeField(encodedIdentity(identity))
         payload.writeField(CompactNorito.encodeUInt32(0))
         payload.writeField(invalidString.data)
         payload.writeField(
             CompactNorito.encodeString("/v1/offline/operations/\(Self.operationId)")
         )
-        payload.writeField(CompactNorito.encodeUInt64(1))
 
         XCTAssertThrowsError(try KagemushaOperationCodec.decodeReference(noritoEncode(
             typeName: "iroha_torii_shared::offline_api::OfflineOperationReference",
@@ -664,12 +652,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         }
 
         let valid = try KagemushaOperationReference(
-            operationId: Self.operationId,
-            kind: .topUp,
+            identity: identity,
             state: .pending,
             transactionHash: Self.transactionHash,
-            statusUri: "/v1/offline/operations/\(Self.operationId)",
-            submittedAtMs: 1
+            statusUri: "/v1/offline/operations/\(identity.operationID)"
         )
         let compactPayload = try XCTUnwrap(
             noritoDecodeFrame(KagemushaOperationCodec.encodeReference(valid))
@@ -686,30 +672,124 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     }
 
     func testRequestsDeriveLowercaseOperationIdsFromCanonicalArchives() throws {
-        let operationId = Data(repeating: 0xab, count: 32)
-        let expectedOperationId = String(repeating: "ab", count: 32)
+        let expectedOperationId = try KagemushaOperationIdentityDerivation.operationID(
+            compactAuthorityPayload: Self.authorityPayload,
+            nonce: Self.authorizationNonce
+        )
         let topUpArchive = requestArchive(
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
             fieldCount: 8,
-            operationIdFieldIndex: 6,
-            operationId: operationId
+            operationIdFieldIndex: 6
         )
         let redeemArchive = requestArchive(
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
             fieldCount: 10,
-            operationIdFieldIndex: 8,
-            operationId: operationId
+            operationIdFieldIndex: 8
         )
 
         let topUp = try KagemushaTopUpRequest(noritoArchive: topUpArchive)
         let redeem = try KagemushaRedeemRequest(noritoArchive: redeemArchive)
 
-        XCTAssertEqual(topUp.operationId, expectedOperationId)
-        XCTAssertEqual(topUp.issuedAtMs, 1)
+        XCTAssertEqual(topUp.identity.operationID, expectedOperationId)
+        XCTAssertEqual(topUp.identity.issuedAtMs, 1)
+        XCTAssertEqual(topUp.identity.expiresAtMs, 2)
+        XCTAssertEqual(topUp.identity.kind, .topUp)
+        XCTAssertEqual(
+            topUp.identity.requestAuthorityDigest,
+            try KagemushaOperationIdentityDerivation.requestAuthorityDigest(
+                compactAuthorityPayload: Self.authorityPayload
+            )
+        )
+        XCTAssertEqual(
+            topUp.identity.canonicalRequestDigest,
+            KagemushaOperationIdentityDerivation.canonicalRequestDigest(
+                requestArchive: topUpArchive,
+                kind: .topUp
+            )
+        )
         XCTAssertEqual(topUp.noritoArchive(), topUpArchive)
-        XCTAssertEqual(redeem.operationId, expectedOperationId)
-        XCTAssertEqual(redeem.issuedAtMs, 1)
+        XCTAssertEqual(redeem.identity.operationID, expectedOperationId)
+        XCTAssertEqual(redeem.identity.issuedAtMs, 1)
+        XCTAssertEqual(redeem.identity.expiresAtMs, 2)
+        XCTAssertEqual(redeem.identity.kind, .redeem)
+        XCTAssertNotEqual(
+            topUp.identity.canonicalRequestDigest,
+            redeem.identity.canonicalRequestDigest
+        )
         XCTAssertEqual(redeem.noritoArchive(), redeemArchive)
+    }
+
+    func testRequestsRejectNonceOperationAuthorityAndLifetimeSubstitution() throws {
+        let validOperationID = Data(hexString: try KagemushaOperationIdentityDerivation
+            .operationID(
+                compactAuthorityPayload: Self.authorityPayload,
+                nonce: Self.authorizationNonce
+            ))!
+        for nonce in [
+            Data(),
+            Data([1]),
+            Data(repeating: 1, count: 31),
+            Data(repeating: 1, count: 33),
+            Data(repeating: 0, count: 32),
+        ] {
+            XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: requestArchive(
+                schema: KagemushaRecursiveSpend.topUpRequestWireName,
+                fieldCount: 8,
+                operationIdFieldIndex: 6,
+                operationId: validOperationID,
+                nonce: nonce
+            ))) { error in
+                XCTAssertEqual(
+                    error as? KagemushaOperationError,
+                    .invalidField("authorization.nonce")
+                )
+            }
+        }
+
+        var mismatchedOperationID = validOperationID
+        mismatchedOperationID[0] ^= 1
+        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: requestArchive(
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
+            fieldCount: 8,
+            operationIdFieldIndex: 6,
+            operationId: mismatchedOperationID
+        ))) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidField("authorization.operation_id")
+            )
+        }
+
+        let alternateKeypair = try Keypair(
+            privateKeyBytes: Data(repeating: 0x43, count: 32)
+        )
+        let alternateAuthority = try AccountAddress
+            .fromAccount(publicKey: alternateKeypair.publicKey)
+            .compactNoritoAccountControllerPayload()
+        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: requestArchive(
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
+            fieldCount: 8,
+            operationIdFieldIndex: 6,
+            operationId: validOperationID,
+            authorityPayload: alternateAuthority
+        ))) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidField("authorization.operation_id")
+            )
+        }
+
+        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: requestArchive(
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
+            fieldCount: 8,
+            operationIdFieldIndex: 6,
+            expiresAtMs: KagemushaRecursiveSpend.maximumAuthorizationTTLMilliseconds + 2
+        ))) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidField("authorization.expires_at_ms")
+            )
+        }
     }
 
     func testRequestsRequireAuthorizationIdentityAndPositiveIssuedAt() throws {
@@ -889,13 +969,48 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: Data()))
     }
 
+    private func operationIdentity(
+        kind: KagemushaOperationKind,
+        operationID: String = ToriiKagemushaAPIModelsTests.operationId,
+        requestAuthorityDigest: String = ToriiKagemushaAPIModelsTests.authorityDigest,
+        canonicalRequestDigest: String = ToriiKagemushaAPIModelsTests.requestDigest,
+        issuedAtMs: UInt64 = 1,
+        expiresAtMs: UInt64 = 2
+    ) throws -> KagemushaOperationIdentity {
+        try KagemushaOperationIdentity(
+            operationID: operationID,
+            requestAuthorityDigest: requestAuthorityDigest,
+            canonicalRequestDigest: canonicalRequestDigest,
+            kind: kind,
+            issuedAtMs: issuedAtMs,
+            expiresAtMs: expiresAtMs
+        )
+    }
+
+    private func encodedIdentity(
+        _ identity: KagemushaOperationIdentity,
+        issuedAtMs: UInt64? = nil
+    ) -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(CompactNorito.encodeString(identity.operationID))
+        writer.writeField(CompactNorito.encodeString(identity.requestAuthorityDigest))
+        writer.writeField(CompactNorito.encodeString(identity.canonicalRequestDigest))
+        writer.writeField(CompactNorito.encodeUInt32(identity.kind == .topUp ? 0 : 1))
+        writer.writeField(CompactNorito.encodeUInt64(issuedAtMs ?? identity.issuedAtMs))
+        writer.writeField(CompactNorito.encodeUInt64(identity.expiresAtMs))
+        return writer.data
+    }
+
     private func requestArchive(
         schema: String,
         fieldCount: Int,
         operationIdFieldIndex: Int,
-        operationId: Data,
+        operationId: Data? = nil,
         authorizationOperationId: Data? = nil,
-        issuedAtMs: UInt64 = 1
+        issuedAtMs: UInt64 = 1,
+        expiresAtMs: UInt64 = 2,
+        nonce: Data = ToriiKagemushaAPIModelsTests.authorizationNonce,
+        authorityPayload: Data = ToriiKagemushaAPIModelsTests.authorityPayload
     ) -> Data {
         KagemushaRecursiveSpend.frameArchive(
             schema: schema,
@@ -904,7 +1019,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 operationIdFieldIndex: operationIdFieldIndex,
                 operationId: operationId,
                 authorizationOperationId: authorizationOperationId,
-                issuedAtMs: issuedAtMs
+                issuedAtMs: issuedAtMs,
+                expiresAtMs: expiresAtMs,
+                nonce: nonce,
+                authorityPayload: authorityPayload
             )
         )
     }
@@ -943,8 +1061,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
         var status = CompactNoritoWriter()
         status.writeUInt32LE(2)
-        status.writeField(CompactNorito.encodeString(Self.operationId))
-        status.writeField(CompactNorito.encodeUInt32(1))
+        status.writeField(encodedIdentity(try operationIdentity(kind: .redeem)))
         status.writeField(CompactNorito.encodeString(Self.transactionHash))
         status.writeField(error.data)
         return noritoEncode(
@@ -962,7 +1079,11 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         maximumBytes: Int,
         construct: (Data) throws -> Void
     ) throws {
-        let operationId = Data(repeating: 0xa7, count: 32)
+        let operationId = Data(hexString: try KagemushaOperationIdentityDerivation
+            .operationID(
+                compactAuthorityPayload: Self.authorityPayload,
+                nonce: Self.authorizationNonce
+            ))!
         var fillerBytes = maximumBytes - 1_024
         var exactArchive: Data?
         for _ in 0..<8 {
@@ -976,7 +1097,9 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 } else if index == fieldCount - 1 {
                     field = requestAuthorization(
                         operationId: operationId,
-                        issuedAtMs: 1
+                        issuedAtMs: 1,
+                        expiresAtMs: 2,
+                        nonce: Self.authorizationNonce
                     )
                 } else if index == 1 {
                     field = Data(repeating: 0x5a, count: fillerBytes)
@@ -1017,21 +1140,33 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     private func requestPayload(
         fieldCount: Int,
         operationIdFieldIndex: Int,
-        operationId: Data,
+        operationId: Data? = nil,
         authorizationOperationId: Data? = nil,
-        issuedAtMs: UInt64 = 1
+        issuedAtMs: UInt64 = 1,
+        expiresAtMs: UInt64 = 2,
+        nonce: Data = ToriiKagemushaAPIModelsTests.authorizationNonce,
+        authorityPayload: Data = ToriiKagemushaAPIModelsTests.authorityPayload
     ) -> Data {
+        let derivedOperationID = Data(hexString: try! KagemushaOperationIdentityDerivation
+            .operationID(
+                compactAuthorityPayload: Self.authorityPayload,
+                nonce: Self.authorizationNonce
+            ))!
+        let outerOperationID = operationId ?? derivedOperationID
         var payload = CompactNoritoWriter()
         for index in 0..<fieldCount {
             let field: Data
             if index == 0 {
                 field = CompactNorito.encodeUInt16(KagemushaRecursiveSpend.wireVersionV4)
             } else if index == operationIdFieldIndex {
-                field = operationId
+                field = outerOperationID
             } else if index == fieldCount - 1 {
                 field = requestAuthorization(
-                    operationId: authorizationOperationId ?? operationId,
-                    issuedAtMs: issuedAtMs
+                    operationId: authorizationOperationId ?? outerOperationID,
+                    issuedAtMs: issuedAtMs,
+                    expiresAtMs: expiresAtMs,
+                    nonce: nonce,
+                    authorityPayload: authorityPayload
                 )
             } else {
                 field = Data([UInt8(index + 1)])
@@ -1043,16 +1178,31 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
     private func requestAuthorization(
         operationId: Data,
-        issuedAtMs: UInt64
+        issuedAtMs: UInt64,
+        expiresAtMs: UInt64,
+        nonce: Data,
+        authorityPayload: Data = ToriiKagemushaAPIModelsTests.authorityPayload
     ) -> Data {
         var authorization = CompactNoritoWriter()
         for index in 0..<10 {
             let field: Data
             switch index {
+            case 0:
+                field = authorityPayload
+            case 1:
+                field = CompactNorito.encodeString("swift-kagemusha-fixture")
             case 3:
                 field = operationId
             case 4:
                 field = CompactNorito.encodeUInt64(issuedAtMs)
+            case 5:
+                field = CompactNorito.encodeUInt64(expiresAtMs)
+            case 6:
+                field = nonce
+            case 7:
+                field = Data(repeating: 0x77, count: 32)
+            case 8:
+                field = Data(repeating: 0x99, count: 32)
             default:
                 field = Data([UInt8(index + 1)])
             }
@@ -1171,6 +1321,14 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
     }
 
+    private static let authorityPayload: Data = {
+        let keypair = try! Keypair(privateKeyBytes: Data(repeating: 0x42, count: 32))
+        let address = try! AccountAddress.fromAccount(publicKey: keypair.publicKey)
+        return try! address.compactNoritoAccountControllerPayload()
+    }()
+    private static let authorizationNonce = Data(repeating: 0x51, count: 32)
+    private static let authorityDigest = String(repeating: "33", count: 32)
+    private static let requestDigest = String(repeating: "55", count: 32)
     private static let operationId = String(repeating: "11", count: 32)
     private static let entrypointHash = String(repeating: "33", count: 32)
     private static let transactionHash = String(repeating: "22", count: 31) + "23"

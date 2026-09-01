@@ -103,8 +103,9 @@ structural and cryptographic checks:
    CommitQC finality round, authenticated proposal round, and Commit phase to
    agree exactly. Prepare evidence requires equal proposal and certification
    rounds; Commit permits only a proposal view at or before its finality view.
-   A `next_epoch_snapshot` in the height context is mandatory for an
-   epoch-ending boundary parent and forbidden elsewhere.
+   A `next_epoch_snapshot` in the height context is mandatory for every
+   representable epoch-ending boundary parent and forbidden elsewhere. The
+   terminal `u64::MAX` height carries none because no successor height exists.
 4. Require the artifact network id to equal the caller's expected network id.
 5. Recompute the block-header height, hash, predecessor, and view-change index
    and require them to match the artifact's height, block hash, subject parent,

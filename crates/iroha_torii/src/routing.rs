@@ -125,7 +125,7 @@ use iroha_data_model::{
     account::AccountAddressErrorCode,
     block::{
         BlockHeader, SignedBlock,
-        consensus::{EvidenceRecord, LaneBlockCommitment},
+        consensus::{EvidencePenaltyStatus, EvidenceRecord, LaneBlockCommitment},
     },
     consensus::ConsensusKeyRecord,
     nexus::{
@@ -11622,6 +11622,25 @@ where
 {
     hex::encode(hash.as_ref())
 }
+fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
+    let (status, details) = match status {
+        EvidencePenaltyStatus::Pending => ("pending", Value::Null),
+        EvidencePenaltyStatus::Applied { height } => {
+            let mut details = json::Map::new();
+            details.insert("height".into(), Value::from(height));
+            ("applied", Value::Object(details))
+        }
+        EvidencePenaltyStatus::Cancelled { height } => {
+            let mut details = json::Map::new();
+            details.insert("height".into(), Value::from(height));
+            ("cancelled", Value::Object(details))
+        }
+    };
+    let mut lifecycle = json::Map::new();
+    lifecycle.insert("status".into(), Value::from(status));
+    lifecycle.insert("details".into(), details);
+    Value::Object(lifecycle)
+}
 fn evidence_to_json(rec: &EvidenceRecord) -> Value {
     use iroha_data_model::block::consensus_v2::SumeragiV2Equivocation;
     use norito::codec::Encode as _;
@@ -11681,6 +11700,10 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
     map.insert(
         "consensus_admitted_height".into(),
         Value::from(rec.recorded_at_height),
+    );
+    map.insert(
+        "penalty_status".into(),
+        evidence_penalty_status_to_json(rec.penalty_status),
     );
     Value::Object(map)
 }
@@ -17467,6 +17490,20 @@ async fn submit_contract_call_request(
         contract_address,
         contract_alias,
     } = prepared;
+    let mint_request_alias: iroha_data_model::smart_contract::ContractAlias =
+        "apps_mint_request::cbsi"
+            .parse()
+            .expect("static CBSI mint-request contract alias");
+    let targets_mint_request = contract_alias.as_ref() == Some(&mint_request_alias) || {
+        let world = state.world_view();
+        world.contract_aliases().get(&mint_request_alias) == Some(&contract_address)
+    };
+    if targets_mint_request {
+        return Err(Error::AppConflict {
+            code: "mint_request_multisig_required",
+            message: "the CBSI mint-request contract is available only through the exact multisig contract-call routes".to_owned(),
+        });
+    }
     let resolved_entrypoint = explicit_contract_entrypoint(&entrypoint)?;
     let entrypoint_descriptor =
         ensure_contract_call_entrypoint(&manifest, resolved_entrypoint, expected_kind)?;
@@ -20932,6 +20969,34 @@ fn parse_multisig_account_alias(
     }
     Ok(alias)
 }
+fn resolve_exact_active_account_alias(
+    state: &CoreState,
+    alias_literal: &str,
+) -> Result<iroha_data_model::account::AccountId> {
+    let nexus = state.nexus_snapshot();
+    let alias = parse_multisig_account_alias(alias_literal, &nexus.dataspace_catalog)?;
+    let view = state.view();
+    let now_ms = view.latest_block().map_or(0, |block| {
+        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+    });
+    resolve_active_account_alias(
+        view.world(),
+        &nexus.dataspace_catalog,
+        &alias,
+        now_ms,
+    )
+    .map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            error.to_string(),
+        ))
+    })?
+    .ok_or_else(|| {
+        multisig_selector_not_found_error(
+            "multisig_authority_alias_not_found",
+            format!("multisig authority alias not found: `{alias_literal}`"),
+        )
+    })
+}
 fn resolve_multisig_account_selector(
     state: &CoreState,
     selector: &MultisigAccountSelectorDto,
@@ -21735,6 +21800,106 @@ struct StrictMultisigContractCallIntent {
     contract_entrypoint: String,
     payload: IrohaJson,
 }
+struct ExactMultisigContractCallTarget {
+    contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    contract_entrypoint: String,
+    payload: IrohaJson,
+}
+fn exact_multisig_contract_call_target_with_world<W: iroha_core::state::WorldReadOnly>(
+    world: &W,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+) -> Option<ExactMultisigContractCallTarget> {
+    if proposal.instructions.len() != 2 {
+        return None;
+    }
+    let register = proposal.instructions[0]
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::RegisterBox>()?;
+    let iroha_data_model::isi::RegisterBox::Trigger(register) = register else {
+        return None;
+    };
+    let execute = proposal.instructions[1]
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()?;
+    let trigger = register.object();
+    if trigger.id() != &execute.trigger
+        || trigger.action().repeats() != iroha_data_model::trigger::action::Repeats::Exactly(1)
+        || trigger.action().authority() != multisig_account_id
+    {
+        return None;
+    }
+    let expected_filter =
+        iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+            .for_trigger(trigger.id().clone())
+            .under_authority(multisig_account_id.clone());
+    if !matches!(
+        trigger.action().filter(),
+        iroha_data_model::events::EventFilterBox::ExecuteTrigger(filter)
+            if filter == &expected_filter
+    ) {
+        return None;
+    }
+    let iroha_data_model::transaction::Executable::ContractCall(invocation) =
+        trigger.action().executable()
+    else {
+        return None;
+    };
+    let metadata = trigger.action().metadata();
+    let contract_alias_literal = multisig_metadata_string(metadata, "contract_alias")?;
+    let contract_alias: iroha_data_model::smart_contract::ContractAlias =
+        contract_alias_literal.parse().ok()?;
+    if contract_alias.to_string() != contract_alias_literal {
+        return None;
+    }
+    let contract_entrypoint = multisig_metadata_string(metadata, "contract_entrypoint")?;
+    let contract_address_literal = multisig_metadata_string(metadata, "contract_address")?;
+    if contract_entrypoint != invocation.entrypoint
+        || contract_address_literal != invocation.contract_address.to_string()
+    {
+        return None;
+    }
+    let payload = execute
+        .args
+        .try_into_any_norito::<norito::json::Value>()
+        .ok()?;
+    if multisig_metadata_json(metadata, "contract_payload").as_ref() != Some(&payload) {
+        return None;
+    }
+    if world.contract_aliases().get(&contract_alias) != Some(&invocation.contract_address) {
+        return None;
+    }
+    let binding = world.contract_instances().get(&invocation.contract_address)?;
+    if binding != &invocation.expected_code_hash {
+        return None;
+    }
+    let code = world.contract_code().get(binding)?;
+    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(code.as_ref())).ok()?;
+    let stored_manifest = world.contract_manifests().get(binding)?;
+    if stored_manifest.signature_payload() != prepared.manifest().signature_payload() {
+        return None;
+    }
+    let descriptor = prepared.entrypoint_descriptor(&contract_entrypoint)?;
+    if descriptor.kind != manifest::EntryPointKind::Kotoage
+        || !matches!(descriptor.permission.as_deref(), Some(value) if !value.is_empty())
+    {
+        return None;
+    }
+    let expected_arguments = encode_contract_argument_record(
+        &prepared,
+        &contract_entrypoint,
+        Some(&IrohaJson::new(payload.clone())),
+    )
+    .ok()?;
+    if expected_arguments.as_deref() != invocation.arguments.as_ref().map(|record| record.as_bytes()) {
+        return None;
+    }
+    Some(ExactMultisigContractCallTarget {
+        contract_alias,
+        contract_entrypoint,
+        payload: IrohaJson::new(payload),
+    })
+}
 fn strict_multisig_contract_call_intent(
     multisig_account_id: &iroha_data_model::account::AccountId,
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
@@ -21824,9 +21989,23 @@ fn strict_multisig_contract_call_intent(
         ("apps_mint_request::sbp", "create_mint_request") => {
             ("MINT_REQUEST", &["proposal_id", "amount"][..])
         }
+        ("apps_mint_request::cbsi", "create_mint_request") => (
+            "MINT_REQUEST",
+            &[
+                "proposal_id",
+                "creation_multisig_alias_fqn",
+                "asset_definition",
+                "amount",
+                "ttl_ms",
+            ][..],
+        ),
         ("apps_mint_request::sbp", "finalize_mint_request" | "cancel_mint_request") => {
             ("MINT_REQUEST", &["proposal_id"][..])
         }
+        (
+            "apps_mint_request::cbsi",
+            "finalize_mint_request" | "cancel_mint_request",
+        ) => ("MINT_REQUEST", &["proposal_id"][..]),
         ("pkdeploy_issuance_swap_sbp::sbp", "swap") => (
             "ISSUANCE_SWAP",
             &["swap_id", "pkr_amount", "treasury_amount"][..],
@@ -21837,7 +22016,10 @@ fn strict_multisig_contract_call_intent(
         return None;
     }
     let mut intent = Map::new();
-    intent.insert("contract_alias".into(), Value::from(contract_alias_literal));
+    intent.insert(
+        "contract_alias".into(),
+        Value::from(contract_alias_literal.clone()),
+    );
     intent.insert(
         "contract_entrypoint".into(),
         Value::from(contract_entrypoint.clone()),
@@ -21907,6 +22089,29 @@ fn strict_multisig_contract_call_intent(
                     Value::from(canonical_quantity_string(amount, false)?),
                 );
             }
+            if contract_alias_literal == "apps_mint_request::cbsi"
+                && contract_entrypoint == "create_mint_request"
+            {
+                intent.insert(
+                    "creation_multisig_alias_fqn".into(),
+                    Value::from(required_nonempty_json_string(
+                        object,
+                        "creation_multisig_alias_fqn",
+                    )?),
+                );
+                intent.insert(
+                    "asset_definition".into(),
+                    Value::from(required_canonical_asset_definition_id_string(
+                        object,
+                        "asset_definition",
+                    )?),
+                );
+                let ttl_ms = object.get("ttl_ms")?.as_u64()?;
+                if ttl_ms == 0 || ttl_ms > 86_400_000 {
+                    return None;
+                }
+                intent.insert("ttl_ms".into(), Value::from(ttl_ms));
+            }
         }
         "ISSUANCE_SWAP" => {
             intent.insert(
@@ -21949,7 +22154,7 @@ fn strict_multisig_contract_call_intent_with_world<W: iroha_core::state::WorldRe
     }
     let descriptor = prepared.entrypoint_descriptor(&parsed.contract_entrypoint)?;
     if descriptor.kind != manifest::EntryPointKind::Kotoage
-        || descriptor.permission.as_deref() != Some("CanInvokeContractEntrypoint")
+        || descriptor.permission.as_deref().is_none_or(str::is_empty)
     {
         return None;
     }
@@ -25840,7 +26045,7 @@ mod multisig_selector_tests {
         );
     }
     #[tokio::test]
-    async fn multisig_approve_prepares_with_concrete_selector_and_returns_resolved_account_id() {
+    async fn contract_multisig_approve_rejects_a_generic_proposal_hash() {
         let (
             world,
             multisig_account_id,
@@ -25850,7 +26055,7 @@ mod multisig_selector_tests {
             active_hash,
         ) = multisig_test_world();
         let state = build_state(world);
-        let response = handle_post_contract_call_multisig_approve(
+        let error = handle_post_contract_call_multisig_approve(
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -25863,23 +26068,20 @@ mod multisig_selector_tests {
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
+                contract_alias: "apps_mint_request::cbsi".parse().expect("contract alias"),
+                entrypoint: "finalize_mint_request".to_owned(),
+                payload: IrohaJson::new(norito::json!({ "proposal_id": "mr00000001" })),
             }),
         )
         .await
-        .expect("approve response");
-        let payload = decode_json_response(response).await;
-        assert_eq!(payload["ok"].as_bool(), Some(true));
-        assert_eq!(payload["submitted"].as_bool(), Some(false));
-        assert_eq!(
-            payload["resolved_multisig_account_id"].as_str(),
-            Some(multisig_account_id.to_string().as_str())
-        );
-        assert_eq!(payload["proposal_id"].as_str(), Some(active_hash.as_str()));
-        assert_eq!(
-            payload["instructions_hash"].as_str(),
-            Some(active_hash.as_str())
-        );
-        assert_exact_unsigned_transaction_draft(&payload);
+        .expect_err("generic proposal must not cross the contract-call approval boundary");
+        assert!(matches!(
+            error,
+            Error::AppConflict {
+                code: "multisig_contract_target_invalid",
+                ..
+            }
+        ));
     }
     #[tokio::test]
     async fn multisig_cancel_prepares_with_concrete_selector_and_returns_cancel_proposal_hash() {
@@ -26946,6 +27148,85 @@ pub async fn handle_post_contract_call_multisig_propose(
     } = prepared;
     let entrypoint_descriptor = ensure_callable_contract_entrypoint(&manifest, &entrypoint)?;
     let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
+    let mint_request_alias: iroha_data_model::smart_contract::ContractAlias =
+        "apps_mint_request::cbsi"
+            .parse()
+            .expect("static CBSI mint-request contract alias");
+    let targets_mint_request = contract_alias.as_ref() == Some(&mint_request_alias) || {
+        let world = state.world_view();
+        world.contract_aliases().get(&mint_request_alias) == Some(&contract_address)
+    };
+    if targets_mint_request {
+        if contract_alias.as_ref() != Some(&mint_request_alias) {
+            return Err(multisig_selector_conflict_error(
+                "mint_request_alias_required",
+                "CBSI mint requests must target the canonical contract alias",
+            ));
+        }
+        let payload_value = normalized_payload
+            .as_ref()
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<Value>().ok())
+            .ok_or_else(|| {
+                multisig_selector_conflict_error(
+                    "mint_request_payload_invalid",
+                    "CBSI mint requests require an exact object payload",
+                )
+            })?;
+        let payload_object = payload_value.as_object().ok_or_else(|| {
+            multisig_selector_conflict_error(
+                "mint_request_payload_invalid",
+                "CBSI mint requests require an exact object payload",
+            )
+        })?;
+        match entrypoint.as_str() {
+            "create_mint_request" => {
+                let creation_alias = payload_object
+                    .get("creation_multisig_alias_fqn")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        multisig_selector_conflict_error(
+                            "mint_request_creation_alias_invalid",
+                            "mint request creation requires a canonical creation multisig alias",
+                        )
+                    })?;
+                let creation_account =
+                    resolve_exact_active_account_alias(state.as_ref(), creation_alias)?;
+                if creation_account != multisig_account_id {
+                    return Err(multisig_selector_conflict_error(
+                        "mint_request_creation_authority_mismatch",
+                        "the creation alias must resolve to the exact proposal multisig authority",
+                    ));
+                }
+                let approval_account =
+                    resolve_exact_active_account_alias(state.as_ref(), "banking@cbsi")?;
+                if approval_account == multisig_account_id {
+                    return Err(multisig_selector_conflict_error(
+                        "mint_request_principals_not_distinct",
+                        "the creation and CBSI approval multisig authorities must be distinct",
+                    ));
+                }
+                load_multisig_spec(state.as_ref(), &approval_account)?;
+            }
+            "finalize_mint_request" => {
+                let approval_account =
+                    resolve_exact_active_account_alias(state.as_ref(), "banking@cbsi")?;
+                if approval_account != multisig_account_id {
+                    return Err(multisig_selector_conflict_error(
+                        "mint_request_approval_authority_mismatch",
+                        "mint request finalization requires the live banking@cbsi multisig authority",
+                    ));
+                }
+            }
+            "cancel_mint_request" => {}
+            _ => {
+                return Err(multisig_selector_conflict_error(
+                    "mint_request_entrypoint_invalid",
+                    "unsupported CBSI mint-request entrypoint",
+                ));
+            }
+        }
+    }
     let arguments = encode_contract_argument_record(
         program.prepared_contract(),
         &entrypoint,
@@ -27120,6 +27401,9 @@ pub async fn handle_post_contract_call_multisig_approve(
         fee_payment,
         proposal_id,
         instructions_hash,
+        contract_alias,
+        entrypoint,
+        payload,
     } = req;
     validate_app_api_fee_payment(&fee_payment, false)?;
     reject_unverified_multisig_alias_selector(&selector)?;
@@ -27132,6 +27416,41 @@ pub async fn handle_post_contract_call_multisig_approve(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
+    let proposal_state = load_multisig_active_proposal_state_optional(
+        state.as_ref(),
+        &multisig_account_id,
+        &instructions_hash,
+    )?
+    .ok_or_else(multisig_not_found_error)?;
+    validate_multisig_active_proposal_binding(
+        &multisig_account_id,
+        &instructions_hash,
+        &proposal_state,
+    )?;
+    let proposal = proposal_value_from_state(proposal_state);
+    let exact_target = {
+        let world = state.world_view();
+        exact_multisig_contract_call_target_with_world(
+            &world,
+            &multisig_account_id,
+            &proposal,
+        )
+        .ok_or_else(|| {
+            multisig_selector_conflict_error(
+                "multisig_contract_target_invalid",
+                "the selected proposal is not an exact, currently deployed contract-call envelope",
+            )
+        })?
+    };
+    if exact_target.contract_alias != contract_alias
+        || exact_target.contract_entrypoint != entrypoint
+        || exact_target.payload != payload
+    {
+        return Err(multisig_selector_conflict_error(
+            "multisig_contract_target_mismatch",
+            "the selected proposal does not match the required contract alias, entrypoint, and payload",
+        ));
+    }
     let approve_instruction = MultisigApprove::new(multisig_account_id.clone(), instructions_hash);
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new(
@@ -30765,6 +31084,12 @@ pub struct MultisigContractCallApproveDto {
     /// Optional deterministic hash of the proposal instructions.
     #[norito(default)]
     pub instructions_hash: Option<String>,
+    /// Exact deployed contract alias expected in the selected proposal.
+    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    /// Exact contract entrypoint expected in the selected proposal.
+    pub entrypoint: String,
+    /// Exact normalized contract payload expected in the selected proposal.
+    pub payload: IrohaJson,
 }
 }
 #[cfg(all(test, feature = "app_api"))]
@@ -66284,8 +66609,8 @@ routing_test! { sync public_lane_validator_record_matches_key_rejects_mismatched
         self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
         metadata: Metadata::default(),
         status: PublicLaneValidatorStatus::Active,
-        activation_epoch: Some(1),
-        activation_height: Some(1),
+        activation_height: 1,
+        deactivation_height: None,
         last_reward_epoch: None,
     };
     assert!(public_lane_validator_record_matches_key(&key, &record));
@@ -66581,8 +66906,8 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
                 self_stake: iroha_primitives::numeric::Quantity::from(7_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
-                activation_epoch: Some(1),
-                activation_height: Some(1),
+                activation_height: 1,
+                deactivation_height: None,
                 last_reward_epoch: None,
             },
         );
@@ -66673,16 +66998,13 @@ fn validator_record_to_json(record: &PublicLaneValidatorRecord) -> (String, Valu
     );
     map.insert("status".into(), validator_status_to_json(&record.status));
     map.insert(
-        "activation_epoch".into(),
-        record
-            .activation_epoch
-            .map(Value::from)
-            .unwrap_or(Value::Null),
+        "activation_height".into(),
+        Value::from(record.activation_height),
     );
     map.insert(
-        "activation_height".into(),
+        "deactivation_height".into(),
         record
-            .activation_height
+            .deactivation_height
             .map(Value::from)
             .unwrap_or(Value::Null),
     );
@@ -66714,8 +67036,8 @@ fn manifest_validator_to_json(
         "status".into(),
         validator_status_to_json(&PublicLaneValidatorStatus::Active),
     );
-    map.insert("activation_epoch".into(), Value::Null);
     map.insert("activation_height".into(), Value::Null);
+    map.insert("deactivation_height".into(), Value::Null);
     map.insert("metadata".into(), metadata_to_json(&Metadata::default()));
     map.insert("last_reward_epoch".into(), Value::Null);
     map.insert("authority_source".into(), Value::from("manifest"));
@@ -66724,19 +67046,15 @@ fn manifest_validator_to_json(
 fn validator_status_to_json(status: &PublicLaneValidatorStatus) -> Value {
     let mut map = Map::new();
     match status {
-        PublicLaneValidatorStatus::PendingActivation(activates_at_epoch) => {
+        PublicLaneValidatorStatus::PendingActivation(activates_at_height) => {
             map.insert("type".into(), Value::from("PendingActivation"));
             map.insert(
-                "activates_at_epoch".into(),
-                Value::from(*activates_at_epoch),
+                "activates_at_height".into(),
+                Value::from(*activates_at_height),
             );
         }
         PublicLaneValidatorStatus::Active => {
             map.insert("type".into(), Value::from("Active"));
-        }
-        PublicLaneValidatorStatus::Jailed(reason) => {
-            map.insert("type".into(), Value::from("Jailed"));
-            map.insert("reason".into(), Value::from(reason.clone()));
         }
         PublicLaneValidatorStatus::Exiting(releases_at_ms) => {
             map.insert("type".into(), Value::from("Exiting"));
@@ -66804,6 +67122,14 @@ fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
     );
     map.insert("amount".into(), Value::from(unbonding.amount.to_string()));
     map.insert("release_at_ms".into(), Value::from(unbonding.release_at_ms));
+    map.insert(
+        "slashable_through_height".into(),
+        Value::from(unbonding.slashable_through_height),
+    );
+    map.insert(
+        "liability_release_height".into(),
+        Value::from(unbonding.liability_release_height),
+    );
     Value::Object(map)
 }
 fn exact_field_filter_candidates<T>(

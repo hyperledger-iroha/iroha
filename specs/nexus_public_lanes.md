@@ -27,7 +27,8 @@ implementation; stake instructions now lock the configured staking asset by
 withdrawing from the `stake_account`/`staker` into a bonded escrow account
 (`nexus.staking.stake_escrow_account_id`). Slashes debit the escrow and credit
 the configured sink (`nexus.staking.slash_sink_account_id`), and unbonds return
-funds to the originating account once the timer expires.
+funds to the originating account once both their timestamp and evidence-liability
+height have elapsed. A matured pending unbond remains claimable until finalised.
 
 ## 1. Ledger State & Types
 
@@ -40,31 +41,37 @@ funds to the originating account once the timer expires.
 | `lane_id: LaneId` | Lane the validator services. |
 | `validator: AccountId` | Authority account used for staking, governance, and reward accounting. |
 | `peer_id: PeerId` | Consensus and transport peer identity bound to the validator record. |
-| `stake_account: AccountId` | Account that supplies the self-bond (may differ from the validator identity). |
+| `stake_account: AccountId` | Canonical self-bond account; it must equal `validator`. |
 | `total_stake: Quantity` | Self stake + approved delegations. |
 | `self_stake: Quantity` | Stake provided by the validator. |
 | `metadata: Metadata` | Commission %, telemetry ids, jurisdiction flags, contact info. |
-| `status: PublicLaneValidatorStatus` | Lifecycle (pending/active/jailed/exiting/etc.). The `PendingActivation` payload encodes the target epoch. |
-| `activation_epoch: Option<u64>` | Epoch when the validator became active (set on activation). |
-| `activation_height: Option<u64>` | Block height recorded at activation. |
+| `status: PublicLaneValidatorStatus` | Lifecycle (pending/active/exiting/exited/slashed). The `PendingActivation` payload encodes the exact activation height. |
+| `activation_height: u64` | Inclusive first height at which the validator may be elected; it is fixed when activation is scheduled. |
+| `deactivation_height: Option<u64>` | Exclusive first height no longer covered by the validator binding; `None` denotes an open tenure. |
 | `last_reward_epoch: Option<u64>` | Epoch that last produced a payout. |
 
 All stake, bond, unbond, slash, and reward amounts use `Quantity`, the canonical nominal non-negative decimal type. Signed `Numeric` values are reserved for genuine rates, ratios, and deltas and enter staking calculations only through explicit arithmetic boundaries.
 
 `PublicLaneValidatorStatus` enumerates lifecycle phases:
 
-- `PendingActivation(epoch)` — waiting for the governance-specified activation epoch; the tuple payload stores the earliest activation epoch (usually `current_epoch + 1`, derived from `epoch_length_blocks`; genesis bootstrap registrations target `current_epoch` so validators can activate in the genesis block).
-- `Active` — participates in consensus and can collect rewards.
-- `Jailed { reason }` — temporarily suspended (downtime, telemetry breach, etc.).
+- `PendingActivation(height)` — scheduled for election eligibility at the exact
+  inclusive `activation_height` carried by the tuple payload.
+- `Active` — participates in consensus during its exact-height tenure and can
+  collect rewards.
 - `Exiting { releases_at_ms }` — unbonding; rewards stop accruing.
-- `Exited` — removed from the set.
+- `Exited` — the release timestamp has passed; the retained tenure and custody
+  gates still control consensus removal and pruning.
 - `Slashed { slash_id }` — governance slashing event recorded for audits.
 
-Activation metadata is monotonic: `activation_epoch`/`activation_height` are set the first time a
-pending validator becomes active and any attempt to reactivate at an earlier epoch/height is rejected.
-Pending validators are promoted automatically at the start of the first block whose epoch meets the
-scheduled boundary, and the activation metrics counter (`nexus_public_lane_validator_activation_total`)
-records the promotion alongside the status change.
+Consensus eligibility is the half-open exact-height tenure
+`[activation_height, deactivation_height)`. A missing `deactivation_height`
+leaves the upper bound open. These boundaries, rather than a lifecycle label,
+are authoritative for election and historical evidence checks, so a status
+transition cannot rewrite an already frozen roster. Pending validators are
+promoted automatically when the current block reaches `activation_height`, and
+the activation metrics counter
+(`nexus_public_lane_validator_activation_total`) records the promotion alongside
+the status change.
 
 For stake-elected public lanes the validator authority account and live peer
 identity are intentionally decoupled. `validator` remains the staking/governance
@@ -82,22 +89,44 @@ Delegators (and validators topping up their own bond) are modelled via
   client-supplied `request_id`.
 - `metadata` stores UX/back-office hints (e.g., custody desk reference numbers).
 
-`PublicLaneUnbonding` holds the deterministic withdrawal schedule
-(`amount`, `release_at_ms`). Torii now exposes the live shares and pending
-withdrawals via `GET /v1/nexus/public-lanes/{lane}/stake` so wallets can show
-timers without bespoke RPCs.
+Consensus work is explicitly bounded: one validator may retain at most
+`nexus.staking.max_stake_shares_per_validator` stake-share rows, and one share
+may retain at most `nexus.staking.max_pending_unbonds_per_share` pending
+requests. Bond and unbond scheduling reject an operation before mutation when
+it would exceed the corresponding bound. The defaults are 256 shares and 8
+pending requests per share, bounding one validator to 2,048 pending requests.
+
+`PublicLaneUnbonding` holds the deterministic withdrawal schedule (`amount`,
+`release_at_ms`, `slashable_through_height`, and `liability_release_height`). Torii
+now exposes the live shares and pending withdrawals via
+`GET /v1/nexus/public-lanes/{lane}/stake` so wallets can show timers without
+bespoke RPCs. There is no withdrawal-expiry window: after the timestamp and
+liability-height gates pass, the request remains claimable until it is
+finalised.
+
+`slashable_through_height` is inclusive. At schedule time the canonical
+liability high-water is
+`slashable_through_height + evidence_horizon_blocks + slashing_delay_blocks`.
+Consensus effects run before ordinary transactions at the equality height, so
+finalization may release custody there only after every pending evidence lien
+for the exact validator tenure has become terminal. Snapshot restore rejects a
+stored liability height below this signed formula.
 
 Lifecycle hooks (runtime enforced):
 
-- `PendingActivation(epoch)` entries automatically flip to `Active` once the
-  current epoch reaches `epoch`. Activation records `activation_epoch` and
-  `activation_height`, and regressions are rejected both for auto-activation
-  and explicit `ActivatePublicLaneValidator` calls.
+- `PendingActivation(height)` entries automatically flip to `Active` once the
+  current block reaches the exact `activation_height`. Explicit
+  `ActivatePublicLaneValidator` calls before that height are rejected.
 - `Exiting(releases_at_ms)` entries transition to `Exited` when the block
-  timestamp passes `releases_at_ms`, clearing stake-share rows so validator
-  capacity can be reclaimed without manual cleanup.
+  timestamp passes `releases_at_ms`. Exit or slash schedules an exclusive
+  `deactivation_height` at the next unfrozen election height; the timestamp
+  transition does not shorten the exact-height consensus tenure. The `Exited`
+  record continues to reserve validator capacity and its peer until that height
+  is reached and while bonded or pending-unbond custody remains, or while
+  pending evidence retains a slashing lien. Only canonical pruning after all
+  gates clear frees those reservations.
 - Reward recording rejects validator shares unless the validator is `Active`,
-  keeping pending/exiting/jailed validators from accruing payouts.
+  keeping pending, exiting, exited, and slashed validators from accruing payouts.
 
 ### 1.3 Reward Records
 
@@ -159,27 +188,38 @@ Registers a validator and bonds an initial stake:
 Validation rules:
 
 - `initial_stake` ≥ `min_self_stake` (governance parameter).
-- `peer_id` MUST resolve to a registered world-state peer with a live consensus
-  key that is present in the current commit topology.
-- A public lane cannot bind the same `peer_id` to multiple non-exited validator
-  records at once.
+- `peer_id` MUST resolve to a registered world-state peer that is present in the
+  current commit topology. Because registration opens a tenure with no
+  `deactivation_height`, the peer MUST have an unbounded `Validator` consensus
+  key (no expiry) that is live at the scheduled `activation_height`.
+- A public lane cannot bind the same `peer_id` to multiple retained validator
+  records. Exited records continue to reserve both their validator-capacity
+  slot and peer identity while any slashable custody remains.
 - Metadata MUST include contact/telemetry hooks before activation.
-- Governance approves/denies the entry; until then the status is `PendingActivation` and the runtime promotes the validator to `Active` at the next epoch boundary once the target activation epoch (`current_epoch + 1` at registration, or `current_epoch` for genesis bootstrap) is reached.
+- Governance approves or denies the entry; until activation the status is
+  `PendingActivation(height)`. Genesis bootstrap registration targets the
+  genesis block height. Every non-genesis registration targets the next
+  unfrozen election height. A registration executed in an epoch-ending block
+  targets the following election, not the immediate successor height, because
+  that successor roster was frozen from the block's pre-state.
 
 ### 2.2 `RebindPublicLaneValidatorPeer`
 
-Repairs the authoritative `validator -> peer_id` binding for a stake-elected
-validator without forcing an exit/re-register cycle.
+Repairs the authoritative `validator -> peer_id` binding before a stake-elected
+validator first becomes eligible to vote.
 
 Validation rules:
 
 - Authority MUST be the `validator` account itself.
-- Rebinding is allowed only while the validator is
-  `PendingActivation`, `Active`, or `Jailed`.
-- `Exiting`, `Exited`, and `Slashed` validator records reject rebinding.
+- An identity-changing rebind at non-genesis execution height `h` is allowed
+  only while the validator is `PendingActivation` and before the pre-state
+  freeze: `h + 1 < activation_height`. `Active`, `Exiting`, `Exited`, and
+  `Slashed` records reject it so evidence always resolves against one immutable
+  voting tenure.
 - The replacement `peer_id` MUST satisfy the same runtime checks as
-  `RegisterPublicLaneValidator` (registered peer, live consensus key, current
-  commit-topology membership, and no duplicate non-terminal lane binding).
+  `RegisterPublicLaneValidator` (registered peer, an unbounded `Validator`
+  consensus key live at the scheduled activation height, current
+  commit-topology membership, and no duplicate retained lane binding).
 - Rebinding to the already-bound `peer_id` succeeds idempotently.
 
 ### 2.3 `BondPublicLaneStake`
@@ -188,6 +228,8 @@ Bonds additional stake (validator self-bond or delegator contribution).
 
 Key fields: `staker`, `amount`, optional metadata for statements. Runtime must
 enforce lane-specific limits (`max_delegators`, `min_bond`, `commission caps`).
+New stake is accepted only for `PendingActivation` and `Active` validators;
+terminal or exiting records cannot reacquire custody.
 
 ### 2.4 `SchedulePublicLaneUnbond`
 
@@ -198,14 +240,18 @@ unbonding period.
 
 ### 2.5 `FinalizePublicLaneUnbond`
 
-After the timer expires, this ISI unlocks the pending stake and returns it to
-`staker`. The executor validates the request id, ensures the unlock timestamp is
-in the past, emits a `PublicLaneStakeShare` update, and records telemetry.
+After the timer and evidence-liability height expire, this ISI unlocks the
+pending stake and returns it to `staker`. The executor validates the request id,
+ensures both release gates are in the past, emits a `PublicLaneStakeShare`
+update, and records telemetry. A valid matured request has no claim deadline.
 
 ### 2.6 `SlashPublicLaneValidator`
 
-Governance uses this instruction to debit stake and jail/eject validators.
+Governance uses this instruction to debit stake and eject validators.
 
+- `offence_height` is the exact non-zero consensus height whose custody remains
+  liable; it cannot be in the future or outside the validator's retained tenure.
+  Pending unbonds whose `slashable_through_height` is earlier are excluded.
 - `slash_id` ties the event to telemetry + incident docs.
 - `reason_code` is a stable enum string (e.g., `double_sign`, `downtime`,
   `safety_violation`).
@@ -228,10 +274,15 @@ Records the payout for an epoch. Fields:
 Cancels consensus slashing before the delayed penalty applies.
 
 - `evidence`: the Norito-encoded `Evidence` payload that was recorded in `consensus_evidence`.
-- The record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, preventing slashing when `slashing_delay_blocks` elapses.
+- The record transitions to `penalty_status = cancelled` with the canonical cancellation height, preventing slashing when `slashing_delay_blocks` elapses.
 - `metadata`: references to payout transactions, root hashes, or dashboards.
 
-This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
+The instruction is idempotent for the exact evidence key: replaying a
+cancellation after that record is already cancelled succeeds without changing
+its terminal height. For evidence admitted at height `A` with delay `D`, an
+ordinary transaction can cancel it only in committed blocks `A + 1` through
+`A + D - 1`, exactly `D - 1` opportunities. At `A + D`, due consensus effects
+run before ordinary transactions, so cancellation in that block is too late.
 
 ## 3. Operations, lifecycle, and tooling
 
@@ -240,30 +291,53 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
   stay admin-managed (`nexus.staking.restricted_validator_mode = admin_managed`).
   For stake-elected lanes, `RegisterPublicLaneValidator` now binds an explicit
   `peer_id`, and the runtime requires that peer to be registered, online with a
-  live consensus key, and present in the commit topology before the
-  registration succeeds. Stake-elected operators can repair stale bindings with
-  `RebindPublicLaneValidatorPeer` instead of waiting for routing timeouts or
-  exiting the validator. Admin-managed lanes now declare explicit manifest
+  live, unbounded `Validator` consensus key, and present in the commit topology
+  before the registration succeeds. Stake-elected operators can repair a stale
+  binding with `RebindPublicLaneValidatorPeer` only before the pre-state freeze
+  for its `activation_height`; an activated tenure must exit and release
+  custody before a different peer identity can register. While a validator
+  tenure remains open, or the current height is below its scheduled exclusive
+  `deactivation_height`, the bound consensus key cannot be rotated or disabled.
+  Admin-managed lanes now declare explicit manifest
   validator bindings of the form `{ "validator": "<i105-account-id>",
   "peer_id": "<peer-id>" }`; both lane modes route against stored `peer_id`
   bindings and neither derives authoritative peers from account signatories.
-- **Activation/exit operations:** registrations land in `PendingActivation` for
-  `current_epoch + 1` (genesis bootstrap registrations use `current_epoch`) and
-  auto-promote at the first block whose epoch meets that boundary (epochs are
-  derived from `epoch_length_blocks`). Operators can also call
-  `ActivatePublicLaneValidator` after the boundary to force promotion. Exits
-  move validators to `Exiting(release_at_ms)` and free capacity only once the
-  block timestamp reaches `release_at_ms`; re-registration after a slash still
-  requires exiting so the record is marked `Exited` and capacity is reclaimed.
-  Capacity checks use `nexus.staking.max_validators` and run after the exit
-  finalizer, so future-dated exits block new registrations until the timer
-  elapses.
+- **Activation/exit operations:** genesis bootstrap registrations use the
+  genesis block height. Every non-genesis registration is assigned the next
+  unfrozen election height and auto-promotes when that exact height is reached.
+  If registration executes in an epoch-ending block, the successor roster is
+  already frozen from pre-state, so activation targets the following election.
+  Operators can also call `ActivatePublicLaneValidator` at or after the exact
+  boundary. Exits move validators to `Exiting(release_at_ms)` and schedule the
+  next unfrozen election height as the exclusive end of the half-open tenure
+  `[activation_height, deactivation_height)`. Reaching the release timestamp
+  records `Exited` but does not rewrite that tenure or immediately release the
+  validator-capacity slot or peer reservation. Lane or dataspace reset, peer
+  removal, consensus-key rotation or disablement, and canonical record pruning
+  must wait until the current height reaches `deactivation_height`. Exiting and
+  peer unregistration preserve all stake custody. The retained record is
+  canonically pruned only after every bonded and pending-unbond position is
+  finalised and no pending evidence lien remains; that pruning alone frees
+  capacity and the peer for reuse. Capacity checks use
+  `nexus.staking.max_validators` and count every retained record.
+- **Lane retirement:** lifecycle and scale-in transitions fail closed while a
+  lane retains a validator whose exclusive `deactivation_height` has not been
+  reached or any bonded or pending-unbond stake. A lane may be retired or reset
+  only after the tenure boundary has passed and its staking custody has been
+  explicitly drained; retirement never serves as an implicit withdrawal or
+  deletion path.
 - **Config knobs:** `nexus.staking.min_validator_stake`,
   `nexus.staking.stake_asset_id`, `nexus.staking.stake_escrow_account_id`,
   `nexus.staking.slash_sink_account_id`, `nexus.staking.unbonding_delay`,
-  `nexus.staking.withdraw_grace`, `nexus.staking.max_validators`,
+  `nexus.staking.max_validators`,
+  `nexus.staking.max_stake_shares_per_validator`,
+  `nexus.staking.max_pending_unbonds_per_share`,
   `nexus.staking.max_slash_bps`, `nexus.staking.reward_dust_threshold`, and the
   validator-mode switches above.
+  `SumeragiNposParameters.reconfig.epoch_length_blocks` defines the election
+  boundary grid. It, `evidence_horizon_blocks`, and
+  `slashing_delay_blocks` are immutable after the initial NPoS parameter
+  installation; horizon plus delay cannot exceed three epoch lengths.
   Thread them through
   `iroha_config::parameters::actual::Nexus` and surface them in `status.md`
   once GA values are ratified.
@@ -277,17 +351,18 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
     `staking rebind --lane-id <id> --validator <i105-account-id> --peer-id <peer-id>`
     to repair stake-elected validator peer bindings in place.
   - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
-    surfaces lifecycle/activation markers (pending target epoch, `activation_epoch` /
-    `activation_height`, exit release, slash id) alongside bonded/self stake
-    and the bound `peer_id`. `peer_id` is non-null for both stake-elected and
-    admin-managed lanes.
+    surfaces lifecycle/tenure markers (pending target height,
+    `activation_height`, exclusive `deactivation_height`, exit release, slash
+    id) alongside bonded/self stake and the bound `peer_id`. `peer_id` is
+    non-null for both stake-elected and admin-managed lanes.
     `iroha_cli app nexus public-lane stake --lane <id> [--validator <i105-account-id>] [--summary]`
     mirrors the `/stake` endpoint with pending-unbond hints per `(validator, staker)` pair.
   - Torii snapshots for dashboards and SDKs:
     - `GET /v1/nexus/public-lanes/{lane}/validators` – metadata, authoritative
       `peer_id`, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation
-      epoch/height, release timers, bonded stake, last reward epoch.
+      height, exclusive deactivation height, release timers, bonded stake, and
+      last reward epoch.
       Optional `canonical I105 literal rendering` controls the literal rendering
       (canonical I105 output only).
     - `GET /v1/nexus/public-lanes/{lane}/stake` – stake shares (`validator`,
@@ -331,14 +406,15 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
 ## 4. Roadmap alignment
 
 - ✅ Runtime and WSV storages implement the NX-9 validator lifecycle; regressions
-  cover activation timing, explicit peer bindings, peer prerequisites, delayed exits, and
-  re-registration after slashes.
+  cover activation timing, explicit peer bindings, peer prerequisites, delayed
+  exits, custody-preserving peer removal, retirement refusal with live custody,
+  and re-registration after every retained position is finalised.
 - ✅ Torii exposes `/v1/nexus/public-lanes/{lane}/{validators,stake,rewards/pending}` with
   Norito JSON so SDKs and dashboards can monitor lane state without custom RPCs.
 - ✅ Torii public-lane proxying now fails closed on missing authoritative peer
   bindings instead of spraying generic online peers.
-- ✅ Stake-elected lanes can repair authoritative peer drift with
-  `RebindPublicLaneValidatorPeer`, while admin-managed lanes publish explicit
+- ✅ Pending stake-elected registrations can repair authoritative peer drift
+  with `RebindPublicLaneValidatorPeer`, while admin-managed lanes publish explicit
   `{ validator, peer_id }` bindings and expose non-null `peer_id` values
   through Torii snapshots.
 - ✅ Config and telemetry knobs are documented; mixed deployments keep

@@ -508,7 +508,7 @@ public struct KagemushaOperationFinalityConfiguration: Equatable, Sendable {
 /// `.unaccepted` permits the exact authoritative-404 submission gate;
 /// `.accepted` disables the not-found gate. A canonical Rejected attempt may
 /// still authorize one deterministic same-request retry. Pending carrier
-/// hashes may change, but `submittedAtMs` remains immutable for the operation.
+/// hashes may change, but the nested request identity remains immutable.
 public enum KagemushaOperationContinuity: Equatable, Sendable {
     case unaccepted
     case accepted(KagemushaOperationReference)
@@ -520,32 +520,17 @@ public enum KagemushaOperationSubmission: Equatable, Sendable {
     case topUp(KagemushaTopUpRequest)
     case redeem(KagemushaRedeemRequest)
 
-    public var operationId: String {
+    public var identity: KagemushaOperationIdentity {
         switch self {
-        case let .topUp(request): request.operationId
-        case let .redeem(request): request.operationId
-        }
-    }
-
-    public var kind: KagemushaOperationKind {
-        switch self {
-        case .topUp: .topUp
-        case .redeem: .redeem
-        }
-    }
-
-    /// Immutable creation time authenticated by the request authorization.
-    public var issuedAtMs: UInt64 {
-        switch self {
-        case let .topUp(request): request.issuedAtMs
-        case let .redeem(request): request.issuedAtMs
+        case let .topUp(request): request.identity
+        case let .redeem(request): request.identity
         }
     }
 }
 
 /// Typed transport seam for the sole Kagemusha Torii lifecycle. The
 /// submission receives the exact request that supplied the coordinator's
-/// operation ID, kind, and signed timestamp. Status lookup receives that same
+/// complete immutable operation identity. Status lookup receives that same
 /// request plus the accepted reference as soon as Torii has returned one.
 public protocol KagemushaOperationFinalityTransport: Sendable {
     func getKagemushaOperationStatus(
@@ -575,19 +560,16 @@ extension ToriiClient: KagemushaOperationFinalityTransport {
 /// Bounded retryable rejection metadata. The raw Torii error envelope is never
 /// exposed through operation resolution.
 public struct KagemushaOperationRejectedAttempt: Equatable, Sendable {
-    public let operationId: String
-    public let kind: KagemushaOperationKind
+    public let identity: KagemushaOperationIdentity
     public let transactionHash: String
     public let failure: KagemushaOperationAttemptFailure
 
     fileprivate init(
-        operationId: String,
-        kind: KagemushaOperationKind,
+        identity: KagemushaOperationIdentity,
         transactionHash: String,
         failure: KagemushaOperationAttemptFailure
     ) {
-        self.operationId = operationId
-        self.kind = kind
+        self.identity = identity
         self.transactionHash = transactionHash
         self.failure = failure
     }
@@ -655,17 +637,15 @@ public enum KagemushaOperationFinalityCoordinator {
     ) async throws -> KagemushaOperationFinalityResolution<State>
     where Transport: KagemushaOperationFinalityTransport {
         guard await KagemushaOperationFinalityLeaseRegistry.shared.acquire(
-            operation.operationId
+            operation.identity.operationID
         ) else {
             throw KagemushaOperationFinalityError.alreadyResolving(
-                operation.operationId
+                operation.identity.operationID
             )
         }
         do {
             let resolution = try await resolveForTesting(
-                operationId: operation.operationId,
-                expectedKind: operation.kind,
-                expectedSubmittedAtMs: operation.issuedAtMs,
+                expectedIdentity: operation.identity,
                 initialState: initialState,
                 continuity: continuity,
                 configuration: configuration,
@@ -696,12 +676,12 @@ public enum KagemushaOperationFinalityCoordinator {
                     recordDefinitiveSubmissionFailure
             )
             await KagemushaOperationFinalityLeaseRegistry.shared.release(
-                operation.operationId
+                operation.identity.operationID
             )
             return resolution
         } catch {
             await KagemushaOperationFinalityLeaseRegistry.shared.release(
-                operation.operationId
+                operation.identity.operationID
             )
             throw error
         }
@@ -710,9 +690,7 @@ public enum KagemushaOperationFinalityCoordinator {
     /// Closure-driven engine retained internally for deterministic SDK tests.
     /// Production callers must use the typed operation and transport overload.
     static func resolveForTesting<State>(
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
-        expectedSubmittedAtMs: UInt64,
+        expectedIdentity: KagemushaOperationIdentity,
         initialState: State,
         continuity: KagemushaOperationContinuity,
         configuration: KagemushaOperationFinalityConfiguration = .production,
@@ -746,12 +724,7 @@ public enum KagemushaOperationFinalityCoordinator {
         ) throws -> State
     ) async throws -> KagemushaOperationFinalityResolution<State> {
         // Validate the operation identifier before any caller-owned side effect.
-        _ = try KagemushaToriiAPI.operationPath(operationId)
-        guard expectedSubmittedAtMs > 0 else {
-            throw KagemushaOperationFinalityError.continuityViolation(
-                "signed request timestamp"
-            )
-        }
+        _ = try KagemushaToriiAPI.operationPath(expectedIdentity.operationID)
         let startedAt = monotonicNow()
         let (overallDeadline, deadlineOverflow) = startedAt
             .addingReportingOverflow(configuration.overallTimeoutNanoseconds)
@@ -761,7 +734,6 @@ public enum KagemushaOperationFinalityCoordinator {
 
         var state = initialState
         var boundTransactionHash: String?
-        var boundSubmittedAtMs: UInt64? = expectedSubmittedAtMs
         var acceptedReference: KagemushaOperationReference?
         switch continuity {
         case .unaccepted:
@@ -771,15 +743,12 @@ public enum KagemushaOperationFinalityCoordinator {
         }
         try initializeContinuitySeed(
             continuity: continuity,
-            operationId: operationId,
-            expectedKind: expectedKind,
-            expectedSubmittedAtMs: expectedSubmittedAtMs,
-            boundTransactionHash: &boundTransactionHash,
-            boundSubmittedAtMs: &boundSubmittedAtMs
+            expectedIdentity: expectedIdentity,
+            boundTransactionHash: &boundTransactionHash
         )
 
         if let failure = try existingDefinitiveSubmissionFailure(state) {
-            guard failure.target.operationKind == expectedKind else {
+            guard failure.target.operationKind == expectedIdentity.kind else {
                 throw KagemushaOperationFinalityError.continuityViolation(
                     "definitive submission failure operation kind"
                 )
@@ -824,11 +793,9 @@ public enum KagemushaOperationFinalityCoordinator {
         if let initialStatus {
             switch try observe(
                 initialStatus,
-                operationId: operationId,
-                expectedKind: expectedKind,
+                expectedIdentity: expectedIdentity,
                 state: state,
                 boundTransactionHash: &boundTransactionHash,
-                boundSubmittedAtMs: &boundSubmittedAtMs,
                 recordObservation: recordObservation,
                 recordRejection: recordRejection
             ) {
@@ -869,7 +836,7 @@ public enum KagemushaOperationFinalityCoordinator {
                     .classify(
                         error,
                         target: KagemushaSubmissionTarget(
-                            operationKind: expectedKind
+                            operationKind: expectedIdentity.kind
                         )
                     ) {
                 case let .definitivePreAdmission(failure):
@@ -893,16 +860,9 @@ public enum KagemushaOperationFinalityCoordinator {
             if let reference {
                 try validate(
                     reference,
-                    operationId: operationId,
-                    expectedKind: expectedKind,
-                    expectedSubmittedAtMs: expectedSubmittedAtMs
+                    expectedIdentity: expectedIdentity
                 )
-                try bind(
-                    reference.transactionHash,
-                    submittedAtMs: reference.submittedAtMs,
-                    to: &boundTransactionHash,
-                    and: &boundSubmittedAtMs
-                )
+                try bind(reference.transactionHash, to: &boundTransactionHash)
                 state = try recordAcceptance(reference, state)
                 acceptedReference = reference
                 shouldDelayBeforePolling = true
@@ -944,11 +904,9 @@ public enum KagemushaOperationFinalityCoordinator {
 
             switch try observe(
                 status,
-                operationId: operationId,
-                expectedKind: expectedKind,
+                expectedIdentity: expectedIdentity,
                 state: state,
                 boundTransactionHash: &boundTransactionHash,
-                boundSubmittedAtMs: &boundSubmittedAtMs,
                 recordObservation: recordObservation,
                 recordRejection: recordRejection
             ) {
@@ -1088,11 +1046,9 @@ public enum KagemushaOperationFinalityCoordinator {
 
     private static func observe<State>(
         _ status: KagemushaOperationStatus,
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
+        expectedIdentity: KagemushaOperationIdentity,
         state: State,
         boundTransactionHash: inout String?,
-        boundSubmittedAtMs: inout UInt64?,
         recordObservation: (
             _ transactionHash: String,
             _ submittedAtMs: UInt64?,
@@ -1106,34 +1062,28 @@ public enum KagemushaOperationFinalityCoordinator {
     ) throws -> Observation<State> {
         switch status {
         case let .pending(pending):
-            guard pending.operationId == operationId,
-                  pending.kind == expectedKind else {
+            guard pending.identity == expectedIdentity else {
                 throw KagemushaOperationFinalityError.continuityViolation(
-                    "pending identity or kind"
+                    "pending identity"
                 )
             }
-            try bind(
-                pending.transactionHash,
-                submittedAtMs: pending.submittedAtMs,
-                to: &boundTransactionHash,
-                and: &boundSubmittedAtMs
-            )
+            try bind(pending.transactionHash, to: &boundTransactionHash)
             return .pending(
                 try recordObservation(
                     pending.transactionHash,
-                    pending.submittedAtMs,
+                    pending.identity.issuedAtMs,
                     state
                 )
             )
 
         case let .applied(applied):
-            guard applied.operationId == operationId else {
+            guard applied.identity == expectedIdentity else {
                 throw KagemushaOperationFinalityError.continuityViolation(
                     "applied operation identity"
                 )
             }
             let transactionHash: String
-            switch (expectedKind, applied.result) {
+            switch (expectedIdentity.kind, applied.result) {
             case let (.topUp, .topUp(result)):
                 transactionHash = result.transactionHash
             case let (.redeem, .redeem(result)):
@@ -1143,12 +1093,7 @@ public enum KagemushaOperationFinalityCoordinator {
                     "applied operation kind"
                 )
             }
-            try bind(
-                transactionHash,
-                submittedAtMs: nil,
-                to: &boundTransactionHash,
-                and: &boundSubmittedAtMs
-            )
+            try bind(transactionHash, to: &boundTransactionHash)
             let observedState = try recordObservation(
                 transactionHash,
                 nil,
@@ -1162,18 +1107,12 @@ public enum KagemushaOperationFinalityCoordinator {
             )
 
         case let .rejected(rejected):
-            guard rejected.operationId == operationId,
-                  rejected.kind == expectedKind else {
+            guard rejected.identity == expectedIdentity else {
                 throw KagemushaOperationFinalityError.continuityViolation(
-                    "rejected identity or kind"
+                    "rejected identity"
                 )
             }
-            try bind(
-                rejected.transactionHash,
-                submittedAtMs: nil,
-                to: &boundTransactionHash,
-                and: &boundSubmittedAtMs
-            )
+            try bind(rejected.transactionHash, to: &boundTransactionHash)
             let observedState = try recordObservation(
                 rejected.transactionHash,
                 nil,
@@ -1192,8 +1131,7 @@ public enum KagemushaOperationFinalityCoordinator {
                 KagemushaOperationFinalityResolution(
                     outcome: .rejectedAttempt(
                         KagemushaOperationRejectedAttempt(
-                            operationId: rejected.operationId,
-                            kind: rejected.kind,
+                            identity: rejected.identity,
                             transactionHash: rejected.transactionHash,
                             failure: failure
                         )
@@ -1206,16 +1144,14 @@ public enum KagemushaOperationFinalityCoordinator {
 
     private static func validate(
         _ reference: KagemushaOperationReference,
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
-        expectedSubmittedAtMs: UInt64
+        expectedIdentity: KagemushaOperationIdentity
     ) throws {
-        let expectedStatusURI = try KagemushaToriiAPI.operationPath(operationId)
-        guard reference.operationId == operationId,
-              reference.kind == expectedKind,
+        let expectedStatusURI = try KagemushaToriiAPI.operationPath(
+            expectedIdentity.operationID
+        )
+        guard reference.identity == expectedIdentity,
               reference.state == .pending,
-              reference.statusUri == expectedStatusURI,
-              reference.submittedAtMs == expectedSubmittedAtMs else {
+              reference.statusUri == expectedStatusURI else {
             throw KagemushaOperationFinalityError.continuityViolation(
                 "accepted operation reference"
             )
@@ -1224,63 +1160,36 @@ public enum KagemushaOperationFinalityCoordinator {
 
     private static func bind(
         _ transactionHash: String,
-        submittedAtMs: UInt64?,
-        to boundTransactionHash: inout String?,
-        and boundSubmittedAtMs: inout UInt64?
+        to boundTransactionHash: inout String?
     ) throws {
         guard isCanonicalHash(transactionHash) else {
             throw KagemushaOperationFinalityError.continuityViolation(
                 "transaction hash"
             )
         }
-        if let submittedAtMs {
-            guard submittedAtMs > 0 else {
-                throw KagemushaOperationFinalityError.continuityViolation(
-                    "submitted timestamp"
-                )
-            }
-            if let boundSubmittedAtMs,
-               boundSubmittedAtMs != submittedAtMs {
-                throw KagemushaOperationFinalityError.continuityViolation(
-                    "submitted timestamp"
-                )
-            }
-        }
         boundTransactionHash = transactionHash
-        if let submittedAtMs {
-            boundSubmittedAtMs = submittedAtMs
-        }
     }
 
     private static func initializeContinuitySeed(
         continuity: KagemushaOperationContinuity,
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
-        expectedSubmittedAtMs: UInt64,
-        boundTransactionHash: inout String?,
-        boundSubmittedAtMs: inout UInt64?
+        expectedIdentity: KagemushaOperationIdentity,
+        boundTransactionHash: inout String?
     ) throws {
         guard case let .accepted(reference) = continuity else {
             return
         }
         try validate(
             reference,
-            operationId: operationId,
-            expectedKind: expectedKind,
-            expectedSubmittedAtMs: expectedSubmittedAtMs
+            expectedIdentity: expectedIdentity
         )
-        try bind(
-            reference.transactionHash,
-            submittedAtMs: reference.submittedAtMs,
-            to: &boundTransactionHash,
-            and: &boundSubmittedAtMs
-        )
+        try bind(reference.transactionHash, to: &boundTransactionHash)
     }
 
     private static func isCanonicalHash(_ value: String) -> Bool {
         let bytes = Array(value.utf8)
         return bytes.count == 64
             && bytes.contains(where: { $0 != UInt8(ascii: "0") })
+            && bytes.last.map({ "13579bdf".utf8.contains($0) }) == true
             && bytes.allSatisfy {
                 ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
                     || ($0 >= UInt8(ascii: "a")

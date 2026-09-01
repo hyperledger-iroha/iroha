@@ -1241,13 +1241,13 @@ fn filesystem_publisher_rejects_ancestor_replacement_and_symlink_without_writing
 fn runtime_dag_signer_rejects_invalid_handle_and_oversized_identity() {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
     let signer = Arc::new(TestRuntimeDagSigner::new(
-        "pkcs11:governance-dag:primary",
+        "provider:governance-dag:primary",
         &peer_id,
         0x31,
     ));
     let public_key = signer.public_key();
     validate_runtime_handle(
-        "pkcs11:prod/governance-dag.primary-v1_slot-a",
+        "provider:prod/governance-dag.primary-v1_slot-a",
         "governance runtime DAG signer",
     )
     .expect("canonical production runtime handle");
@@ -1256,8 +1256,8 @@ fn runtime_dag_signer_rejects_invalid_handle_and_oversized_identity() {
         "https://operator:secret@governance-signer",
         "https://governance-signer/path?credential=secret",
         "https://governance-signer/path#fragment",
-        "pkcs11:prod/%67overnance-signer",
-        "pkcs11:prod\\governance-signer",
+        "provider:prod/%67overnance-signer",
+        "provider:prod\\governance-signer",
     ] {
         let error = GovernanceRuntimeDagSigner::try_new(
             handle.to_owned(),
@@ -1287,12 +1287,12 @@ fn runtime_dag_signer_rejects_invalid_handle_and_oversized_identity() {
 fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
     let signer = Arc::new(TestRuntimeDagSigner::new(
-        "pkcs11:governance-dag:primary",
+        "provider:governance-dag:primary",
         &peer_id,
         0x31,
     ));
     let error = GovernanceRuntimeDagSigner::try_new(
-        "pkcs11:governance-dag:test".to_owned(),
+        "provider:governance-dag:test".to_owned(),
         peer_id.clone(),
         signer.public_key(),
         test_runtime_dag_signer_qualification(),
@@ -1300,7 +1300,7 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
     )
     .expect_err("test-marked configured handle must fail closed");
     assert!(error.to_string().contains("test-marked"));
-    let mut stale = TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
+    let mut stale = TestRuntimeDagSigner::new("provider:governance-dag:primary", &peer_id, 0x31);
     stale.qualification_error = Some("hsm_token=must-never-escape".to_owned());
     let stale = Arc::new(stale);
     let error = GovernanceRuntimeDagSigner::try_new(
@@ -1314,7 +1314,7 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
     assert!(error.to_string().contains("stale"));
     assert!(!error.to_string().contains("must-never-escape"));
     let invalid = Arc::new(TestRuntimeDagSigner::new(
-        "pkcs11:governance-dag:primary",
+        "provider:governance-dag:primary",
         &peer_id,
         0x31,
     ));
@@ -1333,7 +1333,7 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
         GovernanceDagRuntimeProviderQualificationV1::new(1, [0x72; 32]),
     ] {
         let substituted = Arc::new(TestRuntimeDagSigner::new(
-            "pkcs11:governance-dag:primary",
+            "provider:governance-dag:primary",
             &peer_id,
             0x31,
         ));
@@ -1352,7 +1352,7 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
         );
     }
     let drifting = Arc::new(TestRuntimeDagSigner::new(
-        "pkcs11:governance-dag:primary",
+        "provider:governance-dag:primary",
         &peer_id,
         0x31,
     ));
@@ -1373,7 +1373,7 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
             .contains("policy changed during startup qualification")
     );
     let signer = Arc::new(TestRuntimeDagSigner::new(
-        "pkcs11:governance-dag:primary",
+        "provider:governance-dag:primary",
         &peer_id,
         0x31,
     ));
@@ -1395,7 +1395,7 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
     assert!(error.to_string().contains("policy changed"));
     assert_eq!(signer.observed_purpose(), None);
     let signer = Arc::new(TestRuntimeDagSigner::new(
-        "pkcs11:governance-dag:primary",
+        "provider:governance-dag:primary",
         b"12D3KooWRuntimeDagPublisher",
         0x31,
     ));
@@ -1424,16 +1424,16 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
 fn runtime_dag_signer_rejects_handle_peer_and_public_key_mismatch() {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
     let signer = Arc::new(TestRuntimeDagSigner::new(
-        "pkcs11:governance-dag:primary",
+        "provider:governance-dag:primary",
         &peer_id,
         0x31,
     ));
     let public_key = signer.public_key();
     let mismatched_public_key =
-        TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x32).public_key();
+        TestRuntimeDagSigner::new("provider:governance-dag:primary", &peer_id, 0x32).public_key();
     for (handle, peer, key, expected) in [
         (
-            "pkcs11:governance-dag:other",
+            "provider:governance-dag:other",
             peer_id.clone(),
             public_key,
             "handle does not match",
@@ -1476,7 +1476,7 @@ fn runtime_dag_signer_rejects_malformed_and_weak_ed25519_keys() {
             "non-canonical or weak",
         ),
     ] {
-        let mut signer = TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
+        let mut signer = TestRuntimeDagSigner::new("provider:governance-dag:primary", &peer_id, 0x31);
         signer.public_key_override = Some(public_key);
         let signer = Arc::new(signer);
         let error = GovernanceRuntimeDagSigner::try_new(
@@ -1493,7 +1493,7 @@ fn runtime_dag_signer_rejects_malformed_and_weak_ed25519_keys() {
 #[test]
 fn runtime_dag_signer_redacts_provider_error_and_rejects_wrong_signature() {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
-    let mut refusing = TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
+    let mut refusing = TestRuntimeDagSigner::new("provider:governance-dag:primary", &peer_id, 0x31);
     refusing.refuse_with = Some("bearer=must-never-escape".to_owned());
     let refusing = Arc::new(refusing);
     let wrapped = GovernanceRuntimeDagSigner::try_new(
@@ -1516,7 +1516,7 @@ fn runtime_dag_signer_redacts_provider_error_and_rejects_wrong_signature() {
         refusing.observed_purpose(),
         Some(GovernanceDagSigningPurposeV1::LogNode)
     );
-    let mut corrupt = TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
+    let mut corrupt = TestRuntimeDagSigner::new("provider:governance-dag:primary", &peer_id, 0x31);
     corrupt.corrupt_signature = true;
     let corrupt = Arc::new(corrupt);
     let wrapped = GovernanceRuntimeDagSigner::try_new(

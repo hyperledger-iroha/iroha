@@ -168,6 +168,11 @@ const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
     windows
 ))]
 const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 5;
+/// First published Kagemusha-specific native contract revision.
+///
+/// Stale libraries lack the probe entirely, so revision 1 is the canonical
+/// identity hard cut without a compatibility value.
+const KAGEMUSHA_NATIVE_CONTRACT_REVISION: u32 = 1;
 const CANONICAL_NETWORK_ID_LITERAL_BYTES: usize = 74;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
@@ -447,6 +452,11 @@ where
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_bridge_abi_version() -> u32 {
     CONNECT_NORITO_BRIDGE_ABI_VERSION
+}
+/// Return the Kagemusha-specific native contract revision.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_native_contract_revision() -> u32 {
+    KAGEMUSHA_NATIVE_CONTRACT_REVISION
 }
 #[cfg(any(
     test,
@@ -761,15 +771,16 @@ impl_kagemusha_canonical_decode_schema!(
     Vec<u8>,
     Vec<u64>,
     proto::EnvelopeV1,
+    AccountId,
     KagemushaNoteOpeningV2,
     KagemushaNoteMembershipWitnessV2,
     KagemushaOutputMembershipPathsV4,
     KagemushaOutputMembershipFrontierV4,
     KagemushaRecipientOutputProverMaterialV2,
-    KagemushaRequestAuthorizationPreparationV2,
+    KagemushaRequestAuthorizationPreparationV3,
     KagemushaRecursiveSpendRedemptionChangePrepareResultV4,
     KagemushaRecursiveSpendPeerSplitChangePrepareResultV4,
-    KagemushaTopUpShieldBuildRequestV4,
+    KagemushaTopUpShieldBuildRequestV5,
     iroha_data_model::offline::KagemushaRecipientOutputDerivationRequestV2,
     iroha_data_model::offline::KagemushaRecipientPaymentRequestSigningPayloadV2,
     iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
@@ -811,8 +822,8 @@ impl_kagemusha_canonical_decode_schema!(
 );
 impl_kagemusha_canonical_decode_schema!(
     iroha_data_model::offline::KAGEMUSHA_SINGLE_RECURSIVE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
-    KagemushaRecursiveSpendRedemptionChangePrepareRequestV4,
-    KagemushaRecursiveSpendRedeemLocalRequestV4,
+    KagemushaRecursiveSpendRedemptionChangePrepareRequestV5,
+    KagemushaRecursiveSpendRedeemLocalRequestV5,
     iroha_data_model::offline::KagemushaRecursiveSpendInitResultV4,
     iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
 );
@@ -6013,6 +6024,11 @@ const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1: c_ulong =
 const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4: c_ulong =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4 as c_ulong;
 const KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4: u16 = 4;
+// The top-up and redemption local carriers changed an identically sized
+// operation-id field into a nonce. Distinct versions prevent a stale V4
+// archive from decoding successfully with different semantics.
+const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_LOCAL_WITNESS_VERSION_V5: u16 = 5;
+const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_WITNESS_VERSION_V5: u16 = 5;
 const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_LOCAL_MAX_BYTES_V4: usize =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V4 + 64;
 const KAGEMUSHA_RECURSIVE_SPEND_INIT_LOCAL_MAX_BYTES_V4: usize = 8 * 1024 * 1024;
@@ -6026,10 +6042,14 @@ const KAGEMUSHA_RECURSIVE_SPEND_LIFECYCLE_RESULT_MAX_BYTES_V4: usize =
     KAGEMUSHA_RECURSIVE_SPEND_VERIFY_LOCAL_MAX_BYTES_V4;
 const KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2: usize =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2;
-const KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V2: u16 = 2;
+const KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V3: u16 = 3;
 const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_OBJECT_MAX_BYTES_V1: usize = 8 * 1024;
-const KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_VERSION_V4: u16 = 4;
-const KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_REQUEST_MAX_BYTES_V4: usize =
+// The request carrier changed its operation-id field into the canonical
+// redemption authority plus nonce. Version 5 prevents stale V4 bytes from
+// acquiring new semantics. The unchanged result remains a V4 carrier.
+const KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_REQUEST_VERSION_V5: u16 = 5;
+const KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_RESULT_VERSION_V4: u16 = 4;
+const KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_REQUEST_MAX_BYTES_V5: usize =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
         + KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2;
 const KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_RESULT_MAX_BYTES_V4: usize = 64 * 1024;
@@ -6093,12 +6113,11 @@ impl KagemushaRequestAuthorizationPlatformV2 {
 /// It deliberately cannot decode as `KagemushaRequestAuthorizationV2`: no signature or
 /// authenticatorData is present until finalization receives the platform result.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
-struct KagemushaRequestAuthorizationPreparationV2 {
+struct KagemushaRequestAuthorizationPreparationV3 {
     version: u16,
     authority: AccountId,
     device_id: String,
     asset_definition_id: AssetDefinitionId,
-    operation_id: [u8; 32],
     issued_at_ms: u64,
     expires_at_ms: u64,
     nonce: [u8; 32],
@@ -6106,14 +6125,13 @@ struct KagemushaRequestAuthorizationPreparationV2 {
     registration_hash: [u8; 32],
     platform: KagemushaRequestAuthorizationPlatformV2,
 }
-impl KagemushaRequestAuthorizationPreparationV2 {
+impl KagemushaRequestAuthorizationPreparationV3 {
     fn validate(&self) -> BridgeResult<()> {
-        if self.version != KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V2
+        if self.version != KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V3
             || self.device_id.is_empty()
             || self.device_id.len() > 128
             || self.device_id.trim() != self.device_id
             || self.device_id.chars().any(char::is_control)
-            || self.operation_id == [0; 32]
             || self.nonce == [0; 32]
             || self.registration_hash == [0; 32]
             || self.issued_at_ms == 0
@@ -6131,7 +6149,6 @@ impl KagemushaRequestAuthorizationPreparationV2 {
             &self.authority,
             &self.device_id,
             &self.asset_definition_id,
-            self.operation_id,
             self.issued_at_ms,
             self.expires_at_ms,
             self.nonce,
@@ -6171,11 +6188,16 @@ impl KagemushaRequestAuthorizationPreparationV2 {
             }
             _ => return Err(BridgeError::KagemushaProve),
         };
+        let operation_id = iroha_data_model::offline::derive_kagemusha_operation_id_v4(
+            &self.authority,
+            self.nonce,
+        )
+        .map_err(|_| BridgeError::KagemushaProve)?;
         let authorization = iroha_data_model::offline::KagemushaRequestAuthorizationV2 {
             authority: self.authority.clone(),
             device_id: self.device_id.clone(),
             asset_definition_id: self.asset_definition_id.clone(),
-            operation_id: self.operation_id,
+            operation_id,
             issued_at_ms: self.issued_at_ms,
             expires_at_ms: self.expires_at_ms,
             nonce: self.nonce,
@@ -6259,22 +6281,23 @@ impl Drop for KagemushaRedemptionChangeOpeningDerivationV4 {
         self.entropy.zeroize();
     }
 }
-/// Canonical local-only C bridge request for a proof-bound V4 change opening.
+/// Canonical local-only V5 bridge request for a proof-bound V4 change opening.
 #[derive(Clone, norito::Encode, norito::Decode)]
-struct KagemushaRecursiveSpendRedemptionChangePrepareRequestV4 {
+struct KagemushaRecursiveSpendRedemptionChangePrepareRequestV5 {
     version: u16,
     bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
     input_opening: KagemushaNoteOpeningV2,
     change_amount: iroha_data_model::offline::KagemushaScaledAmountV2,
-    operation_id: [u8; 32],
+    recipient: AccountId,
+    nonce: [u8; 32],
     entropy: [u8; 32],
 }
-impl KagemushaRecursiveSpendRedemptionChangePrepareRequestV4 {
+impl KagemushaRecursiveSpendRedemptionChangePrepareRequestV5 {
     fn validate(&self) -> BridgeResult<()> {
-        if self.version != KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_VERSION_V4
-            || self.operation_id == [0; 32]
+        if self.version != KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_REQUEST_VERSION_V5
+            || self.nonce == [0; 32]
             || self.entropy == [0; 32]
-            || self.operation_id == self.entropy
+            || self.nonce == self.entropy
         {
             return Err(BridgeError::KagemushaProve);
         }
@@ -6284,13 +6307,19 @@ impl KagemushaRecursiveSpendRedemptionChangePrepareRequestV4 {
         self.input_opening.validate()?;
         self.change_amount
             .validate()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        self.operation_id().map(|_| ())
+    }
+
+    fn operation_id(&self) -> BridgeResult<[u8; 32]> {
+        iroha_data_model::offline::derive_kagemusha_operation_id_v4(&self.recipient, self.nonce)
             .map_err(|_| BridgeError::KagemushaProve)
     }
 }
-impl Drop for KagemushaRecursiveSpendRedemptionChangePrepareRequestV4 {
+impl Drop for KagemushaRecursiveSpendRedemptionChangePrepareRequestV5 {
     fn drop(&mut self) {
         self.input_opening.zeroize();
-        self.operation_id.zeroize();
+        self.nonce.zeroize();
         self.entropy.zeroize();
     }
 }
@@ -6303,7 +6332,7 @@ struct KagemushaRecursiveSpendRedemptionChangePrepareResultV4 {
 }
 impl KagemushaRecursiveSpendRedemptionChangePrepareResultV4 {
     fn validate(&self) -> BridgeResult<()> {
-        if self.version != KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_VERSION_V4 {
+        if self.version != KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_RESULT_VERSION_V4 {
             return Err(BridgeError::KagemushaProve);
         }
         self.opening.validate()?;
@@ -7180,9 +7209,12 @@ impl Drop for KagemushaRecursiveSpendAppendLocalRequestV4 {
         self.zeroize();
     }
 }
-/// Secret-bearing V4 redemption archive.
+/// Secret-bearing V5 local carrier for the public V4 redemption proof path.
+///
+/// Version 5 is a hard cut: a stale V4 carrier's operation-id bytes must never
+/// be reinterpreted as the canonical-identity nonce.
 #[derive(Clone, Debug, norito::Encode, norito::Decode)]
-struct KagemushaRecursiveSpendRedeemLocalRequestV4 {
+struct KagemushaRecursiveSpendRedeemLocalRequestV5 {
     version: u16,
     bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
     topup_provenance: iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4,
@@ -7194,12 +7226,12 @@ struct KagemushaRecursiveSpendRedeemLocalRequestV4 {
     unshield_verifier_id: VerifyingKeyId,
     unshield_verifier_commitment: [u8; 32],
     block_height: u64,
-    operation_id: [u8; 32],
+    nonce: [u8; 32],
     change_output_membership: Option<KagemushaOutputMembershipPathsV4>,
 }
-impl KagemushaRecursiveSpendRedeemLocalRequestV4 {
+impl KagemushaRecursiveSpendRedeemLocalRequestV5 {
     fn validate_shape(&self) -> BridgeResult<()> {
-        if self.version != KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4 {
+        if self.version != KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_WITNESS_VERSION_V5 {
             return Err(BridgeError::KagemushaProve);
         }
         validate_kagemusha_recursive_spend_bundle_shape_v4(&self.bundle)?;
@@ -7220,7 +7252,7 @@ impl KagemushaRecursiveSpendRedeemLocalRequestV4 {
             }
         }
         let input_amount = self.bundle.statement.current_note.amount.atomic_units;
-        if self.operation_id == [0; 32]
+        if self.nonce == [0; 32]
             || self.block_height == 0
             || self.unshield_verifier_commitment == [0; 32]
             || self.public_amount.scale != self.bundle.statement.asset_scale
@@ -7256,6 +7288,7 @@ impl KagemushaRecursiveSpendRedeemLocalRequestV4 {
         }
     }
     fn zeroize(&mut self) {
+        self.nonce.zeroize();
         self.input_opening.zeroize();
         zeroize_kagemusha_note_membership_witness_v2(&mut self.input_membership_witness);
         if let Some(change) = &mut self.change_opening {
@@ -7266,7 +7299,7 @@ impl KagemushaRecursiveSpendRedeemLocalRequestV4 {
         }
     }
 }
-impl Drop for KagemushaRecursiveSpendRedeemLocalRequestV4 {
+impl Drop for KagemushaRecursiveSpendRedeemLocalRequestV5 {
     fn drop(&mut self) {
         self.zeroize();
     }
@@ -7285,17 +7318,18 @@ impl KagemushaRecursiveSpendVerifyLocalRequestV4 {
         validate_kagemusha_recursive_spend_verify_request_shape_v4(&self.request)
     }
 }
-/// Secret-bearing, local-only request for constructing the zero-input shield
-/// transition used by a recursive Kagemusha top-up. This archive never goes
-/// to Torii and is zeroized immediately after the native prover returns.
+/// Secret-bearing V5 local request for constructing the zero-input shield
+/// transition used by a recursive Kagemusha V4 top-up. Version 5 prevents a
+/// stale V4 operation-id field from being reinterpreted as a nonce. This
+/// archive never goes to Torii and is zeroized after native proving.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
-struct KagemushaTopUpShieldBuildRequestV4 {
+struct KagemushaTopUpShieldBuildRequestV5 {
     version: u16,
     network_id: NetworkId,
     asset: AssetId,
     amount: iroha_data_model::offline::KagemushaScaledAmountV2,
     payer: AccountId,
-    operation_id: [u8; 32],
+    nonce: [u8; 32],
     opening: KagemushaNoteOpeningV2,
     leaf_index: u32,
     zero_path: KagemushaTopUpZeroPathV2,
@@ -7317,14 +7351,14 @@ impl KagemushaTopUpZeroPathV2 {
         self.root.zeroize();
     }
 }
-impl KagemushaTopUpShieldBuildRequestV4 {
+impl KagemushaTopUpShieldBuildRequestV5 {
     fn zeroize(&mut self) {
-        self.operation_id.zeroize();
+        self.nonce.zeroize();
         self.opening.zeroize();
         self.zero_path.zeroize();
     }
 }
-impl Drop for KagemushaTopUpShieldBuildRequestV4 {
+impl Drop for KagemushaTopUpShieldBuildRequestV5 {
     fn drop(&mut self) {
         self.zeroize();
     }
@@ -7344,10 +7378,10 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v4(
         KagemushaRecursiveSpendTopUpUnsignedV4, KagemushaSpendableNoteDescriptorV2,
         KagemushaTopUpShieldEvidenceV2,
     };
-    let mut request: KagemushaTopUpShieldBuildRequestV4 =
+    let mut request: KagemushaTopUpShieldBuildRequestV5 =
         decode_canonical_kagemusha_archive(request_archive)?;
     let outcome = (|| {
-        if request.version != KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4 {
+        if request.version != KAGEMUSHA_RECURSIVE_SPEND_TOPUP_LOCAL_WITNESS_VERSION_V5 {
             return Err(BridgeError::KagemushaProve);
         }
         let _installed =
@@ -7359,6 +7393,7 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v4(
         request.opening.validate()?;
         if request.asset.account() != &request.payer
             || request.asset.definition().to_string().is_empty()
+            || request.nonce == [0; 32]
             || request.leaf_index
                 >= iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2
             || request.zero_path.siblings.len()
@@ -7370,6 +7405,11 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v4(
         {
             return Err(BridgeError::KagemushaProve);
         }
+        let operation_id = iroha_data_model::offline::derive_kagemusha_operation_id_v4(
+            &request.payer,
+            request.nonce,
+        )
+        .map_err(|_| BridgeError::KagemushaProve)?;
         let vk_box = kagemusha_topup_shield_v2_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
         if hash_vk(&vk_box) != request.shield_verifier_commitment {
             return Err(BridgeError::KagemushaProve);
@@ -7384,7 +7424,7 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v4(
             &request.network_id,
             &request.asset.definition().to_string(),
             &request.payer.to_string(),
-            request.operation_id,
+            operation_id,
             request.amount.atomic_units,
             request.amount.scale,
             &request.opening.spend_key,
@@ -7424,7 +7464,7 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v4(
                 proof: attachment,
             },
             artifact_binding: request.artifact_binding.clone(),
-            operation_id: request.operation_id,
+            operation_id,
         };
         unsigned
             .validate_public_binding()
@@ -8154,7 +8194,7 @@ fn derive_kagemusha_redemption_change_opening_v4(
         return Err(BridgeError::KagemushaProve);
     }
     let result = KagemushaRecursiveSpendRedemptionChangePrepareResultV4 {
-        version: KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_VERSION_V4,
+        version: KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_RESULT_VERSION_V4,
         opening,
         output,
     };
@@ -9056,7 +9096,7 @@ fn execute_kagemusha_recursive_spend_append_v4(
     result
 }
 fn execute_kagemusha_recursive_spend_redeem_v4(
-    local: &KagemushaRecursiveSpendRedeemLocalRequestV4,
+    local: &KagemushaRecursiveSpendRedeemLocalRequestV5,
     installed: &impl KagemushaRecursiveSpendArtifactSetViewV4,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4> {
     use iroha_core::zk::{
@@ -9076,6 +9116,9 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
         KagemushaUnshieldPublicInputsBindingV2,
     };
     local.validate_shape()?;
+    let operation_id =
+        iroha_data_model::offline::derive_kagemusha_operation_id_v4(&local.recipient, local.nonce)
+            .map_err(|_| BridgeError::KagemushaProve)?;
     let bundle = &local.bundle;
     validate_kagemusha_topup_provenance_for_bundle_against_installed_v4(
         bundle,
@@ -9231,7 +9274,7 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
             .map(|_| statement.artifact_binding.clone()),
         unshield_public_inputs: public_inputs,
         unshield_public_inputs_digest: public_inputs_digest,
-        operation_id: local.operation_id,
+        operation_id,
     };
     redemption
         .validate_public_binding()
@@ -9249,7 +9292,7 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
         unshield_proof: proof_attachment.clone(),
         redemption: redemption.clone(),
         block_height: local.block_height,
-        operation_id: local.operation_id,
+        operation_id,
     };
     build_request
         .validate_public_binding()
@@ -9330,7 +9373,7 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
         redemption,
         offline_change,
         block_height: local.block_height,
-        operation_id: local.operation_id,
+        operation_id,
     };
     let authorization_digest = unsigned.digest().map_err(|_| BridgeError::KagemushaProve)?;
     let offline_change_topup_provenance = offline_change_bundle
@@ -9342,7 +9385,7 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
         offline_change_bundle,
         offline_change_membership_witness,
         offline_change_topup_provenance,
-        operation_id: local.operation_id,
+        operation_id,
     };
     result
         .validate_for_request(&build_request)
@@ -9440,13 +9483,13 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_output_derive_v2(
     })();
     bridge_result_to_code(result)
 }
-/// Prepare an exact proof-bound V4 partial-redemption change opening.
+/// Prepare an exact proof-bound partial-redemption change opening from a V5 local request.
 ///
 /// Both input and output use the bridge-local canonical Norito schemas. The
 /// result contains secret opening material and must be released only with
 /// [`connect_norito_kagemusha_secret_free_buffer`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4(
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5(
     request_norito_ptr: *const c_uchar,
     request_norito_len: c_ulong,
     out_result_ptr: *mut *mut c_uchar,
@@ -9458,18 +9501,19 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redemption_cha
             read_kagemusha_archive_bytes_bounded(
                 request_norito_ptr,
                 request_norito_len,
-                KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_REQUEST_MAX_BYTES_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_REQUEST_MAX_BYTES_V5,
             )
         }?);
         let request = decode_canonical_kagemusha_recursive_archive::<
-            KagemushaRecursiveSpendRedemptionChangePrepareRequestV4,
+            KagemushaRecursiveSpendRedemptionChangePrepareRequestV5,
         >(request_bytes.as_slice())?;
         request.validate()?;
+        let operation_id = request.operation_id()?;
         let preparation = prepare_kagemusha_redemption_change_opening_v4(
             &request.bundle,
             &request.input_opening,
             request.change_amount,
-            &request.operation_id,
+            &operation_id,
             &request.entropy,
         )?;
         write_kagemusha_secret_archive!(
@@ -9709,11 +9753,11 @@ fn kagemusha_recipient_receive_offer_verify_v2(
     )?;
     Ok((projected, verified))
 }
-fn kagemusha_request_authorization_preparation_v2(
+fn kagemusha_request_authorization_preparation_v3(
     preparation_archive: &[u8],
-) -> BridgeResult<KagemushaRequestAuthorizationPreparationV2> {
+) -> BridgeResult<KagemushaRequestAuthorizationPreparationV3> {
     let preparation = decode_canonical_kagemusha_archive::<
-        KagemushaRequestAuthorizationPreparationV2,
+        KagemushaRequestAuthorizationPreparationV3,
     >(preparation_archive)?;
     preparation.validate()?;
     Ok(preparation)
@@ -9837,25 +9881,25 @@ fn kagemusha_parse_ios_app_attest_assertion_object_v1(
         signature_der.ok_or(BridgeError::KagemushaProve)?,
     ))
 }
-fn kagemusha_finalize_hardware_authorization_archive_v2(
+fn kagemusha_finalize_hardware_authorization_archive_v3(
     preparation_archive: &[u8],
     authenticator_data: Vec<u8>,
     signature_der: &[u8],
 ) -> BridgeResult<(Vec<u8>, Vec<u8>)> {
-    let preparation = kagemusha_request_authorization_preparation_v2(preparation_archive)?;
+    let preparation = kagemusha_request_authorization_preparation_v3(preparation_archive)?;
     let signature = kagemusha_device_signature_from_strict_der_v2(signature_der)?;
     let authorization = preparation.finalize(authenticator_data, signature)?;
     let archive = norito::to_bytes(&authorization).map_err(|_| BridgeError::KagemushaProve)?;
     Ok((archive, signature.as_raw_bytes().to_vec()))
 }
-fn kagemusha_finalize_ios_app_attest_authorization_archive_v2(
+fn kagemusha_finalize_ios_app_attest_authorization_archive_v3(
     preparation_archive: &[u8],
     assertion_object: &[u8],
 ) -> BridgeResult<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let (authenticator_data, signature_der) =
         kagemusha_parse_ios_app_attest_assertion_object_v1(assertion_object)?;
     let extracted_authenticator_data = authenticator_data.clone();
-    let (archive, signature_raw) = kagemusha_finalize_hardware_authorization_archive_v2(
+    let (archive, signature_raw) = kagemusha_finalize_hardware_authorization_archive_v3(
         preparation_archive,
         authenticator_data,
         &signature_der,
@@ -10248,12 +10292,48 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_receive_offer_verify
     })();
     bridge_result_to_code(result)
 }
-/// Return the canonical bytes covered by a V2 hardware authorization signature.
+/// Derive the authoritative V4 operation identifier from one canonical authority and nonce.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_operation_id_derive_v4(
+    authority_norito_ptr: *const c_uchar,
+    authority_norito_len: c_ulong,
+    nonce_ptr: *const c_uchar,
+    nonce_len: c_ulong,
+    out_operation_id_ptr: *mut *mut c_uchar,
+    out_operation_id_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_operation_id_ptr, out_operation_id_len)?;
+        let authority_bytes = read_kagemusha_bytes!(
+            authority_norito_ptr,
+            authority_norito_len,
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2
+        )?;
+        let authority = decode_canonical_kagemusha_archive::<AccountId>(&authority_bytes)?;
+        let nonce_bytes = read_kagemusha_bytes!(nonce_ptr, nonce_len, 32)?;
+        let nonce: [u8; 32] = nonce_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let operation_id =
+            iroha_data_model::offline::derive_kagemusha_operation_id_v4(&authority, nonce)
+                .map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(
+                out_operation_id_ptr,
+                out_operation_id_len,
+                &operation_id,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+/// Return the canonical bytes covered by a V3 hardware authorization signature.
 ///
 /// The input is a canonical local-only unsigned preparation. It contains no
 /// signature or authenticatorData and cannot decode as a protocol authorization.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_signing_bytes_v2(
+pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_signing_bytes_v3(
     preparation_norito_ptr: *const c_uchar,
     preparation_norito_len: c_ulong,
     out_signing_bytes_ptr: *mut *mut c_uchar,
@@ -10266,7 +10346,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_signing_
             preparation_norito_len,
             KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2
         )?;
-        let preparation = kagemusha_request_authorization_preparation_v2(&preparation_bytes)?;
+        let preparation = kagemusha_request_authorization_preparation_v3(&preparation_bytes)?;
         let signing_bytes = preparation.signing_bytes()?;
         unsafe {
             write_kagemusha_archive_bridge(
@@ -10284,7 +10364,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_signing_
 /// returned by App Attest. The strict DER signature is normalized to canonical
 /// low-S `r || s`; both the protocol archive and those canonical bytes are returned.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_finalize_hardware_v2(
+pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_finalize_hardware_v3(
     preparation_norito_ptr: *const c_uchar,
     preparation_norito_len: c_ulong,
     authenticator_data_ptr: *const c_uchar,
@@ -10316,7 +10396,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_finalize
             }?
         };
         let signature_der = read_kagemusha_bytes!(signature_der_ptr, signature_der_len, 72)?;
-        let (archive, signature_raw) = kagemusha_finalize_hardware_authorization_archive_v2(
+        let (archive, signature_raw) = kagemusha_finalize_hardware_authorization_archive_v3(
             &preparation_bytes,
             authenticator_data,
             &signature_der,
@@ -10342,7 +10422,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_finalize
 /// outputs are the authorization archive, canonical raw-low-S signature, and
 /// the exact extracted authenticatorData, atomically.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2(
+pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3(
     preparation_norito_ptr: *const c_uchar,
     preparation_norito_len: c_ulong,
     assertion_object_ptr: *const c_uchar,
@@ -10378,7 +10458,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_finalize
             KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_OBJECT_MAX_BYTES_V1
         )?;
         let (archive, signature_raw, authenticator_data) =
-            kagemusha_finalize_ios_app_attest_authorization_archive_v2(
+            kagemusha_finalize_ios_app_attest_authorization_archive_v3(
                 &preparation_bytes,
                 &assertion_object,
             )?;
@@ -11205,7 +11285,7 @@ fn validate_kagemusha_topup_provenance_for_bundle_v4(
 /// roster/QC signature authentication remains the responsibility of the
 /// release-pinned finality verifier when the result is consumed by the prover.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_offline_operation_status_validate_v1(
+pub unsafe extern "C" fn connect_norito_kagemusha_offline_operation_status_validate_v2(
     status_norito_ptr: *const c_uchar,
     status_norito_len: c_ulong,
 ) -> c_int {
@@ -11244,7 +11324,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_offline_operation_status_valid
 /// signature; that requires the separately trusted, release-pinned validator
 /// roster when the result is consumed by the prover.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+pub unsafe extern "C" fn connect_norito_kagemusha_offline_operation_status_json_validate_v2(
     status_json_ptr: *const c_uchar,
     status_json_len: c_ulong,
 ) -> c_int {
@@ -12804,7 +12884,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
 /// Build the canonical unsigned online-to-offline request from a Torii
 /// next-zero Merkle path and local confidential note secrets.
 ///
-/// The input is the local-only `KagemushaTopUpShieldBuildRequestV4`; output is
+/// The input is the local-only `KagemushaTopUpShieldBuildRequestV5`; output is
 /// a canonical `KagemushaRecursiveSpendTopUpUnsignedV4`. Secret key material
 /// is wiped before this function returns and is never included in output.
 #[unsafe(no_mangle)]
@@ -13277,7 +13357,7 @@ macro_rules! kagemusha_recursive_spend_lifecycle_exports {
             };
             let request_bytes = Zeroizing::new(request_bytes);
             let mut local = match decode_canonical_kagemusha_recursive_archive::<
-                KagemushaRecursiveSpendRedeemLocalRequestV4,
+                KagemushaRecursiveSpendRedeemLocalRequestV5,
             >(&request_bytes)
             {
                 Ok(request) => request,
@@ -14944,16 +15024,15 @@ mod kagemusha_bridge_tests {
     }
     fn request_authorization_preparation(
         platform: KagemushaRequestAuthorizationPlatformV2,
-    ) -> KagemushaRequestAuthorizationPreparationV2 {
-        KagemushaRequestAuthorizationPreparationV2 {
-            version: KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V2,
+    ) -> KagemushaRequestAuthorizationPreparationV3 {
+        KagemushaRequestAuthorizationPreparationV3 {
+            version: KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V3,
             authority: AccountId::new(fixture_key_pair(0x41).public_key().clone()),
             device_id: "pk3-hardware-device".to_owned(),
             asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("pk3", "universal").expect("domain"),
                 "cash".parse().expect("asset name"),
             ),
-            operation_id: [0x42; 32],
             issued_at_ms: 1_900_000_000_000,
             expires_at_ms: 1_900_000_060_000,
             nonce: [0x43; 32],
@@ -14964,7 +15043,7 @@ mod kagemusha_bridge_tests {
     }
     fn shared_request_authorization_preparation(
         platform: KagemushaRequestAuthorizationPlatformV2,
-    ) -> KagemushaRequestAuthorizationPreparationV2 {
+    ) -> KagemushaRequestAuthorizationPreparationV3 {
         let authority = fixture_key_pair(0x22).public_key().clone();
         let asset_definition_id = AssetDefinitionId::from_uuid_bytes([
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x47, 0x08, 0x89, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
@@ -14976,12 +15055,11 @@ mod kagemusha_bridge_tests {
                 .expect("fixed canonical registration hash")
                 .try_into()
                 .expect("registration hash length");
-        KagemushaRequestAuthorizationPreparationV2 {
-            version: KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V2,
+        KagemushaRequestAuthorizationPreparationV3 {
+            version: KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V3,
             authority: AccountId::new(authority),
             device_id: "physical-device-1".to_owned(),
             asset_definition_id,
-            operation_id: [0x31; 32],
             issued_at_ms: 1_000,
             expires_at_ms: 2_000,
             nonce: [0x32; 32],
@@ -14991,10 +15069,10 @@ mod kagemusha_bridge_tests {
         }
     }
     #[test]
-    fn hardware_authorization_preparation_matches_shared_mobile_vector() {
+    fn hardware_authorization_preparation_v3_derives_one_canonical_operation_id() {
         const VECTOR_PATH: &str = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/kagemusha_request_authorization_v2_hardware.hex"
+            "/tests/fixtures/kagemusha_request_authorization_v3_hardware.hex"
         );
         let android = shared_request_authorization_preparation(
             KagemushaRequestAuthorizationPlatformV2::AndroidKeyMint,
@@ -15002,12 +15080,18 @@ mod kagemusha_bridge_tests {
         let ios = shared_request_authorization_preparation(
             KagemushaRequestAuthorizationPlatformV2::IosAppAttest,
         );
+        let operation_id = iroha_data_model::offline::derive_kagemusha_operation_id_v4(
+            &android.authority,
+            android.nonce,
+        )
+        .expect("derive canonical operation id");
         let actual = [
             (
                 "authority_public_key",
                 hex::encode(android.authority.expect_single_signatory().to_bytes().1),
             ),
             ("registration_hash", hex::encode(android.registration_hash)),
+            ("operation_id", hex::encode(operation_id)),
             (
                 "android_preparation",
                 hex::encode(norito::to_bytes(&android).expect("encode Android preparation")),
@@ -15035,6 +15119,7 @@ mod kagemusha_bridge_tests {
                     .flatten()
             })
             .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(expected.len(), actual.len(), "shared vector key-set drift");
         let mismatches = actual
             .iter()
             .filter(|(name, value)| expected.get(name).copied() != Some(value.as_str()))
@@ -15045,6 +15130,44 @@ mod kagemusha_bridge_tests {
             "shared mobile hardware-authorization vector drift:\n{}",
             mismatches.join("\n"),
         );
+        let android_signing_bytes = android.signing_bytes().expect("Android signing preimage");
+        let signature: p256::ecdsa::Signature = p256_signing_key().sign(&android_signing_bytes);
+        let device_signature =
+            kagemusha_device_signature_from_strict_der_v2(signature.to_der().as_bytes())
+                .expect("canonical device signature");
+        let android_authorization = android
+            .finalize(Vec::new(), device_signature)
+            .expect("finalize Android authorization");
+        assert_eq!(android_authorization.operation_id, operation_id);
+        assert_eq!(ios.signing_bytes().expect("iOS clientDataHash").len(), 32);
+        assert_eq!(android.version, 3);
+    }
+    #[test]
+    fn operation_id_v4_c_export_matches_authoritative_derivation() {
+        let authority = AccountId::new(fixture_key_pair(0x35).public_key().clone());
+        let authority_archive = norito::to_bytes(&authority).expect("encode authority");
+        let nonce = [0x36; 32];
+        let expected =
+            iroha_data_model::offline::derive_kagemusha_operation_id_v4(&authority, nonce)
+                .expect("derive operation id");
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_operation_id_derive_v4(
+                    authority_archive.as_ptr(),
+                    authority_archive.len() as c_ulong,
+                    nonce.as_ptr(),
+                    nonce.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            },
+            0
+        );
+        assert_eq!(out_len, 32);
+        assert_eq!(unsafe { slice::from_raw_parts(out_ptr, 32) }, expected);
+        connect_norito_free(out_ptr);
     }
     fn p256_signing_key() -> SigningKey {
         SigningKey::from_bytes((&[0x46; 32]).into()).expect("valid deterministic P-256 scalar")
@@ -16026,7 +16149,7 @@ mod kagemusha_bridge_tests {
             assert_eq!(decoded_authenticator_data, authenticator_data);
             assert_eq!(decoded_signature, signature_der.as_bytes());
             let (authorization, raw_signature, extracted_authenticator_data) =
-                kagemusha_finalize_ios_app_attest_authorization_archive_v2(
+                kagemusha_finalize_ios_app_attest_authorization_archive_v3(
                     &preparation_archive,
                     &assertion_object,
                 )
@@ -16070,7 +16193,7 @@ mod kagemusha_bridge_tests {
             KagemushaRequestAuthorizationPlatformV2::AndroidKeyMint,
         );
         assert!(
-            kagemusha_finalize_ios_app_attest_authorization_archive_v2(
+            kagemusha_finalize_ios_app_attest_authorization_archive_v3(
                 &norito::to_bytes(&android).expect("encode Android preparation"),
                 &valid,
             )
@@ -16091,7 +16214,7 @@ mod kagemusha_bridge_tests {
             *mut c_ulong,
             *mut *mut c_uchar,
             *mut c_ulong,
-        ) -> c_int = connect_norito_kagemusha_request_authorization_finalize_hardware_v2;
+        ) -> c_int = connect_norito_kagemusha_request_authorization_finalize_hardware_v3;
         let _ios_app_attest_c: unsafe extern "C" fn(
             *const c_uchar,
             c_ulong,
@@ -16103,10 +16226,10 @@ mod kagemusha_bridge_tests {
             *mut c_ulong,
             *mut *mut c_uchar,
             *mut c_ulong,
-        ) -> c_int = connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2;
+        ) -> c_int = connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3;
         let header = include_str!("../include/connect_norito_bridge.h");
         let hardware_start = header
-            .find("int32_t connect_norito_kagemusha_request_authorization_finalize_hardware_v2(")
+            .find("int32_t connect_norito_kagemusha_request_authorization_finalize_hardware_v3(")
             .expect("hardware authorization finalizer declaration");
         let hardware_end = hardware_start
             + header[hardware_start..]
@@ -16118,7 +16241,7 @@ mod kagemusha_bridge_tests {
         assert_eq!(hardware.matches("uint8_t**").count(), 2);
         let ios_start = header
             .find(
-                "int32_t connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2(",
+                "int32_t connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3(",
             )
             .expect("App Attest authorization finalizer declaration");
         let ios_end = ios_start
@@ -16162,13 +16285,10 @@ mod kagemusha_bridge_tests {
             !production.contains(&retired_method),
             "paired namespaces must not expose the retired JNI authorization finalizer",
         );
-        let compact_production: String = production.split_whitespace().collect();
-        assert!(compact_production.contains(
-            "nativeFinalizeHardwareAuthorizationV2{preparationbytes,authenticator_databytes,signature_derbytes}->JniObjectArray=java_native_kagemusha_finalize_hardware_authorization_v2;"
-        ));
-        assert!(compact_production.contains(
-            "nativeFinalizeIosAppAttestAuthorizationV2{preparationbytes,assertion_objectbytes}->JniObjectArray=java_native_kagemusha_finalize_ios_app_attest_authorization_v2;"
-        ));
+        let retired_hardware_jni = ["nativeFinalizeHardwareAuthorization", "V2"].concat();
+        let retired_app_attest_jni = ["nativeFinalizeIosAppAttestAuthorization", "V2"].concat();
+        assert!(!production.contains(&retired_hardware_jni));
+        assert!(!production.contains(&retired_app_attest_jni));
         let (_, argument_types) = source
             .rsplit_once("macro_rules! kagemusha_jni_argument_type")
             .expect("typed Kagemusha JNI arguments");
@@ -16184,7 +16304,7 @@ mod kagemusha_bridge_tests {
         let mut authenticator_data_ptr = ptr::dangling_mut::<c_uchar>();
         let mut authenticator_data_len = 99;
         let status = unsafe {
-            connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2(
+            connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3(
                 ptr::dangling(),
                 c_ulong::MAX,
                 ptr::dangling(),
@@ -16210,7 +16330,7 @@ mod kagemusha_bridge_tests {
         authenticator_data_ptr = ptr::dangling_mut();
         authenticator_data_len = 99;
         let status = unsafe {
-            connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2(
+            connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3(
                 ptr::dangling(),
                 1,
                 ptr::dangling(),
@@ -16617,7 +16737,7 @@ mod kagemusha_bridge_tests {
             })*};
         }
         assert_preacquisition! {
-            "java_native_kagemusha_prepare_top_up_v4" copies "java_kagemusha_text(";
+            "java_native_kagemusha_prepare_top_up_v5" copies "java_kagemusha_text(";
             "java_native_kagemusha_artifact_set_install_v4" copies "read_java_byte_array_bounded(";
             "java_native_kagemusha_candidate_lab_artifact_set_install_v4" copies "read_java_byte_array_bounded(";
             "java_native_kagemusha_lifecycle_archive_bounded" copies "read_java_byte_array_bounded(";
@@ -18339,10 +18459,10 @@ mod kagemusha_bridge_tests {
         peer_payment: iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
         verify_local: KagemushaRecursiveSpendVerifyLocalRequestV4,
         verify_result: iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4,
-        partial_redeem_local: KagemushaRecursiveSpendRedeemLocalRequestV4,
+        partial_redeem_local: KagemushaRecursiveSpendRedeemLocalRequestV5,
         partial_redeem_result:
             iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4,
-        redeem_local: KagemushaRecursiveSpendRedeemLocalRequestV4,
+        redeem_local: KagemushaRecursiveSpendRedeemLocalRequestV5,
         redeem_result: iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4,
         acknowledgement_payload:
             iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2,
@@ -18406,7 +18526,10 @@ mod kagemusha_bridge_tests {
             ),
         };
         let payer = sample_account(0x90);
-        let topup_operation_id = [0x93; 32];
+        let topup_nonce = [0x93; 32];
+        let topup_operation_id =
+            iroha_data_model::offline::derive_kagemusha_operation_id_v4(&payer, topup_nonce)
+                .expect("derive canonical top-up operation id");
         let topup_amount =
             KagemushaScaledAmountV2::new(1_000, 2).expect("production DS acceptance top-up amount");
         let shield_verifier_id = VerifyingKeyId::new(
@@ -18416,13 +18539,13 @@ mod kagemusha_bridge_tests {
         let shield_verifier_commitment = hash_vk(
             &kagemusha_topup_shield_v2_vk_box().expect("production DS top-up shield verifying key"),
         );
-        let topup_build = KagemushaTopUpShieldBuildRequestV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
+        let topup_build = KagemushaTopUpShieldBuildRequestV5 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_TOPUP_LOCAL_WITNESS_VERSION_V5,
             network_id: fixture.manifest.network_id,
             asset: AssetId::new(fixture.manifest.asset.clone(), payer.clone()),
             amount: topup_amount,
             payer: payer.clone(),
-            operation_id: topup_operation_id,
+            nonce: topup_nonce,
             opening: sender_opening.clone(),
             leaf_index: 0,
             zero_path: KagemushaTopUpZeroPathV2 {
@@ -18439,6 +18562,28 @@ mod kagemusha_bridge_tests {
         let topup_unsigned =
             kagemusha_topup_shield_build_unsigned_from_archive_v4(&topup_build_archive)
                 .expect("build genuine production DS top-up shield");
+        let mut stale_topup_build = topup_build.clone();
+        stale_topup_build.version = KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4;
+        let stale_topup_archive = Zeroizing::new(
+            norito::to_bytes(&stale_topup_build).expect("encode stale V4 top-up carrier"),
+        );
+        kagemusha_topup_shield_build_unsigned_from_archive_v4(&stale_topup_archive)
+            .expect_err("a stale V4 top-up carrier must not decode as a V5 nonce carrier");
+        let mut stale_topup_ptr = ptr::dangling_mut::<c_uchar>();
+        let mut stale_topup_len = 99;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_topup_shield_build_unsigned_v4(
+                    stale_topup_archive.as_ptr(),
+                    stale_topup_archive.len() as c_ulong,
+                    &mut stale_topup_ptr,
+                    &mut stale_topup_len,
+                )
+            },
+            ERR_KAGEMUSHA_PROVE
+        );
+        assert!(stale_topup_ptr.is_null());
+        assert_eq!(stale_topup_len, 0);
         let mut exhausted_topup_build = topup_build.clone();
         exhausted_topup_build.leaf_index =
             iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2;
@@ -18702,7 +18847,14 @@ mod kagemusha_bridge_tests {
             .change_topup_provenance
             .as_ref()
             .expect("production DS sender change top-up provenance");
-        let partial_redeem_operation_id = [0x9a; 32];
+        let partial_redeem_recipient = sample_account(0x9c);
+        let partial_redeem_nonce = [0x9a; 32];
+        let partial_redeem_operation_id =
+            iroha_data_model::offline::derive_kagemusha_operation_id_v4(
+                &partial_redeem_recipient,
+                partial_redeem_nonce,
+            )
+            .expect("derive canonical partial-redemption operation id");
         let partial_redeem_amount =
             KagemushaScaledAmountV2::new(100, 2).expect("production DS partial redemption amount");
         let partial_change_amount = KagemushaScaledAmountV2::new(200, 2)
@@ -18726,13 +18878,13 @@ mod kagemusha_bridge_tests {
             Some(partial_change_preparation.output.note_commitment),
         )
         .expect("derive production DS redemption-change membership paths");
-        let partial_redeem_local = KagemushaRecursiveSpendRedeemLocalRequestV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
+        let partial_redeem_local = KagemushaRecursiveSpendRedeemLocalRequestV5 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_WITNESS_VERSION_V5,
             bundle: sender_change_bundle.clone(),
             topup_provenance: sender_change_topup_provenance.clone(),
             input_opening: change_opening.clone(),
             input_membership_witness: sender_change_membership_witness.clone(),
-            recipient: sample_account(0x9c),
+            recipient: partial_redeem_recipient,
             public_amount: partial_redeem_amount,
             change_opening: Some(partial_change_preparation.opening.clone()),
             unshield_verifier_id: VerifyingKeyId::new(
@@ -18743,7 +18895,7 @@ mod kagemusha_bridge_tests {
                 &confidential_unshield_v3_vk_box().expect("production DS unshield verifying key"),
             ),
             block_height: 43,
-            operation_id: partial_redeem_operation_id,
+            nonce: partial_redeem_nonce,
             change_output_membership: Some(partial_change_output_membership.clone()),
         };
         partial_redeem_local
@@ -18870,8 +19022,8 @@ mod kagemusha_bridge_tests {
                 zero_path: partial_change_output_membership.dummy_path.clone(),
             }
         );
-        let redeem_local = KagemushaRecursiveSpendRedeemLocalRequestV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
+        let redeem_local = KagemushaRecursiveSpendRedeemLocalRequestV5 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_WITNESS_VERSION_V5,
             bundle: peer_payment.recipient_bundle.clone(),
             topup_provenance: peer_payment.topup_provenance.clone(),
             input_opening: fixture.fresh_recipient_opening.clone(),
@@ -18887,12 +19039,35 @@ mod kagemusha_bridge_tests {
                 &confidential_unshield_v3_vk_box().expect("production DS unshield verifying key"),
             ),
             block_height: 43,
-            operation_id: [0x99; 32],
+            nonce: [0x99; 32],
             change_output_membership: None,
         };
         redeem_local
             .validate_shape()
             .expect("production DS redeem bridge shape");
+        let mut stale_redeem_local = redeem_local.clone();
+        stale_redeem_local.version = KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4;
+        stale_redeem_local
+            .validate_shape()
+            .expect_err("a stale V4 redemption carrier must not validate as V5");
+        let stale_redeem_archive = Zeroizing::new(
+            norito::to_bytes(&stale_redeem_local).expect("encode stale V4 redemption carrier"),
+        );
+        let mut stale_redeem_ptr = ptr::dangling_mut::<c_uchar>();
+        let mut stale_redeem_len = 99;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_recursive_spend_redeem_v4(
+                    stale_redeem_archive.as_ptr(),
+                    stale_redeem_archive.len() as c_ulong,
+                    &mut stale_redeem_ptr,
+                    &mut stale_redeem_len,
+                )
+            },
+            ERR_KAGEMUSHA_PROVE
+        );
+        assert!(stale_redeem_ptr.is_null());
+        assert_eq!(stale_redeem_len, 0);
         let finalized_height = redeem_local.topup_provenance.topup_finality_evidence[0]
             .topup_anchor
             .finalized_height;
@@ -18931,7 +19106,14 @@ mod kagemusha_bridge_tests {
             redeem_result.unsigned.amount,
             redeem_result.unsigned.bundle.statement.current_note.amount
         );
-        assert_eq!(redeem_result.operation_id, redeem_local.operation_id);
+        assert_eq!(
+            redeem_result.operation_id,
+            iroha_data_model::offline::derive_kagemusha_operation_id_v4(
+                &redeem_local.recipient,
+                redeem_local.nonce,
+            )
+            .expect("derive canonical redemption operation id")
+        );
         assert!(redeem_result.unsigned.offline_change.is_none());
         assert!(redeem_result.offline_change_bundle.is_none());
         assert!(redeem_result.offline_change_membership_witness.is_none());
@@ -20374,9 +20556,9 @@ mod kagemusha_bridge_tests {
             false
         );
         archive!(
-            "recursive_partial_redeem_local_v4",
+            "recursive_partial_redeem_local_v5",
             "input",
-            "sender/partial-redeem-local-v4.norito",
+            "sender/partial-redeem-local-v5.norito",
             &lifecycle.partial_redeem_local,
             true
         );
@@ -20388,9 +20570,9 @@ mod kagemusha_bridge_tests {
             true
         );
         archive!(
-            "recursive_redeem_local_v4",
+            "recursive_redeem_local_v5",
             "input",
-            "receiver/redeem-local-v4.norito",
+            "receiver/redeem-local-v5.norito",
             &lifecycle.redeem_local,
             true
         );
@@ -21517,8 +21699,8 @@ mod kagemusha_bridge_tests {
         );
         AssetId::new(definition, account)
     }
-    fn redemption_change_prepare_request_v4()
-    -> KagemushaRecursiveSpendRedemptionChangePrepareRequestV4 {
+    fn redemption_change_prepare_request_v5()
+    -> KagemushaRecursiveSpendRedemptionChangePrepareRequestV5 {
         use iroha_data_model::offline::{
             KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
@@ -21624,13 +21806,14 @@ mod kagemusha_bridge_tests {
         bundle
             .validate_public_binding()
             .expect("fixture must be a fully bound V4 bundle");
-        let request = KagemushaRecursiveSpendRedemptionChangePrepareRequestV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_VERSION_V4,
+        let request = KagemushaRecursiveSpendRedemptionChangePrepareRequestV5 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_REQUEST_VERSION_V5,
             bundle,
             input_opening,
             change_amount: KagemushaScaledAmountV2::new(375, 2).expect("change amount"),
-            operation_id: [0x9c; 32],
-            entropy: [0x9d; 32],
+            recipient: sample_account(0x9c),
+            nonce: [0x9d; 32],
+            entropy: [0x9e; 32],
         };
         request.validate().expect("valid preparation request");
         request
@@ -22150,8 +22333,8 @@ mod kagemusha_bridge_tests {
             "../../../kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
         );
         let kotlin_builder = kotlin
-            .split_once("fun buildRedeemRequestV4(")
-            .expect("Kotlin V4 redeem builder")
+            .split_once("fun buildRedeemRequestV5(")
+            .expect("Kotlin V5 redeem builder")
             .1
             .split_once("fun prepareAcknowledgement(")
             .expect("end of Kotlin V4 redeem builder")
@@ -22159,7 +22342,7 @@ mod kagemusha_bridge_tests {
         assert_ordered(
             kotlin_builder,
             &[
-                "nativeBuildRedeemRequestV4(",
+                "nativeBuildRedeemRequestV5(",
                 "bundleArchive",
                 "topUpProvenanceArchive",
                 "openingArchive",
@@ -22171,8 +22354,8 @@ mod kagemusha_bridge_tests {
             "Kotlin must erase the transient provenance archive"
         );
         let kotlin_declaration = kotlin
-            .split_once("external fun nativeBuildRedeemRequestV4(")
-            .expect("Kotlin V4 redeem native declaration")
+            .split_once("external fun nativeBuildRedeemRequestV5(")
+            .expect("Kotlin V5 redeem native declaration")
             .1
             .split_once("): ByteArray")
             .expect("end of Kotlin V4 redeem native declaration")
@@ -22186,8 +22369,8 @@ mod kagemusha_bridge_tests {
             "../../../java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
         );
         let java_builder = java
-            .split_once("RedeemRequestV4 buildRedeemRequestV4(")
-            .expect("Java V4 redeem builder")
+            .split_once("RedeemRequestV5 buildRedeemRequestV5(")
+            .expect("Java V5 redeem builder")
             .1
             .split_once("AcknowledgementPreparation prepareAcknowledgement(")
             .expect("end of Java V4 redeem builder")
@@ -22195,7 +22378,7 @@ mod kagemusha_bridge_tests {
         assert_ordered(
             java_builder,
             &[
-                "nativeBuildRedeemRequestV4(",
+                "nativeBuildRedeemRequestV5(",
                 "bundleArchive",
                 "topUpProvenanceArchive",
                 "openingArchive",
@@ -22207,8 +22390,8 @@ mod kagemusha_bridge_tests {
             "Java must erase the transient provenance archive"
         );
         let java_declaration = java
-            .split_once("native byte[] nativeBuildRedeemRequestV4(")
-            .expect("Java V4 redeem native declaration")
+            .split_once("native byte[] nativeBuildRedeemRequestV5(")
+            .expect("Java V5 redeem native declaration")
             .1
             .split_once(");")
             .expect("end of Java V4 redeem native declaration")
@@ -22479,13 +22662,13 @@ mod kagemusha_bridge_tests {
         }
     }
     fn assert_redemption_change_prepare_rejected(
-        request: &KagemushaRecursiveSpendRedemptionChangePrepareRequestV4,
+        request: &KagemushaRecursiveSpendRedemptionChangePrepareRequestV5,
     ) {
         let archive = Zeroizing::new(norito::to_bytes(request).expect("encode invalid request"));
         let mut out_ptr = std::ptr::NonNull::<c_uchar>::dangling().as_ptr();
         let mut out_len = 77;
         let status = unsafe {
-            connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4(
+            connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5(
                 archive.as_ptr(),
                 archive.len() as c_ulong,
                 &mut out_ptr,
@@ -22498,12 +22681,13 @@ mod kagemusha_bridge_tests {
     }
     #[test]
     fn redemption_change_prepare_c_ffi_roundtrips_canonical_full_bundle_request() {
-        let request = redemption_change_prepare_request_v4();
+        let request = redemption_change_prepare_request_v5();
+        let operation_id = request.operation_id().expect("derive fixture operation id");
         let expected = prepare_kagemusha_redemption_change_opening_v4(
             &request.bundle,
             &request.input_opening,
             request.change_amount,
-            &request.operation_id,
+            &operation_id,
             &request.entropy,
         )
         .expect("prepare expected result");
@@ -22511,7 +22695,7 @@ mod kagemusha_bridge_tests {
         let mut out_ptr = std::ptr::null_mut();
         let mut out_len = 0;
         let status = unsafe {
-            connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4(
+            connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5(
                 request_archive.as_ptr(),
                 request_archive.len() as c_ulong,
                 &mut out_ptr,
@@ -22543,7 +22727,7 @@ mod kagemusha_bridge_tests {
     }
     #[test]
     fn redemption_change_prepare_c_ffi_rejects_malformed_full_binding_and_amounts() {
-        let request = redemption_change_prepare_request_v4();
+        let request = redemption_change_prepare_request_v5();
         let mut malformed_bundle = request.clone();
         malformed_bundle
             .bundle
@@ -22551,14 +22735,17 @@ mod kagemusha_bridge_tests {
             .public_statement_digest[0] ^= 1;
         assert!(malformed_bundle.bundle.validate_public_binding().is_err());
         assert_redemption_change_prepare_rejected(&malformed_bundle);
-        let mut zero_operation = request.clone();
-        zero_operation.operation_id = [0; 32];
-        assert_redemption_change_prepare_rejected(&zero_operation);
+        let mut stale_version = request.clone();
+        stale_version.version = 4;
+        assert_redemption_change_prepare_rejected(&stale_version);
+        let mut zero_nonce = request.clone();
+        zero_nonce.nonce = [0; 32];
+        assert_redemption_change_prepare_rejected(&zero_nonce);
         let mut zero_entropy = request.clone();
         zero_entropy.entropy = [0; 32];
         assert_redemption_change_prepare_rejected(&zero_entropy);
         let mut equal_identifiers = request.clone();
-        equal_identifiers.entropy = equal_identifiers.operation_id;
+        equal_identifiers.entropy = equal_identifiers.nonce;
         assert_redemption_change_prepare_rejected(&equal_identifiers);
         let mut wrong_scale = request.clone();
         wrong_scale.change_amount = KagemushaScaledAmountV2::new(375, 3).expect("scaled amount");
@@ -22572,13 +22759,13 @@ mod kagemusha_bridge_tests {
     }
     #[test]
     fn redemption_change_prepare_c_ffi_rejects_noncanonical_input_and_clears_outputs() {
-        let request = redemption_change_prepare_request_v4();
+        let request = redemption_change_prepare_request_v5();
         let mut archive = Zeroizing::new(norito::to_bytes(&request).expect("encode request"));
         archive.push(0);
         let mut out_ptr = std::ptr::NonNull::<c_uchar>::dangling().as_ptr();
         let mut out_len = 91;
         let status = unsafe {
-            connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4(
+            connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5(
                 archive.as_ptr(),
                 archive.len() as c_ulong,
                 &mut out_ptr,
@@ -22590,7 +22777,7 @@ mod kagemusha_bridge_tests {
         assert_eq!(out_len, 0);
         let mut missing_len_output = std::ptr::NonNull::<c_uchar>::dangling().as_ptr();
         let status = unsafe {
-            connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4(
+            connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5(
                 archive.as_ptr(),
                 archive.len() as c_ulong,
                 &mut missing_len_output,
@@ -22602,7 +22789,8 @@ mod kagemusha_bridge_tests {
     }
     #[test]
     fn peer_split_change_is_value_conserving_input_bound_and_domain_separated() {
-        let base = redemption_change_prepare_request_v4();
+        let base = redemption_change_prepare_request_v5();
+        let operation_id = base.operation_id().expect("derive fixture operation id");
         let recipient = peer_split_recipient_request_v4(
             &base.bundle,
             KagemushaScaledAmountV2::new(625, 2).expect("payment"),
@@ -22613,7 +22801,7 @@ mod kagemusha_bridge_tests {
             std::slice::from_ref(&base.input_opening),
             &recipient,
             base.change_amount,
-            &base.operation_id,
+            &operation_id,
             &base.entropy,
         )
         .expect("one-input peer-split change");
@@ -22629,7 +22817,7 @@ mod kagemusha_bridge_tests {
             &base.bundle,
             &base.input_opening,
             base.change_amount,
-            &base.operation_id,
+            &operation_id,
             &base.entropy,
         )
         .expect("redemption-domain comparison");
@@ -22640,7 +22828,7 @@ mod kagemusha_bridge_tests {
             std::slice::from_ref(&base.input_opening),
             &recipient,
             base.change_amount,
-            &base.operation_id,
+            &operation_id,
             &[0xbe; 32],
         )
         .expect("entropy-bound peer change");
@@ -22656,7 +22844,7 @@ mod kagemusha_bridge_tests {
                 std::slice::from_ref(&wrong_opening),
                 &recipient,
                 base.change_amount,
-                &base.operation_id,
+                &operation_id,
                 &base.entropy,
             )
             .is_err()
@@ -22672,7 +22860,7 @@ mod kagemusha_bridge_tests {
                 std::slice::from_ref(&base.input_opening),
                 &wrong_value,
                 base.change_amount,
-                &base.operation_id,
+                &operation_id,
                 &base.entropy,
             )
             .is_err()
@@ -22680,7 +22868,8 @@ mod kagemusha_bridge_tests {
     }
     #[test]
     fn peer_split_change_accepts_two_distinct_ordered_inputs_and_rejects_duplicates() {
-        let base = redemption_change_prepare_request_v4();
+        let base = redemption_change_prepare_request_v5();
+        let operation_id = base.operation_id().expect("derive fixture operation id");
         let (second_bundle, second_opening) =
             second_peer_split_input_v4(&base.bundle, base.input_opening.spend_key);
         let bundles = vec![base.bundle.clone(), second_bundle];
@@ -22695,7 +22884,7 @@ mod kagemusha_bridge_tests {
             &openings,
             &recipient,
             base.change_amount,
-            &base.operation_id,
+            &operation_id,
             &base.entropy,
         )
         .expect("two distinct ordered inputs");
@@ -22709,7 +22898,7 @@ mod kagemusha_bridge_tests {
                 &[base.input_opening.clone(), mismatched_opening],
                 &recipient,
                 base.change_amount,
-                &base.operation_id,
+                &operation_id,
                 &base.entropy,
             )
             .is_err(),
@@ -22723,7 +22912,7 @@ mod kagemusha_bridge_tests {
                 &duplicate_openings,
                 &recipient,
                 base.change_amount,
-                &base.operation_id,
+                &operation_id,
                 &base.entropy,
             )
             .is_err()
@@ -22731,7 +22920,7 @@ mod kagemusha_bridge_tests {
     }
     #[test]
     fn peer_split_change_c_ffi_returns_secret_owned_canonical_result() {
-        let base = redemption_change_prepare_request_v4();
+        let base = redemption_change_prepare_request_v5();
         let recipient = peer_split_recipient_request_v4(
             &base.bundle,
             KagemushaScaledAmountV2::new(625, 2).expect("payment"),
@@ -22743,7 +22932,7 @@ mod kagemusha_bridge_tests {
             input_openings: vec![base.input_opening.clone()],
             recipient_request: recipient,
             change_amount: base.change_amount,
-            operation_id: base.operation_id,
+            operation_id: base.operation_id().expect("derive fixture operation id"),
             entropy: base.entropy,
         };
         let request_archive = Zeroizing::new(norito::to_bytes(&request).expect("encode request"));
@@ -22837,21 +23026,21 @@ mod kagemusha_bridge_tests {
     #[test]
     fn redemption_change_preparation_jni_covers_both_sdk_namespaces() {
         let source = bridge_source();
-        assert!(source.contains("nativePrepareRedemptionChangeV4"));
+        assert!(source.contains("nativePrepareRedemptionChangeV5"));
         let native = source
-            .rsplit_once("fn java_native_kagemusha_prepare_redemption_change_v4(")
+            .rsplit_once("fn java_native_kagemusha_prepare_redemption_change_v5(")
             .expect("redemption-change JNI helper")
             .1
-            .split_once("fn java_native_kagemusha_create_recipient_request_v2(")
+            .split_once("fn java_native_kagemusha_prepare_peer_split_change_v4(")
             .expect("end of redemption-change JNI helper")
             .0;
         assert!(
             native.contains("java_kagemusha_decode_sensitive_archive::<KagemushaNoteOpeningV2>")
         );
-        assert!(
-            native
-                .contains("java_kagemusha_fixed32_sensitive(env, &operation_id, \"operationId\")")
-        );
+        assert!(native.contains("parse_account_id_for_chain("));
+        assert!(native.contains("java_kagemusha_fixed32_sensitive(env, &nonce, \"nonce\")"));
+        assert!(native.contains("derive_kagemusha_operation_id_v4("));
+        assert!(!native.contains("&operation_id, \"operationId\""));
         assert!(native.contains("java_kagemusha_fixed32_sensitive(env, &entropy, \"entropy\")"));
         let kotlin = include_str!(
             "../../../kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
@@ -22860,8 +23049,8 @@ mod kagemusha_bridge_tests {
             "../../../java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
         );
         for sdk in [kotlin, java] {
-            assert!(sdk.contains("prepareRedemptionChangeV4("));
-            assert!(sdk.contains("nativePrepareRedemptionChangeV4("));
+            assert!(sdk.contains("prepareRedemptionChangeV5("));
+            assert!(sdk.contains("nativePrepareRedemptionChangeV5("));
         }
     }
     #[test]
@@ -28677,7 +28866,7 @@ mod kagemusha_candidate_lab_jni {
         ) -> jni::sys::jbyteArray
             => platform_jni::java_native_kagemusha_build_verify_request_v4,
                 extra JavaKagemushaArtifactRegistryV4::CandidateEvidenceLab;
-        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildRedeemRequestV4(
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildRedeemRequestV5(
             bundle: jni::objects::JByteArray<'_>,
             topup_provenance: jni::objects::JByteArray<'_>,
             opening: jni::objects::JByteArray<'_>,
@@ -28689,10 +28878,10 @@ mod kagemusha_candidate_lab_jni {
             change_opening: jni::objects::JByteArray<'_>,
             change_output_membership: jni::objects::JByteArray<'_>,
             verifier_commitment: jni::objects::JByteArray<'_>,
-            operation_id: jni::objects::JByteArray<'_>,
+            nonce: jni::objects::JByteArray<'_>,
             block_height: jni::sys::jlong,
         ) -> jni::sys::jbyteArray
-            => platform_jni::java_native_kagemusha_build_redeem_request_v4;
+            => platform_jni::java_native_kagemusha_build_redeem_request_v5;
         Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeAppendV4(
             request: jni::objects::JByteArray<'_>,
             recipient_request: jni::objects::JByteArray<'_>,
@@ -28759,19 +28948,37 @@ mod tests {
         assert_eq!(native_signer_jni_contract_revision(), 5);
     }
     #[test]
+    fn kagemusha_native_contract_revision_is_the_operation_identity_hard_cut() {
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_native_contract_revision() },
+            1
+        );
+    }
+    fn offline_operation_identity(
+        issued_at_ms: u64,
+    ) -> iroha_torii_shared::offline_api::OfflineOperationIdentity {
+        use iroha_torii_shared::offline_api::{OfflineOperationIdentity, OfflineOperationKind};
+        OfflineOperationIdentity {
+            operation_id: "11".repeat(32),
+            request_authority_digest: "33".repeat(32),
+            canonical_request_digest: "55".repeat(32),
+            kind: OfflineOperationKind::TopUp,
+            issued_at_ms,
+            expires_at_ms: 300_042,
+        }
+    }
+    #[test]
     fn offline_operation_status_ffi_rejects_invalid_shared_status() {
-        use iroha_torii_shared::offline_api::{OfflineOperationKind, OfflineOperationStatus};
+        use iroha_torii_shared::offline_api::OfflineOperationStatus;
 
         let valid = OfflineOperationStatus::Pending {
-            operation_id: "11".repeat(32),
-            kind: OfflineOperationKind::TopUp,
+            identity: offline_operation_identity(42),
             transaction_hash: format!("{}23", "22".repeat(31)),
-            submitted_at_ms: 42,
         };
         let valid_archive = norito::encode_canonical(&valid).expect("encode valid status");
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_offline_operation_status_validate_v1(
+                connect_norito_kagemusha_offline_operation_status_validate_v2(
                     valid_archive.as_ptr(),
                     valid_archive.len() as c_ulong,
                 )
@@ -28780,13 +28987,13 @@ mod tests {
         );
 
         let invalid = OfflineOperationStatus::Pending {
-            submitted_at_ms: 0,
-            ..valid
+            identity: offline_operation_identity(0),
+            transaction_hash: format!("{}23", "22".repeat(31)),
         };
         let invalid_archive = norito::encode_canonical(&invalid).expect("encode invalid status");
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_offline_operation_status_validate_v1(
+                connect_norito_kagemusha_offline_operation_status_validate_v2(
                     invalid_archive.as_ptr(),
                     invalid_archive.len() as c_ulong,
                 )
@@ -28796,18 +29003,16 @@ mod tests {
     }
     #[test]
     fn offline_operation_status_json_ffi_is_bounded_strict_and_structural() {
-        use iroha_torii_shared::offline_api::{OfflineOperationKind, OfflineOperationStatus};
+        use iroha_torii_shared::offline_api::OfflineOperationStatus;
 
         let valid = OfflineOperationStatus::Pending {
-            operation_id: "11".repeat(32),
-            kind: OfflineOperationKind::TopUp,
+            identity: offline_operation_identity(42),
             transaction_hash: format!("{}23", "22".repeat(31)),
-            submitted_at_ms: 42,
         };
         let valid_json = norito::json::to_vec(&valid).expect("encode valid status JSON");
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                connect_norito_kagemusha_offline_operation_status_json_validate_v2(
                     valid_json.as_ptr(),
                     valid_json.len() as c_ulong,
                 )
@@ -28816,13 +29021,13 @@ mod tests {
         );
 
         let invalid = OfflineOperationStatus::Pending {
-            submitted_at_ms: 0,
-            ..valid
+            identity: offline_operation_identity(0),
+            transaction_hash: format!("{}23", "22".repeat(31)),
         };
         let invalid_json = norito::json::to_vec(&invalid).expect("encode invalid status JSON");
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                connect_norito_kagemusha_offline_operation_status_json_validate_v2(
                     invalid_json.as_ptr(),
                     invalid_json.len() as c_ulong,
                 )
@@ -28836,7 +29041,7 @@ mod tests {
         unknown_field_json.push_str(r#","unexpected":true}"#);
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                connect_norito_kagemusha_offline_operation_status_json_validate_v2(
                     unknown_field_json.as_ptr(),
                     unknown_field_json.len() as c_ulong,
                 )
@@ -28852,7 +29057,7 @@ mod tests {
         assert_ne!(duplicate_field_json, valid_json_text);
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                connect_norito_kagemusha_offline_operation_status_json_validate_v2(
                     duplicate_field_json.as_ptr(),
                     duplicate_field_json.len() as c_ulong,
                 )
@@ -28862,12 +29067,12 @@ mod tests {
 
         let byte = 0_u8;
         assert_eq!(
-            unsafe { connect_norito_kagemusha_offline_operation_status_json_validate_v1(&byte, 0) },
+            unsafe { connect_norito_kagemusha_offline_operation_status_json_validate_v2(&byte, 0) },
             ERR_KAGEMUSHA_PROVE
         );
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                connect_norito_kagemusha_offline_operation_status_json_validate_v2(
                     &byte,
                     (iroha_torii_shared::offline_api::OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES + 1)
                         as c_ulong,
@@ -28877,7 +29082,7 @@ mod tests {
         );
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+                connect_norito_kagemusha_offline_operation_status_json_validate_v2(
                     std::ptr::null(),
                     1,
                 )
@@ -28951,7 +29156,7 @@ mod tests {
             }
         }
         assert!(source.contains("nativeEncodeRegisterZkAssetSignedTransaction"));
-        assert!(source.contains("java_native_kagemusha_build_redeem_request_v4"));
+        assert!(source.contains("java_native_kagemusha_build_redeem_request_v5"));
     }
     #[test]
     fn disabled_local_fetch_integrity_maps_to_options_error() {
@@ -29115,6 +29320,31 @@ mod tests {
                 "authorization_create_v2",
             ]
             .concat(),
+            [
+                "connect_norito_kagemusha_request_authorization_signing_bytes_",
+                "v2",
+            ]
+            .concat(),
+            [
+                "connect_norito_kagemusha_request_authorization_finalize_hardware_",
+                "v2",
+            ]
+            .concat(),
+            [
+                "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_",
+                "v2",
+            ]
+            .concat(),
+            [
+                "connect_norito_kagemusha_offline_operation_status_validate_",
+                "v1",
+            ]
+            .concat(),
+            [
+                "connect_norito_kagemusha_offline_operation_status_json_validate_",
+                "v1",
+            ]
+            .concat(),
         ];
         for (label, contents) in [("Rust source", source), ("C header", header)] {
             for symbol in &obsolete_exports {
@@ -29144,9 +29374,9 @@ mod tests {
             "java_native_encode_register_zk_asset_signed_transaction",
             "java_native_kagemusha_prepare_recipient_request_v2",
             "java_native_kagemusha_create_recipient_lineage_query_v2",
-            "java_native_kagemusha_build_redeem_request_v4",
-            "java_native_kagemusha_prepare_authorization_v2",
-            "java_native_kagemusha_prepare_top_up_v4",
+            "java_native_kagemusha_build_redeem_request_v5",
+            "java_native_kagemusha_prepare_authorization_v3",
+            "java_native_kagemusha_prepare_top_up_v5",
         ] {
             let marker = format!("\npub(super) fn {symbol}(");
             let helper = source

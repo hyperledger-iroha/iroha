@@ -27,7 +27,13 @@ use iroha_data_model::{
         AccountValue,
     },
     asset::{AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
-    block::{BlockHeader, SignedBlock},
+    block::{
+        BlockHeader, SignedBlock,
+        consensus::{
+            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
+        },
+        consensus_v2 as wire_v2,
+    },
     domain::DomainId,
     isi::{Log, space_directory::PublishSpaceDirectoryManifest},
     metadata::Metadata,
@@ -35,6 +41,7 @@ use iroha_data_model::{
         AssetPermissionManifest, DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig,
         ManifestVersion, UniversalAccountId,
     },
+    parameter::{Parameter, system::SumeragiNposParameters},
     peer::PeerId,
     smart_contract::{ContractAddress, ContractAlias},
     transaction::TransactionBuilder,
@@ -78,6 +85,99 @@ fn checked_random_snapshot_keypair() -> KeyPair {
 fn checked_random_snapshot_bls_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("snapshot BLS fixture key generation should succeed")
+}
+fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence {
+    let mut keys = (1_u8..=4)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic snapshot evidence key")
+        })
+        .collect::<Vec<_>>();
+    keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let roster = keys
+        .iter()
+        .map(|key| wire_v2::ValidatorPower {
+            validator: PeerId::new(key.public_key().clone()),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    let context = wire_v2::HeightContext {
+        network_id,
+        protocol_version: wire_v2::PROTOCOL_VERSION,
+        height: 1,
+        epoch: 0,
+        epoch_end_height: u64::MAX,
+        next_epoch_snapshot: None,
+        snapshot_bootstrap: None,
+        mode: wire_v2::ConsensusMode::Permissioned,
+        parent_commit_qc: None,
+        quorum: wire_v2::DualQuorum::from_roster(&roster)
+            .expect("equal-power snapshot evidence quorum"),
+        roster,
+        nexus_amx_context_hash: Hash::new(b"snapshot evidence context"),
+        execution_policy_hash: Hash::new(b"snapshot evidence execution policy"),
+        da_layout: wire_v2::DataAvailabilityLayout {
+            encoding: wire_v2::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 32,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 1024,
+            max_chunk_count: 64,
+        },
+        leader_seed: [0x51; 32],
+    };
+    context
+        .validate()
+        .expect("snapshot evidence height context must be valid");
+    let proofs_of_possession = keys
+        .iter()
+        .map(|key| {
+            bls_normal_pop_prove(key.private_key()).expect("snapshot evidence proof of possession")
+        })
+        .collect::<Vec<_>>();
+    let round = wire_v2::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let execution_commitment = wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"snapshot evidence parent state"),
+        Hash::new(b"snapshot evidence post state"),
+        Hash::new(b"snapshot evidence ordinary writes"),
+        1,
+        Hash::new(b"snapshot evidence executed block wire"),
+    );
+    let signer: wire_v2::ValidatorIndex = 1;
+    let signer_index = usize::try_from(signer).expect("snapshot evidence signer index fits usize");
+    let signed_vote = |seed: u8| {
+        let mut vote = wire_v2::Vote {
+            round,
+            proposal_round: round,
+            phase: wire_v2::GlobalPhase::Prepare,
+            subject: wire_v2::BlockSubject {
+                parent_block_hash: None,
+                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32])),
+                payload_hash: Hash::prehashed([seed.wrapping_add(1); 32]),
+            },
+            execution_commitment,
+            signer,
+            signature: Vec::new(),
+        };
+        vote.signature =
+            Signature::try_new(keys[signer_index].private_key(), &vote.signature_preimage())
+                .expect("snapshot evidence phase-vote signature")
+                .payload()
+                .to_vec();
+        vote
+    };
+    crate::sumeragi::evidence::canonical_v2_evidence(&SumeragiV2EquivocationEvidence {
+        context,
+        proofs_of_possession,
+        conflict: wire_v2::SumeragiV2Equivocation::PhaseVote {
+            first: signed_vote(0x61),
+            second: signed_vote(0x62),
+        },
+    })
 }
 fn current_generation_name(store_dir: &Path) -> String {
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);

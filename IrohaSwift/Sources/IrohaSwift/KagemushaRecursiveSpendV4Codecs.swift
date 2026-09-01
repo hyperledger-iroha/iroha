@@ -153,10 +153,10 @@ enum KagemushaRecursiveSpendCodecsV4 {
     }
 
     static func encodeRedeemLocalRequest(
-        _ request: KagemushaRecursiveSpendRedeemLocalRequestV4
+        _ request: KagemushaRecursiveSpendRedeemLocalRequestV5
     ) throws -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeField(uint16(KagemushaRecursiveSpend.localWitnessVersionV4))
+        writer.writeField(uint16(KagemushaRecursiveSpend.redeemLocalWitnessVersionV5))
         writer.writeField(try nestedPayload(
             request.input.bundle.noritoArchive,
             schema: KagemushaRecursiveSpend.bundleWireNameV4,
@@ -175,7 +175,10 @@ enum KagemushaRecursiveSpendCodecsV4 {
             request.input.membershipWitness,
             field: "redeemLocalRequestV4.inputMembershipWitness"
         ))
-        writer.writeField(try accountID(request.recipient))
+        writer.writeField(try accountID(
+            request.recipient,
+            field: "redeemLocalRequestV5.recipient"
+        ))
         writer.writeField(try scaledAmount(request.publicAmount))
         writer.writeField(option(try request.changeOpening.map {
             try noteOpening($0, field: "redeemLocalRequestV4.changeOpening")
@@ -186,18 +189,18 @@ enum KagemushaRecursiveSpendCodecsV4 {
         ))
         writer.writeField(request.unshieldVerifier.commitment)
         writer.writeField(uint64(request.blockHeight))
-        writer.writeField(request.operationID)
+        writer.writeField(request.nonce)
         writer.writeField(option(try request.changeOutputMembershipPaths.map {
             try outputMembership($0)
         }))
         return frame(
-            KagemushaRecursiveSpend.redeemLocalRequestWireNameV4,
+            KagemushaRecursiveSpend.redeemLocalRequestWireNameV5,
             payload: writer.data
         )
     }
 
     static func encodeRedemptionChangePrepareRequest(
-        _ request: KagemushaRecursiveSpendRedemptionChangePrepareRequestV4
+        _ request: KagemushaRecursiveSpendRedemptionChangePrepareRequestV5
     ) throws -> Data {
         var writer = CompactNoritoWriter()
         defer { writer.wipe() }
@@ -205,19 +208,23 @@ enum KagemushaRecursiveSpendCodecsV4 {
         writer.writeField(try nestedPayload(
             request.bundle.noritoArchive,
             schema: KagemushaRecursiveSpend.bundleWireNameV4,
-            field: "redemptionChangePrepareRequestV4.bundle"
+            field: "redemptionChangePrepareRequestV5.bundle"
         ))
         var openingPayload = try noteOpening(
             request.inputOpening,
-            field: "redemptionChangePrepareRequestV4.inputOpening"
+            field: "redemptionChangePrepareRequestV5.inputOpening"
         )
         defer { openingPayload.resetBytes(in: 0..<openingPayload.count) }
         writer.writeField(openingPayload)
         writer.writeField(try scaledAmount(request.changeAmount))
-        writer.writeField(request.operationID)
+        writer.writeField(try accountID(
+            request.recipient,
+            field: "redemptionChangePrepareRequestV5.recipient"
+        ))
+        writer.writeField(request.nonce)
         writer.writeField(request.entropy)
         return frame(
-            KagemushaRecursiveSpend.redemptionChangePrepareRequestWireNameV4,
+            KagemushaRecursiveSpend.redemptionChangePrepareRequestWireNameV5,
             payload: writer.data
         )
     }
@@ -350,14 +357,14 @@ enum KagemushaRecursiveSpendCodecsV4 {
         return writer.data
     }
 
-    private static func accountID(_ value: String) throws -> Data {
+    private static func accountID(_ value: String, field: String) throws -> Data {
         do {
             return try KagemushaRecursiveSpend.canonicalAccountAddress(
                 value,
-                field: "redeemLocalRequestV4.recipient"
+                field: field
             ).address.compactNoritoAccountControllerPayload()
         } catch {
-            throw KagemushaRecursiveSpendError.invalidField("redeemLocalRequestV4.recipient")
+            throw KagemushaRecursiveSpendError.invalidField(field)
         }
     }
 

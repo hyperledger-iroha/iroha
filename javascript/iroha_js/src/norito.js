@@ -132,9 +132,11 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "RecordSccpMessage",
 ];
 const CANCEL_ASSET_LOCK_WIRE_ID =
+  "iroha.instruction.v1::escrow::CancelAssetLock";
+const CANCEL_ASSET_LOCK_INNER_TYPE_NAME =
   "iroha_data_model::isi::escrow::CancelAssetLock";
 const CANCEL_ASSET_LOCK_V1_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
-  CANCEL_ASSET_LOCK_WIRE_ID,
+  CANCEL_ASSET_LOCK_INNER_TYPE_NAME,
 );
 // A transparent 32-byte EscrowId plus one positive signed-512-bit Quantity
 // yields an unpadded canonical archive in this exact range. Enforce it before
@@ -150,13 +152,13 @@ const SET_ASSET_TRANSFER_CONTROL_WIRE_ID =
   "iroha.asset.transfer.control.set";
 const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 const RECORD_SCCP_MESSAGE_WIRE_ID =
-  "iroha_data_model::isi::bridge::RecordSccpMessage";
+  "iroha.instruction.v1::bridge::RecordSccpMessage";
 const ISSUE_REPLICATION_ORDER_WIRE_ID =
-  "iroha_data_model::isi::sorafs::IssueReplicationOrder";
+  "iroha.instruction.v1::sorafs::IssueReplicationOrder";
 const COMPLETE_REPLICATION_ORDER_WIRE_ID =
-  "iroha_data_model::isi::sorafs::CompleteReplicationOrder";
+  "iroha.instruction.v1::sorafs::CompleteReplicationOrder";
 const EXPIRE_REPLICATION_ORDER_WIRE_ID =
-  "iroha_data_model::isi::sorafs::ExpireReplicationOrder";
+  "iroha.instruction.v1::sorafs::ExpireReplicationOrder";
 const REPLICATION_ORDER_V1_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "sorafs_manifest::capacity::ReplicationOrderV1",
 );
@@ -308,18 +310,19 @@ const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha.instruction.v1::kaigi::SetKaigiR
 const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha.instruction.v1::kaigi::RegisterKaigiRelay";
 const UNREGISTER_KAIGI_RELAY_WIRE_ID = "iroha.instruction.v1::kaigi::UnregisterKaigiRelay";
 const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth";
-const PROPOSE_DEPLOY_CONTRACT_WIRE_ID = "iroha_data_model::isi::governance::ProposeDeployContract";
-const CAST_ZK_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastZkBallot";
-const CAST_PLAIN_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastPlainBallot";
-const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = "iroha_data_model::isi::social::ClaimTwitterFollowReward";
-const SEND_TO_TWITTER_WIRE_ID = "iroha_data_model::isi::social::SendToTwitter";
-const CANCEL_TWITTER_ESCROW_WIRE_ID = "iroha_data_model::isi::social::CancelTwitterEscrow";
-const REGISTER_ZK_ASSET_WIRE_ID = "iroha_data_model::isi::zk::RegisterZkAsset";
-const CREATE_ELECTION_WIRE_ID = "iroha_data_model::isi::zk::CreateElection";
-const SUBMIT_BALLOT_WIRE_ID = "iroha_data_model::isi::zk::SubmitBallot";
-const FINALIZE_ELECTION_WIRE_ID = "iroha_data_model::isi::zk::FinalizeElection";
-const REGISTER_VERIFYING_KEY_WIRE_ID = "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey";
-const UPDATE_VERIFYING_KEY_WIRE_ID = "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey";
+const PROPOSE_DEPLOY_CONTRACT_WIRE_ID =
+  "iroha.instruction.v1::governance::ProposeDeployContract";
+const CAST_ZK_BALLOT_WIRE_ID = "iroha.instruction.v1::governance::CastZkBallot";
+const CAST_PLAIN_BALLOT_WIRE_ID = "iroha.instruction.v1::governance::CastPlainBallot";
+const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = "iroha.instruction.v1::social::ClaimTwitterFollowReward";
+const SEND_TO_TWITTER_WIRE_ID = "iroha.instruction.v1::social::SendToTwitter";
+const CANCEL_TWITTER_ESCROW_WIRE_ID = "iroha.instruction.v1::social::CancelTwitterEscrow";
+const REGISTER_ZK_ASSET_WIRE_ID = "iroha.instruction.v1::zk::RegisterZkAsset";
+const CREATE_ELECTION_WIRE_ID = "iroha.instruction.v1::zk::CreateElection";
+const SUBMIT_BALLOT_WIRE_ID = "iroha.instruction.v1::zk::SubmitBallot";
+const FINALIZE_ELECTION_WIRE_ID = "iroha.instruction.v1::zk::FinalizeElection";
+const REGISTER_VERIFYING_KEY_WIRE_ID = "iroha.instruction.v1::verifying_keys::RegisterVerifyingKey";
+const UPDATE_VERIFYING_KEY_WIRE_ID = "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey";
 const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   "iroha.mint": "iroha_data_model::isi::mint_burn::MintBox",
   "iroha.burn": "iroha_data_model::isi::mint_burn::BurnBox",
@@ -328,17 +331,21 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   "iroha.custom": "iroha_data_model::isi::transparent::CustomInstruction",
   "iroha.execute_trigger": "iroha_data_model::isi::transparent::ExecuteTrigger",
   "iroha.rwa": "iroha_data_model::isi::rwa::RwaInstructionBox",
-  [CANCEL_ASSET_LOCK_WIRE_ID]: CANCEL_ASSET_LOCK_WIRE_ID,
+  [CANCEL_ASSET_LOCK_WIRE_ID]: CANCEL_ASSET_LOCK_INNER_TYPE_NAME,
   [SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID]:
     "iroha_data_model::isi::asset_transfer_control::SetAssetTransferAvailability",
   [SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID]:
     "iroha_data_model::isi::asset_transfer_control::SetAssetTransferBlacklist",
   [SET_ASSET_TRANSFER_CONTROL_WIRE_ID]:
     "iroha_data_model::isi::asset_transfer_control::SetAssetTransferControl",
-  [RECORD_SCCP_MESSAGE_WIRE_ID]: RECORD_SCCP_MESSAGE_WIRE_ID,
-  [ISSUE_REPLICATION_ORDER_WIRE_ID]: ISSUE_REPLICATION_ORDER_WIRE_ID,
-  [COMPLETE_REPLICATION_ORDER_WIRE_ID]: COMPLETE_REPLICATION_ORDER_WIRE_ID,
-  [EXPIRE_REPLICATION_ORDER_WIRE_ID]: EXPIRE_REPLICATION_ORDER_WIRE_ID,
+  [RECORD_SCCP_MESSAGE_WIRE_ID]:
+    "iroha_data_model::isi::bridge::RecordSccpMessage",
+  [ISSUE_REPLICATION_ORDER_WIRE_ID]:
+    "iroha_data_model::isi::sorafs::IssueReplicationOrder",
+  [COMPLETE_REPLICATION_ORDER_WIRE_ID]:
+    "iroha_data_model::isi::sorafs::CompleteReplicationOrder",
+  [EXPIRE_REPLICATION_ORDER_WIRE_ID]:
+    "iroha_data_model::isi::sorafs::ExpireReplicationOrder",
   [CREATE_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::CreateKaigi",
   [JOIN_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::JoinKaigi",
   [LEAVE_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::LeaveKaigi",
@@ -353,38 +360,62 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::kaigi::UnregisterKaigiRelay",
   [REPORT_KAIGI_RELAY_HEALTH_WIRE_ID]:
     "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth",
-  [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]: PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
-  [CAST_ZK_BALLOT_WIRE_ID]: CAST_ZK_BALLOT_WIRE_ID,
-  [CAST_PLAIN_BALLOT_WIRE_ID]: CAST_PLAIN_BALLOT_WIRE_ID,
-  [CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID]: CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID,
-  [SEND_TO_TWITTER_WIRE_ID]: SEND_TO_TWITTER_WIRE_ID,
-  [CANCEL_TWITTER_ESCROW_WIRE_ID]: CANCEL_TWITTER_ESCROW_WIRE_ID,
-  [REGISTER_SMART_CONTRACT_CODE_WIRE_ID]: REGISTER_SMART_CONTRACT_CODE_WIRE_ID,
-  [REGISTER_SMART_CONTRACT_BYTES_WIRE_ID]: REGISTER_SMART_CONTRACT_BYTES_WIRE_ID,
-  [DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID]: DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
-  [ACTIVATE_CONTRACT_INSTANCE_WIRE_ID]: ACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
+  [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]:
+    "iroha_data_model::isi::governance::ProposeDeployContract",
+  [CAST_ZK_BALLOT_WIRE_ID]:
+    "iroha_data_model::isi::governance::CastZkBallot",
+  [CAST_PLAIN_BALLOT_WIRE_ID]:
+    "iroha_data_model::isi::governance::CastPlainBallot",
+  [CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID]:
+    "iroha_data_model::isi::social::ClaimTwitterFollowReward",
+  [SEND_TO_TWITTER_WIRE_ID]: "iroha_data_model::isi::social::SendToTwitter",
+  [CANCEL_TWITTER_ESCROW_WIRE_ID]:
+    "iroha_data_model::isi::social::CancelTwitterEscrow",
+  [REGISTER_SMART_CONTRACT_CODE_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode",
+  [REGISTER_SMART_CONTRACT_BYTES_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes",
+  [DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance",
+  [ACTIVATE_CONTRACT_INSTANCE_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::ActivateContractInstance",
   [SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID]:
-    SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID,
-  [OFFER_CONTRACT_OWNERSHIP_WIRE_ID]: OFFER_CONTRACT_OWNERSHIP_WIRE_ID,
-  [ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID]: ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID,
+    "iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation",
+  [OFFER_CONTRACT_OWNERSHIP_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::OfferContractOwnership",
+  [ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::AcceptContractOwnership",
   [CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID]:
-    CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID,
-  [COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID]: COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID,
-  [UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID]: UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID,
-  [FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]: FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
-  [CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]: CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
-  [REMOVE_SMART_CONTRACT_BYTES_WIRE_ID]: REMOVE_SMART_CONTRACT_BYTES_WIRE_ID,
-  [REGISTER_ZK_ASSET_WIRE_ID]: REGISTER_ZK_ASSET_WIRE_ID,
+    "iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer",
+  [COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::CommitContractDeployment",
+  [UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
+  [FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
+  [CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload",
+  [REMOVE_SMART_CONTRACT_BYTES_WIRE_ID]:
+    "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes",
+  [REGISTER_ZK_ASSET_WIRE_ID]: "iroha_data_model::isi::zk::RegisterZkAsset",
   [SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID]:
     "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
   [CANCEL_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID]:
     "iroha_data_model::isi::zk::CancelConfidentialPolicyTransition",
-  [CREATE_ELECTION_WIRE_ID]: CREATE_ELECTION_WIRE_ID,
-  [SUBMIT_BALLOT_WIRE_ID]: SUBMIT_BALLOT_WIRE_ID,
-  [FINALIZE_ELECTION_WIRE_ID]: FINALIZE_ELECTION_WIRE_ID,
-  [REGISTER_VERIFYING_KEY_WIRE_ID]: REGISTER_VERIFYING_KEY_WIRE_ID,
-  [UPDATE_VERIFYING_KEY_WIRE_ID]: UPDATE_VERIFYING_KEY_WIRE_ID,
+  [CREATE_ELECTION_WIRE_ID]: "iroha_data_model::isi::zk::CreateElection",
+  [SUBMIT_BALLOT_WIRE_ID]: "iroha_data_model::isi::zk::SubmitBallot",
+  [FINALIZE_ELECTION_WIRE_ID]: "iroha_data_model::isi::zk::FinalizeElection",
+  [REGISTER_VERIFYING_KEY_WIRE_ID]:
+    "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+  [UPDATE_VERIFYING_KEY_WIRE_ID]:
+    "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
 });
+const INSTRUCTION_WIRE_SCHEMA_BINDINGS = Object.freeze(
+  Object.entries(INNER_TYPE_NAME_BY_WIRE_ID).map(
+    ([outerWireId, innerTypeName]) =>
+      Object.freeze({ outerWireId, innerTypeName }),
+  ),
+);
 const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
   Object.fromEntries(
     Object.entries(INNER_TYPE_NAME_BY_WIRE_ID).map(([wireId, typeName]) => [
@@ -1546,6 +1577,7 @@ export function inspectSubscriptionTriggerAction(encodedAction) {
 /** @internal Source-level test facade; intentionally absent from package exports. */
 export function _createNoritoInstructionApi(nativeRuntime) {
   return Object.freeze({
+    _instructionWireSchemaBindings: () => INSTRUCTION_WIRE_SCHEMA_BINDINGS,
     inspectSubscriptionTriggerAction: (encodedAction) =>
       inspectTriggerAction(encodedAction, nativeRuntime),
     noritoDecodeInstruction: (bytes, options = {}) =>
@@ -3881,7 +3913,6 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
   switch (wireId) {
     case PROPOSE_DEPLOY_CONTRACT_WIRE_ID: {
       const fields = decodeStructFields(payload, "ProposeDeployContract", [
-        "proposal_operator",
         "contract_address",
         "code_hash",
         "abi_hash",
@@ -3889,10 +3920,6 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         "manifest_provenance",
       ]);
       const decoded = {
-        proposal_operator: decodeAccountIdValue(
-          fields.proposal_operator,
-          "ProposeDeployContract.proposal_operator",
-        ),
         contract_address: decodeStringValue(
           fields.contract_address,
           "ProposeDeployContract.contract_address",
@@ -6490,7 +6517,6 @@ function decodeGovernanceAbiVersionValue(payload, context) {
 function encodeProposeDeployContractPayload(value) {
   validateProposeDeployContractPayload(value);
   return encodeStructValue([
-    [encodeAccountIdValue(value.proposal_operator, "ProposeDeployContract.proposal_operator")],
     [encodeNoritoStringValue(assertNonEmptyString(value.contract_address, "ProposeDeployContract.contract_address"))],
     [encodeGovernanceHash32Value(value.code_hash, "ProposeDeployContract.code_hash")],
     [encodeGovernanceHash32Value(value.abi_hash, "ProposeDeployContract.abi_hash")],

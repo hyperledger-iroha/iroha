@@ -4,8 +4,7 @@ use iroha_config::parameters::actual;
 use iroha_core::kagemusha_operation::{
     KagemushaOperationExecutionPhaseV4, KagemushaOperationOutcomeRecordV4,
     KagemushaOperationOutcomeStateV4, classify_kagemusha_operation_entrypoint_v4,
-    classify_kagemusha_operation_transaction_v4, kagemusha_operation_authority_digest_v4,
-    kagemusha_operation_finality_v4,
+    classify_kagemusha_operation_transaction_v4, kagemusha_operation_finality_v4,
     kagemusha_operation_outcome_state_key_from_authority_digest_v4, kagemusha_operation_outcome_v4,
     signed_transaction_wire_hash_v4,
 };
@@ -23,6 +22,7 @@ use iroha_data_model::{
     offline::{
         KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2, KagemushaOperationCarrierV4,
         KagemushaOperationRequestV4, KagemushaRecursiveSpendTopUpAnchorV4,
+        kagemusha_operation_authority_digest_v4,
     },
     state_path::StatePath,
     transaction::{
@@ -32,9 +32,9 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::offline_api::{
-    OfflineOperationKind, OfflineOperationReference, OfflineOperationResult, OfflineOperationState,
-    OfflineOperationStatus, OfflineRedeemRequest, OfflineRedeemResult, OfflineTopUpFinalityProof,
-    OfflineTopUpRequest, OfflineTopUpResult,
+    OfflineOperationIdentity, OfflineOperationKind, OfflineOperationReference,
+    OfflineOperationResult, OfflineOperationState, OfflineOperationStatus, OfflineRedeemRequest,
+    OfflineRedeemResult, OfflineTopUpFinalityProof, OfflineTopUpRequest, OfflineTopUpResult,
 };
 use mv::storage::StorageReadOnly;
 use parking_lot::Mutex;
@@ -49,9 +49,10 @@ const PATH_OFFLINE_TOP_UP: &str = iroha_torii_shared::uri::OFFLINE_TOP_UP;
 const PATH_OFFLINE_REDEEM: &str = iroha_torii_shared::uri::OFFLINE_REDEEM;
 const OFFLINE_OPERATION_RETENTION_AFTER_EXPIRY_MS: u64 = 24 * 60 * 60 * 1_000;
 // Canonical logical accounting is intentionally independent of allocator and
-// architecture details: operation id + kind + request digest + transaction
-// hash + submission/expiry timestamps. The count budget separately bounds the
-// map-node/key duplication and in-flight coordination objects.
+// architecture details: operation id + request-authority digest + kind +
+// request digest + transaction hash + issuance/expiry timestamps. The count
+// budget separately bounds map-node/key duplication and in-flight coordination
+// objects.
 const ADMITTED_OPERATION_ACCOUNTED_BYTES: usize =
     iroha_config::parameters::defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY;
 #[derive(Debug, Clone)]
@@ -815,9 +816,10 @@ impl OfflineOperationRequestOwned {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct OfflineOperationRequestBinding {
     operation_id: [u8; 32],
+    request_authority_digest: [u8; 32],
     kind: KagemushaV2OperationKind,
     canonical_request_digest: [u8; 32],
-    submitted_at_ms: u64,
+    issued_at_ms: u64,
     expires_at_ms: u64,
 }
 impl OfflineOperationRequestBinding {
@@ -825,6 +827,13 @@ impl OfflineOperationRequestBinding {
         let authorization = request.authorization();
         Ok(Self {
             operation_id: authorization.operation_id,
+            request_authority_digest: kagemusha_operation_authority_digest_v4(
+                &authorization.authority,
+            )
+            .map_err(|source| Error::SerializationFailure {
+                context: "offline_request_authority_digest",
+                source: Box::new(source),
+            })?,
             kind: request.kind(),
             canonical_request_digest: request
                 .as_kagemusha_request()
@@ -833,9 +842,21 @@ impl OfflineOperationRequestBinding {
                     context: "offline_request_binding",
                     source: Box::new(source),
                 })?,
-            submitted_at_ms: authorization.issued_at_ms,
+            issued_at_ms: authorization.issued_at_ms,
             expires_at_ms: authorization.expires_at_ms,
         })
+    }
+}
+impl OfflineOperationRequestBinding {
+    fn identity(self) -> OfflineOperationIdentity {
+        OfflineOperationIdentity {
+            operation_id: hex::encode(self.operation_id),
+            request_authority_digest: hex::encode(self.request_authority_digest),
+            canonical_request_digest: hex::encode(self.canonical_request_digest),
+            kind: self.kind.into(),
+            issued_at_ms: self.issued_at_ms,
+            expires_at_ms: self.expires_at_ms,
+        }
     }
 }
 fn ensure_same_offline_request_binding(
@@ -868,16 +889,19 @@ struct OfflineOperationRecord {
     canonical_request_digest: [u8; 32],
     transaction_hash: HashOf<SignedTransaction>,
     transaction_nonce: Option<NonZeroU32>,
-    submitted_at_ms: u64,
 }
 impl OfflineOperationRecord {
     fn binding(&self) -> OfflineOperationRequestBinding {
         let authorization = self.request.authorization();
         OfflineOperationRequestBinding {
             operation_id: authorization.operation_id,
+            request_authority_digest: kagemusha_operation_authority_digest_v4(
+                &authorization.authority,
+            )
+            .expect("validated request authority must have a canonical digest"),
             kind: self.request.kind(),
             canonical_request_digest: self.canonical_request_digest,
-            submitted_at_ms: authorization.issued_at_ms,
+            issued_at_ms: authorization.issued_at_ms,
             expires_at_ms: authorization.expires_at_ms,
         }
     }
@@ -932,10 +956,10 @@ impl OfflineOperationRegistry {
     }
 }
 fn require_idempotency_key(headers: &HeaderMap, operation_id: [u8; 32]) -> Result<(), Error> {
-    if operation_id == [0; 32] {
+    if operation_id == [0; 32] || operation_id[31] & 1 != 1 {
         return Err(Error::AppQueryValidation {
             code: "operation_id_invalid",
-            message: "The signed offline operation id must be non-zero.".to_owned(),
+            message: "The signed offline operation id must be a non-zero marked hash.".to_owned(),
         });
     }
     let expected = hex::encode(operation_id);
@@ -1148,19 +1172,15 @@ fn offline_operation_status_uri(operation_id: [u8; 32]) -> String {
     format!("/v1/offline/operations/{}", hex::encode(operation_id))
 }
 fn offline_operation_reference_response(
-    operation_id: [u8; 32],
-    kind: OfflineOperationKind,
+    identity: OfflineOperationIdentity,
     transaction_hash: String,
-    submitted_at_ms: u64,
 ) -> Result<AxResponse, Error> {
-    let status_uri = offline_operation_status_uri(operation_id);
+    let status_uri = format!("/v1/offline/operations/{}", identity.operation_id);
     let payload = OfflineOperationReference {
-        operation_id: hex::encode(operation_id),
-        kind,
+        identity,
         state: OfflineOperationState::Pending,
         transaction_hash,
         status_uri: status_uri.clone(),
-        submitted_at_ms,
     };
     let mut response = crate::utils::respond_with_status_and_format(
         axum::http::StatusCode::ACCEPTED,
@@ -1186,10 +1206,8 @@ fn offline_operation_reference_for_admitted_record(
     record: &AdmittedOfflineOperationRecord,
 ) -> Result<AxResponse, Error> {
     offline_operation_reference_response(
-        record.binding.operation_id,
-        record.binding.kind.into(),
+        record.binding.identity(),
         record.transaction_hash.to_string(),
-        record.binding.submitted_at_ms,
     )
 }
 fn parse_operation_id(raw: &str) -> Result<[u8; 32], Error> {
@@ -1211,10 +1229,10 @@ fn parse_operation_id(raw: &str) -> Result<[u8; 32], Error> {
         code: "operation_id_invalid",
         message: "Offline operation id must decode to 32 bytes.".to_owned(),
     })?;
-    if operation_id == [0; 32] {
+    if operation_id == [0; 32] || operation_id[31] & 1 != 1 {
         return Err(Error::AppQueryValidation {
             code: "operation_id_invalid",
-            message: "Offline operation id must be non-zero.".to_owned(),
+            message: "Offline operation id must be a non-zero marked hash.".to_owned(),
         });
     }
     Ok(operation_id)
@@ -1268,7 +1286,6 @@ fn offline_operation_record_from_carrier(
         canonical_request_digest: carrier.canonical_request_digest(),
         transaction_hash: transaction.hash(),
         transaction_nonce: transaction.nonce(),
-        submitted_at_ms: request.authorization().issued_at_ms,
     })
 }
 fn terminal_offline_operation_in_entrypoint(
@@ -1397,6 +1414,12 @@ fn offline_operation_record_from_pending(
             )
         })?;
     let authorization = carrier.request().authorization();
+    let request_authority_digest =
+        kagemusha_operation_authority_digest_v4(&authorization.authority).map_err(|error| {
+            offline_operation_evidence_inconsistent(format!(
+                "The pending offline operation request authority is not canonical: {error}"
+            ))
+        })?;
     let signed_transaction_wire_hash =
         signed_transaction_wire_hash_v4(transaction).map_err(|error| {
             offline_operation_evidence_inconsistent(format!(
@@ -1407,9 +1430,10 @@ fn offline_operation_record_from_pending(
         || transaction.authority() != issuer_authority
         || pending.operation_id() != operation_id
         || carrier.operation_id() != operation_id
+        || pending.request_authority_digest() != request_authority_digest
         || pending.kind() != carrier.kind()
         || pending.canonical_request_digest() != carrier.canonical_request_digest()
-        || pending.submitted_at_ms() != authorization.issued_at_ms
+        || pending.issued_at_ms() != authorization.issued_at_ms
         || pending.expires_at_ms() != authorization.expires_at_ms
         || pending.signed_transaction_wire_hash() != signed_transaction_wire_hash
         || pending.entrypoint_hash() != transaction.hash_as_entrypoint()
@@ -1426,6 +1450,10 @@ fn offline_operation_record_from_pending(
 }
 fn pending_offline_operation_lookup_error(error: PendingKagemushaOperationLookupError) -> Error {
     match error {
+        PendingKagemushaOperationLookupError::InvalidOperationId => Error::AppQueryValidation {
+            code: "operation_id_invalid",
+            message: "Offline operation id must be a canonical marked hash.".to_owned(),
+        },
         PendingKagemushaOperationLookupError::Unavailable { .. }
         | PendingKagemushaOperationLookupError::DurabilityTransition { .. } => {
             offline_operation_pending_unavailable(
@@ -1466,6 +1494,9 @@ fn resolve_pending_offline_operation_by_id(
                 })
             },
         ),
+        Err(error @ PendingKagemushaOperationLookupError::InvalidOperationId) => {
+            Err(pending_offline_operation_lookup_error(error))
+        }
         Err(error @ PendingKagemushaOperationLookupError::Unavailable { .. })
         | Err(error @ PendingKagemushaOperationLookupError::DurabilityTransition { .. }) => {
             match find_terminal_offline_operation_by_id(app, issuer_authority, operation_id)? {
@@ -1527,10 +1558,8 @@ fn find_existing_offline_operation(
         match finality.outcome {
             KagemushaV2TerminalOutcome::Applied => {
                 return offline_operation_reference_response(
-                    authorization.operation_id,
-                    requested.kind().into(),
+                    requested_binding.identity(),
                     finality.transaction_hash,
-                    authorization.issued_at_ms,
                 )
                 .map(OfflineSubmissionRecovery::Existing);
             }
@@ -1561,10 +1590,8 @@ fn find_existing_offline_operation(
                     ));
                 }
                 return offline_operation_reference_response(
-                    authorization.operation_id,
-                    existing.request.kind().into(),
+                    existing.binding().identity(),
                     existing.transaction_hash.to_string(),
-                    existing.submitted_at_ms,
                 )
                 .map(OfflineSubmissionRecovery::Existing);
             }
@@ -1573,10 +1600,8 @@ fn find_existing_offline_operation(
                 match finality.outcome {
                     KagemushaV2TerminalOutcome::Applied => {
                         return offline_operation_reference_response(
-                            authorization.operation_id,
-                            existing.request.kind().into(),
+                            existing.binding().identity(),
                             existing.transaction_hash.to_string(),
-                            existing.submitted_at_ms,
                         )
                         .map(OfflineSubmissionRecovery::Existing);
                     }
@@ -1838,27 +1863,21 @@ fn terminal_operation_supersedes_pending_record(
     )
 }
 fn pending_offline_operation_status(
-    operation_id: [u8; 32],
-    kind: KagemushaV2OperationKind,
+    identity: OfflineOperationIdentity,
     transaction_hash: &HashOf<SignedTransaction>,
-    submitted_at_ms: u64,
 ) -> OfflineOperationStatus {
     OfflineOperationStatus::Pending {
-        operation_id: hex::encode(operation_id),
-        kind: kind.into(),
+        identity,
         transaction_hash: transaction_hash.to_string(),
-        submitted_at_ms,
     }
 }
 fn rejected_offline_operation_status(
-    operation_id: [u8; 32],
-    kind: KagemushaV2OperationKind,
+    identity: OfflineOperationIdentity,
     transaction_hash: &HashOf<SignedTransaction>,
     message: String,
 ) -> OfflineOperationStatus {
     OfflineOperationStatus::Rejected {
-        operation_id: hex::encode(operation_id),
-        kind: kind.into(),
+        identity,
         transaction_hash: transaction_hash.to_string(),
         error: iroha_torii_shared::ErrorEnvelope::new(
             "offline_operation_rejected",
@@ -1868,8 +1887,7 @@ fn rejected_offline_operation_status(
 }
 fn terminal_rejected_or_expired_offline_operation_status(
     entry: &crate::PipelineStatusEntry,
-    operation_id: [u8; 32],
-    kind: KagemushaV2OperationKind,
+    identity: OfflineOperationIdentity,
     transaction_hash: &HashOf<SignedTransaction>,
 ) -> Option<OfflineOperationStatus> {
     matches!(
@@ -1878,8 +1896,7 @@ fn terminal_rejected_or_expired_offline_operation_status(
     )
     .then(|| {
         rejected_offline_operation_status(
-            operation_id,
-            kind,
+            identity,
             transaction_hash,
             kagemusha_v4_cached_rejection_detail(entry.rejection.as_ref()),
         )
@@ -1925,7 +1942,6 @@ fn offline_operation_status_response(
         }
     }
     let kind = record.request.kind();
-    let operation_id_hex = hex::encode(operation_id);
     let applied = |finalized_block_height: u64| {
         if finalized_block_height == 0 {
             return Err(offline_operation_evidence_inconsistent(
@@ -1968,12 +1984,16 @@ fn offline_operation_status_response(
             }
         };
         Ok::<_, Error>(OfflineOperationStatus::Applied {
-            operation_id: operation_id_hex.clone(),
+            identity: record.binding().identity(),
             result,
         })
     };
     let rejected = |message: String| {
-        rejected_offline_operation_status(operation_id, kind, &record.transaction_hash, message)
+        rejected_offline_operation_status(
+            record.binding().identity(),
+            &record.transaction_hash,
+            message,
+        )
     };
     let pending = || -> Result<OfflineOperationStatus, Error> {
         if !known_pending_in_queue {
@@ -1984,10 +2004,8 @@ fn offline_operation_status_response(
             )?;
         }
         Ok(pending_offline_operation_status(
-            operation_id,
-            kind,
+            record.binding().identity(),
             &record.transaction_hash,
-            record.submitted_at_ms,
         ))
     };
     let status = if let Some(finality) = committed {
@@ -2001,8 +2019,7 @@ fn offline_operation_status_response(
     {
         if let Some(status) = terminal_rejected_or_expired_offline_operation_status(
             &entry,
-            operation_id,
-            kind,
+            record.binding().identity(),
             &record.transaction_hash,
         ) {
             status
@@ -2033,10 +2050,8 @@ fn offline_operation_status_response(
                     );
                 }
                 _ => pending_offline_operation_status(
-                    operation_id,
-                    kind,
+                    record.binding().identity(),
                     &record.transaction_hash,
-                    record.submitted_at_ms,
                 ),
             }
         }
@@ -2076,8 +2091,7 @@ fn admitted_offline_operation_status_response(
     if let Some((entry, _)) = crate::pipeline_status_local_entry(app, &admitted.transaction_hash) {
         if let Some(status) = terminal_rejected_or_expired_offline_operation_status(
             &entry,
-            operation_id,
-            admitted.binding.kind,
+            admitted.binding.identity(),
             &admitted.transaction_hash,
         ) {
             return Ok(respond_with_offline_operation_status(status));
@@ -2109,10 +2123,8 @@ fn admitted_offline_operation_status_response(
             }
             _ => {
                 let status = pending_offline_operation_status(
-                    operation_id,
-                    admitted.binding.kind,
+                    admitted.binding.identity(),
                     &admitted.transaction_hash,
-                    admitted.binding.submitted_at_ms,
                 );
                 return Ok(respond_with_offline_operation_status(status));
             }
@@ -2123,12 +2135,8 @@ fn admitted_offline_operation_status_response(
         kagemusha_v4_snapshot_time_ms(&state),
         admitted.binding.expires_at_ms,
     )?;
-    let status = pending_offline_operation_status(
-        operation_id,
-        admitted.binding.kind,
-        &admitted.transaction_hash,
-        admitted.binding.submitted_at_ms,
-    );
+    let status =
+        pending_offline_operation_status(admitted.binding.identity(), &admitted.transaction_hash);
     Ok(respond_with_offline_operation_status(status))
 }
 pub(crate) fn handle_operation_status(
@@ -2924,17 +2932,40 @@ mod tests {
     fn submission_test_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32]))
     }
+    fn test_operation_identity(
+        mut operation_id: [u8; 32],
+        kind: OfflineOperationKind,
+        issued_at_ms: u64,
+        expires_at_ms: u64,
+    ) -> OfflineOperationIdentity {
+        operation_id[31] |= 1;
+        OfflineOperationIdentity {
+            operation_id: hex::encode(operation_id),
+            request_authority_digest: "33".repeat(32),
+            canonical_request_digest: "55".repeat(32),
+            kind,
+            issued_at_ms,
+            expires_at_ms,
+        }
+    }
     fn admitted_record_fixture(
         operation_seed: u8,
-        submitted_at_ms: u64,
+        issued_at_ms: u64,
         expires_at_ms: u64,
     ) -> AdmittedOfflineOperationRecord {
+        let mut operation_id = [operation_seed; 32];
+        operation_id[31] |= 1;
+        let mut request_authority_digest = [operation_seed.wrapping_add(1); 32];
+        request_authority_digest[31] |= 1;
+        let mut canonical_request_digest = [operation_seed.wrapping_add(2); 32];
+        canonical_request_digest[31] |= 1;
         AdmittedOfflineOperationRecord {
             binding: OfflineOperationRequestBinding {
-                operation_id: [operation_seed; 32],
+                operation_id,
+                request_authority_digest,
                 kind: KagemushaV2OperationKind::TopUp,
-                canonical_request_digest: [operation_seed.wrapping_add(1); 32],
-                submitted_at_ms,
+                canonical_request_digest,
+                issued_at_ms,
                 expires_at_ms,
             },
             transaction_hash: submission_test_hash(operation_seed),
@@ -3395,7 +3426,10 @@ mod tests {
             OfflineOperationRequest::TopUp(&second).into_owned()
         );
         assert_eq!(recovered.transaction_hash, transaction.hash());
-        assert_eq!(recovered.submitted_at_ms, second.authorization.issued_at_ms);
+        assert_eq!(
+            recovered.request.authorization().issued_at_ms,
+            second.authorization.issued_at_ms
+        );
         let batch_transaction = TransactionBuilder::new(
             crate::signed_query_test_network_id(),
             issuer.authority.clone().into(),
@@ -3576,14 +3610,14 @@ mod tests {
             decode_offline_operation_status(status).await,
             OfflineOperationStatus::Pending {
                 transaction_hash,
-                submitted_at_ms,
+                identity,
                 ..
             } if transaction_hash == retry.hash().to_string()
-                && submitted_at_ms == request.authorization.issued_at_ms
+                && identity.issued_at_ms == request.authorization.issued_at_ms
         ));
     }
     #[test]
-    fn pending_queue_lookup_errors_preserve_unavailable_and_inconsistent_classes() {
+    fn pending_queue_lookup_errors_preserve_public_error_classes() {
         let entrypoint_hash =
             submission_test_transaction(vec![submission_test_request(0x76)]).hash_as_entrypoint();
         for error in [
@@ -3600,6 +3634,15 @@ mod tests {
                 }
             ));
         }
+        assert!(matches!(
+            pending_offline_operation_lookup_error(
+                PendingKagemushaOperationLookupError::InvalidOperationId
+            ),
+            Error::AppQueryValidation {
+                code: "operation_id_invalid",
+                ..
+            }
+        ));
         assert!(matches!(
             pending_offline_operation_lookup_error(
                 PendingKagemushaOperationLookupError::Inconsistent {
@@ -3901,8 +3944,8 @@ mod tests {
             )
             .expect("canonical finality must supersede a stale local validation failure");
             let reference = decode_offline_operation_reference(response).await;
-            assert_eq!(reference.operation_id, hex::encode(operation_id));
-            assert_eq!(reference.kind, OfflineOperationKind::TopUp);
+            assert_eq!(reference.identity.operation_id, hex::encode(operation_id));
+            assert_eq!(reference.identity.kind, OfflineOperationKind::TopUp);
             assert_eq!(reference.transaction_hash, transaction_hash.to_string());
         }
 
@@ -4375,13 +4418,12 @@ mod tests {
             .expect("historical status must not require authority readiness to reconstruct");
         match decode_offline_operation_status(response).await {
             OfflineOperationStatus::Rejected {
-                operation_id: actual_operation_id,
-                kind,
+                identity,
                 transaction_hash: actual_transaction_hash,
                 ..
             } => {
-                assert_eq!(actual_operation_id, hex::encode(operation_id));
-                assert_eq!(kind, OfflineOperationKind::TopUp);
+                assert_eq!(identity.operation_id, hex::encode(operation_id));
+                assert_eq!(identity.kind, OfflineOperationKind::TopUp);
                 assert_eq!(actual_transaction_hash, transaction_hash.to_string());
             }
             other => panic!("canonical rejection returned the wrong status: {other:?}"),
@@ -5010,7 +5052,14 @@ mod tests {
         let uppercase = "AB".repeat(32);
         let non_hex = "gg".repeat(32);
         let zero = "00".repeat(32);
-        for invalid in ["ab", uppercase.as_str(), non_hex.as_str(), zero.as_str()] {
+        let unmarked = "aa".repeat(32);
+        for invalid in [
+            "ab",
+            uppercase.as_str(),
+            non_hex.as_str(),
+            zero.as_str(),
+            unmarked.as_str(),
+        ] {
             assert!(
                 parse_operation_id(invalid).is_err(),
                 "invalid id: {invalid}"
@@ -5501,10 +5550,13 @@ mod tests {
         let make_reference = || {
             crate::utils::with_current_response_format(crate::utils::ResponseFormat::Json, async {
                 offline_operation_reference_response(
-                    operation_id,
-                    OfflineOperationKind::Redeem,
+                    test_operation_identity(
+                        operation_id,
+                        OfflineOperationKind::Redeem,
+                        17,
+                        300_017,
+                    ),
                     transaction_hash.clone(),
-                    17,
                 )
                 .expect("build accepted operation reference")
             })
@@ -5537,7 +5589,9 @@ mod tests {
         );
         assert_eq!(
             first_json
-                .get("operation_id")
+                .get("identity")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|identity| identity.get("operation_id"))
                 .and_then(norito::json::Value::as_str),
             Some(hex::encode(operation_id).as_str())
         );
@@ -5550,7 +5604,12 @@ mod tests {
         let applied =
             crate::utils::with_current_response_format(crate::utils::ResponseFormat::Json, async {
                 respond_with_offline_operation_status(OfflineOperationStatus::Applied {
-                    operation_id: hex::encode(operation_id),
+                    identity: test_operation_identity(
+                        operation_id,
+                        OfflineOperationKind::Redeem,
+                        17,
+                        300_017,
+                    ),
                     result: OfflineOperationResult::Redeem(OfflineRedeemResult {
                         transaction_hash: transaction_hash.clone(),
                         finalized_block_height: 23,
@@ -5576,7 +5635,9 @@ mod tests {
             applied_json
                 .get("value")
                 .and_then(norito::json::Value::as_object)
-                .and_then(|value| value.get("operation_id"))
+                .and_then(|value| value.get("identity"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|identity| identity.get("operation_id"))
                 .and_then(norito::json::Value::as_str),
             Some(hex::encode(operation_id).as_str())
         );
@@ -5664,8 +5725,7 @@ mod tests {
             let entry = crate::PipelineStatusEntry::fresh(kind, None, None);
             let status = terminal_rejected_or_expired_offline_operation_status(
                 &entry,
-                operation_id,
-                KagemushaV2OperationKind::Redeem,
+                test_operation_identity(operation_id, OfflineOperationKind::Redeem, 17, 300_017),
                 &transaction_hash,
             )
             .expect("rejected and expired cache entries are terminal");
@@ -5698,7 +5758,9 @@ mod tests {
                 value
                     .get("value")
                     .and_then(norito::json::Value::as_object)
-                    .and_then(|value| value.get("operation_id"))
+                    .and_then(|value| value.get("identity"))
+                    .and_then(norito::json::Value::as_object)
+                    .and_then(|identity| identity.get("operation_id"))
                     .and_then(norito::json::Value::as_str),
                 Some(hex::encode(operation_id).as_str()),
                 "{kind:?}"
@@ -5714,8 +5776,12 @@ mod tests {
             assert!(
                 terminal_rejected_or_expired_offline_operation_status(
                     &entry,
-                    operation_id,
-                    KagemushaV2OperationKind::Redeem,
+                    test_operation_identity(
+                        operation_id,
+                        OfflineOperationKind::Redeem,
+                        17,
+                        300_017,
+                    ),
                     &transaction_hash,
                 )
                 .is_none(),

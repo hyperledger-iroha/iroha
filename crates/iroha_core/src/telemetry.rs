@@ -1496,7 +1496,6 @@ impl StateTelemetry {
         match status {
             PublicLaneValidatorStatus::PendingActivation(_) => "pending",
             PublicLaneValidatorStatus::Active => "active",
-            PublicLaneValidatorStatus::Jailed(_) => "jailed",
             PublicLaneValidatorStatus::Exiting(_) => "exiting",
             PublicLaneValidatorStatus::Exited => "exited",
             PublicLaneValidatorStatus::Slashed(_) => "slashed",

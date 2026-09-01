@@ -33,6 +33,7 @@ import org.hyperledger.iroha.android.client.transport.RequestReplayPolicy;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.transport.TransportExecutor;
+import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -65,12 +66,17 @@ public final class KagemushaRecursiveSpendProverTest {
     scaledAmountsAreExactAndNeverRound();
     peerTransportGoldenVectorsAreExact();
     qrNfcAndNearbyGoldenVectorsAreExact();
+    qrStreamRequiresHeaderAndEnforcesBoundedCoherentCountsWithoutPoisoningState();
+    qrStreamTerminalFailureConsumesExactCoverage();
+    qrStreamPreflightsInputBoundsAndMatchesCrossSdkGoldenVector();
     nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade();
     toriiLifecycleRoutesAndHeadersAreExact();
+    toriiLifecycleResponseArchivesEnforceRouteSpecificBounds();
     toriiCommandsRejectNoncanonicalRecoveryHeaders();
     toriiOperationIdentityBindingsRejectSubstitutionBeforeCompletion();
-    toriiOperationStatusAllowsCarrierReplacementWithImmutableSignedTime();
+    toriiOperationStatusAdvancesOnlyValidatedPendingCarrier();
     operationStatusProjectionRejectsZeroHeightsAndUnstableCodes();
+    operationIdentityParserDerivesAllBindingsAndRejectsMalformedAuthorization();
     offlineCapabilityRejectsRetiredReadinessClaims();
     publicSurfaceIsKagemushaOnly();
   }
@@ -81,8 +87,33 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   @org.junit.Test
+  public void artifactContractIsFixedUnderJUnit() {
+    artifactContractIsFixed();
+  }
+
+  @org.junit.Test
+  public void qrStreamRequiresHeaderAndBoundedCountsUnderJUnit() {
+    qrStreamRequiresHeaderAndEnforcesBoundedCoherentCountsWithoutPoisoningState();
+  }
+
+  @org.junit.Test
+  public void qrStreamTerminalFailureConsumesExactCoverageUnderJUnit() {
+    qrStreamTerminalFailureConsumesExactCoverage();
+  }
+
+  @org.junit.Test
+  public void qrStreamPreflightAndGoldenVectorUnderJUnit() {
+    qrStreamPreflightsInputBoundsAndMatchesCrossSdkGoldenVector();
+  }
+
+  @org.junit.Test
   public void toriiLifecycleRoutesAndHeadersAreExactUnderJUnit() {
     toriiLifecycleRoutesAndHeadersAreExact();
+  }
+
+  @org.junit.Test
+  public void toriiLifecycleResponseArchivesEnforceRouteSpecificBoundsUnderJUnit() {
+    toriiLifecycleResponseArchivesEnforceRouteSpecificBounds();
   }
 
   @org.junit.Test
@@ -97,12 +128,17 @@ public final class KagemushaRecursiveSpendProverTest {
 
   @org.junit.Test
   public void toriiOperationStatusAllowsCarrierReplacementUnderJUnit() {
-    toriiOperationStatusAllowsCarrierReplacementWithImmutableSignedTime();
+    toriiOperationStatusAdvancesOnlyValidatedPendingCarrier();
   }
 
   @org.junit.Test
   public void operationStatusProjectionRejectsZeroHeightsAndUnstableCodesUnderJUnit() {
     operationStatusProjectionRejectsZeroHeightsAndUnstableCodes();
+  }
+
+  @org.junit.Test
+  public void operationIdentityParserRejectsMalformedAuthorizationUnderJUnit() {
+    operationIdentityParserDerivesAllBindingsAndRejectsMalformedAuthorization();
   }
 
   @org.junit.Test
@@ -186,12 +222,16 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void exactAbiIsRequired() {
     assert KagemushaRecursiveSpendProver.isExactBridgeAbi(23);
     assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(22);
+    assert KagemushaRecursiveSpendProver.isExactKagemushaContractRevision(1);
+    assert !KagemushaRecursiveSpendProver.isExactKagemushaContractRevision(2);
     assert KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 23, () -> true);
+        () -> {}, () -> 23, () -> 1, () -> true);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 23, () -> false);
+        () -> {}, () -> 23, () -> 2, () -> true);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 23, () -> true);
+        () -> {}, () -> 23, () -> 1, () -> false);
+    assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
+        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 23, () -> 1, () -> true);
     assert KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation(
         () -> { throw new IllegalArgumentException("production artifact validation"); });
     assert !KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation(
@@ -264,7 +304,9 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS == 8;
-    assert KagemushaRecursiveSpendProver.MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4
+    assert KagemushaRecursiveSpendProver.RELEASE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4
+        == 191_862;
+    assert KagemushaRecursiveSpendProver.ABSOLUTE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4
         == 384 * 1024;
     assert KagemushaRecursiveSpendProver.TOP_UP_SHIELD_INSERTION_CAPACITY == 65_463;
     final int lastValidLeaf =
@@ -372,7 +414,7 @@ public final class KagemushaRecursiveSpendProverTest {
           long[].class
         });
     final Method authorizationPrepareNative = Arrays.stream(methods)
-        .filter(method -> method.getName().equals("nativePrepareAuthorizationV2"))
+        .filter(method -> method.getName().equals("nativePrepareAuthorizationV3"))
         .findFirst()
         .orElseThrow();
     assert authorizationPrepareNative.getReturnType() == byte[][].class;
@@ -383,7 +425,6 @@ public final class KagemushaRecursiveSpendProverTest {
           int.class,
           byte[].class,
           byte[].class,
-          byte[].class,
           long.class,
           long.class,
           byte[].class,
@@ -391,12 +432,57 @@ public final class KagemushaRecursiveSpendProverTest {
           byte[].class,
           byte[].class
         });
+    final Method[] publicAuthorizationPreparation = Arrays.stream(methods)
+        .filter(method -> Modifier.isPublic(method.getModifiers()))
+        .filter(method -> method.getName().equals("prepareRequestAuthorization"))
+        .toArray(Method[]::new);
+    assert publicAuthorizationPreparation.length == 1;
+    assert Arrays.equals(
+        publicAuthorizationPreparation[0].getParameterTypes(),
+        new Class<?>[] {
+          String.class,
+          int.class,
+          String.class,
+          String.class,
+          long.class,
+          long.class,
+          byte[].class,
+          byte[].class,
+          byte[].class,
+          KagemushaRecursiveSpendProver.OnlineHardwareAssertionPlatform.class
+        });
+    assert Arrays.stream(methods)
+        .anyMatch(method -> method.getName().equals("nativeKagemushaContractRevision"));
+    assert Arrays.stream(methods)
+        .anyMatch(method -> method.getName().equals("nativePrepareTopUpV5"));
+    assert Arrays.stream(methods)
+        .anyMatch(method -> method.getName().equals("nativeBuildRedeemRequestV5"));
+    assert Arrays.stream(methods)
+        .anyMatch(method -> method.getName().equals("nativeFinalizeTopUpV5"));
+    assert Arrays.stream(methods)
+        .anyMatch(method -> method.getName().equals("nativeFinalizeRedeemV5"));
+    assert Arrays.stream(methods)
+        .anyMatch(method -> method.getName().equals("nativeProjectOperationReferenceV2"));
+    assert Arrays.stream(methods)
+        .anyMatch(method -> method.getName().equals("nativeProjectOperationStatusV2"));
+    for (final String retired : Arrays.asList(
+        "nativePrepareAuthorization" + "V2",
+        "nativeFinalizeHardwareAuthorization" + "V2",
+        "nativeFinalizeIosAppAttestAuthorization" + "V2",
+        "nativePrepareTopUp" + "V4",
+        "nativeBuildRedeemRequest" + "V4",
+        "nativeFinalizeTopUp" + "V4",
+        "nativeFinalizeRedeem" + "V4",
+        "nativeProjectOperationReference" + "V4",
+        "nativeProjectOperationStatus" + "V4")) {
+      assert Arrays.stream(methods).noneMatch(method -> method.getName().equals(retired));
+    }
     final String retiredAuthorizationFinalizer =
         String.join("", "native", "Create", "Authorization", "V2");
     assert Arrays.stream(methods)
         .noneMatch(method -> method.getName().equals(retiredAuthorizationFinalizer));
     final Method authorizationFinalizeNative = Arrays.stream(methods)
-        .filter(method -> method.getName().equals("nativeFinalizeHardwareAuthorizationV2"))
+        .filter(method -> method.getName().equals("nativeFinalizeHardwareAuthorizationV3"))
         .findFirst()
         .orElseThrow();
     assert authorizationFinalizeNative.getReturnType() == byte[][].class;
@@ -404,7 +490,7 @@ public final class KagemushaRecursiveSpendProverTest {
         authorizationFinalizeNative.getParameterTypes(),
         new Class<?>[] {byte[].class, byte[].class, byte[].class});
     final Method iosAuthorizationFinalizeNative = Arrays.stream(methods)
-        .filter(method -> method.getName().equals("nativeFinalizeIosAppAttestAuthorizationV2"))
+        .filter(method -> method.getName().equals("nativeFinalizeIosAppAttestAuthorizationV3"))
         .findFirst()
         .orElseThrow();
     assert iosAuthorizationFinalizeNative.getReturnType() == byte[][].class;
@@ -592,7 +678,7 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.decodeNoteOpening(
             archive("KagemushaNoteOpeningV2", 0x45));
     assertThrowsIllegalArgument(() ->
-        KagemushaRecursiveSpendProver.decodeRedeemRequestV4(new byte[0], opening));
+        KagemushaRecursiveSpendProver.decodeRedeemRequestV5(new byte[0], opening));
     assert opening.isDestroyed();
 
     final KagemushaRecursiveSpendProver.SpendableBranchV4 redeemInput = spendableBranch(0x46);
@@ -600,7 +686,7 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.decodeNoteOpening(
             archive("KagemushaNoteOpeningV2", 0x47));
     try {
-      assertThrowsNativeFailure(() -> KagemushaRecursiveSpendProver.buildRedeemRequestV4(
+      assertThrowsNativeFailure(() -> KagemushaRecursiveSpendProver.buildRedeemRequestV5(
           redeemInput,
           "alice@wonderland",
           org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT,
@@ -654,9 +740,9 @@ public final class KagemushaRecursiveSpendProverTest {
     final KagemushaRecursiveSpendProver.NoteOpening closeOwnedOpening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
             archive("KagemushaNoteOpeningV2", 0x4a));
-    final KagemushaRecursiveSpendProver.RedeemRequestV4 closeOwnedRequest =
-        KagemushaRecursiveSpendProver.decodeRedeemRequestV4(
-            archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4b),
+    final KagemushaRecursiveSpendProver.RedeemRequestV5 closeOwnedRequest =
+        KagemushaRecursiveSpendProver.decodeRedeemRequestV5(
+            archive("KagemushaRecursiveSpendRedeemLocalRequestV5", 0x4b),
             closeOwnedOpening);
     closeOwnedRequest.close();
     closeOwnedRequest.close();
@@ -666,9 +752,9 @@ public final class KagemushaRecursiveSpendProverTest {
     final KagemushaRecursiveSpendProver.NoteOpening handedOffOpening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
             archive("KagemushaNoteOpeningV2", 0x4c));
-    final KagemushaRecursiveSpendProver.RedeemRequestV4 request =
-        KagemushaRecursiveSpendProver.decodeRedeemRequestV4(
-            archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4d),
+    final KagemushaRecursiveSpendProver.RedeemRequestV5 request =
+        KagemushaRecursiveSpendProver.decodeRedeemRequestV5(
+            archive("KagemushaRecursiveSpendRedeemLocalRequestV5", 0x4d),
             handedOffOpening);
     final KagemushaRecursiveSpendProver.NoteOpening requestHandoff =
         request.takeChangeOpening();
@@ -710,9 +796,9 @@ public final class KagemushaRecursiveSpendProverTest {
     SecretArchiveWiper.wipeAll(null);
 
     final byte[] rawNativeArchive =
-        archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x63);
-    final KagemushaRecursiveSpendProver.RedeemRequestV4 owner =
-        KagemushaRecursiveSpendProver.decodeRedeemRequestV4(rawNativeArchive, null);
+        archive("KagemushaRecursiveSpendRedeemLocalRequestV5", 0x63);
+    final KagemushaRecursiveSpendProver.RedeemRequestV5 owner =
+        KagemushaRecursiveSpendProver.decodeRedeemRequestV5(rawNativeArchive, null);
     SecretArchiveWiper.wipe(rawNativeArchive);
     assert allZero(rawNativeArchive);
     assert owner.noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
@@ -1043,8 +1129,8 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.decodeVerifyRequestV4(
             archive("KagemushaRecursiveSpendVerifyLocalRequestV4"))
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
-    assert KagemushaRecursiveSpendProver.decodeRedeemRequestV4(
-            archive("KagemushaRecursiveSpendRedeemLocalRequestV4"), null)
+    assert KagemushaRecursiveSpendProver.decodeRedeemRequestV5(
+            archive("KagemushaRecursiveSpendRedeemLocalRequestV5"), null)
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
     assert KagemushaRecursiveSpendProver.decodeInitResultV4(
             archive("KagemushaRecursiveSpendInitResultV4"))
@@ -1309,6 +1395,175 @@ public final class KagemushaRecursiveSpendProverTest {
     return archive;
   }
 
+  private static final class KagemushaRequestFixture {
+    private final byte[] archive;
+    private final byte[] operationId;
+    private final byte[] requestAuthorityDigest;
+    private final byte[] canonicalRequestDigest;
+
+    private KagemushaRequestFixture(
+        final byte[] archive,
+        final byte[] operationId,
+        final byte[] requestAuthorityDigest,
+        final byte[] canonicalRequestDigest) {
+      this.archive = archive;
+      this.operationId = operationId;
+      this.requestAuthorityDigest = requestAuthorityDigest;
+      this.canonicalRequestDigest = canonicalRequestDigest;
+    }
+  }
+
+  private static KagemushaRequestFixture kagemushaRequestFixture(
+      final KagemushaRecursiveSpendProver.OperationKind kind,
+      final byte[] nonce,
+      final byte[] authorityPayload,
+      final byte[] operationIdOverride,
+      final long expiresAtMilliseconds,
+      final int outerFieldMarker,
+      final boolean deriveOperationId,
+      final int authorizationFieldCount) {
+    final byte[] authorityArchive = framedArchive(
+        "iroha_data_model::account::model::AccountId", authorityPayload, 0);
+    final byte[] derivedOperationId;
+    if (deriveOperationId && nonce.length == 32 && !isAllZero(nonce)) {
+      derivedOperationId = markedBlake2b(
+          "iroha:offline:kagemusha:operation-id:v4\0".getBytes(StandardCharsets.UTF_8),
+          littleEndian(authorityArchive.length),
+          authorityArchive,
+          nonce);
+    } else {
+      derivedOperationId = filled(0x55);
+    }
+    final byte[] operationId = operationIdOverride == null
+        ? Arrays.copyOf(derivedOperationId, derivedOperationId.length)
+        : Arrays.copyOf(operationIdOverride, operationIdOverride.length);
+    final List<byte[]> authorizationFields = new ArrayList<>();
+    authorizationFields.add(Arrays.copyOf(authorityPayload, authorityPayload.length));
+    authorizationFields.add("device-1".getBytes(StandardCharsets.UTF_8));
+    authorizationFields.add(new byte[] {2});
+    authorizationFields.add(Arrays.copyOf(operationId, operationId.length));
+    authorizationFields.add(littleEndian(1_725_000_000_123L));
+    authorizationFields.add(littleEndian(expiresAtMilliseconds));
+    authorizationFields.add(Arrays.copyOf(nonce, nonce.length));
+    authorizationFields.add(filled(0x41));
+    authorizationFields.add(filled(0x43));
+    authorizationFields.add(new byte[] {1});
+    while (authorizationFields.size() > authorizationFieldCount) {
+      authorizationFields.remove(authorizationFields.size() - 1);
+    }
+    final int fieldCount = kind == KagemushaRecursiveSpendProver.OperationKind.TOP_UP ? 8 : 10;
+    final List<byte[]> requestFields = new ArrayList<>();
+    for (int index = 0; index < fieldCount; index++) {
+      requestFields.add(new byte[] {(byte) outerFieldMarker});
+    }
+    requestFields.set(0, new byte[] {4, 0});
+    requestFields.set(fieldCount - 2, Arrays.copyOf(operationId, operationId.length));
+    requestFields.set(fieldCount - 1, compactFields(authorizationFields));
+    final byte[] payload = compactFields(requestFields);
+    final String schema = kind == KagemushaRecursiveSpendProver.OperationKind.TOP_UP
+        ? "iroha.torii.v1.offline.top_up.request"
+        : "iroha.torii.v1.offline.redeem.request";
+    final byte[] authorityDigest = markedBlake2b(
+        "iroha:offline:kagemusha:operation-outcome-authority:v4\0"
+            .getBytes(StandardCharsets.UTF_8),
+        littleEndian(authorityArchive.length),
+        authorityArchive);
+    final byte[] archive = framedArchive(schema, payload, 8);
+    final byte[] requestDigest = markedBlake2b(
+        "iroha:offline:kagemusha:operation-request:v4\0".getBytes(StandardCharsets.UTF_8),
+        (kind == KagemushaRecursiveSpendProver.OperationKind.TOP_UP ? "top_up" : "redeem")
+            .getBytes(StandardCharsets.UTF_8),
+        littleEndian(archive.length),
+        archive);
+    for (final byte[] field : authorizationFields) Arrays.fill(field, (byte) 0);
+    for (final byte[] field : requestFields) Arrays.fill(field, (byte) 0);
+    Arrays.fill(authorityArchive, (byte) 0);
+    Arrays.fill(derivedOperationId, (byte) 0);
+    return new KagemushaRequestFixture(
+        archive, operationId, authorityDigest, requestDigest);
+  }
+
+  private static byte[] compactFields(final List<byte[]> fields) {
+    int length = 0;
+    for (final byte[] field : fields) {
+      length = Math.addExact(length, Math.addExact(compactLength(field.length).length, field.length));
+    }
+    final byte[] encoded = new byte[length];
+    int offset = 0;
+    for (final byte[] field : fields) {
+      final byte[] prefix = compactLength(field.length);
+      System.arraycopy(prefix, 0, encoded, offset, prefix.length);
+      offset += prefix.length;
+      System.arraycopy(field, 0, encoded, offset, field.length);
+      offset += field.length;
+    }
+    return encoded;
+  }
+
+  private static byte[] compactLength(final int value) {
+    int remaining = value;
+    final byte[] scratch = new byte[5];
+    int count = 0;
+    while (remaining >= 0x80) {
+      scratch[count++] = (byte) ((remaining & 0x7f) | 0x80);
+      remaining >>>= 7;
+    }
+    scratch[count++] = (byte) remaining;
+    return Arrays.copyOf(scratch, count);
+  }
+
+  private static byte[] littleEndian(final long value) {
+    final byte[] encoded = new byte[Long.BYTES];
+    long remaining = value;
+    for (int index = 0; index < encoded.length; index++) {
+      encoded[index] = (byte) remaining;
+      remaining >>>= 8;
+    }
+    return encoded;
+  }
+
+  private static byte[] markedBlake2b(final byte[]... chunks) {
+    int length = 0;
+    for (final byte[] chunk : chunks) length = Math.addExact(length, chunk.length);
+    final byte[] preimage = new byte[length];
+    int offset = 0;
+    for (final byte[] chunk : chunks) {
+      System.arraycopy(chunk, 0, preimage, offset, chunk.length);
+      offset += chunk.length;
+    }
+    final byte[] digest = Blake2b.digest256(preimage);
+    Arrays.fill(preimage, (byte) 0);
+    digest[digest.length - 1] |= 1;
+    return digest;
+  }
+
+  private static byte[] framedArchive(
+      final String schema, final byte[] payload, final int paddingBytes) {
+    final NoritoHeader header = new NoritoHeader(
+        SchemaHash.hash16(schema),
+        payload.length,
+        CRC64.compute(payload),
+        NoritoHeader.COMPACT_LEN,
+        NoritoHeader.COMPRESSION_NONE);
+    final byte[] headerBytes = header.encode();
+    final byte[] archive = new byte[headerBytes.length + paddingBytes + payload.length];
+    System.arraycopy(headerBytes, 0, archive, 0, headerBytes.length);
+    System.arraycopy(payload, 0, archive, headerBytes.length + paddingBytes, payload.length);
+    return archive;
+  }
+
+  private static byte[] filledLength(final int value, final int length) {
+    final byte[] bytes = new byte[length];
+    Arrays.fill(bytes, (byte) value);
+    return bytes;
+  }
+
+  private static boolean isAllZero(final byte[] value) {
+    int accumulator = 0;
+    for (final byte octet : value) accumulator |= octet;
+    return accumulator == 0;
+  }
+
   private static void peerTransportGoldenVectorsAreExact() {
     requireNativeArtifactStreaming();
     final byte[] offerArchive = portableOfferFixture(
@@ -1412,6 +1667,305 @@ public final class KagemushaRecursiveSpendProverTest {
     assert !KagemushaNearby.IS_AVAILABLE;
     Arrays.fill(rawArchive, (byte) 0);
     Arrays.fill(nearby, (byte) 0);
+  }
+
+  private static void qrStreamRequiresHeaderAndEnforcesBoundedCoherentCountsWithoutPoisoningState() {
+    final byte[] archive = new byte[129];
+    for (int index = 0; index < archive.length; index++) archive[index] = (byte) (index * 17 + 3);
+    final byte[] digest = KagemushaNfcProtocol.sha256(archive);
+    final byte[] streamId = Arrays.copyOf(digest, 16);
+    final KagemushaQrStream.Frame header = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.HEADER,
+        streamId,
+        0,
+        1,
+        qrHeader(KagemushaPeerTransport.Kind.RECEIVE_REQUEST, 64, 4, 3, 1, 129, digest));
+    final KagemushaQrStream.Frame data = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.DATA,
+        streamId,
+        0,
+        3,
+        Arrays.copyOfRange(archive, 0, 64));
+    final KagemushaQrStream.Decoder decoder = new KagemushaQrStream.Decoder();
+
+    assertThrowsIllegalArgument(() -> decoder.ingest(qrText(data)));
+    decoder.ingest(qrText(header));
+
+    final KagemushaQrStream.Frame mismatchedTotal = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.DATA,
+        data.streamId(),
+        data.index(),
+        data.total() + 1,
+        data.payload());
+    assertThrowsIllegalArgument(() -> decoder.ingest(qrText(mismatchedTotal)));
+
+    final KagemushaQrStream.Frame boundaryFrame = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.DATA,
+        data.streamId(),
+        KagemushaQrStream.MAXIMUM_STREAM_FRAMES - 2,
+        KagemushaQrStream.MAXIMUM_STREAM_FRAMES - 1,
+        data.payload());
+    final KagemushaQrStream.Frame decodedBoundary =
+        KagemushaQrStream.Frame.decode(boundaryFrame.encode());
+    assert decodedBoundary.index() == 4_094;
+    assert decodedBoundary.total() == 4_095;
+    assertThrowsIllegalArgument(() -> new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.DATA,
+        data.streamId(),
+        0,
+        KagemushaQrStream.MAXIMUM_STREAM_FRAMES,
+        data.payload()));
+
+    final KagemushaQrStream.DecodeResult result = decoder.ingest(qrText(data));
+    assert !result.isComplete();
+    assert result.receivedDataFrames() == 1;
+    assert result.totalDataFrames() == 3;
+
+    final KagemushaQrStream.Options boundaryOptions = new KagemushaQrStream.Options(64, 16);
+    final int boundaryBytes = 3_854 * 64;
+    assert KagemushaQrStream.preflightStreamFrameCount(boundaryBytes, boundaryOptions)
+        == KagemushaQrStream.MAXIMUM_STREAM_FRAMES;
+    assertThrowsIllegalArgument(() -> KagemushaQrStream.preflightStreamFrameCount(
+        3_855 * 64, boundaryOptions));
+
+    final KagemushaQrStream.Frame boundaryHeader = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.HEADER,
+        streamId,
+        0,
+        1,
+        qrHeader(
+            KagemushaPeerTransport.Kind.PAYMENT,
+            64,
+            16,
+            3_854,
+            241,
+            boundaryBytes,
+            digest));
+    final KagemushaQrStream.DecodeResult boundaryResult =
+        new KagemushaQrStream.Decoder().ingest(qrText(boundaryHeader));
+    assert boundaryResult.totalDataFrames() == 3_854;
+    final KagemushaQrStream.Frame overCapHeader = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.HEADER,
+        streamId,
+        0,
+        1,
+        qrHeader(
+            KagemushaPeerTransport.Kind.PAYMENT,
+            64,
+            16,
+            3_855,
+            241,
+            3_855 * 64,
+            digest));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaQrStream.Decoder().ingest(qrText(overCapHeader)));
+    Arrays.fill(archive, (byte) 0);
+    Arrays.fill(digest, (byte) 0);
+    Arrays.fill(streamId, (byte) 0);
+  }
+
+  private static void qrStreamTerminalFailureConsumesExactCoverage() {
+    final byte[] archive = new byte[129];
+    for (int index = 0; index < archive.length; index++) archive[index] = (byte) (index * 17 + 3);
+    final byte[] digest = KagemushaNfcProtocol.sha256(archive);
+    final byte[] forgedDigest = new byte[32];
+    Arrays.fill(forgedDigest, (byte) 0x99);
+    final byte[] forgedStreamId = Arrays.copyOf(forgedDigest, 16);
+    final KagemushaQrStream.Frame header = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.HEADER,
+        forgedStreamId,
+        0,
+        1,
+        qrHeader(
+            KagemushaPeerTransport.Kind.RECEIVE_REQUEST,
+            64,
+            4,
+            3,
+            1,
+            archive.length,
+            forgedDigest));
+    final List<KagemushaQrStream.Frame> dataFrames = new ArrayList<>();
+    for (int index = 0; index < 3; index++) {
+      final int start = index * 64;
+      dataFrames.add(new KagemushaQrStream.Frame(
+          KagemushaQrStream.FrameKind.DATA,
+          forgedStreamId,
+          index,
+          3,
+          Arrays.copyOfRange(archive, start, Math.min(start + 64, archive.length))));
+    }
+
+    final KagemushaQrStream.Decoder decoder = new KagemushaQrStream.Decoder();
+    decoder.ingest(qrText(header));
+    decoder.ingest(qrText(dataFrames.get(0)));
+    decoder.ingest(qrText(dataFrames.get(1)));
+    final KagemushaQrStream.Frame finalFrame = dataFrames.get(2);
+    assertThrowsIllegalArgument(() -> decoder.ingest(qrText(finalFrame)));
+    assertThrowsIllegalArgument(() -> decoder.ingest(qrText(finalFrame)));
+
+    final byte[] validStreamId = Arrays.copyOf(digest, 16);
+    final KagemushaQrStream.Frame validHeader = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.HEADER,
+        validStreamId,
+        0,
+        1,
+        qrHeader(
+            KagemushaPeerTransport.Kind.RECEIVE_REQUEST,
+            64,
+            4,
+            3,
+            1,
+            archive.length,
+            digest));
+    assert decoder.ingest(qrText(validHeader)).totalDataFrames() == 3;
+    Arrays.fill(archive, (byte) 0);
+    Arrays.fill(digest, (byte) 0);
+    Arrays.fill(forgedDigest, (byte) 0);
+    Arrays.fill(forgedStreamId, (byte) 0);
+    Arrays.fill(validStreamId, (byte) 0);
+  }
+
+  private static void qrStreamPreflightsInputBoundsAndMatchesCrossSdkGoldenVector() {
+    final String prefix = KagemushaPeerTransport.QR_STREAM_TEXT_PREFIX;
+    final char[] oversizedBody = new char[
+        KagemushaQrStream.MAXIMUM_FRAME_TEXT_BYTES - prefix.length() + 1];
+    Arrays.fill(oversizedBody, 'A');
+    final String oversizedText = prefix + new String(oversizedBody);
+    assert oversizedText.length() == KagemushaQrStream.MAXIMUM_FRAME_TEXT_BYTES + 1;
+    assertThrowsIllegalArgument(() -> KagemushaQrStream.decodeFrameText(oversizedText));
+    assertThrowsIllegalArgument(() -> KagemushaQrStream.decodeFrameText(prefix + "é"));
+
+    final byte[] validStreamId = new byte[16];
+    Arrays.fill(validStreamId, (byte) 1);
+    final byte[] oversizedStreamId = new byte[17];
+    Arrays.fill(oversizedStreamId, (byte) 1);
+    assertThrowsIllegalArgument(() -> new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.DATA,
+        oversizedStreamId,
+        0,
+        1,
+        new byte[] {1}));
+    assertThrowsIllegalArgument(() -> new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.DATA,
+        validStreamId,
+        0,
+        1,
+        new byte[KagemushaQrStream.MAXIMUM_CHUNK_SIZE + 1]));
+
+    final String expectedEnvelope =
+        "010202000040000000010000000100000003"
+            + "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
+    final String expectedFrame =
+        "4b510100039058c6f2c0cb492c533b0a4d14ef77"
+            + "00000000000000010032"
+            + expectedEnvelope
+            + "4807f6d1";
+    final String expectedText =
+        "PKKQ1.S1EBAAOQWMbywMtJLFM7Ck0U73cAAAAAAAAAAQAy"
+            + "AQICAABAAAAAAQAAAAEAAAADA5BYxvLAy0ksUzsKTRTvd8wPeKvMztUofYShogEc-4FIB_bR";
+    final String expectedDataFrame =
+        "4b510101039058c6f2c0cb492c533b0a4d14ef77"
+            + "000000000000000100030102033f206e96";
+    final String expectedDataText =
+        "PKKQ1.S1EBAQOQWMbywMtJLFM7Ck0U73cAAAAAAAAAAQADAQIDPyBulg";
+    final String expectedParityFrame =
+        "4b510102039058c6f2c0cb492c533b0a4d14ef770000000000000001004001020300000000000000"
+            + "00000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            + "000000000000000000000000000006035fc2";
+    final String expectedParityText =
+        "PKKQ1.S1EBAgOQWMbywMtJLFM7Ck0U73cAAAAAAAAAAQBAAQIDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYDX8I";
+    final byte[] payload = new byte[] {1, 2, 3};
+    final byte[] digest = KagemushaNfcProtocol.sha256(payload);
+    final byte[] envelope = qrHeader(
+        KagemushaPeerTransport.Kind.PAYMENT, 64, 2, 1, 1, payload.length, digest);
+    assert envelope.length == 50;
+    assert hex(envelope).equals(expectedEnvelope);
+    final byte[] streamId = Arrays.copyOf(digest, 16);
+    final KagemushaQrStream.Frame frame = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.HEADER, streamId, 0, 1, envelope);
+    final byte[] frameBytes = frame.encode();
+    assert frameBytes.length == 34 + 50;
+    assert hex(frameBytes).equals(expectedFrame);
+    final String text = prefix + KagemushaPeerTransport.base64UrlEncode(frameBytes);
+    assert text.equals(expectedText);
+    final KagemushaQrStream.Frame decoded = KagemushaQrStream.decodeFrameText(expectedText);
+    assert Arrays.equals(decoded.encode(), frameBytes);
+    final KagemushaQrStream.DecodeResult headerResult =
+        new KagemushaQrStream.Decoder().ingest(expectedText);
+    assert headerResult.payloadKind() == KagemushaPeerTransport.Kind.PAYMENT;
+    assert headerResult.totalDataFrames() == 1;
+    assert headerResult.receivedDataFrames() == 0;
+
+    final KagemushaQrStream.Frame dataFrame = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.DATA, streamId, 0, 1, payload);
+    assert hex(dataFrame.encode()).equals(expectedDataFrame);
+    assert qrText(dataFrame).equals(expectedDataText);
+    assert KagemushaQrStream.decodeFrameText(expectedDataText).equals(dataFrame);
+
+    final byte[] parityPayload = new byte[64];
+    System.arraycopy(payload, 0, parityPayload, 0, payload.length);
+    final KagemushaQrStream.Frame parityFrame = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.PARITY, streamId, 0, 1, parityPayload);
+    assert hex(parityFrame.encode()).equals(expectedParityFrame);
+    assert qrText(parityFrame).equals(expectedParityText);
+    assert KagemushaQrStream.decodeFrameText(expectedParityText).equals(parityFrame);
+
+    final byte[] callerStreamId = new byte[16];
+    Arrays.fill(callerStreamId, (byte) 0x41);
+    final byte[] callerPayload = new byte[] {1, 2, 3};
+    final KagemushaQrStream.Frame disposable = new KagemushaQrStream.Frame(
+        KagemushaQrStream.FrameKind.DATA, callerStreamId, 0, 1, callerPayload);
+    disposable.zeroize();
+    assert allZero(disposable.streamId());
+    assert allZero(disposable.payload());
+    assert !allZero(callerStreamId);
+    assert Arrays.equals(callerPayload, new byte[] {1, 2, 3});
+    Arrays.fill(payload, (byte) 0);
+    Arrays.fill(digest, (byte) 0);
+    Arrays.fill(envelope, (byte) 0);
+    Arrays.fill(streamId, (byte) 0);
+    Arrays.fill(frameBytes, (byte) 0);
+    Arrays.fill(parityPayload, (byte) 0);
+    Arrays.fill(callerStreamId, (byte) 0);
+    Arrays.fill(callerPayload, (byte) 0);
+  }
+
+  private static String qrText(final KagemushaQrStream.Frame frame) {
+    return KagemushaPeerTransport.QR_STREAM_TEXT_PREFIX
+        + KagemushaPeerTransport.base64UrlEncode(frame.encode());
+  }
+
+  private static byte[] qrHeader(
+      final KagemushaPeerTransport.Kind kind,
+      final int chunkSize,
+      final int parityGroup,
+      final int dataChunks,
+      final int parityChunks,
+      final int totalBytes,
+      final byte[] digest) {
+    final byte[] header = new byte[50];
+    header[0] = 1;
+    header[1] = (byte) kind.code();
+    header[2] = (byte) parityGroup;
+    writeQrU16(header, 4, chunkSize);
+    writeQrU32(header, 6, dataChunks);
+    writeQrU32(header, 10, parityChunks);
+    writeQrU32(header, 14, totalBytes);
+    System.arraycopy(digest, 0, header, 18, 32);
+    return header;
+  }
+
+  private static void writeQrU16(final byte[] output, final int offset, final int value) {
+    output[offset] = (byte) (value >>> 8);
+    output[offset + 1] = (byte) value;
+  }
+
+  private static void writeQrU32(final byte[] output, final int offset, final int value) {
+    output[offset] = (byte) (value >>> 24);
+    output[offset + 1] = (byte) (value >>> 16);
+    output[offset + 2] = (byte) (value >>> 8);
+    output[offset + 3] = (byte) value;
   }
 
   private static void requireNativeArtifactStreaming() {
@@ -1621,10 +2175,10 @@ public final class KagemushaRecursiveSpendProverTest {
             toriiBaseUri, transport, localSigningContext, Duration.ofMillis(-1)));
     final Duration requestTimeout = Duration.ofSeconds(37);
     final byte[] projectedOperationId = filled(0x11);
-    final KagemushaRecursiveSpendProver.OperationRequestIdentity topUpIdentity =
+    final KagemushaRecursiveSpendProver.OperationIdentity topUpIdentity =
         operationRequestIdentity(
             KagemushaRecursiveSpendProver.OperationKind.TOP_UP, projectedOperationId, 1L);
-    final KagemushaRecursiveSpendProver.OperationRequestIdentity redeemIdentity =
+    final KagemushaRecursiveSpendProver.OperationIdentity redeemIdentity =
         operationRequestIdentity(
             KagemushaRecursiveSpendProver.OperationKind.REDEEM, projectedOperationId, 1L);
     final KagemushaRecursiveSpendProver.ToriiClient client =
@@ -1662,6 +2216,10 @@ public final class KagemushaRecursiveSpendProverTest {
         .equals("https://torii.example/api/v1/offline/readiness");
     assert captured.get().headers().get("Accept").equals(Arrays.asList("application/json"));
     assert captured.get().timeout().equals(requestTimeout);
+    assert captured
+        .get()
+        .maximumResponseBytes()
+        .equals((long) KagemushaRecursiveSpendProver.MAX_TORII_READINESS_RESPONSE_BYTES);
 
     final KagemushaRecursiveSpendProver.RecipientLineageQueryV2 query = construct(
         KagemushaRecursiveSpendProver.RecipientLineageQueryV2.class,
@@ -1680,6 +2238,11 @@ public final class KagemushaRecursiveSpendProverTest {
         .equals(Arrays.asList(nonce));
     assert lineageRequest.replayPolicy() == RequestReplayPolicy.ONE_SHOT;
     assert lineageRequest.timeout().equals(requestTimeout);
+    assert lineageRequest
+        .maximumResponseBytes()
+        .equals(
+            (long)
+                KagemushaRecursiveSpendProver.MAX_TORII_RECIPIENT_LINEAGE_RESPONSE_BYTES);
     final byte[] signature =
         Base64.getDecoder()
             .decode(
@@ -1743,13 +2306,17 @@ public final class KagemushaRecursiveSpendProverTest {
             new KagemushaRecursiveSpendProver.TopUpRequest(
                 archive("iroha.torii.v1.offline.top_up.request")))
         .join();
-    assert topUpHandle.operationIdHex().equals(operationId);
+    assert topUpHandle.identity().operationIdHex().equals(operationId);
     assert captured.get().method().equals("POST");
     assert captured.get().uri().getPath().equals("/api/v1/offline/top-up");
     assert captured.get().headers().get("Content-Type")
         .equals(Arrays.asList("application/x-norito"));
     assert captured.get().headers().get("Idempotency-Key").equals(Arrays.asList(operationId));
     assert captured.get().timeout().equals(requestTimeout);
+    assert captured
+        .get()
+        .maximumResponseBytes()
+        .equals((long) KagemushaRecursiveSpendProver.MAX_TORII_OPERATION_REFERENCE_BYTES);
 
     client
         .submitRedeem(
@@ -1758,10 +2325,89 @@ public final class KagemushaRecursiveSpendProverTest {
         .join();
     assert captured.get().uri().getPath().equals("/api/v1/offline/redeem");
     assert captured.get().timeout().equals(requestTimeout);
+    assert captured
+        .get()
+        .maximumResponseBytes()
+        .equals((long) KagemushaRecursiveSpendProver.MAX_TORII_OPERATION_REFERENCE_BYTES);
 
     client.getOperation(topUpHandle).join();
     assert captured.get().uri().getPath().equals("/api/v1/offline/operations/" + operationId);
     assert captured.get().timeout().equals(requestTimeout);
+    assert captured
+        .get()
+        .maximumResponseBytes()
+        .equals((long) KagemushaRecursiveSpendProver.MAX_TORII_OPERATION_STATUS_BYTES);
+  }
+
+  private static void toriiLifecycleResponseArchivesEnforceRouteSpecificBounds() {
+    final int referenceLimit =
+        KagemushaRecursiveSpendProver.MAX_TORII_OPERATION_REFERENCE_BYTES;
+    final KagemushaRecursiveSpendProver.OperationReference reference =
+        construct(
+            KagemushaRecursiveSpendProver.OperationReference.class,
+            new Class<?>[] {byte[].class},
+            archive("OfflineOperationReference", referenceLimit - NoritoHeader.HEADER_LENGTH));
+    assert reference.noritoEncoded().length == referenceLimit;
+    assertThrowsIllegalArgument(
+        () ->
+            construct(
+                KagemushaRecursiveSpendProver.OperationReference.class,
+                new Class<?>[] {byte[].class},
+                archive(
+                    "OfflineOperationReference",
+                    referenceLimit + 1 - NoritoHeader.HEADER_LENGTH)));
+
+    final int statusLimit = KagemushaRecursiveSpendProver.MAX_TORII_OPERATION_STATUS_BYTES;
+    final KagemushaRecursiveSpendProver.OperationStatus status =
+        construct(
+            KagemushaRecursiveSpendProver.OperationStatus.class,
+            new Class<?>[] {byte[].class},
+            archive("OfflineOperationStatus", statusLimit - NoritoHeader.HEADER_LENGTH));
+    assert status.noritoEncoded().length == statusLimit;
+    assertThrowsIllegalArgument(
+        () ->
+            construct(
+                KagemushaRecursiveSpendProver.OperationStatus.class,
+                new Class<?>[] {byte[].class},
+                archive(
+                    "OfflineOperationStatus", statusLimit + 1 - NoritoHeader.HEADER_LENGTH)));
+
+    final int proofLimit = KagemushaRecursiveSpendProver.MAX_TORII_PROOF_ARCHIVE_BYTES;
+    assert proofLimit == 4 * 1024 * 1024;
+    final KagemushaRecursiveSpendProver.TopUpFinalityProof proof =
+        construct(
+            KagemushaRecursiveSpendProver.TopUpFinalityProof.class,
+            new Class<?>[] {byte[].class},
+            archive(
+                "KagemushaTopUpFinalityProofV2",
+                proofLimit - NoritoHeader.HEADER_LENGTH));
+    assert proof.noritoEncoded().length == proofLimit;
+    assertThrowsIllegalArgument(
+        () ->
+            construct(
+                KagemushaRecursiveSpendProver.TopUpFinalityProof.class,
+                new Class<?>[] {byte[].class},
+                archive(
+                    "KagemushaTopUpFinalityProofV2",
+                    proofLimit + 1 - NoritoHeader.HEADER_LENGTH)));
+
+    final int lineageLimit =
+        KagemushaRecursiveSpendProver.MAX_TORII_RECIPIENT_LINEAGE_RESPONSE_BYTES;
+    assert lineageLimit == 4 * 1024 * 1024;
+    final String lineageSchema =
+        "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage";
+    final KagemushaRecursiveSpendProver.RecipientRegistrationLineage lineage =
+        construct(
+            KagemushaRecursiveSpendProver.RecipientRegistrationLineage.class,
+            new Class<?>[] {byte[].class},
+            archive(lineageSchema, lineageLimit - NoritoHeader.HEADER_LENGTH));
+    assert lineage.noritoEncoded().length == lineageLimit;
+    assertThrowsIllegalArgument(
+        () ->
+            construct(
+                KagemushaRecursiveSpendProver.RecipientRegistrationLineage.class,
+                new Class<?>[] {byte[].class},
+                archive(lineageSchema, lineageLimit + 1 - NoritoHeader.HEADER_LENGTH)));
   }
 
   private static String universalOfflineCapabilityJson() {
@@ -1837,29 +2483,47 @@ public final class KagemushaRecursiveSpendProverTest {
     final KagemushaRecursiveSpendProver.OperationReferenceProjection reference =
         operationReferenceProjection(
             KagemushaRecursiveSpendProver.OperationKind.TOP_UP, operationId, 7L);
-    final KagemushaRecursiveSpendProver.OperationRequestIdentity identity =
+    final KagemushaRecursiveSpendProver.OperationIdentity identity =
         operationRequestIdentity(
             KagemushaRecursiveSpendProver.OperationKind.TOP_UP, operationId, 7L);
     final KagemushaRecursiveSpendProver.OperationHandle handle =
         KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
             reference, identity);
-    assert handle.operationIdHex().equals(operationIdHex);
-    assert handle.submittedAtMilliseconds() == 7L;
-    assertThrowsIllegalState(() ->
-        KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
-            reference,
-            operationRequestIdentity(
-                KagemushaRecursiveSpendProver.OperationKind.TOP_UP, otherOperationId, 7L)));
-    assertThrowsIllegalState(() ->
-        KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
-            reference,
-            operationRequestIdentity(
-                KagemushaRecursiveSpendProver.OperationKind.REDEEM, operationId, 7L)));
-    assertThrowsIllegalState(() ->
-        KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
-            reference,
-            operationRequestIdentity(
-                KagemushaRecursiveSpendProver.OperationKind.TOP_UP, operationId, 8L)));
+    assert handle.identity().operationIdHex().equals(operationIdHex);
+    assert handle.identity().issuedAtMilliseconds() == 7L;
+    final List<KagemushaRecursiveSpendProver.OperationIdentity> substitutions = Arrays.asList(
+        operationRequestIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP, otherOperationId, 7L),
+        operationRequestIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.REDEEM, operationId, 7L),
+        operationRequestIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP, operationId, 8L),
+        operationIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            filled(0x23),
+            filled(0x31),
+            7L,
+            8L),
+        operationIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            filled(0x21),
+            filled(0x33),
+            7L,
+            8L),
+        operationIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            filled(0x21),
+            filled(0x31),
+            7L,
+            9L));
+    for (final KagemushaRecursiveSpendProver.OperationIdentity substitution : substitutions) {
+      assertThrowsIllegalState(() ->
+          KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
+              reference, substitution));
+    }
     final KagemushaRecursiveSpendProver.OperationStatusProjection status =
         operationProjection(
             KagemushaRecursiveSpendProver.OperationState.PENDING,
@@ -1869,30 +2533,13 @@ public final class KagemushaRecursiveSpendProverTest {
             null,
             null);
     KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(status, handle);
-    assertThrowsIllegalState(() ->
-        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
-            status,
-            new KagemushaRecursiveSpendProver.OperationHandle(
-                otherOperationId,
-                KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
-                operationId,
-                7L)));
-    assertThrowsIllegalState(() ->
-        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
-            status,
-            new KagemushaRecursiveSpendProver.OperationHandle(
-                operationId,
-                KagemushaRecursiveSpendProver.OperationKind.REDEEM,
-                operationId,
-                7L)));
-    assertThrowsIllegalState(() ->
-        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
-            status,
-            new KagemushaRecursiveSpendProver.OperationHandle(
-                operationId,
-                KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
-                operationId,
-                8L)));
+    for (final KagemushaRecursiveSpendProver.OperationIdentity substitution : substitutions) {
+      final KagemushaRecursiveSpendProver.OperationHandle mismatchedHandle =
+          new KagemushaRecursiveSpendProver.OperationHandle(substitution, operationId);
+      assertThrowsIllegalState(() ->
+          KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+              status, mismatchedHandle));
+    }
     final KagemushaRecursiveSpendProver.OperationStatusProjection appliedRedeem =
         operationProjection(
             KagemushaRecursiveSpendProver.OperationState.APPLIED,
@@ -1934,7 +2581,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert dispatched.get() == null;
   }
 
-  private static void toriiOperationStatusAllowsCarrierReplacementWithImmutableSignedTime() {
+  private static void toriiOperationStatusAdvancesOnlyValidatedPendingCarrier() {
     final byte[] operationId = filled(0x11);
     final byte[] replacementTransactionHash = filled(0x13);
     final KagemushaRecursiveSpendProver.OperationHandle topUpHandle =
@@ -1954,8 +2601,8 @@ public final class KagemushaRecursiveSpendProverTest {
             null);
     KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
         replacementPending, topUpHandle);
-    assert Arrays.equals(topUpHandle.transactionHash(), operationId);
-    assert topUpHandle.submittedAtMilliseconds() == 7L;
+    assert Arrays.equals(topUpHandle.transactionHash(), replacementTransactionHash);
+    assert topUpHandle.identity().issuedAtMilliseconds() == 7L;
 
     final KagemushaRecursiveSpendProver.OperationStatusProjection changedTimestampPending =
         operationProjectionWithTransactionHash(
@@ -1969,6 +2616,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assertThrowsIllegalState(() ->
         KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
             changedTimestampPending, topUpHandle));
+    assert Arrays.equals(topUpHandle.transactionHash(), replacementTransactionHash);
 
     final KagemushaRecursiveSpendProver.OperationHandle redeemHandle =
         KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
@@ -1982,11 +2630,24 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.OperationKind.REDEEM,
             operationId,
             replacementTransactionHash,
-            null,
+            7L,
             1L,
             null);
     KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
         appliedWinner, redeemHandle);
+    assert Arrays.equals(redeemHandle.transactionHash(), operationId);
+    assertThrowsIllegalState(() ->
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+            operationProjectionWithTransactionHash(
+                KagemushaRecursiveSpendProver.OperationState.PENDING,
+                KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                operationId,
+                replacementTransactionHash,
+                7L,
+                null,
+                null),
+            redeemHandle));
+    assert Arrays.equals(redeemHandle.transactionHash(), operationId);
 
     final KagemushaRecursiveSpendProver.OperationStatusProjection rejectedRetry =
         operationProjectionWithTransactionHash(
@@ -1994,11 +2655,16 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
             operationId,
             replacementTransactionHash,
-            null,
+            7L,
             null,
             operationRejection("offline_operation_rejected", "rejected"));
     KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
         rejectedRetry, topUpHandle);
+    assert Arrays.equals(topUpHandle.transactionHash(), replacementTransactionHash);
+    assertThrowsIllegalState(() ->
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+            replacementPending, topUpHandle));
+    assert Arrays.equals(topUpHandle.transactionHash(), replacementTransactionHash);
   }
 
   private static void operationStatusProjectionRejectsZeroHeightsAndUnstableCodes() {
@@ -2008,7 +2674,7 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.OperationState.PENDING,
             KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
             digest, 1L, null, null)
-        .submittedAtMilliseconds() == 1L;
+        .state() == KagemushaRecursiveSpendProver.OperationState.PENDING;
     assertThrowsIllegalArgument(() -> operationProjection(
         KagemushaRecursiveSpendProver.OperationState.PENDING,
         KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
@@ -2044,6 +2710,141 @@ public final class KagemushaRecursiveSpendProverTest {
         .rejection() == rejection;
   }
 
+  private static void operationIdentityParserDerivesAllBindingsAndRejectsMalformedAuthorization() {
+    final byte[] nonce = filledLength(0x07, 32);
+    final KagemushaRequestFixture fixture = kagemushaRequestFixture(
+        KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+        nonce,
+        new byte[] {1},
+        null,
+        1_725_000_060_123L,
+        1,
+        true,
+        10);
+    final KagemushaRecursiveSpendProver.OperationIdentity identity =
+        KagemushaRecursiveSpendProver.operationIdentityFromCanonicalRequestForTest(
+            fixture.archive, KagemushaRecursiveSpendProver.OperationKind.TOP_UP);
+    assert Arrays.equals(fixture.operationId, identity.operationId());
+    assert Arrays.equals(fixture.requestAuthorityDigest, identity.requestAuthorityDigest());
+    assert Arrays.equals(fixture.canonicalRequestDigest, identity.canonicalRequestDigest());
+    assert identity.issuedAtMilliseconds() == 1_725_000_000_123L;
+    assert identity.expiresAtMilliseconds() == 1_725_000_060_123L;
+    Arrays.fill(fixture.operationId, (byte) 0);
+    Arrays.fill(fixture.requestAuthorityDigest, (byte) 0);
+    Arrays.fill(fixture.canonicalRequestDigest, (byte) 0);
+    assert !isAllZero(identity.operationId());
+    assert !isAllZero(identity.requestAuthorityDigest());
+    assert !isAllZero(identity.canonicalRequestDigest());
+
+    for (final byte[] badNonce : Arrays.asList(
+        new byte[0], filledLength(1, 1), filledLength(1, 31),
+        filledLength(1, 33), new byte[32])) {
+      final byte[] badArchive = kagemushaRequestFixture(
+          KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+          badNonce,
+          new byte[] {1},
+          null,
+          1_725_000_060_123L,
+          1,
+          false,
+          10).archive;
+      assertThrowsIllegalArgument(() ->
+          KagemushaRecursiveSpendProver.operationIdentityFromCanonicalRequestForTest(
+              badArchive, KagemushaRecursiveSpendProver.OperationKind.TOP_UP));
+    }
+
+    final byte[] wrongOperation = filled(0x55);
+    final byte[] wrongOperationArchive = kagemushaRequestFixture(
+        KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+        nonce,
+        new byte[] {1},
+        wrongOperation,
+        1_725_000_060_123L,
+        1,
+        true,
+        10).archive;
+    assertThrowsIllegalArgument(() ->
+        KagemushaRecursiveSpendProver.operationIdentityFromCanonicalRequestForTest(
+            wrongOperationArchive, KagemushaRecursiveSpendProver.OperationKind.TOP_UP));
+
+    final byte[] expiredArchive = kagemushaRequestFixture(
+        KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+        nonce,
+        new byte[] {1},
+        null,
+        1_725_000_300_124L,
+        1,
+        true,
+        10).archive;
+    assertThrowsIllegalArgument(() ->
+        KagemushaRecursiveSpendProver.operationIdentityFromCanonicalRequestForTest(
+            expiredArchive, KagemushaRecursiveSpendProver.OperationKind.TOP_UP));
+
+    final byte[] authoritySubstitution = kagemushaRequestFixture(
+        KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+        nonce,
+        new byte[] {2},
+        identity.operationId(),
+        1_725_000_060_123L,
+        1,
+        true,
+        10).archive;
+    assertThrowsIllegalArgument(() ->
+        KagemushaRecursiveSpendProver.operationIdentityFromCanonicalRequestForTest(
+            authoritySubstitution, KagemushaRecursiveSpendProver.OperationKind.TOP_UP));
+
+    final byte[] nineFieldAuthorization = kagemushaRequestFixture(
+        KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+        nonce,
+        new byte[] {1},
+        null,
+        1_725_000_060_123L,
+        1,
+        true,
+        9).archive;
+    assertThrowsIllegalArgument(() ->
+        KagemushaRecursiveSpendProver.operationIdentityFromCanonicalRequestForTest(
+            nineFieldAuthorization, KagemushaRecursiveSpendProver.OperationKind.TOP_UP));
+
+    final KagemushaRequestFixture requestSubstitution = kagemushaRequestFixture(
+        KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+        nonce,
+        new byte[] {1},
+        null,
+        1_725_000_060_123L,
+        2,
+        true,
+        10);
+    final KagemushaRecursiveSpendProver.OperationIdentity substitutedIdentity =
+        KagemushaRecursiveSpendProver.operationIdentityFromCanonicalRequestForTest(
+            requestSubstitution.archive, KagemushaRecursiveSpendProver.OperationKind.TOP_UP);
+    assert !Arrays.equals(
+        identity.canonicalRequestDigest(), substitutedIdentity.canonicalRequestDigest());
+
+    final byte[] evenDigest = filled(0x22);
+    assertThrowsIllegalArgument(() -> operationIdentity(
+        KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+        evenDigest,
+        filled(0x21),
+        filled(0x31),
+        1L,
+        2L));
+    assertThrowsIllegalArgument(() -> operationIdentity(
+        KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+        filled(0x11),
+        evenDigest,
+        filled(0x31),
+        1L,
+        2L));
+    assertThrowsIllegalArgument(() -> operationIdentity(
+        KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+        filled(0x11),
+        filled(0x21),
+        evenDigest,
+        1L,
+        2L));
+  }
+
   private static KagemushaRecursiveSpendProver.OperationRejection operationRejection(
       final String code, final String message) {
     return construct(
@@ -2073,23 +2874,20 @@ public final class KagemushaRecursiveSpendProverTest {
       final Long submittedAt,
       final Long finalizedHeight,
       final KagemushaRecursiveSpendProver.OperationRejection rejection) {
+    final long issuedAt = submittedAt == null ? 1L : submittedAt;
     return construct(
         KagemushaRecursiveSpendProver.OperationStatusProjection.class,
         new Class<?>[] {
             KagemushaRecursiveSpendProver.OperationState.class,
-            KagemushaRecursiveSpendProver.OperationKind.class,
+            KagemushaRecursiveSpendProver.OperationIdentity.class,
             byte[].class,
-            byte[].class,
-            Long.class,
             Long.class,
             KagemushaRecursiveSpendProver.FinalizedTopUp.class,
             KagemushaRecursiveSpendProver.OperationRejection.class,
         },
         state,
-        kind,
-        operationId,
+        operationRequestIdentity(kind, operationId, issuedAt),
         transactionHash,
-        submittedAt,
         finalizedHeight,
         null,
         rejection);
@@ -2100,37 +2898,59 @@ public final class KagemushaRecursiveSpendProverTest {
       final KagemushaRecursiveSpendProver.OperationKind kind,
       final byte[] operationId,
       final long submittedAtMilliseconds) {
+    final KagemushaRecursiveSpendProver.OperationIdentity identity =
+        operationRequestIdentity(kind, operationId, submittedAtMilliseconds);
     return construct(
         KagemushaRecursiveSpendProver.OperationReferenceProjection.class,
         new Class<?>[] {
-            KagemushaRecursiveSpendProver.OperationKind.class,
-            byte[].class,
+            KagemushaRecursiveSpendProver.OperationIdentity.class,
+            KagemushaRecursiveSpendProver.OperationState.class,
             byte[].class,
             String.class,
-            long.class,
         },
-        kind,
+        identity,
+        KagemushaRecursiveSpendProver.OperationState.PENDING,
         operationId,
-        operationId,
-        "/v1/offline/operations/" + hex(operationId),
-        submittedAtMilliseconds);
+        "/v1/offline/operations/" + hex(operationId));
   }
 
-  private static KagemushaRecursiveSpendProver.OperationRequestIdentity
+  private static KagemushaRecursiveSpendProver.OperationIdentity
       operationRequestIdentity(
       final KagemushaRecursiveSpendProver.OperationKind kind,
       final byte[] operationId,
       final long authorizationIssuedAtMilliseconds) {
-    return construct(
-        KagemushaRecursiveSpendProver.OperationRequestIdentity.class,
-        new Class<?>[] {
-            KagemushaRecursiveSpendProver.OperationKind.class,
-            byte[].class,
-            long.class,
-        },
+    return operationIdentity(
         kind,
         operationId,
-        authorizationIssuedAtMilliseconds);
+        filled(0x21),
+        filled(0x31),
+        authorizationIssuedAtMilliseconds,
+        authorizationIssuedAtMilliseconds + 1L);
+  }
+
+  private static KagemushaRecursiveSpendProver.OperationIdentity operationIdentity(
+      final KagemushaRecursiveSpendProver.OperationKind kind,
+      final byte[] operationId,
+      final byte[] requestAuthorityDigest,
+      final byte[] canonicalRequestDigest,
+      final long issuedAtMilliseconds,
+      final long expiresAtMilliseconds) {
+    return construct(
+        KagemushaRecursiveSpendProver.OperationIdentity.class,
+        new Class<?>[] {
+            byte[].class,
+            byte[].class,
+            byte[].class,
+            KagemushaRecursiveSpendProver.OperationKind.class,
+            long.class,
+            long.class,
+        },
+        operationId,
+        requestAuthorityDigest,
+        canonicalRequestDigest,
+        kind,
+        issuedAtMilliseconds,
+        expiresAtMilliseconds);
   }
 
   private static String unexpectedToriiRoute(final TransportRequest request) {
@@ -2187,7 +3007,7 @@ public final class KagemushaRecursiveSpendProverTest {
             "buildOutputMembershipFrontierV4",
             "buildTopUpProvenanceV4",
             "buildRedeemV4",
-            "buildRedeemRequestV4",
+            "buildRedeemRequestV5",
             "buildVerifyRequestV4",
             "createRecipientLineageQueryV2",
             "createRecipientReceiveOfferV2",
@@ -2199,7 +3019,7 @@ public final class KagemushaRecursiveSpendProverTest {
             "decodeNoteOpening",
             "decodeOutputMembershipFrontierV4",
             "decodePeerPayment",
-            "decodeRedeemRequestV4",
+            "decodeRedeemRequestV5",
             "decodeReceiverAcknowledgement",
             "decodeRecipientPaymentRequest",
             "decodeRecipientReceiveOfferV2",
@@ -2228,7 +3048,7 @@ public final class KagemushaRecursiveSpendProverTest {
             "prepareAcknowledgement",
             "prepareNoteOpening",
             "preparePeerSplitChangeV4",
-            "prepareRedemptionChangeV4",
+            "prepareRedemptionChangeV5",
             "prepareRecipientPaymentRequest",
             "prepareRequestAuthorization",
             "prepareTopUp",
@@ -2307,7 +3127,7 @@ public final class KagemushaRecursiveSpendProverTest {
     for (final String name : Arrays.asList(
         "decodeAppendRequestV4",
         "decodeSplitResultV4",
-        "decodeRedeemRequestV4",
+        "decodeRedeemRequestV5",
         "decodeRedeemBuildResultV4")) {
       final List<Method> candidates = new ArrayList<>();
       for (final Method method : KagemushaRecursiveSpendProver.class.getDeclaredMethods()) {

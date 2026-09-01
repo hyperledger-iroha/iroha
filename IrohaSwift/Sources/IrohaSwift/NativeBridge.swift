@@ -3757,6 +3757,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return loadedBridgeAbiVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
+            && kagemushaNativeContractRevision() == KagemushaRecursiveSpend.nativeContractRevision
             && hasKagemushaRecursiveSpendV4Symbols(
                 KagemushaRecursiveSpend.requiredNativeSymbols + ["connect_norito_free"]
             )

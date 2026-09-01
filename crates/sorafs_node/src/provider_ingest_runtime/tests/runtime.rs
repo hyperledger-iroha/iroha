@@ -95,7 +95,7 @@ struct TestSigner {
 }
 impl ProviderIngestCompletionSignerV1 for TestSigner {
     fn runtime_handle(&self) -> &str {
-        "pkcs11:sorafs-provider-ingest-unit"
+        "provider:sorafs-provider-ingest-unit"
     }
     fn authority(&self) -> &AccountId {
         &self.authority

@@ -1929,6 +1929,8 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
     complete.write_text(
         "module.exports = {"
         "connectNoritoBridgeAbiVersion() { return 23; },"
+        "kagemushaNativeContractRevision() { return 1; },"
+        "kagemushaOfflineOperationStatusJsonValidateV2() {},"
         "inspectSorafsOrderbookSubmissionForDiscriminantV1() {},"
         "sorafsValidateAppealFinanceCancelAssetLockJson() {}"
         ",validationFeeHijiriQuoteRequestV1() {}"
@@ -1948,8 +1950,27 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
         == 23
     )
 
+    wrong_revision = tmp_path / "wrong-kagemusha-revision.cjs"
+    wrong_revision.write_text(
+        complete.read_text(encoding="utf-8").replace(
+            "kagemushaNativeContractRevision() { return 1; }",
+            "kagemushaNativeContractRevision() { return 2; }",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        checker.ArtifactContractError,
+        match="Kagemusha native contract revision mismatch",
+    ):
+        checker.probe_node_abi(
+            wrong_revision,
+            checker.REQUIRED_SYMBOLS["node"],
+        )
+
     source = complete.read_text(encoding="utf-8")
     for symbol in (
+        "kagemushaNativeContractRevision",
+        "kagemushaOfflineOperationStatusJsonValidateV2",
         "inspectSorafsOrderbookSubmissionForDiscriminantV1",
         "privateSettlementVerifyAuditApprovalResponseV1",
         "privateSettlementVerifyAuditorCapsuleResponseV1",
@@ -1960,7 +1981,8 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
     ):
         incomplete = tmp_path / f"missing-{symbol}.cjs"
         incomplete.write_text(
-            re.sub(rf"{symbol}\(\) \{{\}},?", "", source), encoding="utf-8"
+            re.sub(rf"{re.escape(symbol)}\(\) \{{[^}}]*\}},?", "", source),
+            encoding="utf-8",
         )
         with pytest.raises(checker.ArtifactContractError, match="missing required exports"):
             checker.probe_node_abi(incomplete, checker.REQUIRED_SYMBOLS["node"])

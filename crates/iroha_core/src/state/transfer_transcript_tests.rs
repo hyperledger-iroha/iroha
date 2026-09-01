@@ -485,13 +485,16 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     let executable = iroha_data_model::transaction::Executable::Instructions(
         iroha_primitives::const_vec::ConstVec::from(Vec::<InstructionBox>::new()),
     );
-    let nonmatching_action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
-        executable.clone(),
-        Repeats::Indefinitely,
-        ALICE_ID.clone(),
-        data_pre::DataEventFilter::Configuration(data_pre::ConfigurationEventFilter::new()),
-    )
-    .expect("test data-trigger action satisfies its authority invariant");
+    let mut nonmatching_action =
+        crate::smartcontracts::triggers::specialized::SpecializedAction::new(
+            executable.clone(),
+            Repeats::Indefinitely,
+            ALICE_ID.clone(),
+            data_pre::DataEventFilter::Configuration(data_pre::ConfigurationEventFilter::new()),
+        )
+        .expect("test data-trigger action satisfies its authority invariant");
+    nonmatching_action.metadata =
+        crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(true);
     batch_guard_tx
         .world
         .triggers
@@ -508,13 +511,15 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
         first_delta.supports_numeric_transfer_batch_merge(&batch_guard_tx),
         "unrelated data triggers should not disable transfer batching"
     );
-    let matching_action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
+    let mut matching_action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
         executable,
         Repeats::Indefinitely,
         ALICE_ID.clone(),
         data_pre::DataEventFilter::Asset(data_pre::AssetEventFilter::new()),
     )
     .expect("test data-trigger action satisfies its authority invariant");
+    matching_action.metadata =
+        crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(true);
     batch_guard_tx
         .world
         .triggers

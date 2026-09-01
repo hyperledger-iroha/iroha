@@ -1499,9 +1499,11 @@ mismatches, and inconsistent schemas are rejected before the future completes.
 
 `IrohaKeyManager.withDefaultProviders()` constructs a manager that prefers
 hardware-backed keystore providers when available and also registers a software
-provider for emulators or desktop JVMs. Pass custom `KeyGenParameters` when you
+provider as its general fallback. Software-backed custody is supported for
+ordinary production, governance, build, test, deployment, and release paths;
+hardware providers are optional. Pass custom `KeyGenParameters` when you
 need to enforce StrongBox-only keys or user-authentication requirements while
-retaining an explicit deterministic software provider for local testing.
+retaining an explicit deterministic software provider for other signing paths.
 If your desktop JVM lacks built-in Ed25519 support, configure the software
 provider with BouncyCastle required.
 Hardware-backed keys remain non-extractable; for user-managed accounts that must
@@ -1556,7 +1558,9 @@ different algorithm (common on emulators), falling back to the next configured
 provider.
 
 `generateOrLoad(alias, preference)` accepts a `KeySecurityPreference` that
-describes the required hardware tier:
+describes the caller-selected provider tier. The `*_REQUIRED` variants below
+are explicit per-call policies, not SDK build, release, deployment, or
+governance prerequisites:
 
 - `STRONGBOX_REQUIRED` — only StrongBox-backed providers are consulted; the call
   fails if no StrongBox backend is registered or the target device cannot
@@ -1565,8 +1569,8 @@ describes the required hardware tier:
   hardware-backed providers, and finally explicitly configured software providers.
 - `HARDWARE_REQUIRED`/`HARDWARE_PREFERRED` — retain the previous semantics for
   “any hardware” while allowing deterministic software-provider selection.
-- `SOFTWARE_ONLY` — bypass hardware providers entirely (useful for emulator or
-  deterministic testing scenarios).
+- `SOFTWARE_ONLY` — bypass hardware providers entirely (valid for production
+  software custody as well as emulator and deterministic testing scenarios).
 
 Provider metadata is used only to choose candidate providers. For an existing
 or newly generated Android Keystore alias, required policies inspect that

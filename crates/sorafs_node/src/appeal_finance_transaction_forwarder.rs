@@ -2713,7 +2713,7 @@ mod tests {
     impl TestCheckpointRuntime {
         fn new(seed: u8) -> Self {
             Self {
-                provider_handle: format!("appeal-finance-hsm-{seed}"),
+                provider_handle: format!("appeal-finance-provider-{seed}"),
                 key: SigningKey::from_bytes(&[seed; 32]),
                 qualification: Mutex::new(AppealFinanceRuntimeProviderQualificationV1::new(
                     1, [seed; 32],
@@ -3611,7 +3611,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(50));
         let mut authentication_policy = runtime.authentication_policy();
-        authentication_policy.provider_handle = "hsm:dummy:appeal-finance".to_owned();
+        authentication_policy.provider_handle = "provider:dummy:appeal-finance".to_owned();
         assert!(matches!(
             AppealFinanceTransactionForwarder::open(
                 dir.path(),
@@ -3628,7 +3628,7 @@ mod tests {
         let runtime = TestCheckpointRuntime::new(49);
         let mut authentication_policy = runtime.authentication_policy();
         authentication_policy.provider_handle =
-            "hsm://appeal-finance/checkpoint.primary-v1_slot-a".to_owned();
+            "provider://appeal-finance/checkpoint.primary-v1_slot-a".to_owned();
         authentication_policy
             .validate()
             .expect("canonical production provider handle");
@@ -3636,8 +3636,8 @@ mod tests {
             "https://operator:secret@checkpoint",
             "https://checkpoint/path?credential=secret",
             "https://checkpoint/path#fragment",
-            "hsm://appeal-finance/%63heckpoint",
-            "hsm:\\appeal-finance\\checkpoint",
+            "provider://appeal-finance/%63heckpoint",
+            "provider:\\appeal-finance\\checkpoint",
         ] {
             authentication_policy.provider_handle = handle.to_owned();
             assert!(matches!(

@@ -14,7 +14,9 @@ AND5 packages the Android SDK for external adoption once AND2 (key management) a
 
 Objectives:
 
-- Provide two canonical sample apps that demonstrate secure-element signing, offline workflows, and `/v1/pipeline` networking behaviour.
+- Provide two canonical sample apps that demonstrate software-backed signing,
+  optional secure-element posture, offline workflows, and `/v1/pipeline`
+  networking behaviour.
 - Publish developer guides that explain key management, offline signing, telemetry/observability hooks, configuration, and troubleshooting with explicit `iroha_config` mappings.
 - Automate artifact distribution (signed AAR/Maven packages) with reproducible metadata, SBOMs, and provenance attestations aligned with the workspace release policy.
 - Coordinate public guides and translations in the sibling `iroha-docs`
@@ -24,7 +26,7 @@ Objectives:
 
 | Sample | Capabilities | Dependencies | Notes |
 |--------|--------------|--------------|-------|
-| **Operator Console** | Governance transaction builder, StrongBox signing, Torii `/v1/pipeline` retries, telemetry dashboards (AND7 hooks) | AND2 attestation harness, AND4 mock Torii harness, `specs/android_support_playbook.md` for ops alignment | Target audience: validator/operators. Must expose provenance hashes, pending queue inspector, and attestation upload workflow. Scaffold lives at `examples/android/operator-console`. |
+| **Operator Console** | Governance transaction builder with a software signing baseline and optional StrongBox posture, Torii `/v1/pipeline` retries, telemetry dashboards (AND7 hooks) | AND4 mock Torii harness; optional AND2 attestation harness; `specs/android_support_playbook.md` for ops alignment | Target audience: validator/operators. Must expose provenance hashes and the pending queue inspector; expose attestation upload only when the optional hardware profile is selected. Scaffold lives at `examples/android/operator-console`. |
 | **Retail Wallet** | Offline signing envelope creation, device-to-device handoff, wire-framed instruction payloads (transfer/mint), recovery + rotation playbooks | AND2 fallback derivation, `TransactionBuilder.encodeAndSignEnvelopeWithAttestation`, Norito fixture regeneration SLA | Demonstrates sender-final, immutable device-to-device cash handoff. Separate queued online envelopes may replay when connectivity returns; cash ownership is never reconciled or reversed. Ships with mocked ledger + CLI to replay online envelopes. Scaffold lives at `examples/android/retail-wallet`. |
 
 Implementation notes:
@@ -73,7 +75,7 @@ Implementation notes:
 | Doc | Path | Status | Summary |
 |-----|------|--------|---------|
 | SDK quickstart refresh | `specs/sdk/android/index.md` | Update | Expand setup section with sample app references, Managed Device requirements, and Torii pipeline pointers. |
-| Key management & attestation guide | `specs/sdk/android/key_management.md` | ✅ Published | Explains `IrohaKeyManager` providers, StrongBox preference, alias lifecycle, and attestation bundle handling with references to `android_strongbox_device_matrix.md`. |
+| Key management & attestation guide | `specs/sdk/android/key_management.md` | ✅ Published | Explains the software provider baseline, optional StrongBox preferences, alias lifecycle, and conditional attestation bundle handling with references to `android_strongbox_device_matrix.md`. |
 | Offline signing & envelopes | `specs/sdk/android/offline_signing.md` | ✅ Published | Details the envelope schema, Norito payload reuse, recovery workflows, and CLI helpers for verification. |
 | Networking & telemetry guide | `specs/sdk/android/networking.md` | ✅ Published | Captures `/v1/pipeline` HTTP client configuration, retry/queue plumbing, Norito RPC usage, and telemetry observer alignment with `telemetry_redaction.md`. |
 | Configuration & manifest guide | `specs/sdk/android/configuration.md` | ✅ Published | Documents the `iroha_config` → `ClientConfig` pipeline, manifest hashing, telemetry redaction knobs, pending-queue wiring, and the schema diff/override workflows referenced by `android_runbook.md`. |

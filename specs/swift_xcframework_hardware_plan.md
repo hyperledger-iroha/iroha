@@ -1,13 +1,14 @@
 # Swift XCFramework Hardware Pool Plan
 
-This note tracks the hardware requirements and outstanding actions needed to keep the
-IOS6 XCFramework smoke harness green. Update this file whenever the device inventory or
-ownership changes.
+This note tracks the optional hardware-integration inventory for the IOS6
+XCFramework smoke harness. The simulator/software baseline remains valid when
+this pool is absent; no build, test, or release requires a physical device.
+Update this file whenever the optional device inventory or ownership changes.
 
 ## Target matrix recap
 
 See `specs/swift_xcframework_device_matrix.md` for the canonical simulator and
-physical device coverage. Required physical hardware:
+physical device coverage. Optional physical hardware:
 
 | Device | Minimum OS | Capability | Notes |
 |--------|------------|------------|-------|
@@ -73,7 +74,7 @@ and schedule a compensating smoke run within 12 hours.
 
 ## Validation snapshot (2027-05)
 
-- `scripts/check_xcframework_device_pool.py --json-out configs/swift/xcframework_device_pool_snapshot.json` proves the pipeline uses `ios14p-strongbox`, the harness reads `configs/swift/xcframework_device_matrix.json`, and the destination defaults are present. Attach the JSON artefact to readiness reviews.
+- `scripts/check_xcframework_device_pool.py --json-out configs/swift/xcframework_device_pool_snapshot.json` proves the required simulator/software defaults are present. Add `--require-hardware-lane` only when reviewing the optional `ios14p-strongbox` integration and its external pipeline binding.
 - Disk budget guard (`ensure_disk_budget`) now runs before the harness kicks off, failing with a clear message if <20 GB is available under the DerivedData/artefact mount.
 
 ## Maintenance SOP

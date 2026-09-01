@@ -5,6 +5,7 @@ import org.bouncycastle.crypto.ec.CustomNamedCurves
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator
 import org.bouncycastle.crypto.params.HKDFParameters
 import java.io.ByteArrayOutputStream
+import java.io.Closeable
 import java.math.BigInteger
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -58,8 +59,8 @@ class IrohaPeerNearbyDiscoveryContextV1 private constructor(
     requestCanonicalHash: ByteArray,
     allowsBootstrapSentinel: Boolean,
 ) {
-    private val session = sessionId.copyOf()
-    private val requestHash = requestCanonicalHash.copyOf()
+    private val session = sessionId.boundedNearbyCopy(16, 16, "Nearby session")
+    private val requestHash = requestCanonicalHash.boundedNearbyCopy(32, 32, "Nearby request hash")
     val sessionId: ByteArray get() = session.copyOf()
     val requestCanonicalHash: ByteArray get() = requestHash.copyOf()
 
@@ -196,11 +197,15 @@ class IrohaPeerNearbyHelloV1(
     ephemeralPublicKey: ByteArray,
     deviceCertificate: ByteArray,
 ) {
-    private val session = sessionId.copyOf()
-    private val helloNonce = nonce.copyOf()
-    private val requestHash = requestCanonicalHash.copyOf()
-    private val publicKey = ephemeralPublicKey.copyOf()
-    private val certificate = deviceCertificate.copyOf()
+    private val session = sessionId.boundedNearbyCopy(16, 16, "Nearby session")
+    private val helloNonce = nonce.boundedNearbyCopy(32, 32, "Nearby nonce")
+    private val requestHash = requestCanonicalHash.boundedNearbyCopy(32, 32, "Nearby request hash")
+    private val publicKey = ephemeralPublicKey.boundedNearbyCopy(65, 65, "Nearby P-256 key")
+    private val certificate = deviceCertificate.boundedNearbyCopy(
+        1,
+        IrohaPeerNearbyV1.MAXIMUM_CERTIFICATE_BYTES,
+        "Nearby device certificate",
+    )
     val sessionId: ByteArray get() = session.copyOf()
     val nonce: ByteArray get() = helloNonce.copyOf()
     val requestCanonicalHash: ByteArray get() = requestHash.copyOf()
@@ -286,9 +291,13 @@ class IrohaPeerNearbyAuthenticationV1(
     transcriptHash: ByteArray,
     signature: ByteArray,
 ) {
-    private val session = sessionId.copyOf()
-    private val transcript = transcriptHash.copyOf()
-    private val authSignature = signature.copyOf()
+    private val session = sessionId.boundedNearbyCopy(16, 16, "Nearby session")
+    private val transcript = transcriptHash.boundedNearbyCopy(32, 32, "Nearby transcript")
+    private val authSignature = signature.boundedNearbyCopy(
+        1,
+        IrohaPeerNearbyV1.MAXIMUM_AUTHENTICATION_SIGNATURE_BYTES,
+        "Nearby signature",
+    )
     val sessionId: ByteArray get() = session.copyOf()
     val transcriptHash: ByteArray get() = transcript.copyOf()
     val signature: ByteArray get() = authSignature.copyOf()
@@ -326,7 +335,8 @@ class IrohaPeerNearbyAuthenticationV1(
                 ?: throw IllegalArgumentException("Invalid Nearby role")
             require(data[9].toInt() == 0) { "Invalid Nearby flags" }
             val signatureLength = data.readU16Nearby(58)
-            require(signatureLength > 0 && 60 + signatureLength == data.size) {
+            require(signatureLength in 1..IrohaPeerNearbyV1.MAXIMUM_AUTHENTICATION_SIGNATURE_BYTES &&
+                60 + signatureLength == data.size) {
                 "Invalid Nearby signature length"
             }
             return IrohaPeerNearbyAuthenticationV1(
@@ -347,8 +357,12 @@ class IrohaPeerNearbyEncryptedRecordV1(
     val sequence: Long,
     ciphertextAndTag: ByteArray,
 ) {
-    private val session = sessionId.copyOf()
-    private val sealed = ciphertextAndTag.copyOf()
+    private val session = sessionId.boundedNearbyCopy(16, 16, "Nearby session")
+    private val sealed = ciphertextAndTag.boundedNearbyCopy(
+        16,
+        IrohaPeerNearbyV1.MAXIMUM_MESSAGE_BYTES + 16,
+        "Nearby encrypted message",
+    )
     val sessionId: ByteArray get() = session.copyOf()
     val ciphertextAndTag: ByteArray get() = sealed.copyOf()
 
@@ -407,7 +421,22 @@ fun interface IrohaPeerNearbySignatureVerifierV1 {
     ): Boolean
 }
 
-/** Authenticated P-256/HKDF-SHA256/AES-256-GCM transcript state. */
+private class NearbyVerificationMaterialV1(
+    val role: IrohaPeerNearbyRoleV1,
+    val certificate: ByteArray,
+    val signedBytes: ByteArray,
+    val signature: ByteArray,
+    val peerPublicKey: ByteArray,
+)
+
+/**
+ * Authenticated P-256/HKDF-SHA256/AES-256-GCM transcript state.
+ *
+ * The session assumes lifecycle ownership of [ephemeralKey]. [close] (or [destroy]) is
+ * idempotent, wipes the owned AES key byte arrays, and closes that key before dropping its
+ * reference. JVM cryptographic providers and [BigInteger] may retain opaque internal copies that
+ * cannot be physically overwritten; explicit destruction shortens their reachable lifetime.
+ */
 class IrohaPeerNearbySessionV1 @JvmOverloads constructor(
     val profile: IrohaPeerPayloadProfile,
     val localRole: IrohaPeerNearbyRoleV1,
@@ -415,21 +444,34 @@ class IrohaPeerNearbySessionV1 @JvmOverloads constructor(
     requestCanonicalHash: ByteArray,
     deviceCertificate: ByteArray,
     nonce: ByteArray = randomNearbyBytes(32),
-    private val ephemeralKey: IrohaPeerNearbyP256V1 = IrohaPeerNearbyP256V1.generate(),
-) {
-    private val session = sessionId.copyOf()
-    private val requestHash = requestCanonicalHash.copyOf()
+    ephemeralKey: IrohaPeerNearbyP256V1 = IrohaPeerNearbyP256V1.generate(),
+) : Closeable {
+    private var ownedEphemeralKey: IrohaPeerNearbyP256V1? = ephemeralKey
+    private val session = initializeOrClose {
+        sessionId.boundedNearbyCopy(16, 16, "Nearby session")
+    }
+    private val requestHash = initializeOrClose {
+        requestCanonicalHash.boundedNearbyCopy(32, 32, "Nearby request hash")
+    }
     val sessionId: ByteArray get() = session.copyOf()
     val requestCanonicalHash: ByteArray get() = requestHash.copyOf()
-    val localHello = IrohaPeerNearbyHelloV1(
-        profile,
-        localRole,
-        session,
-        nonce,
-        requestHash,
-        ephemeralKey.publicKey,
-        deviceCertificate,
-    )
+    private var hello: IrohaPeerNearbyHelloV1? = initializeOrClose {
+        IrohaPeerNearbyHelloV1(
+            profile,
+            localRole,
+            session,
+            nonce,
+            requestHash,
+            ephemeralKey.publicKey,
+            deviceCertificate,
+        )
+    }
+
+    val localHello: IrohaPeerNearbyHelloV1
+        @Synchronized get() {
+            checkNotDestroyed()
+            return hello ?: throw IllegalStateException("Nearby session has been destroyed")
+        }
 
     private var peerHello: IrohaPeerNearbyHelloV1? = null
     private var acceptedTranscriptHash: ByteArray? = null
@@ -437,72 +479,136 @@ class IrohaPeerNearbySessionV1 @JvmOverloads constructor(
     private var inboundKey: ByteArray? = null
     private var outboundSequence = 0L
     private var inboundSequence = 0L
+    private var authenticationInProgress = false
+    private var destroyed = false
+
+    val isDestroyed: Boolean
+        @Synchronized get() = destroyed
 
     val isAuthenticated: Boolean
-        get() = outboundKey != null && inboundKey != null && acceptedTranscriptHash != null
+        @Synchronized get() = !destroyed && outboundKey != null && inboundKey != null &&
+            acceptedTranscriptHash != null
 
+    @Synchronized
     fun acceptPeerHello(hello: IrohaPeerNearbyHelloV1) {
+        checkNotDestroyed()
+        val local = this.hello ?: throw IllegalStateException("Nearby session has been destroyed")
         require(peerHello == null) { "Nearby hello replay or reordering" }
         require(hello.profile == profile) { "Nearby profile mismatch" }
         require(hello.role == localRole.peer) { "Nearby role mismatch" }
         require(hello.sessionId.contentEquals(session)) { "Nearby session mismatch" }
         require(hello.requestCanonicalHash.contentEquals(requestHash)) { "Nearby request mismatch" }
-        require(!hello.ephemeralPublicKey.contentEquals(localHello.ephemeralPublicKey) &&
-            !hello.nonce.contentEquals(localHello.nonce)) { "Nearby authentication reflection" }
+        require(!hello.ephemeralPublicKey.contentEquals(local.ephemeralPublicKey) &&
+            !hello.nonce.contentEquals(local.nonce)) { "Nearby authentication reflection" }
         peerHello = hello
     }
 
-    fun authenticationPreimage(): ByteArray =
-        IrohaPeerNearbyV1.AUTHENTICATION_DOMAIN + byteArrayOf(localRole.code.toByte()) + transcriptHash()
+    @Synchronized
+    fun authenticationPreimage(): ByteArray {
+        checkNotDestroyed()
+        return IrohaPeerNearbyV1.AUTHENTICATION_DOMAIN +
+            byteArrayOf(localRole.code.toByte()) + transcriptHash()
+    }
 
-    fun makeAuthentication(signature: ByteArray): IrohaPeerNearbyAuthenticationV1 =
-        IrohaPeerNearbyAuthenticationV1(
+    @Synchronized
+    fun makeAuthentication(signature: ByteArray): IrohaPeerNearbyAuthenticationV1 {
+        checkNotDestroyed()
+        return IrohaPeerNearbyAuthenticationV1(
             profile,
             localRole,
             session,
             transcriptHash(),
             signature,
         )
+    }
 
     fun acceptPeerAuthentication(
         authentication: IrohaPeerNearbyAuthenticationV1,
         verifier: IrohaPeerNearbySignatureVerifierV1,
     ) {
-        require(!isAuthenticated && acceptedTranscriptHash == null) {
-            "Nearby authentication replay or reordering"
+        val verification = synchronized(this) {
+            checkNotDestroyed()
+            require(!authenticationInProgress && !isAuthenticated && acceptedTranscriptHash == null) {
+                "Nearby authentication replay or reordering"
+            }
+            val hello = peerHello ?: throw IllegalStateException("Nearby peer verification required")
+            require(authentication.profile == profile && authentication.role == localRole.peer) {
+                "Nearby authentication routing mismatch"
+            }
+            require(authentication.sessionId.contentEquals(session)) { "Nearby session mismatch" }
+            val transcript = transcriptHash()
+            require(authentication.transcriptHash.contentEquals(transcript)) {
+                "Nearby transcript mismatch"
+            }
+            val signed = IrohaPeerNearbyV1.AUTHENTICATION_DOMAIN +
+                byteArrayOf(authentication.role.code.toByte()) + transcript
+            authenticationInProgress = true
+            NearbyVerificationMaterialV1(
+                authentication.role,
+                hello.deviceCertificate,
+                signed,
+                authentication.signature,
+                hello.ephemeralPublicKey,
+            )
         }
-        val hello = peerHello ?: throw IllegalStateException("Nearby peer verification required")
-        require(authentication.profile == profile && authentication.role == localRole.peer) {
-            "Nearby authentication routing mismatch"
+        try {
+            val verified = verifier.verify(
+                verification.role,
+                verification.certificate,
+                verification.signedBytes,
+                verification.signature,
+            )
+            synchronized(this) {
+                try {
+                    // Destruction may have happened on any thread while the verifier ran.
+                    checkNotDestroyed()
+                    require(verified) { "Nearby certificate authentication failed" }
+                    val keyAgreement = ownedEphemeralKey
+                        ?: throw IllegalStateException("Nearby session has been destroyed")
+                    val transcript = authentication.transcriptHash
+                    val shared = keyAgreement.sharedSecret(verification.peerPublicKey)
+                    var senderToReceiver: ByteArray? = null
+                    var receiverToSender: ByteArray? = null
+                    try {
+                        senderToReceiver = deriveNearbyKey(shared, transcript, "sender-to-receiver")
+                        receiverToSender = deriveNearbyKey(shared, transcript, "receiver-to-sender")
+                    } catch (failure: Throwable) {
+                        senderToReceiver?.fill(0)
+                        receiverToSender?.fill(0)
+                        throw failure
+                    } finally {
+                        shared.fill(0)
+                    }
+                    if (localRole == IrohaPeerNearbyRoleV1.SENDER) {
+                        outboundKey = senderToReceiver
+                        inboundKey = receiverToSender
+                    } else {
+                        outboundKey = receiverToSender
+                        inboundKey = senderToReceiver
+                    }
+                    keyAgreement.close()
+                    ownedEphemeralKey = null
+                    acceptedTranscriptHash = transcript
+                    outboundSequence = 0
+                    inboundSequence = 0
+                } finally {
+                    authenticationInProgress = false
+                }
+            }
+        } catch (failure: Throwable) {
+            synchronized(this) {
+                authenticationInProgress = false
+                if (destroyed) {
+                    throw IllegalStateException("Nearby session has been destroyed", failure)
+                }
+            }
+            throw failure
         }
-        require(authentication.sessionId.contentEquals(session)) { "Nearby session mismatch" }
-        val transcript = transcriptHash()
-        require(authentication.transcriptHash.contentEquals(transcript)) { "Nearby transcript mismatch" }
-        val signed = IrohaPeerNearbyV1.AUTHENTICATION_DOMAIN +
-            byteArrayOf(authentication.role.code.toByte()) + transcript
-        require(verifier.verify(
-            authentication.role,
-            hello.deviceCertificate,
-            signed,
-            authentication.signature,
-        )) { "Nearby certificate authentication failed" }
-        val shared = ephemeralKey.sharedSecret(hello.ephemeralPublicKey)
-        val senderToReceiver = deriveNearbyKey(shared, transcript, "sender-to-receiver")
-        val receiverToSender = deriveNearbyKey(shared, transcript, "receiver-to-sender")
-        shared.fill(0)
-        if (localRole == IrohaPeerNearbyRoleV1.SENDER) {
-            outboundKey = senderToReceiver
-            inboundKey = receiverToSender
-        } else {
-            outboundKey = receiverToSender
-            inboundKey = senderToReceiver
-        }
-        acceptedTranscriptHash = transcript
-        outboundSequence = 0
-        inboundSequence = 0
     }
 
+    @Synchronized
     fun seal(message: ByteArray): IrohaPeerNearbyEncryptedRecordV1 {
+        checkNotDestroyed()
         val key = outboundKey ?: throw IllegalStateException("Nearby session is not authenticated")
         require(message.isNotEmpty() && message.size <= IrohaPeerNearbyV1.MAXIMUM_MESSAGE_BYTES) {
             "Nearby message is too large"
@@ -522,7 +628,9 @@ class IrohaPeerNearbySessionV1 @JvmOverloads constructor(
         return IrohaPeerNearbyEncryptedRecordV1(profile, localRole, session, sequence, sealed)
     }
 
+    @Synchronized
     fun open(record: IrohaPeerNearbyEncryptedRecordV1): ByteArray {
+        checkNotDestroyed()
         val key = inboundKey ?: throw IllegalStateException("Nearby session is not authenticated")
         require(record.profile == profile && record.senderRole == localRole.peer) {
             "Nearby encrypted routing mismatch"
@@ -540,10 +648,35 @@ class IrohaPeerNearbySessionV1 @JvmOverloads constructor(
         return plaintext
     }
 
+    /** Idempotently destroys the session and its owned key material. */
+    @Synchronized
+    fun destroy() = close()
+
+    /** Idempotently destroys the session and its owned key material. */
+    @Synchronized
+    override fun close() {
+        if (destroyed) return
+        destroyed = true
+        outboundKey?.fill(0)
+        inboundKey?.fill(0)
+        acceptedTranscriptHash?.fill(0)
+        outboundKey = null
+        inboundKey = null
+        acceptedTranscriptHash = null
+        peerHello = null
+        hello = null
+        authenticationInProgress = false
+        outboundSequence = 0
+        inboundSequence = 0
+        ownedEphemeralKey?.close()
+        ownedEphemeralKey = null
+    }
+
     private fun transcriptHash(): ByteArray {
         val peer = peerHello ?: throw IllegalStateException("Nearby peer verification required")
-        val senderHello = if (localRole == IrohaPeerNearbyRoleV1.SENDER) localHello else peer
-        val receiverHello = if (localRole == IrohaPeerNearbyRoleV1.RECEIVER) localHello else peer
+        val local = hello ?: throw IllegalStateException("Nearby session has been destroyed")
+        val senderHello = if (localRole == IrohaPeerNearbyRoleV1.SENDER) local else peer
+        val receiverHello = if (localRole == IrohaPeerNearbyRoleV1.RECEIVER) local else peer
         val service = IrohaPeerNearbyV1.SERVICE_ID.toByteArray()
         val sender = senderHello.encode()
         val receiver = receiverHello.encode()
@@ -561,25 +694,68 @@ class IrohaPeerNearbySessionV1 @JvmOverloads constructor(
             output.write(receiver)
         }.toByteArray())
     }
-}
 
-/** Raw secp256r1 key agreement with canonical 65-byte X9.63 public keys. */
-class IrohaPeerNearbyP256V1 private constructor(privateBytes: ByteArray) {
-    private val scalar = BigInteger(1, privateBytes)
-    private val encodedPublicKey = PARAMETERS.g.multiply(scalar).normalize().getEncoded(false)
-    val publicKey: ByteArray get() = encodedPublicKey.copyOf()
-
-    init {
-        require(privateBytes.size == 32 && scalar.signum() > 0 && scalar < PARAMETERS.n) {
-            "Invalid P-256 private key"
-        }
+    private fun checkNotDestroyed() {
+        check(!destroyed) { "Nearby session has been destroyed" }
     }
 
+    private fun <T> initializeOrClose(initializer: () -> T): T = try {
+        initializer()
+    } catch (failure: Throwable) {
+        ownedEphemeralKey?.close()
+        ownedEphemeralKey = null
+        throw failure
+    }
+}
+
+/**
+ * Raw secp256r1 key agreement with canonical 65-byte X9.63 public keys.
+ *
+ * [close] is idempotent and drops the immutable [BigInteger] scalar reference. The JVM does not
+ * expose a supported way to physically overwrite [BigInteger]'s opaque internal storage.
+ */
+class IrohaPeerNearbyP256V1 private constructor(privateBytes: ByteArray) : Closeable {
+    private var scalar: BigInteger? = try {
+        require(privateBytes.size == 32) { "Invalid P-256 private key" }
+        BigInteger(1, privateBytes).also {
+            require(it.signum() > 0 && it < PARAMETERS.n) { "Invalid P-256 private key" }
+        }
+    } finally {
+        privateBytes.fill(0)
+    }
+    private val encodedPublicKey = PARAMETERS.g.multiply(requireNotNull(scalar)).normalize().getEncoded(false)
+    private var destroyed = false
+
+    val isDestroyed: Boolean
+        @Synchronized get() = destroyed
+
+    val publicKey: ByteArray
+        @Synchronized get() {
+            checkNotDestroyed()
+            return encodedPublicKey.copyOf()
+        }
+
+    @Synchronized
     fun sharedSecret(peerPublicKey: ByteArray): ByteArray {
+        checkNotDestroyed()
         require(isValidPublicKey(peerPublicKey)) { "Invalid Nearby P-256 key" }
-        val point = PARAMETERS.curve.decodePoint(peerPublicKey).multiply(scalar).normalize()
+        val keyScalar = scalar ?: throw IllegalStateException("Nearby P-256 key has been destroyed")
+        val point = PARAMETERS.curve.decodePoint(peerPublicKey).multiply(keyScalar).normalize()
         require(!point.isInfinity) { "Invalid Nearby P-256 shared point" }
         return point.affineXCoord.encoded.leftPadNearby(32)
+    }
+
+    /** Idempotently drops this key's scalar and wipes its owned encoded-public-key buffer. */
+    @Synchronized
+    override fun close() {
+        if (destroyed) return
+        destroyed = true
+        scalar = null
+        encodedPublicKey.fill(0)
+    }
+
+    private fun checkNotDestroyed() {
+        check(!destroyed) { "Nearby P-256 key has been destroyed" }
     }
 
     companion object {
@@ -595,8 +771,10 @@ class IrohaPeerNearbyP256V1 private constructor(privateBytes: ByteArray) {
             }
         }
 
-        @JvmStatic fun fromPrivateBytes(bytes: ByteArray): IrohaPeerNearbyP256V1 =
-            IrohaPeerNearbyP256V1(bytes.copyOf())
+        @JvmStatic fun fromPrivateBytes(bytes: ByteArray): IrohaPeerNearbyP256V1 {
+            require(bytes.size == 32) { "Invalid P-256 private key" }
+            return IrohaPeerNearbyP256V1(bytes.copyOf())
+        }
 
         internal fun isValidPublicKey(bytes: ByteArray): Boolean {
             if (bytes.size != 65 || bytes[0] != 0x04.toByte()) return false
@@ -653,6 +831,11 @@ private fun requireRecordPrefix(
 }
 
 private fun randomNearbyBytes(count: Int): ByteArray = ByteArray(count).also(SecureRandom()::nextBytes)
+
+private fun ByteArray.boundedNearbyCopy(minimum: Int, maximum: Int, name: String): ByteArray {
+    require(size in minimum..maximum) { "$name length is outside its IPN1 bound" }
+    return copyOf()
+}
 
 private fun ByteArray.leftPadNearby(size: Int): ByteArray {
     require(this.size <= size)

@@ -84,7 +84,13 @@ fn setup_state() -> State {
             .collect(),
     )
     .expect("staking test dataspace catalog should match its lanes");
-    State::new_with_nexus_for_testing(World::default(), nexus, LiveQueryStore::start_test())
+    let world = World::default();
+    let mut parameters = world.parameters.block();
+    parameters.set_parameter(Parameter::Custom(
+        SumeragiNposParameters::default().into_custom_parameter(),
+    ));
+    parameters.commit();
+    State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test())
 }
 fn staking_test_lane_catalog() -> LaneCatalog {
     let lane_count = NonZeroU32::new(256).expect("non-zero lane count");
@@ -211,12 +217,30 @@ fn set_epoch_length(state: &mut State, epoch_length_blocks: u64) {
             SumeragiNposParameters {
                 epoch_length_blocks: NonZeroU64::new(epoch_length_blocks)
                     .expect("staking test epoch length must be non-zero"),
+                evidence_horizon_blocks: 1,
+                slashing_delay_blocks: 1,
                 ..SumeragiNposParameters::default()
             }
             .into_custom_parameter(),
         ));
     }
     wb.commit();
+}
+fn set_test_npos_penalty_windows(
+    stx: &mut StateTransaction<'_, '_>,
+    evidence_horizon_blocks: u64,
+    slashing_delay_blocks: u64,
+) {
+    let mut parameters = stx.world.sumeragi_npos_parameters().unwrap_or_default();
+    parameters.evidence_horizon_blocks = evidence_horizon_blocks;
+    parameters.slashing_delay_blocks = slashing_delay_blocks;
+    parameters
+        .validate()
+        .expect("test NPoS penalty windows must be valid");
+    stx.world
+        .parameters
+        .get_mut()
+        .set_parameter(Parameter::Custom(parameters.into_custom_parameter()));
 }
 fn configure_reward_fixture(
     stx: &mut StateTransaction<'_, '_>,
@@ -370,6 +394,10 @@ fn insert_validator_record_for_key(
     status: PublicLaneValidatorStatus,
     stake: Quantity,
 ) {
+    let activation_height = match &status {
+        PublicLaneValidatorStatus::PendingActivation(height) => *height,
+        _ => 1,
+    };
     stx.world.public_lane_validators.insert(
         (key_lane, validator.clone()),
         PublicLaneValidatorRecord {
@@ -381,8 +409,8 @@ fn insert_validator_record_for_key(
             self_stake: stake,
             metadata: Metadata::default(),
             status,
-            activation_epoch: None,
-            activation_height: None,
+            activation_height,
+            deactivation_height: None,
             last_reward_epoch: None,
         },
     );

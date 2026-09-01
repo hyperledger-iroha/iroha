@@ -29,7 +29,12 @@ required before Android SDK releases can advance from preview to GA/LTS.
 All updates MUST be reflected in `status.md` within 24 hours and referenced in
 the weekly AND2/AND6 governance sync.
 
-## 2. Release-Stage Evidence Matrix
+## 2. Optional Hardware-Integration Evidence Matrix
+
+This matrix qualifies the optional StrongBox integration when a deployment
+selects it. It is not an Android SDK build, test, tag, or release gate, and
+software-backed signing remains a fully supported release path without a
+physical bundle.
 
 | Stage | Attestation Reports | Device Matrix | Tamper-Proof Logs | Disclosure Pack |
 |-------|--------------------|---------------|-------------------|-----------------|

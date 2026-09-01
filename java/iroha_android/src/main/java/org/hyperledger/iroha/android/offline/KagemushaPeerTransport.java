@@ -56,9 +56,7 @@ public final class KagemushaPeerTransport {
 
   public static Payload decode(final String value, final Kind expectedKind) {
     Objects.requireNonNull(value, "value");
-    if (value.getBytes(StandardCharsets.UTF_8).length > MAXIMUM_TEXT_ENVELOPE_BYTES) {
-      throw new IllegalArgumentException("Kagemusha peer text exceeds its bound");
-    }
+    requireTextEnvelopeBound(value);
     final Kind kind = kindOf(value);
     if (kind == null) throw new IllegalArgumentException("Kagemusha peer prefix is invalid");
     if (expectedKind != null && expectedKind != kind) {
@@ -82,9 +80,7 @@ public final class KagemushaPeerTransport {
 
   public static Payload decodeUserPresented(final String value, final Kind expectedKind) {
     Objects.requireNonNull(value, "value");
-    if (value.getBytes(StandardCharsets.UTF_8).length > MAXIMUM_TEXT_ENVELOPE_BYTES) {
-      throw new IllegalArgumentException("Kagemusha peer text exceeds its bound");
-    }
+    requireTextEnvelopeBound(value);
     return decode(trimAsciiBoundary(value), expectedKind);
   }
 
@@ -104,7 +100,10 @@ public final class KagemushaPeerTransport {
   }
 
   private static byte[] decodeBase64Url(final String value) {
-    if (value == null || value.isEmpty() || value.length() % 4 == 1) {
+    if (value == null
+        || value.isEmpty()
+        || value.length() > MAXIMUM_TEXT_ENVELOPE_BYTES
+        || value.length() % 4 == 1) {
       throw new IllegalArgumentException("Kagemusha peer text is not canonical Base64URL");
     }
     for (int index = 0; index < value.length(); index++) {
@@ -140,6 +139,15 @@ public final class KagemushaPeerTransport {
 
   private static boolean isBoundary(final char value) {
     return value == ' ' || value == '\t' || value == '\r' || value == '\n';
+  }
+
+  private static void requireTextEnvelopeBound(final String value) {
+    // Bound the UTF-16 input before materializing UTF-8. The exact byte-count
+    // check then allocates at most a small multiple of the 12 KiB wire limit.
+    if (value.length() > MAXIMUM_TEXT_ENVELOPE_BYTES
+        || value.getBytes(StandardCharsets.UTF_8).length > MAXIMUM_TEXT_ENVELOPE_BYTES) {
+      throw new IllegalArgumentException("Kagemusha peer text exceeds its bound");
+    }
   }
 
   private static void requireArchiveBound(final byte[] archive) {

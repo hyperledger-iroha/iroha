@@ -69,9 +69,10 @@ async fn app_api_router_smoke() {
         iroha_torii::OnlinePeersProvider::new(peers_rx),
     )
     .expect("valid Torii app API fixture");
-    let app = torii
+    let runtime = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
+    let app = runtime.router();
     for path in ["/v1/soracloud/status", "/v1/soracloud/apps/status"] {
         let response = app
             .clone()
@@ -441,6 +442,7 @@ async fn app_api_router_smoke() {
             .unwrap(),
     )
     .await;
+    runtime.shutdown().await;
 }
 #[tokio::test]
 async fn contract_routes_honor_api_token_requirement() {
@@ -479,9 +481,10 @@ async fn contract_routes_honor_api_token_requirement() {
         iroha_torii::OnlinePeersProvider::new(peers_rx),
     )
     .expect("valid Torii app API fixture");
-    let app = torii
+    let runtime = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
+    let app = runtime.router();
     for (method, path) in [
         ("POST", "/v1/contracts/deploy"),
         ("POST", "/v1/contracts/deploy-bundle"),
@@ -547,4 +550,5 @@ async fn contract_routes_honor_api_token_requirement() {
             .unwrap(),
     )
     .await;
+    runtime.shutdown().await;
 }

@@ -314,7 +314,7 @@ impl Default for Sandbox {
     }
 }
 impl Sandbox {
-    fn trigger_registration_metadata(&self) -> Metadata {
+    fn trigger_registration_metadata(&self, data_scope: bool) -> Metadata {
         let height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         let registered_ms = self
             .state
@@ -332,6 +332,14 @@ impl Sandbox {
             .expect("registered timestamp metadata key");
         metadata.insert(key_height, Json::new(height));
         metadata.insert(key_time, Json::new(registered_ms));
+        if data_scope {
+            for (key, value) in
+                crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(true)
+                    .iter()
+            {
+                metadata.insert(key.clone(), value.clone());
+            }
+        }
         metadata
     }
     /// Add a time trigger that transfers the test asset after a timer fires.
@@ -373,7 +381,7 @@ impl Sandbox {
                 TimeEventFilter::new(ExecutionTime::PreCommit),
             )
             .expect("sandbox time-trigger action satisfies validation invariants")
-            .with_metadata(self.trigger_registration_metadata()),
+            .with_metadata(self.trigger_registration_metadata(false)),
         )
         .try_into()
         .unwrap();
@@ -462,7 +470,7 @@ impl Sandbox {
                     .for_asset(asset(src)),
             )
             .expect("sandbox data-trigger action satisfies validation invariants")
-            .with_metadata(self.trigger_registration_metadata()),
+            .with_metadata(self.trigger_registration_metadata(true)),
         )
         .try_into()
         .unwrap();

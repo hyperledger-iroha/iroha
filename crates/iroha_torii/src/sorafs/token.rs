@@ -935,7 +935,7 @@ mod tests {
     fn token_config(public_key: [u8; 32], requests_per_minute: u32) -> actual::SorafsTokenConfig {
         actual::SorafsTokenConfig {
             enabled: true,
-            signer_handle: Some("pkcs11:prod/stream-token/v1".to_owned()),
+            signer_handle: Some("provider:prod/stream-token/v1".to_owned()),
             signer_public_key: Some(public_key),
             signer_revision: Some(4),
             signer_policy_digest: Some([0xb4; 32]),
@@ -952,7 +952,7 @@ mod tests {
         mode: TestSignerMode,
     ) -> (StreamTokenIssuer, Arc<TestStreamTokenRuntimeSigner>) {
         let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
-            "pkcs11:prod/stream-token/v1",
+            "provider:prod/stream-token/v1",
             [0x33; 32],
             mode,
         ));
@@ -1015,7 +1015,7 @@ mod tests {
     #[test]
     fn disabled_issuance_rejects_an_unexpected_runtime_signer() {
         let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
-            "pkcs11:prod/stream-token/v1",
+            "provider:prod/stream-token/v1",
             [0x33; 32],
             TestSignerMode::Sign,
         ));
@@ -1035,7 +1035,7 @@ mod tests {
     #[test]
     fn runtime_signer_binding_fails_closed() {
         let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
-            "pkcs11:prod/stream-token/v1",
+            "provider:prod/stream-token/v1",
             [0x33; 32],
             TestSignerMode::Sign,
         ));
@@ -1066,8 +1066,8 @@ mod tests {
             "https://operator:secret@signer",
             "https://signer/path?credential=secret",
             "https://signer/path#fragment",
-            "pkcs11:prod/%73tream-token/v1",
-            "pkcs11:prod\\stream-token\\v1",
+            "provider:prod/%73tream-token/v1",
+            "provider:prod\\stream-token\\v1",
         ] {
             config.signer_handle = Some(invalid_handle.to_owned());
             assert!(matches!(
@@ -1075,12 +1075,12 @@ mod tests {
                 Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle)
             ));
         }
-        config.signer_handle = Some("pkcs11:prod/other-token/v1".to_owned());
+        config.signer_handle = Some("provider:prod/other-token/v1".to_owned());
         assert!(matches!(
             StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
             Err(StreamTokenIssuerError::RuntimeSignerHandleMismatch)
         ));
-        config.signer_handle = Some("pkcs11:prod/stream-token/v1".to_owned());
+        config.signer_handle = Some("provider:prod/stream-token/v1".to_owned());
         config.signer_public_key = None;
         assert!(matches!(
             StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
@@ -1106,7 +1106,7 @@ mod tests {
     #[test]
     fn runtime_signer_qualification_fails_closed_at_startup() {
         let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
-            "pkcs11:prod/stream-token/v1",
+            "provider:prod/stream-token/v1",
             [0x33; 32],
             TestSignerMode::Sign,
         ));
@@ -1135,7 +1135,7 @@ mod tests {
         ));
         let unavailable = Arc::new(
             TestStreamTokenRuntimeSigner::new(
-                "pkcs11:prod/stream-token/v1",
+                "provider:prod/stream-token/v1",
                 [0x33; 32],
                 TestSignerMode::Sign,
             )
@@ -1152,7 +1152,7 @@ mod tests {
         let drifted = StreamTokenRuntimeSignerQualificationV1::new(5, [0xb4; 32]);
         let drifting = Arc::new(
             TestStreamTokenRuntimeSigner::new(
-                "pkcs11:prod/stream-token/v1",
+                "provider:prod/stream-token/v1",
                 [0x33; 32],
                 TestSignerMode::Sign,
             )
@@ -1165,7 +1165,7 @@ mod tests {
         ));
         let transient_identity_drift = Arc::new(
             TestStreamTokenRuntimeSigner::new(
-                "pkcs11:prod/stream-token/v1",
+                "provider:prod/stream-token/v1",
                 [0x33; 32],
                 TestSignerMode::Sign,
             )
@@ -1177,7 +1177,7 @@ mod tests {
             Err(StreamTokenIssuerError::RuntimeSignerQualificationMismatch)
         ));
         let test_marked = Arc::new(TestStreamTokenRuntimeSigner::new(
-            "pkcs11:test/stream-token/v1",
+            "provider:test/stream-token/v1",
             [0x33; 32],
             TestSignerMode::Sign,
         ));
@@ -1267,7 +1267,7 @@ mod tests {
         ] {
             let signer = Arc::new(
                 TestStreamTokenRuntimeSigner::new(
-                    "pkcs11:prod/stream-token/v1",
+                    "provider:prod/stream-token/v1",
                     [0x33; 32],
                     TestSignerMode::Sign,
                 )
@@ -1312,7 +1312,7 @@ mod tests {
         let expected = StreamTokenRuntimeSignerQualificationV1::new(4, [0xb4; 32]);
         let signer = Arc::new(
             TestStreamTokenRuntimeSigner::new(
-                "pkcs11:prod/stream-token/v1",
+                "provider:prod/stream-token/v1",
                 [0x33; 32],
                 TestSignerMode::Sign,
             )
@@ -1357,7 +1357,7 @@ mod tests {
             let (issuer, signer) = issuer_and_signer(1, mode);
             let error = issuer
                 .issue_token(
-                    quota_subject("credential-hsm"),
+                    quota_subject("credential-provider"),
                     vec![0xAA],
                     [0x11; 32],
                     "sorafs.sf1@1.0.0".to_owned(),
@@ -1372,7 +1372,7 @@ mod tests {
             assert_eq!(signer.calls.load(Ordering::Relaxed), 1);
             assert!(matches!(
                 issuer.issue_token(
-                    quota_subject("credential-hsm"),
+                    quota_subject("credential-provider"),
                     vec![0xAA],
                     [0x11; 32],
                     "sorafs.sf1@1.0.0".to_owned(),

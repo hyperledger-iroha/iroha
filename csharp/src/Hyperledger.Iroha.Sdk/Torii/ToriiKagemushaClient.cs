@@ -41,9 +41,7 @@ public sealed partial class ToriiClient
         return SubmitKagemushaV4Async(
             "/v1/offline/top-up",
             request.Norito,
-            request.OperationId,
-            request.IssuedAtMilliseconds,
-            ToriiKagemushaOperationKind.TopUp,
+            request.Identity,
             cancellationToken);
     }
 
@@ -55,9 +53,7 @@ public sealed partial class ToriiClient
         return SubmitKagemushaV4Async(
             "/v1/offline/redeem",
             request.Norito,
-            request.OperationId,
-            request.IssuedAtMilliseconds,
-            ToriiKagemushaOperationKind.Redeem,
+            request.Identity,
             cancellationToken);
     }
 
@@ -106,9 +102,7 @@ public sealed partial class ToriiClient
     private async Task<ToriiKagemushaOperationReference> SubmitKagemushaV4Async(
         string path,
         byte[] norito,
-        string operationId,
-        ulong issuedAtMilliseconds,
-        ToriiKagemushaOperationKind expectedKind,
+        ToriiKagemushaOperationIdentity identity,
         CancellationToken cancellationToken)
     {
         EnsureOneShotTransportIsVerified();
@@ -122,7 +116,7 @@ public sealed partial class ToriiClient
             configureRequest: message =>
             {
                 message.Headers.Remove("Idempotency-Key");
-                message.Headers.TryAddWithoutValidation("Idempotency-Key", operationId);
+                message.Headers.TryAddWithoutValidation("Idempotency-Key", identity.OperationId);
             },
             cancellationToken: cancellationToken);
         if (response.StatusCode != HttpStatusCode.Accepted)
@@ -139,9 +133,7 @@ public sealed partial class ToriiClient
         var location = response.Headers.Location?.OriginalString;
         return ParseKagemushaOperationReference(
             document.RootElement,
-            operationId,
-            issuedAtMilliseconds,
-            expectedKind,
+            identity,
             location);
     }
 
@@ -257,47 +249,37 @@ public sealed partial class ToriiClient
 
     private static ToriiKagemushaOperationReference ParseKagemushaOperationReference(
         JsonElement root,
-        string expectedOperationId,
-        ulong expectedSubmittedAtMilliseconds,
-        ToriiKagemushaOperationKind expectedKind,
+        ToriiKagemushaOperationIdentity expectedIdentity,
         string? location)
     {
         RequireExactFields(
             root,
             "Kagemusha operation reference",
-            "operation_id",
-            "kind",
+            "identity",
             "state",
             "transaction_hash",
-            "status_uri",
-            "submitted_at_ms");
-        var operationId = RequireJsonOperationId(root.GetProperty("operation_id"), "operation_id");
-        var kind = ParseTaggedKind(root.GetProperty("kind"), "kind");
+            "status_uri");
+        var identity = ParseKagemushaOperationIdentity(
+            root.GetProperty("identity"),
+            "identity");
         var state = ParseTaggedPendingState(root.GetProperty("state"));
         var transactionHash = RequireJsonHash(root.GetProperty("transaction_hash"), "transaction_hash");
         var statusUri = RequireJsonString(root.GetProperty("status_uri"), "status_uri");
-        var submittedAtMilliseconds = RequireJsonPositiveUInt64(
-            root.GetProperty("submitted_at_ms"),
-            "submitted_at_ms");
-        var expectedUri = $"/v1/offline/operations/{expectedOperationId}";
-        if (!string.Equals(operationId, expectedOperationId, StringComparison.Ordinal)
-            || kind != expectedKind
+        var expectedUri = $"/v1/offline/operations/{expectedIdentity.OperationId}";
+        if (!identity.Equals(expectedIdentity)
             || state != ToriiKagemushaOperationState.Pending
             || !string.Equals(statusUri, expectedUri, StringComparison.Ordinal)
-            || !string.Equals(location, expectedUri, StringComparison.Ordinal)
-            || submittedAtMilliseconds != expectedSubmittedAtMilliseconds)
+            || !string.Equals(location, expectedUri, StringComparison.Ordinal))
         {
             throw new JsonException("Kagemusha operation reference does not match the submitted V4 command.");
         }
 
         return new ToriiKagemushaOperationReference
         {
-            OperationId = operationId,
-            Kind = kind,
+            Identity = identity,
             State = state,
             TransactionHash = transactionHash,
             StatusUri = statusUri,
-            SubmittedAtMilliseconds = submittedAtMilliseconds,
         };
     }
 
@@ -312,59 +294,59 @@ public sealed partial class ToriiClient
         {
             throw new JsonException("Kagemusha operation status value must be an object.");
         }
-        var operationId = RequireJsonOperationId(value.GetProperty("operation_id"), "value.operation_id");
-        if (!string.Equals(operationId, expectedReference.OperationId, StringComparison.Ordinal))
+        // Bind the whole immutable identity before accepting a Pending cursor
+        // or parsing terminal result/error data.
+        var identity = ParseKagemushaOperationIdentity(
+            value.GetProperty("identity"),
+            "value.identity");
+        if (!identity.Equals(expectedReference.Identity))
         {
-            throw new JsonException("Kagemusha operation status does not match the requested operation id.");
+            throw new JsonException("Kagemusha operation status identity does not match the accepted reference.");
         }
 
         var status = stateText switch
         {
-            "pending" => ParsePendingStatus(value, operationId),
-            "applied" => ParseAppliedStatus(value, operationId),
-            "rejected" => ParseRejectedStatus(value, operationId),
+            "pending" => ParsePendingStatus(value, identity),
+            "applied" => ParseAppliedStatus(value, identity),
+            "rejected" => ParseRejectedStatus(value, identity),
             _ => throw new JsonException("Kagemusha operation state must be pending, applied, or rejected."),
         };
-
-        if (status.Kind != expectedReference.Kind
-            || status.State == ToriiKagemushaOperationState.Pending
-                && status.SubmittedAtMilliseconds != expectedReference.SubmittedAtMilliseconds)
-        {
-            throw new JsonException(
-                "Kagemusha operation status does not match the accepted operation reference.");
-        }
 
         return status;
     }
 
-    private static ToriiKagemushaOperationStatus ParsePendingStatus(JsonElement value, string operationId)
+    private static ToriiKagemushaOperationStatus ParsePendingStatus(
+        JsonElement value,
+        ToriiKagemushaOperationIdentity identity)
     {
         RequireExactFields(
             value,
             "Kagemusha pending operation",
-            "operation_id",
-            "kind",
-            "transaction_hash",
-            "submitted_at_ms");
+            "identity",
+            "transaction_hash");
         return new ToriiKagemushaOperationStatus
         {
-            OperationId = operationId,
+            Identity = identity,
             State = ToriiKagemushaOperationState.Pending,
-            Kind = ParseTaggedKind(value.GetProperty("kind"), "value.kind"),
             TransactionHash = RequireJsonHash(value.GetProperty("transaction_hash"), "value.transaction_hash"),
-            SubmittedAtMilliseconds = RequireJsonPositiveUInt64(value.GetProperty("submitted_at_ms"), "value.submitted_at_ms"),
         };
     }
 
-    private static ToriiKagemushaOperationStatus ParseAppliedStatus(JsonElement value, string operationId)
+    private static ToriiKagemushaOperationStatus ParseAppliedStatus(
+        JsonElement value,
+        ToriiKagemushaOperationIdentity identity)
     {
-        RequireExactFields(value, "Kagemusha applied operation", "operation_id", "result");
+        RequireExactFields(value, "Kagemusha applied operation", "identity", "result");
         var resultTag = value.GetProperty("result");
         RequireExactFields(resultTag, "Kagemusha applied result", "kind", "result");
         var kindText = RequireJsonString(resultTag.GetProperty("kind"), "value.result.kind");
         var result = resultTag.GetProperty("result");
         if (kindText == "redeem")
         {
+            if (identity.Kind != ToriiKagemushaOperationKind.Redeem)
+            {
+                throw new JsonException("Kagemusha applied result kind does not match its identity.");
+            }
             RequireExactFields(
                 result,
                 "Kagemusha redeem result",
@@ -372,9 +354,8 @@ public sealed partial class ToriiClient
                 "finalized_block_height");
             return new ToriiKagemushaOperationStatus
             {
-                OperationId = operationId,
+                Identity = identity,
                 State = ToriiKagemushaOperationState.Applied,
-                Kind = ToriiKagemushaOperationKind.Redeem,
                 TransactionHash = RequireJsonHash(
                     result.GetProperty("transaction_hash"),
                     "result.transaction_hash"),
@@ -388,6 +369,10 @@ public sealed partial class ToriiClient
         if (kindText != "top_up")
         {
             throw new JsonException("Kagemusha applied result kind must be top_up or redeem.");
+        }
+        if (identity.Kind != ToriiKagemushaOperationKind.TopUp)
+        {
+            throw new JsonException("Kagemusha applied result kind does not match its identity.");
         }
 
         RequireExactFields(
@@ -422,7 +407,7 @@ public sealed partial class ToriiClient
         }
         var anchorOperationId = RequireJsonFixedBytes32MatchesOperationId(
             RequireJsonProperty(anchor, "topup_operation_id", "result.anchor"),
-            operationId,
+            identity.OperationId,
             "result.anchor.topup_operation_id");
 
         var finalityProof = RequireJsonObject(
@@ -443,7 +428,7 @@ public sealed partial class ToriiClient
                 finalityAnchor,
                 "topup_operation_id",
                 "result.finality_proof.anchor"),
-            operationId,
+            identity.OperationId,
             "result.finality_proof.anchor.topup_operation_id");
 
         // This authenticates the anchor path and combined state root against
@@ -460,9 +445,8 @@ public sealed partial class ToriiClient
 
         return new ToriiKagemushaOperationStatus
         {
-            OperationId = operationId,
+            Identity = identity,
             State = ToriiKagemushaOperationState.Applied,
-            Kind = ToriiKagemushaOperationKind.TopUp,
             TransactionHash = transactionHash,
             TopUpResult = new ToriiKagemushaTopUpResultV4
             {
@@ -474,13 +458,14 @@ public sealed partial class ToriiClient
         };
     }
 
-    private static ToriiKagemushaOperationStatus ParseRejectedStatus(JsonElement value, string operationId)
+    private static ToriiKagemushaOperationStatus ParseRejectedStatus(
+        JsonElement value,
+        ToriiKagemushaOperationIdentity identity)
     {
         RequireExactFields(
             value,
             "Kagemusha rejected operation",
-            "operation_id",
-            "kind",
+            "identity",
             "transaction_hash",
             "error");
         var error = value.GetProperty("error");
@@ -505,9 +490,8 @@ public sealed partial class ToriiClient
         var details = hasDetails ? detailValue.Clone() : (JsonElement?)null;
         return new ToriiKagemushaOperationStatus
         {
-            OperationId = operationId,
+            Identity = identity,
             State = ToriiKagemushaOperationState.Rejected,
-            Kind = ParseTaggedKind(value.GetProperty("kind"), "value.kind"),
             TransactionHash = RequireJsonHash(value.GetProperty("transaction_hash"), "value.transaction_hash"),
             Error = new ToriiKagemushaOperationError
             {
@@ -516,6 +500,45 @@ public sealed partial class ToriiClient
                 Details = details,
             },
         };
+    }
+
+    private static ToriiKagemushaOperationIdentity ParseKagemushaOperationIdentity(
+        JsonElement element,
+        string context)
+    {
+        RequireExactFields(
+            element,
+            context,
+            "operation_id",
+            "request_authority_digest",
+            "canonical_request_digest",
+            "kind",
+            "issued_at_ms",
+            "expires_at_ms");
+        try
+        {
+            return new ToriiKagemushaOperationIdentity(
+                RequireJsonOperationId(
+                    element.GetProperty("operation_id"),
+                    $"{context}.operation_id"),
+                RequireJsonHash(
+                    element.GetProperty("request_authority_digest"),
+                    $"{context}.request_authority_digest"),
+                RequireJsonHash(
+                    element.GetProperty("canonical_request_digest"),
+                    $"{context}.canonical_request_digest"),
+                ParseTaggedKind(element.GetProperty("kind"), $"{context}.kind"),
+                RequireJsonPositiveUInt64(
+                    element.GetProperty("issued_at_ms"),
+                    $"{context}.issued_at_ms"),
+                RequireJsonPositiveUInt64(
+                    element.GetProperty("expires_at_ms"),
+                    $"{context}.expires_at_ms"));
+        }
+        catch (ArgumentException error)
+        {
+            throw new JsonException($"{context} is invalid.", error);
+        }
     }
 
     private static ToriiKagemushaOperationKind ParseTaggedKind(JsonElement element, string context)
@@ -551,14 +574,12 @@ public sealed partial class ToriiClient
         ToriiKagemushaOperationReference reference)
     {
         ArgumentNullException.ThrowIfNull(reference);
+        ArgumentNullException.ThrowIfNull(reference.Identity);
         var operationId = ToriiKagemushaTransport.RequireOperationId(
-            reference.OperationId,
+            reference.Identity.OperationId,
             nameof(reference));
         var expectedStatusUri = $"/v1/offline/operations/{operationId}";
-        if (reference.Kind is not (ToriiKagemushaOperationKind.TopUp
-                or ToriiKagemushaOperationKind.Redeem)
-            || reference.State != ToriiKagemushaOperationState.Pending
-            || reference.SubmittedAtMilliseconds == 0
+        if (reference.State != ToriiKagemushaOperationState.Pending
             || !string.Equals(reference.StatusUri, expectedStatusUri, StringComparison.Ordinal))
         {
             throw new ArgumentException(

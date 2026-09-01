@@ -3722,23 +3722,21 @@ async fn read_queue_file_bounded(
     directory: Arc<WebhookDirectory>,
     path: PathBuf,
 ) -> std::io::Result<BoundedWebhookFile> {
-    tokio::task::spawn_blocking(move || {
+    run_queue_filesystem_operation(move || {
         read_private_webhook_file_bounded(&directory, &path, WEBHOOK_QUEUE_FILE_MAX_BYTES)?
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "webhook spool disappeared"))
     })
     .await
-    .map_err(io::Error::other)?
 }
 async fn remove_queue_file(
     directory: Arc<WebhookDirectory>,
     path: PathBuf,
     expected: Option<WebhookFileIdentity>,
 ) -> io::Result<()> {
-    tokio::task::spawn_blocking(move || {
+    run_queue_filesystem_operation(move || {
         unlink_private_webhook_entry(&directory, &path, expected, true)
     })
     .await
-    .map_err(io::Error::other)?
 }
 async fn replace_queue_file(
     directory: Arc<WebhookDirectory>,
@@ -3746,7 +3744,7 @@ async fn replace_queue_file(
     expected: WebhookFileIdentity,
     bytes: Vec<u8>,
 ) -> io::Result<()> {
-    tokio::task::spawn_blocking(move || {
+    run_queue_filesystem_operation(move || {
         write_private_webhook_file_atomic(
             &directory,
             &path,
@@ -3755,6 +3753,17 @@ async fn replace_queue_file(
             WebhookPublication::ReplaceIdentity(expected),
         )
     })
+    .await
+}
+async fn run_queue_filesystem_operation<T>(
+    operation: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> io::Result<T>
+where
+    T: Send + 'static,
+{
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        operation,
+    ))
     .await
     .map_err(io::Error::other)?
 }
@@ -4686,6 +4695,30 @@ mod tests {
         let mut recovered = super::lock_unpoisoned(&mutex);
         assert_eq!(*recovered, 7);
         *recovered = 8;
+    }
+    #[test]
+    fn queue_filesystem_panic_is_recovered() {
+        let runtime = Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            let reached = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let reached_in_worker = Arc::clone(&reached);
+            let error = super::run_queue_filesystem_operation(move || -> io::Result<()> {
+                assert!(
+                    iroha_core::panic_hook::is_suppressed(),
+                    "the recoverable boundary must be installed on the physical blocking worker"
+                );
+                reached_in_worker.store(true, std::sync::atomic::Ordering::SeqCst);
+                panic!("injected webhook queue filesystem panic");
+            })
+            .await
+            .expect_err("a queue filesystem panic must become a controlled I/O error");
+            assert_eq!(error.kind(), io::ErrorKind::Other);
+            assert!(reached.load(std::sync::atomic::Ordering::SeqCst));
+            assert!(
+                !iroha_core::panic_hook::is_suppressed(),
+                "suppression must stay scoped to the physical blocking worker"
+            );
+        });
     }
     #[test]
     fn proof_id_parsing_supports_string_and_object_forms() {

@@ -206,8 +206,8 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   block replay. Unknown versions, invalid/duplicate catalogs, missing lane 0,
   malformed or future autoscale ownership, and future cooldown cursors are
   rejected. This closes the tip-snapshot gap where no Kura suffix exists to
-  replay a scale-out or scale-in; legacy snapshots without the record continue
-  to use the configured catalog.
+  replay a scale-out or scale-in. Snapshots without the record are rejected;
+  there is no first-release compatibility fallback.
 - Autoscale scale-out creates elastic lanes in the configured default
   dataspace. Those lanes are admitted into default traffic only when their
   visibility is public, their metadata marks them as managed, their alias
@@ -294,12 +294,13 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   ownership. The same reset prunes AXT replay ledger entries keyed by a retired
   handle target lane while
   preserving cross-lane replay guards whose handles target surviving lanes.
-  Public-lane stake-share rows and reward records keyed by or carrying the
-  reset lane, plus reward-claim cursors keyed by the reset lane, are removed as
-  live economic indices so a recreated lane id cannot inherit stale reward
-  epochs or claim cursors. Operator staking status snapshots for reset lanes are
-  cleared with the same reset, preventing stale bonded or slash totals from
-  surviving lane-id reuse in status surfaces.
+  After every reset-owned tenure, custody balance, pending unbond, and evidence
+  lien passes retirement preflight, public-lane stake-share rows and reward
+  records keyed by or carrying the reset lane, plus reward-claim cursors keyed
+  by the reset lane, are removed as live economic indices so a recreated lane
+  id cannot inherit stale reward epochs or claim cursors. Operator staking
+  status snapshots for reset lanes are cleared with the same reset, preventing
+  stale bonded or slash totals from surviving lane-id reuse in status surfaces.
   The block-local path refreshes AXT policy caches after the lane catalog
   changes, retargeting Space Directory-derived entries when directory data is
   present and pruning explicit cache entries whose target lane no longer exists.
@@ -513,15 +514,21 @@ limits. The integration harness at
 scenarios and emits JSON summaries (`sumeragi_baseline_summary::<scenario>::…`)
 whenever new metrics land. Run it locally with:
 
-Live NPoS lane-scope inference is intentionally active-record-only:
-`PendingActivation`, `Jailed`, `Exiting`, `Exited`, and `Slashed`
-public-lane validator records are retained for lifecycle/audit history, but
-they must not constrain recovery candidates or active topology selection after
-lane retirement, rebinding, or autoscale scale-in. Lane reset paths also mark
-revivable `PendingActivation`, `Active`, and `Jailed` records for the reset
-lane as `Exited`, treating either the storage key lane or embedded record lane
-as reset ownership, so a retired lane cannot promote stale pending validators
-or carry stale active validators into a future incarnation of the same lane id.
+Exact-height NPoS election and validation use a validator's retained half-open
+tenure `[activation_height, deactivation_height)`, not a mutable lifecycle
+label. The required activation height is the first eligible height and an
+optional deactivation height is the first ineligible height. Pending validators
+can therefore enter the exact boundary for which they were scheduled, while an
+`Exiting` or slashed validator remains binding through the last height before
+deactivation so an already frozen committee cannot be rewritten. Ended tenures
+remain available for lifecycle audit and offence attribution but cannot enter a
+later recovery or active topology. Lane reset, rebind, and autoscale scale-in
+wait for every reset-owned tenure to reach deactivation, all stake-share and
+pending-unbond custody to drain, and pending evidence liens to clear before
+terminal records and economic indexes may be removed. Reset ownership matches
+either the storage key lane or embedded record lane, preventing a recreated
+lane id from inheriting stale authority without erasing live committee or slash
+liability.
 Live topology, stake snapshot, validator-election profile, due-activation,
 released-exit sweeping, penalty-locator, staking-admission, direct staking
 mutations, reward bookkeeping, slash handling, peer/account cleanup guards,
@@ -546,12 +553,13 @@ validator registration and exit require the validator authority, registration
 initial stake must be validator-owned self-stake, and
 bond/schedule-unbond/finalize-unbond require the staker authority.
 Public-lane stake-share rows, reward records, and reward-claim cursors are live
-economic indices rather than audit history; the same reset paths delete
-reset-owned rows (by storage key or embedded lane where present) and clear
-operator staking status for reset lanes while leaving unchanged-lane economic
-state and status intact. Failed lane-retirement
-preflight leaves those rows and the reset-lane validator/emergency/AXT/relay
-state committed until storage geometry can move atomically.
+economic indices rather than audit history; after the tenure, custody, and
+evidence gates succeed, reset paths delete reset-owned rows (by storage key or
+embedded lane where present) and clear operator staking status for reset lanes
+while leaving unchanged-lane economic state and status intact. Failed
+lane-retirement preflight leaves those rows and the reset-lane
+validator/emergency/AXT/relay state committed until storage geometry can move
+atomically.
 Authoritative lane validator and peer resolution additionally rejects any lane
 absent from the active derived lane config, or whose dataspace is absent from
 the active dataspace catalog, so stale manifest bindings or active public

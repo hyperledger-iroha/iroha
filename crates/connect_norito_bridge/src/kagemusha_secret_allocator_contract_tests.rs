@@ -2,9 +2,9 @@
 fn redemption_change_c_header_declares_secret_allocator_contract() {
     let header = include_str!("../include/connect_norito_bridge.h");
     for declaration in [
-        "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4(",
+        "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5(",
         "connect_norito_kagemusha_secret_free_buffer(uint8_t* ptr)",
-        "KagemushaRecursiveSpendRedemptionChangePrepareRequestV4",
+        "KagemushaRecursiveSpendRedemptionChangePrepareRequestV5",
         "KagemushaRecursiveSpendRedemptionChangePrepareResultV4",
     ] {
         assert!(
@@ -15,7 +15,7 @@ fn redemption_change_c_header_declares_secret_allocator_contract() {
     let source = bridge_source();
     let prepare = source
         .split_once(
-            "pub unsafe extern \"C\" fn connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+            "pub unsafe extern \"C\" fn connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5",
         )
         .expect("prepare export")
         .1

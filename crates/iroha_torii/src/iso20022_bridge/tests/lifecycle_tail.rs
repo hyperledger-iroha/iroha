@@ -327,9 +327,11 @@ fn lifecycle_apply_returns_snapshot_before_retention_compaction() {
         .expect("cfg")
         .expect("enabled");
     runtime.store_retention = std::time::Duration::from_nanos(1);
+    record_original(&runtime, "compact-lifecycle-original", "pacs.008");
+    assert!(runtime.mark_queued("compact-lifecycle-original"));
     let parsed = parse_message(
         "pacs.002",
-        b"MsgId=compact-lifecycle-response\nOrgnlMsgId=unknown-original\nTxSts=ACSP",
+        b"MsgId=compact-lifecycle-response\nOrgnlMsgId=compact-lifecycle-original\nTxSts=ACSP",
     )
     .expect("pacs.002 parsed");
     record_lifecycle(&runtime, "compact-lifecycle-response", "pacs.002");
@@ -341,7 +343,7 @@ fn lifecycle_apply_returns_snapshot_before_retention_compaction() {
             &parsed,
         )
         .expect("lifecycle response snapshot");
-    assert_eq!(outcome.action(), "recorded");
+    assert_eq!(outcome.action(), "marked_processing");
     assert_eq!(snapshot.message_id(), "compact-lifecycle-response");
     assert_eq!(snapshot.status_label(), "Accepted");
 
@@ -353,6 +355,30 @@ fn lifecycle_apply_returns_snapshot_before_retention_compaction() {
             .is_none()
     );
     assert_eq!(snapshot.status_label(), "Accepted");
+}
+#[test]
+fn lifecycle_pacs002_rejects_unknown_original() {
+    let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+        .expect("cfg")
+        .expect("enabled");
+    let parsed = parse_message(
+        "pacs.002",
+        b"MsgId=orphan-status\nOrgnlMsgId=unknown-original\nTxSts=ACSP",
+    )
+    .expect("pacs.002 parsed");
+    record_lifecycle(&runtime, "orphan-status", "pacs.002");
+
+    let error = runtime
+        .apply_inbound_lifecycle_message("orphan-status", "pacs.002", &parsed)
+        .expect_err("an unknown payment original must fail closed");
+    assert!(matches!(error, MsgError::ValidationFailed));
+    assert_eq!(
+        runtime
+            .message_status("orphan-status")
+            .expect("admitted lifecycle identity remains reserved")
+            .status_label(),
+        "Pending"
+    );
 }
 #[test]
 fn checked_in_pacs002_fixture_settles_known_original() {
@@ -768,7 +794,7 @@ fn lifecycle_pacs004_rejects_conflicting_original_references() {
     }
 }
 #[test]
-fn lifecycle_camt056_records_unknown_original_without_creating_it() {
+fn lifecycle_camt056_rejects_unknown_original() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
         .expect("enabled");
@@ -780,19 +806,17 @@ fn lifecycle_camt056_records_unknown_original_without_creating_it() {
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("camt.056", &parsed).expect("lifecycle id");
     record_lifecycle(&runtime, &lifecycle_id, "camt.056");
-    let outcome = runtime
+    let error = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "camt.056", &parsed)
-        .expect("lifecycle applied");
-    assert_eq!(outcome.referenced_message_id(), Some("missing-original"));
-    assert!(!outcome.referenced_message_known());
-    assert_eq!(outcome.action(), "recorded");
+        .expect_err("an unknown cancellation original must fail closed");
+    assert!(matches!(error, MsgError::ValidationFailed));
     assert!(runtime.message_status("missing-original").is_none());
     assert_eq!(
         runtime
             .message_status("cancel-1")
-            .expect("lifecycle status")
+            .expect("admitted lifecycle identity remains reserved")
             .status_label(),
-        "Accepted"
+        "Pending"
     );
 }
 #[test]
@@ -900,7 +924,7 @@ fn lifecycle_sese024_marks_prefixed_settlement_instruction_pending() {
     );
 }
 #[test]
-fn lifecycle_sese024_records_unknown_original_without_creating_it() {
+fn lifecycle_sese024_rejects_unknown_original() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
         .expect("enabled");
@@ -913,22 +937,17 @@ fn lifecycle_sese024_records_unknown_original_without_creating_it() {
         Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed).expect("lifecycle id");
     assert_eq!(lifecycle_id, "sese.024:missing-status");
     record_lifecycle(&runtime, &lifecycle_id, "sese.024");
-    let outcome = runtime
+    let error = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "sese.024", &parsed)
-        .expect("lifecycle applied");
-    assert_eq!(
-        outcome.referenced_message_id(),
-        Some("sese.023:missing-status")
-    );
-    assert!(!outcome.referenced_message_known());
-    assert_eq!(outcome.action(), "recorded");
+        .expect_err("an unknown settlement original must fail closed");
+    assert!(matches!(error, MsgError::ValidationFailed));
     assert!(runtime.message_status("sese.023:missing-status").is_none());
     assert_eq!(
         runtime
             .message_status(&lifecycle_id)
-            .expect("lifecycle status")
+            .expect("admitted lifecycle identity remains reserved")
             .status_label(),
-        "Accepted"
+        "Pending"
     );
 }
 #[test]

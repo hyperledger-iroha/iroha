@@ -24593,6 +24593,11 @@
           }
         ]
       },
+      "OfflineMarkedDigest": {
+        "description": "Canonical lowercase hexadecimal Blake2b-256 digest with the Iroha marker bit set.",
+        "pattern": "^[0-9a-f]{63}[13579bdf]$",
+        "type": "string"
+      },
       "OfflineMerkleProof": {
         "additionalProperties": false,
         "properties": {
@@ -24627,8 +24632,11 @@
           },
           "bytes": {
             "$ref": "#/components/schemas/OfflineByteArray",
+            "description": "Defensive absolute ceiling for an opaque proof pair. Authenticated Kagemusha V4 releases use the exact initialization size or at most the release proof maximum advertised below.",
             "maxItems": 393216,
-            "minItems": 1
+            "minItems": 1,
+            "x-iroha-initialization-proof-bytes": 186852,
+            "x-iroha-release-max-proof-bytes": 191862
           }
         },
         "required": [
@@ -24659,22 +24667,22 @@
       "OfflineOperationAppliedValue": {
         "additionalProperties": false,
         "properties": {
-          "operation_id": {
-            "$ref": "#/components/schemas/OfflineOperationId"
+          "identity": {
+            "$ref": "#/components/schemas/OfflineOperationIdentity"
           },
           "result": {
             "$ref": "#/components/schemas/OfflineOperationResult"
           }
         },
         "required": [
-          "operation_id",
+          "identity",
           "result"
         ],
         "type": "object"
       },
       "OfflineOperationId": {
-        "description": "Canonical non-zero lowercase hexadecimal 32-byte operation id.",
-        "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+        "description": "Canonical lowercase hexadecimal 32-byte operation id with the Iroha marker bit set.",
+        "pattern": "^[0-9a-f]{63}[13579bdf]$",
         "type": "string"
       },
       "OfflineOperationIdBytes": {
@@ -24724,6 +24732,46 @@
         },
         "type": "array"
       },
+      "OfflineOperationIdentity": {
+        "additionalProperties": false,
+        "description": "Complete immutable identity authenticated by an offline request and preserved unchanged through every lifecycle response.",
+        "properties": {
+          "canonical_request_digest": {
+            "$ref": "#/components/schemas/OfflineMarkedDigest"
+          },
+          "expires_at_ms": {
+            "description": "Signed request expiry in Unix epoch milliseconds. It must be later than issued_at_ms and no more than 300000 milliseconds after it.",
+            "format": "uint64",
+            "minimum": 2,
+            "type": "integer",
+            "x-iroha-maximum-ttl-ms": 300000
+          },
+          "issued_at_ms": {
+            "description": "Signed request issuance time in Unix epoch milliseconds, emitted as a lossless unquoted JSON integer.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OfflineOperationKind"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OfflineOperationId"
+          },
+          "request_authority_digest": {
+            "$ref": "#/components/schemas/OfflineMarkedDigest"
+          }
+        },
+        "required": [
+          "operation_id",
+          "request_authority_digest",
+          "canonical_request_digest",
+          "kind",
+          "issued_at_ms",
+          "expires_at_ms"
+        ],
+        "type": "object"
+      },
       "OfflineOperationKind": {
         "additionalProperties": false,
         "description": "Norito tagged unit enum selecting top-up or redemption. The exact canonical object requires value=null and rejects unknown members.",
@@ -24767,64 +24815,42 @@
       "OfflineOperationPendingValue": {
         "additionalProperties": false,
         "properties": {
-          "kind": {
-            "$ref": "#/components/schemas/OfflineOperationKind"
-          },
-          "operation_id": {
-            "$ref": "#/components/schemas/OfflineOperationId"
-          },
-          "submitted_at_ms": {
-            "description": "Signed request issuance time in Unix epoch milliseconds, emitted as a lossless unquoted JSON integer.",
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
+          "identity": {
+            "$ref": "#/components/schemas/OfflineOperationIdentity"
           },
           "transaction_hash": {
             "$ref": "#/components/schemas/OfflineTransactionHash"
           }
         },
         "required": [
-          "operation_id",
-          "kind",
-          "transaction_hash",
-          "submitted_at_ms"
+          "identity",
+          "transaction_hash"
         ],
         "type": "object"
       },
       "OfflineOperationReference": {
         "additionalProperties": false,
         "properties": {
-          "kind": {
-            "$ref": "#/components/schemas/OfflineOperationKind"
-          },
-          "operation_id": {
-            "$ref": "#/components/schemas/OfflineOperationId"
+          "identity": {
+            "$ref": "#/components/schemas/OfflineOperationIdentity"
           },
           "state": {
             "$ref": "#/components/schemas/OfflineOperationState"
           },
           "status_uri": {
             "format": "uri-reference",
-            "pattern": "^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$",
+            "pattern": "^/v1/offline/operations/[0-9a-f]{63}[13579bdf]$",
             "type": "string"
-          },
-          "submitted_at_ms": {
-            "description": "Signed request issuance time in Unix epoch milliseconds, emitted as a lossless unquoted JSON integer.",
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
           },
           "transaction_hash": {
             "$ref": "#/components/schemas/OfflineTransactionHash"
           }
         },
         "required": [
-          "operation_id",
-          "kind",
+          "identity",
           "state",
           "transaction_hash",
-          "status_uri",
-          "submitted_at_ms"
+          "status_uri"
         ],
         "type": "object"
       },
@@ -24853,19 +24879,15 @@
           "error": {
             "$ref": "#/components/schemas/ErrorEnvelope"
           },
-          "kind": {
-            "$ref": "#/components/schemas/OfflineOperationKind"
-          },
-          "operation_id": {
-            "$ref": "#/components/schemas/OfflineOperationId"
+          "identity": {
+            "$ref": "#/components/schemas/OfflineOperationIdentity"
           },
           "transaction_hash": {
             "$ref": "#/components/schemas/OfflineTransactionHash"
           }
         },
         "required": [
-          "operation_id",
-          "kind",
+          "identity",
           "transaction_hash",
           "error"
         ],
@@ -29943,15 +29965,15 @@
           "bundle_id": {
             "$ref": "#/components/schemas/Hash"
           },
-          "committee_authority": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Exact four-validator authority serving the acknowledgement."
-          },
           "collected": {
             "format": "uint8",
             "maximum": 255,
             "minimum": 0,
             "type": "integer"
+          },
+          "committee_authority": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact four-validator authority serving the acknowledgement."
           },
           "leg_ordinal": {
             "format": "uint8",
@@ -31015,6 +31037,89 @@
         ],
         "type": "object"
       },
+      "PublicLaneManifestValidatorRecord": {
+        "additionalProperties": false,
+        "description": "Manifest-backed validator authority projected when the lane has no staking-ledger validator rows.",
+        "properties": {
+          "activation_height": {
+            "description": "Manifest authority does not define a staking-tenure activation height.",
+            "type": "null"
+          },
+          "authority_source": {
+            "const": "manifest",
+            "description": "Authority is supplied by the lane manifest fallback.",
+            "type": "string"
+          },
+          "deactivation_height": {
+            "description": "Manifest authority does not define a staking-tenure deactivation height.",
+            "type": "null"
+          },
+          "lane_id": {
+            "description": "Lane serviced by the validator.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "last_reward_epoch": {
+            "description": "Manifest authority has no staking reward epoch.",
+            "type": "null"
+          },
+          "metadata": {
+            "description": "Empty metadata projected for manifest authority.",
+            "type": "object"
+          },
+          "peer_id": {
+            "description": "Peer identity bound by the lane manifest.",
+            "type": "string"
+          },
+          "self_stake": {
+            "const": "0",
+            "description": "Manifest authority has no staking-ledger self stake.",
+            "type": "string"
+          },
+          "stake_account": {
+            "description": "Validator account projected as the stake account for a manifest authority row.",
+            "type": "string"
+          },
+          "status": {
+            "additionalProperties": false,
+            "description": "Manifest authority is active while selected as the lane fallback.",
+            "properties": {
+              "type": {
+                "const": "Active",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "total_stake": {
+            "const": "0",
+            "description": "Manifest authority has no staking-ledger total stake.",
+            "type": "string"
+          },
+          "validator": {
+            "description": "Validator authority account literal rendered as canonical I105.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane_id",
+          "validator",
+          "peer_id",
+          "stake_account",
+          "total_stake",
+          "self_stake",
+          "status",
+          "activation_height",
+          "deactivation_height",
+          "metadata",
+          "last_reward_epoch",
+          "authority_source"
+        ],
+        "type": "object"
+      },
       "PublicLanePendingReward": {
         "additionalProperties": false,
         "properties": {
@@ -31161,6 +31266,11 @@
             "description": "Amount scheduled for release.",
             "type": "string"
           },
+          "liability_release_height": {
+            "description": "Earliest block whose post-finality transaction phase may release the funds after the complete slashing-liability window.",
+            "format": "uint64",
+            "type": "integer"
+          },
           "release_at_ms": {
             "description": "Release timestamp (ms).",
             "format": "uint64",
@@ -31169,22 +31279,46 @@
           "request_id": {
             "description": "Client-supplied identifier rendered as hex.",
             "type": "string"
+          },
+          "slashable_through_height": {
+            "description": "Inclusive final offence height underwritten by this retained custody.",
+            "format": "uint64",
+            "type": "integer"
           }
         },
         "required": [
           "request_id",
           "amount",
-          "release_at_ms"
+          "release_at_ms",
+          "slashable_through_height",
+          "liability_release_height"
         ],
         "type": "object"
+      },
+      "PublicLaneValidatorListItem": {
+        "discriminator": {
+          "mapping": {
+            "manifest": "#/components/schemas/PublicLaneManifestValidatorRecord",
+            "staking": "#/components/schemas/PublicLaneValidatorRecord"
+          },
+          "propertyName": "authority_source"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/PublicLaneValidatorRecord"
+          },
+          {
+            "$ref": "#/components/schemas/PublicLaneManifestValidatorRecord"
+          }
+        ]
       },
       "PublicLaneValidatorListResponse": {
         "additionalProperties": false,
         "properties": {
           "items": {
-            "description": "Validator records for the lane.",
+            "description": "Staking-ledger or manifest-backed validator authority rows for the lane.",
             "items": {
-              "$ref": "#/components/schemas/PublicLaneValidatorRecord"
+              "$ref": "#/components/schemas/PublicLaneValidatorListItem"
             },
             "type": "array"
           },
@@ -31208,18 +31342,25 @@
       },
       "PublicLaneValidatorRecord": {
         "additionalProperties": false,
+        "description": "Staking-ledger validator authority with an exact bounded election tenure.",
         "properties": {
-          "activation_epoch": {
-            "description": "Epoch recorded when the validator first became active.",
+          "activation_height": {
+            "description": "Inclusive first block height at which this staking validator may be elected.",
             "format": "uint64",
-            "nullable": true,
             "type": "integer"
           },
-          "activation_height": {
-            "description": "Block height recorded when the validator first became active.",
+          "authority_source": {
+            "const": "staking",
+            "description": "Authority is supplied by the public-lane staking ledger.",
+            "type": "string"
+          },
+          "deactivation_height": {
+            "description": "Exclusive first block height no longer covered by this validator binding, or null while the tenure remains open.",
             "format": "uint64",
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "lane_id": {
             "description": "Lane serviced by the validator.",
@@ -31229,8 +31370,10 @@
           "last_reward_epoch": {
             "description": "Epoch that last produced a reward payout.",
             "format": "uint64",
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "metadata": {
             "description": "Optional metadata (commission, endpoints, jurisdiction flags, etc.).",
@@ -31267,52 +31410,104 @@
           "stake_account",
           "total_stake",
           "self_stake",
-          "status"
+          "status",
+          "activation_height",
+          "deactivation_height",
+          "metadata",
+          "last_reward_epoch",
+          "authority_source"
         ],
         "type": "object"
       },
       "PublicLaneValidatorStatus": {
-        "additionalProperties": false,
-        "properties": {
-          "activates_at_epoch": {
-            "description": "Activation epoch when pending; host auto-promotes once the current epoch meets this value.",
-            "format": "uint64",
-            "nullable": true,
-            "type": "integer"
-          },
-          "reason": {
-            "description": "Jail reason when applicable.",
-            "nullable": true,
-            "type": "string"
-          },
-          "releases_at_ms": {
-            "description": "Release timestamp (ms) when exiting.",
-            "format": "uint64",
-            "nullable": true,
-            "type": "integer"
-          },
-          "slash_id": {
-            "description": "Slash identifier when slashed.",
-            "nullable": true,
-            "type": "string"
-          },
-          "type": {
-            "description": "Lifecycle status for the validator.",
-            "enum": [
-              "PendingActivation",
-              "Active",
-              "Jailed",
-              "Exiting",
-              "Exited",
-              "Slashed"
-            ],
-            "type": "string"
-          }
+        "description": "Closed validator lifecycle status. Each discriminator admits exactly its variant payload.",
+        "discriminator": {
+          "propertyName": "type"
         },
-        "required": [
-          "type"
-        ],
-        "type": "object"
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "activates_at_height": {
+                "description": "Exact first election-eligible block height.",
+                "format": "uint64",
+                "type": "integer"
+              },
+              "type": {
+                "const": "PendingActivation",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "activates_at_height"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "Active",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "releases_at_ms": {
+                "description": "Release timestamp (ms).",
+                "format": "uint64",
+                "type": "integer"
+              },
+              "type": {
+                "const": "Exiting",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "releases_at_ms"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "Exited",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "slash_id": {
+                "description": "Slash identifier.",
+                "type": "string"
+              },
+              "type": {
+                "const": "Slashed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "slash_id"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "PublishMusubiReleaseV1": {
         "additionalProperties": false,
@@ -47066,6 +47261,211 @@
           "autonomous_lane_executions"
         ],
         "type": "object"
+      },
+      "SumeragiEvidenceAuditRecord": {
+        "additionalProperties": false,
+        "description": "Closed JSON audit projection of one committed Sumeragi v2 equivocation record.",
+        "properties": {
+          "artifact_hash_1": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "artifact_hash_2": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "class": {
+            "enum": [
+              "proposal",
+              "phase_vote",
+              "timeout_vote"
+            ],
+            "type": "string"
+          },
+          "consensus_admitted_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "context_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "SumeragiV2Equivocation",
+            "type": "string"
+          },
+          "penalty_status": {
+            "$ref": "#/components/schemas/SumeragiEvidencePenaltyStatus"
+          },
+          "recorded_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recorded_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recorded_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signer": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "class",
+          "height",
+          "view",
+          "epoch",
+          "signer",
+          "context_id",
+          "artifact_hash_1",
+          "artifact_hash_2",
+          "recorded_height",
+          "recorded_view",
+          "recorded_ms",
+          "consensus_admitted_height",
+          "penalty_status"
+        ],
+        "type": "object"
+      },
+      "SumeragiEvidenceCountResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "type": "object"
+      },
+      "SumeragiEvidenceListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SumeragiEvidenceAuditRecord"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "items"
+        ],
+        "type": "object"
+      },
+      "SumeragiEvidencePenaltyStatus": {
+        "description": "Closed penalty lifecycle with an explicit null pending payload and exact terminal height.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "details": {
+                "type": "null"
+              },
+              "status": {
+                "const": "pending",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "details"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "details": {
+                "additionalProperties": false,
+                "properties": {
+                  "height": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "height"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "const": "applied",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "details"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "details": {
+                "additionalProperties": false,
+                "properties": {
+                  "height": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "height"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "const": "cancelled",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "details"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "SumeragiLaneBlockSessionStatus": {
         "additionalProperties": false,
@@ -78163,7 +78563,7 @@
     },
     "/v1/nexus/public-lanes/{lane_id}/validators": {
       "get": {
-        "description": "Returns validators servicing the requested public lane with lifecycle status (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height, and `release_at_ms` when an exit timer is running.",
+        "description": "Returns staking-ledger or manifest-backed validators servicing the requested public lane. Each row identifies its `authority_source`; staking rows carry exact activation/deactivation height bounds, while manifest fallback rows carry null tenure bounds.",
         "operationId": "nexusPublicLaneValidators",
         "parameters": [
           {
@@ -79510,12 +79910,12 @@
         "operationId": "offlineOperationStatus",
         "parameters": [
           {
-            "description": "Canonical non-zero lowercase hexadecimal identifier from the configured Kagemusha submission authority's offline operation namespace.",
+            "description": "Canonical marked lowercase hexadecimal identifier from the configured Kagemusha submission authority's offline operation namespace.",
             "in": "path",
             "name": "operation_id",
             "required": true,
             "schema": {
-              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "pattern": "^[0-9a-f]{63}[13579bdf]$",
               "type": "string"
             }
           }
@@ -80348,12 +80748,12 @@
         "operationId": "offlineRedeem",
         "parameters": [
           {
-            "description": "Non-zero lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is the globally unique economic identity across offline command routes and Kagemusha submission authorities and binds the complete signed authorization and canonical typed request. A global Applied replay returns the original operation and any different request reuse conflicts. The same exact request under the configured authority may retry a Rejected attempt with the next deterministic non-zero transaction nonce; a newer exact pending attempt supersedes the older rejection. Clients must never recycle an id after a 404.",
+            "description": "Marked lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is derived from the canonical authority archive plus the signed nonce and is the globally unique economic identity across offline command routes and Kagemusha submission authorities. The separate canonical request digest binds the complete signed authorization and typed request. A global Applied replay returns the original operation and any different request reuse conflicts. The same exact request under the configured authority may retry a Rejected attempt with the next deterministic non-zero transaction nonce; a newer exact pending attempt supersedes the older rejection. Clients must never recycle an id after a 404.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
             "schema": {
-              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "pattern": "^[0-9a-f]{63}[13579bdf]$",
               "type": "string"
             }
           }
@@ -80402,7 +80802,7 @@
                 "required": true,
                 "schema": {
                   "format": "uri-reference",
-                  "pattern": "^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$",
+                  "pattern": "^/v1/offline/operations/[0-9a-f]{63}[13579bdf]$",
                   "type": "string"
                 }
               },
@@ -80771,12 +81171,12 @@
         "operationId": "offlineTopUp",
         "parameters": [
           {
-            "description": "Non-zero lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is the globally unique economic identity across offline command routes and Kagemusha submission authorities and binds the complete signed authorization and canonical typed request. A global Applied replay returns the original operation and any different request reuse conflicts. The same exact request under the configured authority may retry a Rejected attempt with the next deterministic non-zero transaction nonce; a newer exact pending attempt supersedes the older rejection. Clients must never recycle an id after a 404.",
+            "description": "Marked lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is derived from the canonical authority archive plus the signed nonce and is the globally unique economic identity across offline command routes and Kagemusha submission authorities. The separate canonical request digest binds the complete signed authorization and typed request. A global Applied replay returns the original operation and any different request reuse conflicts. The same exact request under the configured authority may retry a Rejected attempt with the next deterministic non-zero transaction nonce; a newer exact pending attempt supersedes the older rejection. Clients must never recycle an id after a 404.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
             "schema": {
-              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "pattern": "^[0-9a-f]{63}[13579bdf]$",
               "type": "string"
             }
           }
@@ -80825,7 +81225,7 @@
                 "required": true,
                 "schema": {
                   "format": "uri-reference",
-                  "pattern": "^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$",
+                  "pattern": "^/v1/offline/operations/[0-9a-f]{63}[13579bdf]$",
                   "type": "string"
                 }
               },
@@ -111116,12 +111516,52 @@
     "/v1/sumeragi/evidence": {
       "get": {
         "description": "List evidence entries recorded by the node.",
+        "parameters": [
+          {
+            "description": "Maximum records returned (default 50; maximum 1000).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "format": "uint32",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Records skipped before the bounded page (default 0; maximum 10000).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "format": "uint32",
+              "maximum": 10000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter by the sole first-release evidence kind.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "enum": [
+                "SumeragiV2Equivocation"
+              ],
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/SumeragiEvidenceListResponse"
                 }
               }
             },
@@ -111167,7 +111607,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/SumeragiEvidenceCountResponse"
                 }
               }
             },

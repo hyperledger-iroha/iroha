@@ -7,8 +7,11 @@
 This checklist captures the **AND6 — CI & Compliance Hardening** gates from
 `roadmap.md` (§Priority 5). It aligns Android SDK releases with the Rust
 release RFC expectations by spelling out the CI jobs, compliance artefacts,
-device-lab evidence, and provenance bundles that must be attached before a GA,
-LTS, or hotfix train moves forward.
+provider-neutral test evidence, and provenance bundles that must be attached
+before a GA, LTS, or hotfix train moves forward. Physical device-lab and
+StrongBox evidence is an optional addendum for releases that explicitly claim
+that hardware integration; software-backed custody remains a valid release
+profile and does not require lab availability.
 
 Use this document together with:
 
@@ -24,7 +27,7 @@ Use this document together with:
 | Stage | Required Gates | Evidence |
 |-------|----------------|----------|
 | **T−7 days (pre-freeze)** | Nightly `ci/run_android_tests.sh` green for 14 days; `ci/check_android_fixtures.sh` and `ci/check_android_samples.sh` passing; lint/dependency scans queued. | Buildkite dashboards, fixture diff report, sample screenshot snapshots. |
-| **T−3 days (RC promotion)** | Device-lab reservation confirmed; StrongBox attestation CI run (`scripts/android_strongbox_attestation_ci.sh`); Robolectric/instrumented suites exercised on scheduled hardware; `./gradlew lintRelease ktlintCheck detekt dependencyGuard` clean. | Device matrix CSV, attestation bundle manifest, Gradle reports archived under `artifacts/android/lint/<version>/`. |
+| **T−3 days (RC promotion)** | Robolectric/software-provider suites green; `./gradlew lintRelease ktlintCheck detekt dependencyGuard` clean. If the release explicitly qualifies StrongBox, also reserve the device lab and run `scripts/android_strongbox_attestation_ci.sh` plus the physical instrumentation matrix. | Gradle reports archived under `artifacts/android/lint/<version>/`; optional device matrix CSV and attestation manifest only for the selected hardware profile. |
 | **T−1 day (go/no-go)** | Telemetry redaction status bundle refreshed (`scripts/telemetry/check_redaction_status.py --write-cache`); compliance artefacts updated per `and6_compliance_checklist.md`; provenance rehearsal completed (`scripts/android_sbom_provenance.sh --dry-run`). | `specs/compliance/android/evidence_log.csv`, telemetry status JSON, provenance dry-run log. |
 | **T0 (GA/LTS cutover)** | `scripts/publish_android_sdk.sh --dry-run` completed; provenance + SBOM signed; release checklist exported and attached to go/no-go minutes; `ci/sdk_sorafs_orchestrator.sh` smoke job green. | Release RFC attachments, Sigstore bundle, adoption artefacts under `artifacts/android/`. |
 | **T+1 day (post-cutover)** | Hotfix readiness verified (`scripts/publish_android_sdk.sh --validate-bundle`); dashboard diffs reviewed (`ci/check_android_dashboard_parity.sh`); evidence packet uploaded to `status.md`. | Dashboard diff export, link to `status.md` entry, archived release packet. |
@@ -38,15 +41,17 @@ Use this document together with:
 | Sample apps | `ci/check_android_samples.sh` | Builds `examples/android/{operator-console,retail-wallet}` and validates localized screenshots via `scripts/android_sample_localization.py`. |
 | Dashboard parity | `ci/check_android_dashboard_parity.sh` | Confirms CI/exported metrics align with the Rust counterparts; required during T+1 verification. |
 | SDK adoption smoke | `ci/sdk_sorafs_orchestrator.sh` | Exercises the multi-source Sorafs orchestrator bindings with the current SDK. Required before uploading staged artefacts. |
-| Attestation verification | `scripts/android_strongbox_attestation_ci.sh --bundles-root artifacts/android/attestation --expectations-root <trusted-expectations> --trust-root <trusted-root.pem> --revocation-snapshot <snapshot> --revocation-snapshot-sha256 <trusted-digest> --evaluation-time-ms <ms> --summary-out artifacts/android/attestation/ci-summary.json` | Verifies every bundle against separately governed identity, root, and revocation inputs; zero bundles fail. Attach the summary to GA packets. |
+| Optional hardware-attestation drill | `scripts/android_strongbox_attestation_ci.sh --bundles-root artifacts/android/attestation --expectations-root <trusted-expectations> --trust-root <trusted-root.pem> --revocation-snapshot <snapshot> --revocation-snapshot-sha256 <trusted-digest> --evaluation-time-ms <ms> --summary-out artifacts/android/attestation/ci-summary.json` | Run only when qualifying the optional StrongBox integration. The drill remains strict (including zero-bundle failure) once selected, but is not an Android SDK build, tag, or release prerequisite; software-backed signing is valid without this evidence. |
 | Device-lab slot validation | `scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab/<slot> --json-out artifacts/android/device_lab/summary.json` | Validates instrumentation bundles before attaching evidence to release packets; CI runs against the sample slot in `fixtures/android/device_lab/slot-sample` (telemetry/attestation/queue/logs + `sha256sum.txt`). |
 
 > **Tip:** add these jobs to the `android-release` Buildkite pipeline so that
 > freeze weeks automatically re-run every gate with the release branch tip.
 
 The consolidated `.github/workflows/android-and6.yml` job runs the lint,
-test-suite, attestation-summary, and device-lab slot checks on every PR/push
-touching Android sources, uploading evidence under `artifacts/android/{lint,tests,attestation,device_lab}/`.
+test-suite, attestation-summary fixture, and sample device-lab slot checks on
+every PR/push touching Android sources, uploading evidence under
+`artifacts/android/{lint,tests,attestation,device_lab}/`. These fixture checks
+exercise the optional integration without booking physical hardware.
 
 ## 3. Lint & Dependency Scans
 
@@ -67,11 +72,16 @@ lintRelease ktlintCheck detekt dependencyGuardBaseline \
 - `dependencyGuardBaseline` regenerates the dependency lock; attach the diff
   to the go/no-go packet.
 
-## 4. Device Lab & StrongBox Coverage
+## 4. Optional Device Lab & StrongBox Coverage
+
+Use this section only when the release explicitly claims StrongBox or physical
+device qualification. Lab capacity and completion of this drill do not block a
+software-backed SDK release.
 
 1. Reserve Pixel + Galaxy devices using the capacity tracker referenced in
-   `specs/compliance/android/device_lab_contingency.md`. Blocks releases
-   if <70 % availability.
+   `specs/compliance/android/device_lab_contingency.md`. If availability is
+   below 70%, postpone the optional hardware qualification or use its documented
+   fallback pool.
 2. Execute `scripts/android_strongbox_attestation_ci.sh --bundles-root \
    artifacts/android/attestation --expectations-root <trusted-expectations> \
    --trust-root <trusted-root.pem> --revocation-snapshot <snapshot> \
@@ -127,8 +137,10 @@ Every GA/LTS/hotfix release should include:
 
 1. **Completed checklist** — copy this file’s table, tick each item, and link
    to supporting artefacts (Buildkite run, logs, doc diffs).
-2. **Device lab evidence** — attestation report summary, reservation log, and
-   any contingency activations.
+2. **Optional device lab addendum** — when the release claims hardware
+   qualification, include the attestation report summary, reservation log, and
+   any contingency activations; otherwise record the hardware profile as not
+   selected.
 3. **Telemetry packet** — redaction status JSON, schema diff, link to
    `specs/sdk/android/telemetry_redaction.md` updates (if any).
 4. **Compliance artefacts** — entries added/updated in the compliance folder

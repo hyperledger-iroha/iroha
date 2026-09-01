@@ -1490,7 +1490,7 @@ fn admission_registry_from_fixtures(fixtures: &[ProviderFixture]) -> Arc<Admissi
 struct ToriiHarness {
     #[allow(dead_code)]
     torii: Torii,
-    app: Router,
+    app: iroha_torii::TestApiRouterRuntime,
     #[allow(dead_code)]
     kiso_child: Child,
     state: Arc<State>,
@@ -1501,6 +1501,11 @@ struct ToriiHarness {
     // Keeps Torii persistence (including the exclusive advert replay lock)
     // isolated for the lifetime of each parallel test harness.
     _torii_data_dir: TempDir,
+}
+impl ToriiHarness {
+    async fn shutdown(self) {
+        self.app.shutdown().await;
+    }
 }
 /// Deterministic test-only signer used by this discovery integration harness.
 ///
@@ -1516,14 +1521,14 @@ impl DiscoveryNativeTransactionSigner {
     fn for_role(role: SorafsNativeTransactionSignerRoleV1) -> Self {
         let (handle, seed) = match role {
             SorafsNativeTransactionSignerRoleV1::ProofOutcome => {
-                ("hsm://sorafs/discovery/proof-outcome", 0xD7)
+                ("provider://sorafs/discovery/proof-outcome", 0xD7)
             }
-            SorafsNativeTransactionSignerRoleV1::Repair => ("hsm://sorafs/discovery/repair", 0xD8),
+            SorafsNativeTransactionSignerRoleV1::Repair => ("provider://sorafs/discovery/repair", 0xD8),
             SorafsNativeTransactionSignerRoleV1::Reserve => {
-                ("hsm://sorafs/discovery/reserve", 0xD9)
+                ("provider://sorafs/discovery/reserve", 0xD9)
             }
             SorafsNativeTransactionSignerRoleV1::Orderbook => {
-                ("hsm://sorafs/discovery/orderbook", 0xDA)
+                ("provider://sorafs/discovery/orderbook", 0xDA)
             }
         };
         Self {
@@ -2232,6 +2237,7 @@ async fn sorafs_routes_disabled_when_cache_off() {
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    harness.shutdown().await;
 }
 #[tokio::test]
 #[should_panic(expected = "SoraFS discovery/admission enforcement requires")]
@@ -2290,6 +2296,7 @@ async fn sorafs_routes_enabled_with_admission_dir() {
             .expect("providers array")
             .is_empty()
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn sorafs_capacity_route_disabled_when_storage_off() {
@@ -2307,6 +2314,7 @@ async fn sorafs_capacity_route_disabled_when_storage_off() {
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_route_disabled_when_storage_off() {
@@ -2326,6 +2334,7 @@ async fn sorafs_pin_register_route_disabled_when_storage_off() {
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    harness.shutdown().await;
 }
 #[test]
 #[should_panic(
@@ -2387,6 +2396,7 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
             .expect("fee_ledger array")
             .is_empty()
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn retired_storage_ingest_and_fetch_are_not_mounted_and_inventory_requires_authentication() {
@@ -2444,6 +2454,7 @@ async fn retired_storage_ingest_and_fetch_are_not_mounted_and_inventory_requires
         .await
         .expect("unsigned malformed storage fetch response");
     assert_eq!(fetch_response.status(), StatusCode::NOT_FOUND);
+    harness.shutdown().await;
 }
 fn pin_register_http_request(body: Vec<u8>, content_type: &'static str) -> Request<Body> {
     let mut request = Request::builder()
@@ -2524,6 +2535,7 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
             .any(|transaction| transaction.hash() == submitted_hash),
         "the dedicated route must queue the original caller-signed transaction unchanged"
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
@@ -2556,6 +2568,7 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
         "pin register Norito transaction failed: {status} body={}",
         String::from_utf8_lossy(&body)
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_validates_signed_manifest_bytes() {
@@ -2586,6 +2599,7 @@ async fn sorafs_pin_register_validates_signed_manifest_bytes() {
         "sorafs_pin_manifest_payload_invalid",
         "chunker descriptor mismatch",
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
@@ -2615,6 +2629,7 @@ async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
         StatusCode::BAD_REQUEST,
         "the removed secret-bearing DTO must fail closed"
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
@@ -2684,6 +2699,7 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
@@ -2701,6 +2717,7 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
         .expect("router responds");
     assert_eq!(invalid_json.status(), StatusCode::BAD_REQUEST);
     let invalid_norito = app
+        .router()
         .oneshot(pin_register_http_request(
             vec![0xFF, 0x00, 0x01, 0x02],
             "application/x-norito",
@@ -2708,6 +2725,7 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
         .await
         .expect("router responds");
     assert_eq!(invalid_norito.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -2868,6 +2886,7 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
             .is_some_and(Vec::is_empty),
         "fresh manifest should not expose governance references"
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -2990,6 +3009,7 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
             .and_then(json::Value::as_u64),
         Some(refresh_window)
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -3112,6 +3132,7 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
             .is_some(),
         "stale response should report remaining expiry window"
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
@@ -3210,6 +3231,7 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
         body.get("proof_expires_in_seconds").is_none(),
         "expired response must not contain remaining expiry interval"
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
@@ -3302,6 +3324,7 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
         body.get("error").and_then(json::Value::as_str),
         Some("alias proof revoked by governance")
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -3430,6 +3453,7 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
             .and_then(json::Value::as_str),
         Some(expected_successor_iso.as_str())
     );
+    harness.shutdown().await;
 }
 async fn fetch_alias_entry(harness: &ToriiHarness, alias_label: &str) -> json::Value {
     let list_request = Request::builder()
@@ -3540,6 +3564,7 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
             .and_then(json::Value::as_u64),
         Some(effective_at)
     );
+    harness.shutdown().await;
 }
 include!("sorafs_discovery/storage_path_fixture.rs");
 include!("sorafs_discovery/fixture_key_mismatch_test.rs");

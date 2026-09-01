@@ -112,6 +112,9 @@ typedef struct ConnectNoritoSorafsReferenceBundlePayload {
 
 // ---------------- Bridge ABI ----------------
 uint32_t connect_norito_bridge_abi_version(void);
+// First published Kagemusha-specific contract revision. Callers must require
+// value 1 and hard-fail when the symbol is absent or its value differs.
+uint32_t connect_norito_kagemusha_native_contract_revision(void);
 
 // ---------------- Detached transaction verification ----------------
 
@@ -411,7 +414,7 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
 // structural and mutual binding before an Apple SDK projects any nested
 // fields. Applied top-ups include balanced Merkle inclusion against the
 // Commit-QC execution commitment. Returns zero only for a valid status.
-int32_t connect_norito_kagemusha_offline_operation_status_validate_v1(
+int32_t connect_norito_kagemusha_offline_operation_status_validate_v2(
     const uint8_t* status_norito_ptr,
     unsigned long status_norito_len);
 
@@ -420,7 +423,7 @@ int32_t connect_norito_kagemusha_offline_operation_status_validate_v1(
 // bindings before a maintained SDK projects any nested fields. This does not
 // authenticate the embedded Commit-QC signature; that requires a separately
 // trusted validator roster. Returns zero only for a valid status.
-int32_t connect_norito_kagemusha_offline_operation_status_json_validate_v1(
+int32_t connect_norito_kagemusha_offline_operation_status_json_validate_v2(
     const uint8_t* status_json_ptr,
     unsigned long status_json_len);
 
@@ -622,16 +625,17 @@ int32_t connect_norito_kagemusha_recipient_output_derive_v2(
     unsigned long* out_result_len);
 
 // Input is canonical bridge-local
-// `KagemushaRecursiveSpendRedemptionChangePrepareRequestV4` in exact field
-// order: version (u16), bundle, input_opening, change_amount, operation_id
-// ([u8; 32]), entropy ([u8; 32]). Native validates the complete bundle public
-// binding and the exact current-note opening before deriving change.
+// `KagemushaRecursiveSpendRedemptionChangePrepareRequestV5` in exact field
+// order: version (u16), bundle, input_opening, change_amount, recipient
+// (canonical AccountId), nonce ([u8; 32]), entropy ([u8; 32]). Native derives
+// the operation id from recipient and nonce, then validates the complete bundle
+// public binding and exact current-note opening before deriving change.
 // Output is canonical bridge-local
 // `KagemushaRecursiveSpendRedemptionChangePrepareResultV4` in exact field
 // order: version (u16), opening, output (complete spendable-note descriptor).
 // The output is secret and must be released only with
 // `connect_norito_kagemusha_secret_free_buffer`.
-int32_t connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4(
+int32_t connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
     uint8_t** out_result_ptr,
@@ -747,18 +751,18 @@ int32_t connect_norito_kagemusha_recipient_receive_offer_verify_v2(
 // It contains no signature or authenticatorData and cannot decode as an
 // on-wire authorization. Finalization accepts strict platform DER, normalizes
 // it to canonical low-S r||s, and returns both the authorization and raw form.
-// KagemushaRequestAuthorizationPreparationV2 fields are, in order:
-// version(u16=2), authority, device_id, asset_definition_id, operation_id,
+// KagemushaRequestAuthorizationPreparationV3 fields are, in order:
+// version(u16=3), authority, device_id, asset_definition_id,
 // issued_at_ms, expires_at_ms, nonce, payload_digest, registration_hash,
 // platform(KagemushaRequestAuthorizationPlatformV2: AndroidKeyMint=0,
 // IosAppAttest=1).
-int32_t connect_norito_kagemusha_request_authorization_signing_bytes_v2(
+int32_t connect_norito_kagemusha_request_authorization_signing_bytes_v3(
     const uint8_t* preparation_norito_ptr,
     unsigned long preparation_norito_len,
     uint8_t** out_signing_bytes_ptr,
     unsigned long* out_signing_bytes_len);
 
-int32_t connect_norito_kagemusha_request_authorization_finalize_hardware_v2(
+int32_t connect_norito_kagemusha_request_authorization_finalize_hardware_v3(
     const uint8_t* preparation_norito_ptr,
     unsigned long preparation_norito_len,
     const uint8_t* authenticator_data_ptr,
@@ -774,7 +778,7 @@ int32_t connect_norito_kagemusha_request_authorization_finalize_hardware_v2(
 // DCAppAttestService.generateAssertion. The exact fields are authenticatorData
 // and signature, both byte strings. Outputs are the authorization archive,
 // canonical raw-low-S signature, and exact extracted authenticatorData.
-int32_t connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2(
+int32_t connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3(
     const uint8_t* preparation_norito_ptr,
     unsigned long preparation_norito_len,
     const uint8_t* assertion_object_ptr,
@@ -785,6 +789,16 @@ int32_t connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v
     unsigned long* out_signature_raw_len,
     uint8_t** out_authenticator_data_ptr,
     unsigned long* out_authenticator_data_len);
+
+// Derives the canonical marked 32-byte V4 operation identifier from a
+// standalone canonical AccountId archive and an exact non-zero 32-byte nonce.
+int32_t connect_norito_kagemusha_operation_id_derive_v4(
+    const uint8_t* authority_norito_ptr,
+    unsigned long authority_norito_len,
+    const uint8_t* nonce_ptr,
+    unsigned long nonce_len,
+    uint8_t** out_operation_id_ptr,
+    unsigned long* out_operation_id_len);
 
 // Durable receiver ACK lifecycle. Creation and verification bind the exact
 // signed request and recipient-only peer payment; callers must additionally check the
@@ -930,6 +944,9 @@ int32_t connect_norito_kagemusha_recursive_spend_init_v4(
 // Builds a canonical unsigned top-up from a local-only secret witness and the
 // authoritative next-zero path returned by POST /v1/zk/merkle-path. Secret
 // material is zeroized by native code and never appears in the output archive.
+// Input must be `KagemushaTopUpShieldBuildRequestV5` (version=5) and supplies
+// a nonce; native derives operation_id from payer+nonce. The stale V4 local
+// carrier is rejected even though the public proof/output symbol remains V4.
 int32_t connect_norito_kagemusha_topup_shield_build_unsigned_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
@@ -998,10 +1015,13 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4(
     uint8_t** out_result_ptr,
     unsigned long* out_result_len);
 
-// V4 accepts its explicit local carrier with
+// The V4 proof path accepts only `KagemushaRecursiveSpendRedeemLocalRequestV5`
+// (version=5), with
 // the owned opening, exact membership/dummy paths, exact scaled public amount,
 // optional private change opening plus mandatory change insertion paths, and
-// active unshield-v3 verifier binding. Native derives the unshield proof
+// active unshield-v3 verifier binding and a nonce. Native derives operation_id
+// from recipient+nonce; stale V4 local carriers are rejected even though the
+// public proof/output symbol remains V4. Native then derives the unshield proof
 // attachment and redemption intent; callers cannot supply either. A partial
 // redemption atomically returns its proof-bound offline-change bundle and
 // membership witness; a full redemption returns no private change state.

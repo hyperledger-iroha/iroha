@@ -75,7 +75,6 @@ RUNTIME_HANDLE_COMPACT_ROLES = frozenset(
         "adapter",
         "custody",
         "external",
-        "hsm",
         "key",
         "keycustody",
         "kms",

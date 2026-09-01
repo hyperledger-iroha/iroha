@@ -162,8 +162,8 @@ def test_complete_topology_is_configuration_qualified_only() -> None:
     (
         "software://key-custody/prod-primary",
         "remote://key-custody/prod-primary",
-        "hsm://key-custody/prod-primary",
-        "pkcs11://key-custody/prod-primary",
+        "provider://key-custody/prod-primary",
+        "external-signer://key-custody/prod-primary",
     ),
 )
 def test_key_custody_handle_is_provider_neutral(handle: str) -> None:

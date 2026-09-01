@@ -1,6 +1,5 @@
 package org.hyperledger.iroha.sdk.offline
 
-import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.zip.CRC32
 
@@ -42,7 +41,11 @@ data class KagemushaQrDecodeResult(
 }
 
 object KagemushaQrStreamCodec {
-    const val MAXIMUM_FRAME_TEXT_BYTES = 6 + ((542 * 4 + 2) / 3)
+    /** Maximum frame count for one stream, including its header. */
+    const val MAXIMUM_STREAM_FRAMES = 4096
+
+    const val MAXIMUM_FRAME_TEXT_BYTES =
+        6 + ((KagemushaQrFrame.MAXIMUM_ENCODED_BYTES * 4 + 2) / 3)
 
     @JvmStatic
     @JvmOverloads
@@ -57,56 +60,97 @@ object KagemushaQrStreamCodec {
             }
             val envelope = KagemushaQrEnvelope.create(payload.kind, archive, options)
             val streamId = envelope.streamId
-            val frames = ArrayList<KagemushaQrFrame>()
-            frames += KagemushaQrFrame(
-                KagemushaQrFrameKind.HEADER,
-                streamId,
-                0,
-                1,
-                envelope.encode(),
+            val frames = ArrayList<KagemushaQrFrame>(
+                1 + envelope.dataChunks + envelope.parityChunks,
             )
-            val chunks = archive.toListOfChunks(options.chunkSize)
-            chunks.forEachIndexed { index, chunk ->
-                frames += KagemushaQrFrame(
-                    KagemushaQrFrameKind.DATA,
-                    streamId,
-                    index,
-                    chunks.size,
-                    chunk,
-                )
-            }
-            repeat(envelope.parityChunks) { group ->
-                val parity = ByteArray(options.chunkSize)
-                val start = group * options.parityGroup
-                val end = minOf(start + options.parityGroup, chunks.size)
-                for (chunkIndex in start until end) {
-                    chunks[chunkIndex].indices.forEach { byteIndex ->
-                        parity[byteIndex] = (parity[byteIndex].toInt() xor
-                            chunks[chunkIndex][byteIndex].toInt()).toByte()
+            val chunks = ArrayList<ByteArray>(envelope.dataChunks)
+            try {
+                val headerBytes = envelope.encode()
+                try {
+                    frames += KagemushaQrFrame(
+                        KagemushaQrFrameKind.HEADER,
+                        streamId,
+                        0,
+                        1,
+                        headerBytes,
+                    )
+                } finally {
+                    headerBytes.fill(0)
+                }
+                chunks += archive.toListOfChunks(options.chunkSize)
+                chunks.forEachIndexed { index, chunk ->
+                    frames += KagemushaQrFrame(
+                        KagemushaQrFrameKind.DATA,
+                        streamId,
+                        index,
+                        chunks.size,
+                        chunk,
+                    )
+                }
+                repeat(envelope.parityChunks) { group ->
+                    val parity = ByteArray(options.chunkSize)
+                    try {
+                        val start = group * options.parityGroup
+                        val end = minOf(start + options.parityGroup, chunks.size)
+                        for (chunkIndex in start until end) {
+                            chunks[chunkIndex].indices.forEach { byteIndex ->
+                                parity[byteIndex] = (parity[byteIndex].toInt() xor
+                                    chunks[chunkIndex][byteIndex].toInt()).toByte()
+                            }
+                        }
+                        frames += KagemushaQrFrame(
+                            KagemushaQrFrameKind.PARITY,
+                            streamId,
+                            group,
+                            envelope.parityChunks,
+                            parity,
+                        )
+                    } finally {
+                        parity.fill(0)
                     }
                 }
-                frames += KagemushaQrFrame(
-                    KagemushaQrFrameKind.PARITY,
-                    streamId,
-                    group,
-                    envelope.parityChunks,
-                    parity,
-                )
-            }
-            return frames.map { frame ->
-                KagemushaPeerTransportContract.QR_STREAM_TEXT_PREFIX +
-                    KagemushaPeerTextCodec.base64UrlEncode(frame.encode())
+                return frames.map { frame ->
+                    val encoded = frame.encode()
+                    try {
+                        KagemushaPeerTransportContract.QR_STREAM_TEXT_PREFIX +
+                            KagemushaPeerTextCodec.base64UrlEncode(encoded)
+                    } finally {
+                        encoded.fill(0)
+                    }
+                }
+            } finally {
+                chunks.forEach { it.fill(0) }
+                frames.forEach { it.zeroize() }
+                streamId.fill(0)
+                envelope.zeroize()
             }
         } finally {
             archive.fill(0)
         }
     }
 
+    internal fun preflightStreamFrameCount(
+        payloadBytes: Int,
+        options: KagemushaQrStreamOptions,
+    ): Int {
+        require(payloadBytes in 1..KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES) {
+            "Kagemusha QR payload exceeds its bound"
+        }
+        val dataChunks = (payloadBytes + options.chunkSize - 1) / options.chunkSize
+        val parityChunks = (dataChunks + options.parityGroup - 1) / options.parityGroup
+        val frameCount = 1 + dataChunks + parityChunks
+        require(frameCount <= MAXIMUM_STREAM_FRAMES) {
+            "Kagemusha QR stream requires $frameCount frames; the limit is $MAXIMUM_STREAM_FRAMES"
+        }
+        return frameCount
+    }
+
     @JvmStatic
     fun decodeFrameText(value: String): KagemushaQrFrame {
         val prefix = KagemushaPeerTransportContract.QR_STREAM_TEXT_PREFIX
-        require(value.toByteArray(Charsets.UTF_8).size <= MAXIMUM_FRAME_TEXT_BYTES &&
-            value.startsWith(prefix)
+        require(value.length <= MAXIMUM_FRAME_TEXT_BYTES &&
+            value.startsWith(prefix) &&
+            value.all { it.code <= 0x7f }
         ) { "Kagemusha QR frame is not canonical" }
         val body = value.substring(prefix.length)
         val bytes = KagemushaPeerTextCodec.base64UrlDecode(body)
@@ -126,23 +170,24 @@ class KagemushaQrStreamDecoder {
     private var streamId: ByteArray? = null
     private var envelope: KagemushaQrEnvelope? = null
     private var dataFrames = linkedMapOf<Int, ByteArray>()
-    private var dataTotals = linkedMapOf<Int, Int>()
     private var parityFrames = linkedMapOf<Int, ByteArray>()
-    private var parityTotals = linkedMapOf<Int, Int>()
     private var recovered = linkedSetOf<Int>()
     private var completedPayload: KagemushaPeerPayload? = null
 
     @Synchronized
     fun reset() {
+        resetState()
+    }
+
+    private fun resetState() {
         clearMap(dataFrames)
         clearMap(parityFrames)
         streamId?.fill(0)
+        envelope?.zeroize()
         streamId = null
         envelope = null
         dataFrames = linkedMapOf()
-        dataTotals = linkedMapOf()
         parityFrames = linkedMapOf()
-        parityTotals = linkedMapOf()
         recovered = linkedSetOf()
         completedPayload = null
     }
@@ -150,105 +195,191 @@ class KagemushaQrStreamDecoder {
     @Synchronized
     fun ingest(frameText: String): KagemushaQrDecodeResult {
         val frame = KagemushaQrStreamCodec.decodeFrameText(frameText)
-        val snapshot = snapshot()
         try {
-            return ingest(frame).also { snapshot.clearCopies() }
-        } catch (failure: RuntimeException) {
-            restore(snapshot)
-            throw failure
+            return ingest(frame)
+        } finally {
+            frame.zeroize()
         }
     }
 
     private fun ingest(frame: KagemushaQrFrame): KagemushaQrDecodeResult {
-        streamId?.let { require(it.contentEquals(frame.streamId)) { "Kagemusha QR frame belongs to another stream" } }
-            ?: run { streamId = frame.streamId.copyOf() }
-        when (frame.kind) {
-            KagemushaQrFrameKind.HEADER -> {
-                val decoded = KagemushaQrEnvelope.decode(frame.payload)
-                require(decoded.streamId.contentEquals(frame.streamId)) { "Kagemusha QR digest mismatch" }
-                envelope?.let { require(it == decoded) { "Conflicting Kagemusha QR header" } }
+        val header = envelope
+        if (header == null) {
+            require(frame.kind == KagemushaQrFrameKind.HEADER) {
+                "Kagemusha QR header must be ingested first"
+            }
+            val headerBytes = frame.payload
+            val decoded = try {
+                KagemushaQrEnvelope.decode(headerBytes)
+            } finally {
+                headerBytes.fill(0)
+            }
+            val frameStreamId = frame.streamId
+            val decodedStreamId = decoded.streamId
+            var retained = false
+            try {
+                require(decodedStreamId.contentEquals(frameStreamId)) {
+                    "Kagemusha QR digest mismatch"
+                }
+                streamId = frameStreamId.copyOf()
                 envelope = decoded
-            }
-            KagemushaQrFrameKind.DATA -> {
-                require(frame.total <= MAXIMUM_DATA_FRAMES) { "Kagemusha QR data frame count is invalid" }
-                store(frame, dataFrames, dataTotals)
-            }
-            KagemushaQrFrameKind.PARITY -> {
-                require(frame.total <= MAXIMUM_PARITY_FRAMES) { "Kagemusha QR parity frame count is invalid" }
-                store(frame, parityFrames, parityTotals)
+                retained = true
+                return result()
+            } finally {
+                decodedStreamId.fill(0)
+                frameStreamId.fill(0)
+                if (!retained) decoded.zeroize()
             }
         }
-        envelope?.let { header ->
-            validateBuffered(header)
-            recover(header)
-            if (completedPayload == null) completedPayload = finalize(header)
+
+        val frameStreamId = frame.streamId
+        try {
+            require(streamId?.contentEquals(frameStreamId) == true) {
+                "Kagemusha QR frame belongs to another stream"
+            }
+        } finally {
+            frameStreamId.fill(0)
+        }
+        when (frame.kind) {
+            KagemushaQrFrameKind.HEADER -> {
+                val headerBytes = frame.payload
+                val decoded = try {
+                    KagemushaQrEnvelope.decode(headerBytes)
+                } finally {
+                    headerBytes.fill(0)
+                }
+                try {
+                    val decodedStreamId = decoded.streamId
+                    val expectedStreamId = frame.streamId
+                    try {
+                        require(decodedStreamId.contentEquals(expectedStreamId)) {
+                            "Kagemusha QR digest mismatch"
+                        }
+                    } finally {
+                        decodedStreamId.fill(0)
+                        expectedStreamId.fill(0)
+                    }
+                    require(header == decoded) { "Conflicting Kagemusha QR header" }
+                } finally {
+                    decoded.zeroize()
+                }
+            }
+            KagemushaQrFrameKind.DATA -> ingestData(frame, header)
+            KagemushaQrFrameKind.PARITY -> ingestParity(frame, header)
         }
         return result()
     }
 
-    private fun store(
+    private fun ingestData(frame: KagemushaQrFrame, header: KagemushaQrEnvelope) {
+        require(frame.total == header.dataChunks && frame.index in 0 until header.dataChunks) {
+            "Kagemusha QR data frame count is invalid"
+        }
+        val payload = frame.payload
+        if (payload.size != header.expectedDataChunkLength(frame.index)) {
+            payload.fill(0)
+            throw IllegalArgumentException("Kagemusha QR data frame does not match its header")
+        }
+        val existing = dataFrames[frame.index]
+        if (existing != null) {
+            val matches = existing.contentEquals(payload)
+            payload.fill(0)
+            require(matches) { "Conflicting duplicate Kagemusha QR frame" }
+            return
+        }
+        ingestNewFrame(frame, dataFrames, payload, frame.index / header.parityGroup, header)
+    }
+
+    private fun ingestParity(frame: KagemushaQrFrame, header: KagemushaQrEnvelope) {
+        require(frame.total == header.parityChunks && frame.index in 0 until header.parityChunks) {
+            "Kagemusha QR parity frame count is invalid"
+        }
+        val payload = frame.payload
+        if (payload.size != header.chunkSize) {
+            payload.fill(0)
+            throw IllegalArgumentException("Kagemusha QR parity frame does not match its header")
+        }
+        val existing = parityFrames[frame.index]
+        if (existing != null) {
+            val matches = existing.contentEquals(payload)
+            payload.fill(0)
+            require(matches) { "Conflicting duplicate Kagemusha QR frame" }
+            return
+        }
+        ingestNewFrame(frame, parityFrames, payload, frame.index, header)
+    }
+
+    private fun ingestNewFrame(
         frame: KagemushaQrFrame,
         frames: MutableMap<Int, ByteArray>,
-        totals: MutableMap<Int, Int>,
+        payload: ByteArray,
+        parityGroup: Int,
+        header: KagemushaQrEnvelope,
     ) {
-        require(frame.index in 0 until frame.total) { "Kagemusha QR frame index is invalid" }
-        frames[frame.index]?.let { previous ->
-            require(previous.contentEquals(frame.payload) && totals[frame.index] == frame.total) {
-                "Conflicting duplicate Kagemusha QR frame"
-            }
-        } ?: run {
-            frames[frame.index] = frame.payload.copyOf()
-            totals[frame.index] = frame.total
-        }
-    }
-
-    private fun validateBuffered(header: KagemushaQrEnvelope) {
-        dataFrames.forEach { (index, payload) ->
-            require(index < header.dataChunks && dataTotals[index] == header.dataChunks &&
-                payload.size == header.expectedDataChunkLength(index)
-            ) { "Kagemusha QR data frame does not match its header" }
-        }
-        parityFrames.forEach { (index, payload) ->
-            require(index < header.parityChunks && parityTotals[index] == header.parityChunks &&
-                payload.size == header.chunkSize
-            ) { "Kagemusha QR parity frame does not match its header" }
-        }
-    }
-
-    private fun recover(header: KagemushaQrEnvelope) {
-        repeat(header.parityChunks) { group ->
-            val parity = parityFrames[group] ?: return@repeat
-            val start = group * header.parityGroup
-            val end = minOf(start + header.parityGroup, header.dataChunks)
-            val missing = (start until end).filter { dataFrames[it] == null }
-            if (missing.size != 1) return@repeat
-            val chunk = parity.copyOf()
-            for (index in start until end) {
-                if (index == missing.single()) continue
-                val present = dataFrames[index] ?: throw IllegalArgumentException("Incomplete parity group")
-                present.indices.forEach { byteIndex ->
-                    chunk[byteIndex] = (chunk[byteIndex].toInt() xor present[byteIndex].toInt()).toByte()
-                }
-            }
-            val exact = chunk.copyOf(header.expectedDataChunkLength(missing.single()))
-            chunk.fill(0)
-            dataFrames[missing.single()] = exact
-            dataTotals[missing.single()] = header.dataChunks
-            recovered += missing.single()
-        }
-    }
-
-    private fun finalize(header: KagemushaQrEnvelope): KagemushaPeerPayload? {
-        if (dataFrames.size != header.dataChunks) return null
-        val archive = ByteArrayOutputStream(header.totalBytes).use { output ->
-            repeat(header.dataChunks) { index ->
-                output.write(dataFrames[index] ?: return null)
-            }
-            output.toByteArray()
-        }
+        frames[frame.index] = payload
+        var recoveredIndex: Int? = null
         try {
-            require(archive.size == header.totalBytes) { "Kagemusha QR archive size mismatch" }
-            require(sha256(archive).contentEquals(header.payloadDigest)) { "Kagemusha QR digest mismatch" }
+            recoveredIndex = recoverGroup(header, parityGroup)
+        } catch (failure: RuntimeException) {
+            recoveredIndex?.let { index ->
+                dataFrames.remove(index)?.fill(0)
+                recovered.remove(index)
+            }
+            frames.remove(frame.index)?.fill(0)
+            throw failure
+        }
+        if (completedPayload != null || dataFrames.size != header.dataChunks) return
+        try {
+            completedPayload = finalizeComplete(header)
+        } catch (failure: RuntimeException) {
+            // Exact coverage consumes a failing stream so another final-frame
+            // retry cannot repeat the whole allocation/hash/decode operation.
+            resetState()
+            throw failure
+        }
+    }
+
+    private fun recoverGroup(header: KagemushaQrEnvelope, group: Int): Int? {
+        val parity = parityFrames[group] ?: return null
+        val start = group * header.parityGroup
+        val end = minOf(start + header.parityGroup, header.dataChunks)
+        val missing = (start until end).filter { dataFrames[it] == null }
+        if (missing.size != 1) return null
+        val missingIndex = missing.single()
+        val chunk = parity.copyOf()
+        for (index in start until end) {
+            if (index == missingIndex) continue
+            val present = dataFrames[index] ?: throw IllegalArgumentException("Incomplete parity group")
+            present.indices.forEach { byteIndex ->
+                chunk[byteIndex] = (chunk[byteIndex].toInt() xor present[byteIndex].toInt()).toByte()
+            }
+        }
+        val exact = chunk.copyOf(header.expectedDataChunkLength(missingIndex))
+        chunk.fill(0)
+        dataFrames[missingIndex] = exact
+        recovered += missingIndex
+        return missingIndex
+    }
+
+    private fun finalizeComplete(header: KagemushaQrEnvelope): KagemushaPeerPayload {
+        require(dataFrames.size == header.dataChunks) { "Kagemusha QR archive is incomplete" }
+        val archive = ByteArray(header.totalBytes)
+        try {
+            var offset = 0
+            repeat(header.dataChunks) { index ->
+                val chunk = dataFrames[index]
+                    ?: throw IllegalArgumentException("Kagemusha QR archive is incomplete")
+                chunk.copyInto(archive, offset)
+                offset += chunk.size
+            }
+            require(offset == header.totalBytes) { "Kagemusha QR archive size mismatch" }
+            val digest = sha256(archive)
+            try {
+                require(header.matchesPayloadDigest(digest)) {
+                    "Kagemusha QR digest mismatch"
+                }
+            } finally {
+                digest.fill(0)
+            }
             return KagemushaPeerPayload.decode(archive, header.payloadKind)
         } finally {
             archive.fill(0)
@@ -263,57 +394,6 @@ class KagemushaQrStreamDecoder {
         recovered.size,
     )
 
-    private data class Snapshot(
-        val streamId: ByteArray?,
-        val envelope: KagemushaQrEnvelope?,
-        val dataFrames: LinkedHashMap<Int, ByteArray>,
-        val dataTotals: LinkedHashMap<Int, Int>,
-        val parityFrames: LinkedHashMap<Int, ByteArray>,
-        val parityTotals: LinkedHashMap<Int, Int>,
-        val recovered: LinkedHashSet<Int>,
-        val completedPayload: KagemushaPeerPayload?,
-    ) {
-        fun clearCopies() {
-            streamId?.fill(0)
-            clearMap(dataFrames)
-            clearMap(parityFrames)
-        }
-    }
-
-    private fun snapshot() = Snapshot(
-        streamId?.copyOf(),
-        envelope,
-        copyMap(dataFrames),
-        LinkedHashMap(dataTotals),
-        copyMap(parityFrames),
-        LinkedHashMap(parityTotals),
-        LinkedHashSet(recovered),
-        completedPayload,
-    )
-
-    private fun restore(snapshot: Snapshot) {
-        clearMap(dataFrames)
-        clearMap(parityFrames)
-        streamId?.fill(0)
-        streamId = snapshot.streamId
-        envelope = snapshot.envelope
-        dataFrames = snapshot.dataFrames
-        dataTotals = snapshot.dataTotals
-        parityFrames = snapshot.parityFrames
-        parityTotals = snapshot.parityTotals
-        recovered = snapshot.recovered
-        completedPayload = snapshot.completedPayload
-    }
-
-    private companion object {
-        const val MAXIMUM_DATA_FRAMES =
-            (KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES +
-                KagemushaQrStreamOptions.MINIMUM_CHUNK_SIZE - 1) /
-                KagemushaQrStreamOptions.MINIMUM_CHUNK_SIZE
-        const val MAXIMUM_PARITY_FRAMES =
-            (MAXIMUM_DATA_FRAMES + KagemushaQrStreamOptions.MINIMUM_PARITY_GROUP - 1) /
-                KagemushaQrStreamOptions.MINIMUM_PARITY_GROUP
-    }
 }
 
 enum class KagemushaQrFrameKind(val code: Int) { HEADER(0), DATA(1), PARITY(2) }
@@ -327,7 +407,7 @@ class KagemushaQrEnvelope private constructor(
     val totalBytes: Int,
     payloadDigest: ByteArray,
 ) {
-    private val digest = payloadDigest.copyOf()
+    private val digest: ByteArray
     val payloadDigest: ByteArray get() = digest.copyOf()
     val streamId: ByteArray get() = digest.copyOfRange(0, 16)
 
@@ -339,7 +419,10 @@ class KagemushaQrEnvelope private constructor(
         require(totalBytes in 1..KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES)
         require(dataChunks == (totalBytes + chunkSize - 1) / chunkSize)
         require(parityChunks == (dataChunks + parityGroup - 1) / parityGroup)
-        require(digest.size == 32 && digest.any { it.toInt() != 0 })
+        require(1L + dataChunks.toLong() + parityChunks.toLong() <=
+            KagemushaQrStreamCodec.MAXIMUM_STREAM_FRAMES.toLong())
+        require(payloadDigest.size == 32 && payloadDigest.any { it.toInt() != 0 })
+        digest = payloadDigest.copyOf()
     }
 
     fun expectedDataChunkLength(index: Int): Int =
@@ -351,11 +434,18 @@ class KagemushaQrEnvelope private constructor(
         out[2] = parityGroup.toByte()
         out[3] = 0
         out.writeU16(4, chunkSize)
-        out.writeU16(6, dataChunks)
-        out.writeU16(8, parityChunks)
-        out.writeU32(10, totalBytes.toLong())
-        digest.copyInto(out, 14)
+        out.writeU32(6, dataChunks.toLong())
+        out.writeU32(10, parityChunks.toLong())
+        out.writeU32(14, totalBytes.toLong())
+        digest.copyInto(out, 18)
     }
+
+    internal fun zeroize() {
+        digest.fill(0)
+    }
+
+    internal fun matchesPayloadDigest(candidate: ByteArray): Boolean =
+        digest.contentEquals(candidate)
 
     override fun equals(other: Any?): Boolean = other is KagemushaQrEnvelope &&
         payloadKind == other.payloadKind && parityGroup == other.parityGroup &&
@@ -367,7 +457,7 @@ class KagemushaQrEnvelope private constructor(
 
     companion object {
         const val VERSION = 1
-        const val ENCODED_LENGTH = 46
+        const val ENCODED_LENGTH = 50
 
         fun create(
             kind: KagemushaPeerPayloadKind,
@@ -375,16 +465,22 @@ class KagemushaQrEnvelope private constructor(
             options: KagemushaQrStreamOptions,
         ): KagemushaQrEnvelope {
             require(payload.isNotEmpty() && payload.size <= KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES)
+            KagemushaQrStreamCodec.preflightStreamFrameCount(payload.size, options)
             val dataChunks = (payload.size + options.chunkSize - 1) / options.chunkSize
-            return KagemushaQrEnvelope(
-                kind,
-                options.parityGroup,
-                options.chunkSize,
-                dataChunks,
-                (dataChunks + options.parityGroup - 1) / options.parityGroup,
-                payload.size,
-                sha256(payload),
-            )
+            val digest = sha256(payload)
+            try {
+                return KagemushaQrEnvelope(
+                    kind,
+                    options.parityGroup,
+                    options.chunkSize,
+                    dataChunks,
+                    (dataChunks + options.parityGroup - 1) / options.parityGroup,
+                    payload.size,
+                    digest,
+                )
+            } finally {
+                digest.fill(0)
+            }
         }
 
         fun decode(data: ByteArray): KagemushaQrEnvelope {
@@ -393,15 +489,20 @@ class KagemushaQrEnvelope private constructor(
             }
             val kind = KagemushaPeerPayloadKind.fromCode(data[1].toInt() and 0xff)
                 ?: throw IllegalArgumentException("Invalid Kagemusha QR payload kind")
-            return KagemushaQrEnvelope(
-                kind,
-                data[2].toInt() and 0xff,
-                data.readU16(4),
-                data.readU16(6),
-                data.readU16(8),
-                data.readU32(10).toInt(),
-                data.copyOfRange(14, 46),
-            )
+            val digest = data.copyOfRange(18, 50)
+            try {
+                return KagemushaQrEnvelope(
+                    kind,
+                    data[2].toInt() and 0xff,
+                    data.readU16(4),
+                    data.readU32Int(6),
+                    data.readU32Int(10),
+                    data.readU32Int(14),
+                    digest,
+                )
+            } finally {
+                digest.fill(0)
+            }
         }
     }
 }
@@ -413,34 +514,44 @@ class KagemushaQrFrame(
     val total: Int,
     payload: ByteArray,
 ) {
-    private val stream = streamId.copyOf()
-    private val bytes = payload.copyOf()
+    private val stream: ByteArray
+    private val bytes: ByteArray
     val streamId: ByteArray get() = stream.copyOf()
     val payload: ByteArray get() = bytes.copyOf()
 
     init {
-        require(stream.size == 16 && stream.any { it.toInt() != 0 })
-        require(index in 0 until total && total in 1..0xffff)
-        require(bytes.isNotEmpty() && bytes.size <= KagemushaQrStreamOptions.MAXIMUM_CHUNK_SIZE)
-        if (kind == KagemushaQrFrameKind.HEADER) {
-            require(index == 0 && total == 1 && bytes.size == KagemushaQrEnvelope.ENCODED_LENGTH)
+        require(streamId.size == 16 && streamId.any { it.toInt() != 0 })
+        require(total in 1 until KagemushaQrStreamCodec.MAXIMUM_STREAM_FRAMES)
+        require(index in 0 until total)
+        require(payload.isNotEmpty() && payload.size <= KagemushaQrStreamOptions.MAXIMUM_CHUNK_SIZE)
+        when (kind) {
+            KagemushaQrFrameKind.HEADER ->
+                require(index == 0 && total == 1 && payload.size == KagemushaQrEnvelope.ENCODED_LENGTH)
+            KagemushaQrFrameKind.DATA, KagemushaQrFrameKind.PARITY -> Unit
         }
+        stream = streamId.copyOf()
+        bytes = payload.copyOf()
     }
 
     fun encode(): ByteArray {
-        val payloadEnd = 26 + bytes.size
+        val payloadEnd = 30 + bytes.size
         return ByteArray(payloadEnd + 4).also { out ->
             out[0] = 0x4b
             out[1] = 0x51
             out[2] = VERSION.toByte()
             out[3] = kind.code.toByte()
             stream.copyInto(out, 4)
-            out.writeU16(20, index)
-            out.writeU16(22, total)
-            out.writeU16(24, bytes.size)
-            bytes.copyInto(out, 26)
+            out.writeU32(20, index.toLong())
+            out.writeU32(24, total.toLong())
+            out.writeU16(28, bytes.size)
+            bytes.copyInto(out, 30)
             out.writeU32(payloadEnd, crc32(out, 2, payloadEnd))
         }
+    }
+
+    internal fun zeroize() {
+        stream.fill(0)
+        bytes.fill(0)
     }
 
     override fun equals(other: Any?): Boolean = other is KagemushaQrFrame &&
@@ -452,9 +563,8 @@ class KagemushaQrFrame(
 
     companion object {
         const val VERSION = 1
-        const val FIXED_OVERHEAD = 30
+        const val FIXED_OVERHEAD = 34
         const val MAXIMUM_ENCODED_BYTES = FIXED_OVERHEAD + KagemushaQrStreamOptions.MAXIMUM_CHUNK_SIZE
-
         fun decode(data: ByteArray): KagemushaQrFrame {
             require(data.size in FIXED_OVERHEAD..MAXIMUM_ENCODED_BYTES &&
                 data[0] == 0x4b.toByte() && data[1] == 0x51.toByte() && data[2].toInt() == VERSION
@@ -462,19 +572,26 @@ class KagemushaQrFrame(
             val kind = KagemushaQrFrameKind.entries.firstOrNull {
                 it.code == (data[3].toInt() and 0xff)
             } ?: throw IllegalArgumentException("Malformed Kagemusha QR frame kind")
-            val payloadLength = data.readU16(24)
-            val payloadEnd = 26 + payloadLength
+            val payloadLength = data.readU16(28)
+            val payloadEnd = 30 + payloadLength
             require(payloadEnd + 4 == data.size) { "Malformed Kagemusha QR frame length" }
             require(data.readU32(payloadEnd) == crc32(data, 2, payloadEnd)) {
                 "Kagemusha QR frame checksum mismatch"
             }
-            return KagemushaQrFrame(
-                kind,
-                data.copyOfRange(4, 20),
-                data.readU16(20),
-                data.readU16(22),
-                data.copyOfRange(26, payloadEnd),
-            )
+            val streamId = data.copyOfRange(4, 20)
+            val payload = data.copyOfRange(30, payloadEnd)
+            try {
+                return KagemushaQrFrame(
+                    kind,
+                    streamId,
+                    data.readU32Int(20),
+                    data.readU32Int(24),
+                    payload,
+                )
+            } finally {
+                streamId.fill(0)
+                payload.fill(0)
+            }
         }
     }
 }
@@ -503,6 +620,12 @@ private fun ByteArray.readU32(offset: Int): Long =
         ((this[offset + 2].toLong() and 0xff) shl 8) or
         (this[offset + 3].toLong() and 0xff)
 
+private fun ByteArray.readU32Int(offset: Int): Int {
+    val value = readU32(offset)
+    require(value <= Int.MAX_VALUE.toLong()) { "Kagemusha QR count exceeds the SDK limit" }
+    return value.toInt()
+}
+
 private fun sha256(value: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(value)
 
 private fun crc32(value: ByteArray, start: Int, endExclusive: Int): Long {
@@ -510,10 +633,5 @@ private fun crc32(value: ByteArray, start: Int, endExclusive: Int): Long {
     crc.update(value, start, endExclusive - start)
     return crc.value
 }
-
-private fun copyMap(source: Map<Int, ByteArray>): LinkedHashMap<Int, ByteArray> =
-    LinkedHashMap<Int, ByteArray>().also { output ->
-        source.forEach { (key, value) -> output[key] = value.copyOf() }
-    }
 
 private fun clearMap(source: Map<Int, ByteArray>) = source.values.forEach { it.fill(0) }

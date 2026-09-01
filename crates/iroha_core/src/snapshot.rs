@@ -2125,7 +2125,7 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
             key,
             "sumeragi_v2_bootstrap" | "commit_topology" | "prev_commit_topology"
         ),
-        CanonicalWsvPath::World => matches!(key, "consensus_evidence"),
+        CanonicalWsvPath::World => false,
         CanonicalWsvPath::Parameters | CanonicalWsvPath::Sumeragi | CanonicalWsvPath::Other => {
             false
         }
@@ -4809,19 +4809,6 @@ fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
     // ledger checkpoints.
     state.remove("commit_topology");
     state.remove("prev_commit_topology");
-    let Some(world) = value.get_mut("world") else {
-        return;
-    };
-    redact_consensus_sidecars_from_world_value(world);
-}
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
-    let Some(world) = world.as_object_mut() else {
-        return;
-    };
-    // Consensus evidence is asynchronously enriched recovery data, not WSV data committed by
-    // the block itself. Including it makes historical checkpoints depend on later peer input.
-    world.remove("consensus_evidence");
 }
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
 #[cfg(any(test, feature = "iroha-core-tests"))]

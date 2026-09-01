@@ -311,6 +311,49 @@ mod tests {
         );
     }
     #[test]
+    fn nexus_staking_work_bounds_are_signed_by_both_consensus_projections() {
+        let baseline = Nexus::default();
+        let baseline_policy =
+            nexus_consensus_policy_digest(&baseline).expect("valid default Nexus policy");
+        let baseline_context =
+            sumeragi_v2_nexus_amx_context_hash(&baseline, &Pipeline::default(), &[], &[]);
+
+        let mut share_bound_drift = baseline.clone();
+        share_bound_drift.staking.max_stake_shares_per_validator = NonZeroU32::new(
+            share_bound_drift
+                .staking
+                .max_stake_shares_per_validator
+                .get()
+                + 1,
+        )
+        .expect("incremented share bound stays non-zero");
+        let mut pending_bound_drift = baseline;
+        pending_bound_drift.staking.max_pending_unbonds_per_share = NonZeroU32::new(
+            pending_bound_drift
+                .staking
+                .max_pending_unbonds_per_share
+                .get()
+                + 1,
+        )
+        .expect("incremented pending-unbond bound stays non-zero");
+
+        for (label, changed) in [
+            ("stake-share bound", share_bound_drift),
+            ("pending-unbond bound", pending_bound_drift),
+        ] {
+            assert_ne!(
+                nexus_consensus_policy_digest(&changed).expect("valid changed Nexus policy"),
+                baseline_policy,
+                "{label} must change the canonical Nexus policy digest"
+            );
+            assert_ne!(
+                sumeragi_v2_nexus_amx_context_hash(&changed, &Pipeline::default(), &[], &[],),
+                baseline_context,
+                "{label} must change the signed Nexus/AMX context"
+            );
+        }
+    }
+    #[test]
     fn nexus_consensus_policy_digest_canonicalizes_dataspace_catalog_order() {
         let universal = DataSpaceMetadata::default();
         let settlement = DataSpaceMetadata {
@@ -576,15 +619,13 @@ mod tests {
         changed.oracle.economics.reward_pool = alternate_account.clone();
         assert_changed("reward_pool", changed);
         let mut changed = baseline.clone();
-        changed.oracle.economics.reward_amount =
-            add_one(&changed.oracle.economics.reward_amount);
+        changed.oracle.economics.reward_amount = add_one(&changed.oracle.economics.reward_amount);
         assert_changed("reward_amount", changed);
         let mut changed = baseline.clone();
         changed.oracle.economics.slash_asset = alternate_asset.clone();
         assert_changed("slash_asset", changed);
         let mut changed = baseline.clone();
-        changed.oracle.economics.slash_receiver =
-            baseline.oracle.economics.reward_pool.clone();
+        changed.oracle.economics.slash_receiver = baseline.oracle.economics.reward_pool.clone();
         assert_changed("slash_receiver", changed);
         let mut changed = baseline.clone();
         changed.oracle.economics.slash_outlier_amount =
@@ -964,10 +1005,7 @@ mod tests {
     fn sumeragi_v2_ingress_capacity_rejects_a_signed_roster_above_byte_geometry() {
         let config = default_v2_sumeragi();
         let mut shared = config
-            .v2_config(
-                Duration::from_secs(1),
-                consensus_v2::ConsensusMode::Npos,
-            )
+            .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos)
             .expect("default v2 config");
         shared.limits.body_bytes = shared.limits.body_source_bytes * 6;
 
@@ -1612,7 +1650,7 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "e3b96d8b05e290807ff89e8080c5dcc3b471108d3d5e90cd41ebd89f30a2d301",
+            "fceea54306bbc0cc6441a2aa6f6df5eee6a40404010fe1e50d49badbcb0ba927",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
@@ -1758,8 +1796,8 @@ mod tests {
             self_stake: iroha_primitives::numeric::Quantity::from(10_u64),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
-            activation_epoch: Some(0),
-            activation_height: Some(1),
+            activation_height: 1,
+            deactivation_height: None,
             last_reward_epoch: None,
         };
         ((lane, validator), record)

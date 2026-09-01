@@ -1,4 +1,5 @@
 import CryptoKit
+import Dispatch
 import XCTest
 @testable import IrohaSwift
 
@@ -24,6 +25,81 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             transcriptHash: Data(repeating: 2, count: 32),
             signature: Data(repeating: 3, count: maximum + 1)
         ))
+    }
+
+    func testRecordDecodersRejectOversizedInputsBeforeMaterialization() {
+        let helloFixedLength = 4 + 1 + 1 + 2 + 1 + 1 + 16 + 32 + 32 + 2
+        let oversizedHello = Data(
+            repeating: 0,
+            count: helloFixedLength + 65 + 4
+                + IrohaPeerNearbyV1.maximumCertificateBytes + 1
+        )
+        XCTAssertThrowsError(try IrohaPeerNearbyHelloV1.decode(oversizedHello)) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidLength)
+        }
+
+        let authenticationFixedLength = 4 + 1 + 1 + 2 + 1 + 1 + 16 + 32 + 2
+        let oversizedAuthentication = Data(
+            repeating: 0,
+            count: authenticationFixedLength
+                + IrohaPeerNearbyV1.maximumAuthenticationSignatureBytes + 1
+        )
+        XCTAssertThrowsError(
+            try IrohaPeerNearbyAuthenticationV1.decode(oversizedAuthentication)
+        ) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidLength)
+        }
+
+        let encryptedHeaderLength = 4 + 1 + 1 + 2 + 1 + 1 + 16 + 8 + 4
+        let oversizedEncrypted = Data(
+            repeating: 0,
+            count: encryptedHeaderLength + IrohaPeerNearbyV1.maximumMessageBytes + 16 + 1
+        )
+        XCTAssertThrowsError(
+            try IrohaPeerNearbyEncryptedRecordV1.decode(oversizedEncrypted)
+        ) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidLength)
+        }
+    }
+
+    func testSessionRejectsOversizedInputsBeforeRetainingCopies() throws {
+        let privateKey = P256.KeyAgreement.PrivateKey()
+        XCTAssertThrowsError(try IrohaPeerNearbySessionV1(
+            profile: .kagemusha,
+            localRole: .sender,
+            sessionID: Data(repeating: 1, count: 17),
+            requestCanonicalHash: Data(repeating: 2, count: 32),
+            deviceCertificate: Data([3]),
+            nonce: Data(repeating: 4, count: 32),
+            ephemeralPrivateKey: privateKey
+        )) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidSession)
+        }
+        XCTAssertThrowsError(try IrohaPeerNearbySessionV1(
+            profile: .kagemusha,
+            localRole: .sender,
+            sessionID: Data(repeating: 1, count: 16),
+            requestCanonicalHash: Data(repeating: 2, count: 33),
+            deviceCertificate: Data([3]),
+            nonce: Data(repeating: 4, count: 32),
+            ephemeralPrivateKey: privateKey
+        )) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidRequest)
+        }
+        XCTAssertThrowsError(try IrohaPeerNearbySessionV1(
+            profile: .kagemusha,
+            localRole: .sender,
+            sessionID: Data(repeating: 1, count: 16),
+            requestCanonicalHash: Data(repeating: 2, count: 32),
+            deviceCertificate: Data(
+                repeating: 3,
+                count: IrohaPeerNearbyV1.maximumCertificateBytes + 1
+            ),
+            nonce: Data(repeating: 4, count: 32),
+            ephemeralPrivateKey: privateKey
+        )) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidCertificate)
+        }
     }
 
     func testDiscoveryContextRoundTripsAndRejectsWrongVersion() throws {
@@ -229,7 +305,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
     }
 
     func testAuthenticatedSessionsExchangeEncryptedMessagesInBothDirections() throws {
-        var pair = try makeAuthenticatedPair()
+        let pair = try makeAuthenticatedPair()
         let payment = Data("IPM1-payment-fixture".utf8)
         let paymentRecord = try pair.sender.seal(payment)
         XCTAssertEqual(try pair.receiver.open(paymentRecord), payment)
@@ -250,7 +326,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             IrohaPeerNearbyV1.maximumMessageBytes
         )
 
-        var pair = try makeAuthenticatedPair()
+        let pair = try makeAuthenticatedPair()
         let maximumPlaintext = Data(
             repeating: 0xA5,
             count: IrohaPeerNearbyV1.maximumMessageBytes
@@ -283,14 +359,14 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
     }
 
     func testEncryptedRecordsRejectReplayAndTampering() throws {
-        var pair = try makeAuthenticatedPair()
+        let pair = try makeAuthenticatedPair()
         let record = try pair.sender.seal(Data("payment".utf8))
         XCTAssertEqual(try pair.receiver.open(record), Data("payment".utf8))
         XCTAssertThrowsError(try pair.receiver.open(record)) {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .replayOrReordering)
         }
 
-        var secondPair = try makeAuthenticatedPair()
+        let secondPair = try makeAuthenticatedPair()
         let original = try secondPair.sender.seal(Data("payment".utf8))
         var bytes = original.encode()
         bytes[bytes.count - 1] ^= 0x01
@@ -305,7 +381,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         let receiverKey = Curve25519.Signing.PrivateKey()
         let sessionID = Data(repeating: 0x33, count: 16)
         let requestHash = Data(repeating: 0x44, count: 32)
-        var sender = try IrohaPeerNearbySessionV1(
+        let sender = try IrohaPeerNearbySessionV1(
             profile: .kagemusha,
             localRole: .sender,
             sessionID: sessionID,
@@ -333,13 +409,13 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             deviceCertificate: receiverKey.publicKey.rawRepresentation,
             nonce: Data(repeating: 0x52, count: 32)
         )
-        var retiredProfileHello = validReceiver.localHello.encode()
+        var retiredProfileHello = try validReceiver.localHello.encode()
         retiredProfileHello[6] = 0
         retiredProfileHello[7] = 1
         XCTAssertThrowsError(try IrohaPeerNearbyHelloV1.decode(retiredProfileHello)) {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidProfile)
         }
-        var unknownProfileHello = validReceiver.localHello.encode()
+        var unknownProfileHello = try validReceiver.localHello.encode()
         unknownProfileHello[6] = 0xFF
         unknownProfileHello[7] = 0xFF
         XCTAssertThrowsError(try IrohaPeerNearbyHelloV1.decode(unknownProfileHello)) {
@@ -349,7 +425,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
 
     func testHandshakeCannotEncryptBeforePeerCertificateAuthentication() throws {
         let signingKey = Curve25519.Signing.PrivateKey()
-        var sender = try IrohaPeerNearbySessionV1(
+        let sender = try IrohaPeerNearbySessionV1(
             profile: .kagemusha,
             localRole: .sender,
             sessionID: Data(repeating: 0x61, count: 16),
@@ -363,7 +439,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
     }
 
     func testHelloAndAuthenticationReplayCannotResetEncryptedSequence() throws {
-        var pair = try makeAuthenticatedPair()
+        let pair = try makeAuthenticatedPair()
 
         XCTAssertThrowsError(try pair.sender.acceptPeerHello(pair.receiver.localHello)) {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .replayOrReordering)
@@ -382,6 +458,98 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         let second = try pair.sender.seal(Data("second".utf8))
         XCTAssertEqual(second.sequence, 1)
         XCTAssertEqual(try pair.receiver.open(second), Data("second".utf8))
+    }
+
+    func testDestroyIsAliasSafeIdempotentAndRejectsEveryLaterOperation() throws {
+        let pair = try makeAuthenticatedPair()
+        let alias = pair.sender
+        let inboundRecord = try pair.receiver.seal(Data("reply".utf8))
+
+        pair.sender.destroy()
+        alias.destroy()
+
+        XCTAssertTrue(pair.sender.isDestroyed)
+        XCTAssertTrue(alias.isDestroyed)
+        XCTAssertFalse(pair.sender.isAuthenticated)
+
+        XCTAssertThrowsError(try alias.localHello) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .sessionDestroyed)
+        }
+        XCTAssertThrowsError(try alias.acceptPeerHello(pair.receiver.localHello)) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .sessionDestroyed)
+        }
+        XCTAssertThrowsError(try alias.authenticationPreimage()) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .sessionDestroyed)
+        }
+        XCTAssertThrowsError(try alias.makeAuthentication(signature: Data([0x01]))) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .sessionDestroyed)
+        }
+        var verifierCalls = 0
+        XCTAssertThrowsError(try alias.acceptPeerAuthentication(
+            pair.receiverAuthentication,
+            verifier: { _, _, _, _ in
+                verifierCalls += 1
+                return true
+            }
+        )) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .sessionDestroyed)
+        }
+        XCTAssertEqual(verifierCalls, 0)
+        XCTAssertThrowsError(try alias.seal(Data("message".utf8))) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .sessionDestroyed)
+        }
+        XCTAssertThrowsError(try alias.open(inboundRecord)) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .sessionDestroyed)
+        }
+    }
+
+    func testConcurrentDestroyFromVerifierPreventsKeyDerivation() throws {
+        let sessionID = Data(repeating: 0x75, count: 16)
+        let requestHash = Data(repeating: 0x76, count: 32)
+        let sender = try IrohaPeerNearbySessionV1(
+            profile: .kagemusha,
+            localRole: .sender,
+            sessionID: sessionID,
+            requestCanonicalHash: requestHash,
+            deviceCertificate: Data(repeating: 0x77, count: 32),
+            nonce: Data(repeating: 0x78, count: 32)
+        )
+        let receiver = try IrohaPeerNearbySessionV1(
+            profile: .kagemusha,
+            localRole: .receiver,
+            sessionID: sessionID,
+            requestCanonicalHash: requestHash,
+            deviceCertificate: Data(repeating: 0x79, count: 32),
+            nonce: Data(repeating: 0x7A, count: 32)
+        )
+        try sender.acceptPeerHello(receiver.localHello)
+        try receiver.acceptPeerHello(sender.localHello)
+        let receiverAuthentication = try receiver.makeAuthentication(
+            signature: Data([0x7B])
+        )
+        var verifierCalls = 0
+
+        XCTAssertThrowsError(try sender.acceptPeerAuthentication(
+            receiverAuthentication,
+            verifier: { _, _, _, _ in
+                verifierCalls += 1
+                let closed = DispatchSemaphore(value: 0)
+                DispatchQueue.global().async {
+                    sender.destroy()
+                    closed.signal()
+                }
+                guard closed.wait(timeout: .now() + 2) == .success else {
+                    XCTFail("Session destroy deadlocked behind verifier callback")
+                    throw IrohaPeerNearbyErrorV1.cryptographicFailure
+                }
+                return true
+            }
+        )) {
+            XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .sessionDestroyed)
+        }
+        XCTAssertEqual(verifierCalls, 1)
+        XCTAssertTrue(sender.isDestroyed)
+        XCTAssertFalse(sender.isAuthenticated)
     }
 
     func testNearbyRecordDecodersRejectTruncationTrailingBytesAndForgedLengths() throws {
@@ -491,7 +659,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             XCTAssertEqual(try IrohaPeerNearbyEncryptedRecordV1.decode(record.encode()), record)
         }
 
-        var reordered = try makeAuthenticatedPair()
+        let reordered = try makeAuthenticatedPair()
         let first = try reordered.sender.seal(Data("first".utf8))
         let second = try reordered.sender.seal(Data("second".utf8))
         XCTAssertThrowsError(try reordered.receiver.open(second)) { error in
@@ -500,7 +668,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         XCTAssertEqual(try reordered.receiver.open(first), Data("first".utf8))
         XCTAssertEqual(try reordered.receiver.open(second), Data("second".utf8))
 
-        var tampered = try makeAuthenticatedPair()
+        let tampered = try makeAuthenticatedPair()
         let original = try tampered.sender.seal(Data("payment".utf8))
         var tamperedBytes = original.encode()
         tamperedBytes[tamperedBytes.count - 1] ^= 1
@@ -521,7 +689,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         let receiverSigningKey = Curve25519.Signing.PrivateKey()
         let sessionID = Data(repeating: 0x71, count: 16)
         let requestHash = Data(repeating: 0x72, count: 32)
-        var sender = try IrohaPeerNearbySessionV1(
+        let sender = try IrohaPeerNearbySessionV1(
             profile: .kagemusha,
             localRole: .sender,
             sessionID: sessionID,
@@ -530,7 +698,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             nonce: Data(repeating: 0x73, count: 32),
             ephemeralPrivateKey: P256.KeyAgreement.PrivateKey()
         )
-        var receiver = try IrohaPeerNearbySessionV1(
+        let receiver = try IrohaPeerNearbySessionV1(
             profile: .kagemusha,
             localRole: .receiver,
             sessionID: sessionID,

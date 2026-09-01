@@ -295,7 +295,7 @@ class CandidateStagerTests(unittest.TestCase):
     def test_redeem_native_call_passes_taira_chain_discriminant(self) -> None:
         source = HARNESS.read_text(encoding="utf-8")
         call_start = source.index(
-            "KagemushaCandidateLabNative.nativeBuildRedeemRequestV4("
+            "KagemushaCandidateLabNative.nativeBuildRedeemRequestV5("
         )
         call_prefix = source[call_start : call_start + 500]
         self.assertIn(

@@ -6030,6 +6030,7 @@ pub(crate) fn control_plane_snapshot(
                     world,
                     validator_account_id,
                     &capability.peer_id,
+                    current_height,
                     |lane_id| state_view.is_lane_active_for_authority(lane_id),
                 ))
             .then(|| capability.clone())

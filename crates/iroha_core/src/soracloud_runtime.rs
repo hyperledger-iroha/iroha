@@ -1,11 +1,15 @@
 //! Shared Soracloud runtime snapshot types and execution traits.
-use crate::state::WorldReadOnly;
+use crate::{
+    smartcontracts::isi::staking::validator_election_eligible_at_height, state::WorldReadOnly,
+};
 use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_data_model::nexus::staking::PublicLaneValidatorStatus;
 use iroha_data_model::{
     account::AccountId,
     isi::InstructionBox,
     name::Name,
-    nexus::{LaneId, staking::PublicLaneValidatorStatus},
+    nexus::LaneId,
     peer::PeerId,
     soracloud::{
         SoraAgentRuntimeStatusV1, SoraArtifactKindV1, SoraCertifiedResponsePolicyV1,
@@ -174,7 +178,7 @@ pub fn validate_finalized_soracloud_uploaded_model_release(
     Ok(())
 }
 
-/// Return whether an account has an exact, active validator record on an authoritative lane.
+/// Return whether an account has an exact validator tenure active at one consensus height.
 ///
 /// Soracloud adverts are only eligibility claims; validator lifecycle state remains the
 /// authoritative admission gate for both placement and request serving.
@@ -182,16 +186,17 @@ pub fn validate_finalized_soracloud_uploaded_model_release(
 pub fn soracloud_validator_is_active(
     world: &impl WorldReadOnly,
     validator_account_id: &AccountId,
+    current_height: u64,
     lane_is_active_for_authority: impl Fn(LaneId) -> bool,
 ) -> bool {
     world.public_lane_validators().iter().any(|(key, record)| {
         &key.1 == validator_account_id
             && crate::state::public_lane_validator_record_matches_key(key, record)
-            && record.status == PublicLaneValidatorStatus::Active
+            && validator_election_eligible_at_height(record, current_height)
             && lane_is_active_for_authority(key.0)
     })
 }
-/// Return whether an account has one exact active validator record bound to the requested peer.
+/// Return whether an account has one exact height-active validator tenure bound to a peer.
 ///
 /// The validator account and consensus peer can use different key roles. Their authoritative
 /// association is the active public-lane validator record, so a stale advert becomes ineligible
@@ -201,6 +206,7 @@ pub fn soracloud_validator_has_active_peer_binding(
     world: &impl WorldReadOnly,
     validator_account_id: &AccountId,
     peer_id: &str,
+    current_height: u64,
     lane_is_active_for_authority: impl Fn(LaneId) -> bool,
 ) -> bool {
     let Ok(canonical_peer_id) = peer_id.parse::<PeerId>() else {
@@ -212,7 +218,7 @@ pub fn soracloud_validator_has_active_peer_binding(
     world.public_lane_validators().iter().any(|(key, record)| {
         &key.1 == validator_account_id
             && crate::state::public_lane_validator_record_matches_key(key, record)
-            && record.status == PublicLaneValidatorStatus::Active
+            && validator_election_eligible_at_height(record, current_height)
             && record.peer_id == canonical_peer_id
             && lane_is_active_for_authority(key.0)
     })
@@ -323,7 +329,7 @@ struct OrderedMailboxResultPreimageV1 {
     runtime_state: Option<OrderedMailboxRuntimeStateFingerprintV1>,
 }
 
-/// Select the exact active public-lane validator responsible for one ordered mailbox message.
+/// Select the exact height-active public-lane validator responsible for one mailbox message.
 ///
 /// Selection is a deterministic rendezvous over the first finalized threshold-beacon pulse after
 /// enqueue, the immutable destination, and each unique exact active validator identity. The
@@ -347,7 +353,7 @@ pub fn resolve_ordered_mailbox_executor(
         BTreeMap::<(AccountId, String), SoraRuntimeDeterministicValidatorHostV1>::new();
     for (key, record) in world.public_lane_validators().iter() {
         if !crate::state::public_lane_validator_record_matches_key(key, record)
-            || record.status != PublicLaneValidatorStatus::Active
+            || !validator_election_eligible_at_height(record, current_height)
             || !lane_is_active_for_authority(key.0)
         {
             continue;
@@ -893,6 +899,7 @@ fn inrou_replica_assignment_has_active_capability(
     bundle: &SoraDeploymentBundleV1,
     assignment: &SoraInrouReplicaPlacementV1,
     now_ms: u64,
+    current_height: u64,
     lane_is_active_for_authority: impl Fn(LaneId) -> bool,
 ) -> bool {
     if !assignment.host_availability.is_available()
@@ -940,6 +947,7 @@ fn inrou_replica_assignment_has_active_capability(
             world,
             &assignment.validator_account_id,
             &assignment.peer_id,
+            current_height,
             lane_is_active_for_authority,
         )
 }
@@ -993,6 +1001,7 @@ pub fn resolve_active_inrou_replica_assignments(
                 bundle,
                 assignment,
                 now_ms,
+                current_height,
                 &lane_is_active_for_authority,
             ) && aggregate_capacity_matches
         })
@@ -1749,8 +1758,8 @@ mod tests {
                 self_stake: Quantity::from(1_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
-                activation_epoch: Some(0),
-                activation_height: Some(1),
+                activation_height: 1,
+                deactivation_height: None,
                 last_reward_epoch: None,
             },
         );
@@ -2229,19 +2238,24 @@ mod tests {
         let authoritative_peer = record.peer_id.to_string();
         let arbitrary_peer = checked_peer_id();
         assert_ne!(arbitrary_peer, record.peer_id);
-        assert!(soracloud_validator_is_active(&world.view(), &key.1, |_| {
-            true
-        }));
+        assert!(soracloud_validator_is_active(
+            &world.view(),
+            &key.1,
+            1,
+            |_| { true }
+        ));
         assert!(soracloud_validator_has_active_peer_binding(
             &world.view(),
             &key.1,
             &authoritative_peer,
+            1,
             |_| true,
         ));
         assert!(!soracloud_validator_has_active_peer_binding(
             &world.view(),
             &key.1,
             &arbitrary_peer.to_string(),
+            1,
             |_| true,
         ));
 
@@ -2254,12 +2268,58 @@ mod tests {
             &world.view(),
             &key.1,
             &authoritative_peer,
+            1,
             |_| true,
         ));
         assert!(soracloud_validator_has_active_peer_binding(
             &world.view(),
             &key.1,
             &arbitrary_peer.to_string(),
+            1,
+            |_| true,
+        ));
+    }
+    #[test]
+    fn validator_authority_follows_half_open_tenure_not_lifecycle_label() {
+        let mut world = seed_ordered_mailbox_validator_world();
+        let (key, mut record) = world
+            .view()
+            .public_lane_validators()
+            .iter()
+            .next()
+            .map(|(key, record)| (key.clone(), record.clone()))
+            .expect("active validator fixture");
+        let peer_id = record.peer_id.to_string();
+        record.status = PublicLaneValidatorStatus::Exiting(99);
+        record.deactivation_height = Some(5);
+        world
+            .public_lane_validators_mut_for_testing()
+            .insert(key.clone(), record);
+
+        assert!(soracloud_validator_is_active(
+            &world.view(),
+            &key.1,
+            4,
+            |_| true
+        ));
+        assert!(soracloud_validator_has_active_peer_binding(
+            &world.view(),
+            &key.1,
+            &peer_id,
+            4,
+            |_| true,
+        ));
+        assert!(!soracloud_validator_is_active(
+            &world.view(),
+            &key.1,
+            5,
+            |_| true
+        ));
+        assert!(!soracloud_validator_has_active_peer_binding(
+            &world.view(),
+            &key.1,
+            &peer_id,
+            5,
             |_| true,
         ));
     }

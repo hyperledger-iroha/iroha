@@ -4,7 +4,10 @@
 //! The point of the idea is to create an ordering (or hash function) which maps the event filter
 //! and the event that triggers it to the same approximate location in the hierarchy, thus using
 //! Binary search trees (common lisp) or hash tables (racket) to quickly trigger hooks.
-use super::{trigger_is_enabled, trigger_was_registered_before_block};
+use super::{
+    data_trigger_scope_authorization_is_well_formed, trigger_is_enabled,
+    trigger_was_registered_before_block,
+};
 use crate::smartcontracts::isi::triggers::specialized::{
     LoadedAction, LoadedActionTrait, SpecializedAction, SpecializedTrigger, TimeTriggerRetryState,
 };
@@ -44,6 +47,8 @@ use thiserror::Error;
 pub enum Error {
     /// Failed to preload IVM trigger
     Preload(#[from] VMError),
+    /// Data trigger is missing canonical v1 scope-authorization metadata
+    InvalidDataScopeAuthorization,
 }
 /// Result type for [`Set`] operations.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
@@ -183,7 +188,7 @@ enum DataTriggerIndexKey {
     Subject(DataTriggerSubjectKind, Vec<u8>),
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct DataTriggerIndex {
     postings: BTreeMap<DataTriggerIndexKey, BTreeSet<TriggerId>>,
 }
@@ -220,6 +225,37 @@ impl DataTriggerIndex {
             }
         }
         candidates.into_iter().collect()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DataTriggerCaptureAction {
+    generation: u64,
+    filter: DataEventFilter,
+    active: bool,
+}
+
+/// Frozen data-trigger index and action predicates for one buffered event batch.
+///
+/// A callback may replace a trigger ID, change lifecycle metadata, or register a
+/// new trigger. Keeping this snapshot across lazy event scanning ensures none of
+/// those changes can inherit an event emitted before the callback ran.
+#[derive(Clone, Debug)]
+pub(crate) struct DataTriggerMatchSnapshot {
+    index: DataTriggerIndex,
+    actions: BTreeMap<TriggerId, DataTriggerCaptureAction>,
+}
+
+impl DataTriggerMatchSnapshot {
+    /// Return canonically ordered candidates from the frozen index.
+    pub(crate) fn candidates(&self, event: &DataEvent) -> Vec<TriggerId> {
+        self.index.candidates(event)
+    }
+
+    /// Match one candidate against the action state frozen with the index.
+    pub(crate) fn matching_generation(&self, id: &TriggerId, event: &DataEvent) -> Option<u64> {
+        let action = self.actions.get(id)?;
+        (action.active && action.filter.matches(event)).then_some(action.generation)
     }
 }
 
@@ -676,6 +712,22 @@ impl json::JsonDeserialize for Set {
             by_call_triggers.ok_or_else(|| json::MapVisitor::missing_field("by_call_triggers"))?;
         let ids = ids.ok_or_else(|| json::MapVisitor::missing_field("ids"))?;
         let contracts = contracts.ok_or_else(|| json::MapVisitor::missing_field("contracts"))?;
+        let incompatible_data_trigger = {
+            let view = data_triggers.view();
+            view.iter()
+                .find(|(_, action)| {
+                    !data_trigger_scope_authorization_is_well_formed(action.metadata())
+                })
+                .map(|(id, _)| id.clone())
+        };
+        if let Some(id) = incompatible_data_trigger {
+            return Err(json::Error::InvalidField {
+                field: "data_triggers".into(),
+                message: format!(
+                    "incompatible data trigger `{id}`: missing or malformed v1 scope authorization metadata; regenerate the first-release snapshot"
+                ),
+            });
+        }
         let active_data_trigger_ids = Self::collect_active_ids(&data_triggers);
         let active_pipeline_trigger_ids = Self::collect_active_ids(&pipeline_triggers);
         let active_time_trigger_ids = Self::collect_active_ids(&time_triggers);
@@ -1772,9 +1824,27 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     pub(crate) fn registration_generation(&self, id: &TriggerId) -> u64 {
         self.registration_generations.get(id).copied().unwrap_or(0)
     }
-    /// Return canonically ordered data-trigger candidates for `event`.
-    pub(crate) fn data_trigger_candidates(&self, event: &DataEvent) -> Vec<TriggerId> {
-        self.data_trigger_index.candidates(event)
+    /// Freeze data-trigger matching state for one buffered event batch.
+    pub(crate) fn data_trigger_match_snapshot(&self) -> DataTriggerMatchSnapshot {
+        let actions = self
+            .data_triggers
+            .iter()
+            .map(|(id, action)| {
+                (
+                    id.clone(),
+                    DataTriggerCaptureAction {
+                        generation: self.registration_generation(id),
+                        filter: action.filter.clone(),
+                        active: trigger_is_enabled(action.metadata())
+                            && !action.repeats.is_depleted(),
+                    },
+                )
+            })
+            .collect();
+        DataTriggerMatchSnapshot {
+            index: self.data_trigger_index.clone(),
+            actions,
+        }
     }
     fn set_active_id(
         active_ids: &mut ActiveTriggerIdStoreTransaction<'block, 'set>,
@@ -1871,6 +1941,9 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         &mut self,
         trigger: SpecializedTrigger<DataEventFilter>,
     ) -> Result<bool> {
+        if !data_trigger_scope_authorization_is_well_formed(&trigger.action.metadata) {
+            return Err(Error::InvalidDataScopeAuthorization);
+        }
         let trigger_id = trigger.id.clone();
         let filter = trigger.action.filter.clone();
         let added = self.add_to(trigger, TriggeringEventType::Data, |me| {
@@ -3037,6 +3110,14 @@ impl TryFrom<SetDto> for Set {
             &mut duplicate_ids,
             &mut missing_contracts,
         )?;
+        if let Some((id, _)) = data
+            .iter()
+            .find(|(_, action)| !data_trigger_scope_authorization_is_well_formed(action.metadata()))
+        {
+            return Err(format!(
+                "incompatible data trigger `{id}`: missing or malformed v1 scope authorization metadata; regenerate the first-release snapshot"
+            ));
+        }
         let pipeline = load_trigger_entries(
             pipeline,
             TriggeringEventType::Pipeline,
@@ -3231,13 +3312,14 @@ mod dto_tests {
             let instr =
                 dm::InstructionBox::from(dm::Log::new(dm::Level::INFO, "hello".to_string()));
             let exec = dm::Executable::Instructions(ConstVec::from(vec![instr]));
-            let action = SpecializedAction::new(
+            let mut action = SpecializedAction::new(
                 exec,
                 dm::Repeats::Exactly(1),
                 authority.clone(),
                 data_filter,
             )
             .expect("test data-trigger action satisfies its authority invariant");
+            action.metadata = super::data_trigger_scope_metadata_for_testing(true);
             let trig = SpecializedTrigger::new(data_id, action);
             tx.add_data_trigger(trig).expect("add data trigger");
             // Pipeline trigger with BlockEventFilter variant
@@ -3384,6 +3466,24 @@ mod dto_tests {
         assert_eq!(dto3.by_call.len(), 1);
         assert_eq!(dto3.ids.len(), 4);
         assert_eq!(dto3.contracts.len(), 1);
+    }
+    #[test]
+    fn data_trigger_snapshot_without_v1_scope_authorization_fails_fast() {
+        let mut dto = SetDto::from(&sample_set());
+        dto.data
+            .first_mut()
+            .expect("sample set has one data trigger")
+            .1
+            .metadata = dm::Metadata::default();
+        let error = match Set::try_from(dto) {
+            Ok(_) => panic!("legacy data-trigger snapshot must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("missing or malformed v1 scope authorization metadata")
+                && error.contains("regenerate the first-release snapshot"),
+            "unexpected compatibility error: {error}"
+        );
     }
     #[test]
     fn set_roundtrips_rebuild_active_trigger_ids() {

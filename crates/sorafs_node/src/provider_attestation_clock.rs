@@ -1923,7 +1923,7 @@ mod tests {
             atomic::{AtomicBool, AtomicUsize, Ordering},
         },
     };
-    const HANDLE: &str = "hsm://musubi/provider-attestation-clock/seal";
+    const HANDLE: &str = "provider://musubi/provider-attestation-clock/seal";
     type CheckpointKey = ([u8; 32], [u8; 32]);
     type CheckpointBlobs = BTreeMap<CheckpointKey, Vec<u8>>;
     type CheckpointHeadRecords =
@@ -2299,7 +2299,7 @@ mod tests {
             if self.handle_calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 HANDLE
             } else {
-                "hsm://musubi/provider-attestation-clock/substituted"
+                "provider://musubi/provider-attestation-clock/substituted"
             }
         }
         fn qualification(

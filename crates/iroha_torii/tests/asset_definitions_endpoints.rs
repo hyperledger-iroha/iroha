@@ -94,7 +94,7 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
         .expect("commit permanent asset alias");
     (state, cbdc_id, usd_id)
 }
-fn build_app(state: Arc<State>) -> axum::Router {
+fn build_app(state: Arc<State>) -> iroha_torii::TestApiRouterRuntime {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -162,7 +162,8 @@ fn commit_alias_lease(
 #[tokio::test]
 async fn asset_definitions_endpoints_return_name_and_alias() {
     let (state, cbdc_id, _) = seeded_state();
-    let app = build_app(state);
+    let runtime = build_app(state);
+    let app = runtime.router();
     // GET /v1/assets/definitions
     let resp = app
         .clone()
@@ -251,6 +252,7 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
             && item["alias"].is_null()
             && item["alias_binding"].is_null()
     }));
+    runtime.shutdown().await;
 }
 #[tokio::test]
 async fn asset_definitions_query_supports_alias_binding_sort() {
@@ -312,7 +314,8 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
         .commit_world_overlay_for_testing()
         .expect("commit permanent asset alias");
     commit_alias_lease(&state, &authority, &usd_id, "usd#lease", 5_000, 2, 1_000);
-    let app = build_app(state);
+    let runtime = build_app(state);
+    let app = runtime.router();
     let resp = app
         .clone()
         .oneshot(
@@ -351,4 +354,5 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
             .and_then(|item| item["alias_binding"]["status"].as_str()),
         Some("leased_active")
     );
+    runtime.shutdown().await;
 }

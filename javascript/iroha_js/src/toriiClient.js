@@ -1879,7 +1879,7 @@ export class ToriiClient {
       headers: {
         Accept: APPLICATION_JSON,
         "Content-Type": "application/x-norito",
-        "Idempotency-Key": normalized.operationId,
+        "Idempotency-Key": normalized.identity.operation_id,
       },
       body: Buffer.from(normalized.norito),
       disableRetries: true,
@@ -1900,9 +1900,7 @@ export class ToriiClient {
       { signal },
     );
     return normalizeKagemushaOperationReference(payload, {
-      expectedOperationId: normalized.operationId,
-      expectedKind: kind,
-      expectedSubmittedAtMs: normalized.issuedAtMs,
+      expectedIdentity: normalized.identity,
       location,
       retryAfter,
     });

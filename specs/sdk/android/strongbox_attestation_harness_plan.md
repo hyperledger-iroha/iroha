@@ -4,6 +4,11 @@
 
 # StrongBox Attestation Harness Plan (AND2)
 
+This is a strict qualification harness for deployments that explicitly select
+the optional StrongBox integration. It is not a general Android SDK build,
+test, tag, or release prerequisite; software-backed signing remains valid
+without a physical-device bundle.
+
 Status: Authored 2026-02-14  
 Owners: Android Crypto TL, Hardware Lab Lead, Device Lab Ops  
 Related roadmap item: AND2 — Plan StrongBox attestation harness
@@ -55,7 +60,12 @@ Related roadmap item: AND2 — Plan StrongBox attestation harness
 - **Buildkite lane:** `.buildkite/android-strongbox-attestation.yml` triggers two steps:
   1. `scripts/android_strongbox_attestation_ci.sh` finds bundles and runs the harness with a separately trusted expectations tree, roots, and governed snapshot.
   2. `scripts/android_strongbox_attestation_report.py --report-path artifacts/android/attestation/report.txt` emits a summary that is attached to the Buildkite annotation and archived in `specs/compliance/android/evidence_log.csv`.
-- **Gating policy:** The CI job fails for zero bundles, missing evidence, missing trusted expectations, bundle/authority path overlap, stale governed status, revoked certificates or anchors, a leaf-SPKI mismatch, non-StrongBox evidence, or a missing `result.json`.
+- **Gating policy:** Once the optional hardware-qualification job is explicitly
+  selected, it fails for zero bundles, missing evidence, missing trusted
+  expectations, bundle/authority path overlap, stale governed status, revoked
+  certificates or anchors, a leaf-SPKI mismatch, non-StrongBox evidence, or a
+  missing `result.json`. This result does not gate the software-backed SDK
+  release path.
 - **Log retention:** Store `result.json` with evidence, but retain expectations and trust anchors in the separately governed inventory. Reports reference Buildkite job IDs and are cross-linked from `specs/compliance/android/jp/strongbox_attestation.md`.
 - **Verification log:** Each manual execution of the harness is recorded in `specs/sdk/android/readiness/android_strongbox_attestation_run_log.md` with date, executor, and outcome so AND2 status reviews have auditable evidence between CI runs.
 

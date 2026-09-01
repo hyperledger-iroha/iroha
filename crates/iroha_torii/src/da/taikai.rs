@@ -710,7 +710,7 @@ pub(crate) mod taikai_ingest {
                 use std::os::unix::fs::OpenOptionsExt as _;
                 options.mode(0o600);
             }
-            let mut file = options.open(&path).map_err(|err| {
+            let file = options.open(&path).map_err(|err| {
                 internal_error(format!(
                     "failed to open Taikai routing manifest lock `{}`: {err}",
                     path.display()

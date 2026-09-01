@@ -47,6 +47,8 @@ use iroha_crypto::Hash;
 #[cfg(test)]
 use iroha_crypto::KeyPair;
 #[cfg(test)]
+use iroha_data_model::nexus::PublicLaneValidatorStatus;
+#[cfg(test)]
 use iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1;
 #[cfg(test)]
 use iroha_data_model::soracloud::{
@@ -59,7 +61,6 @@ use iroha_data_model::{
     account::AccountId,
     isi::{self, InstructionBox},
     name::Name,
-    nexus::PublicLaneValidatorStatus,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         SORA_HTTP_SERVICE_REPLICA_MAX_V1, SORA_INROU_DATA_VOLUME_MOUNT_ROOT_V1,
@@ -4283,18 +4284,16 @@ impl SoracloudRuntimeManager {
     }
     fn run_startup_reconcile(self: Arc<Self>) -> eyre::Result<()> {
         let manager = Arc::clone(&self);
-        let result = std::thread::Builder::new()
-            .name("soracloud-runtime-startup-reconcile".to_owned())
-            .spawn(move || manager.reconcile_once())
-            .wrap_err("spawn Soracloud startup reconcile thread")?
-            .join();
-        match result {
+        let thread = crate::panic_recovery::spawn_thread_recoverable(
+            std::thread::Builder::new().name("soracloud-runtime-startup-reconcile".to_owned()),
+            move || manager.reconcile_once(),
+        )
+        .wrap_err("spawn Soracloud startup reconcile thread")?;
+        match crate::panic_recovery::join_thread_recoverable(thread) {
             Ok(result) => result,
-            Err(panic) => {
+            Err(_panic) => {
                 self.quarantine_local_inrou_runtime();
-                Err(eyre::eyre!(
-                    "Soracloud startup reconcile thread panicked: {panic:?}"
-                ))
+                Err(eyre::eyre!("Soracloud startup reconcile thread panicked"))
             }
         }
     }
@@ -4306,7 +4305,13 @@ impl SoracloudRuntimeManager {
                 tokio::select! {
                     _ = interval.tick() => {
                         let manager = Arc::clone(&self);
-                        match tokio::task::spawn_blocking(move || manager.reconcile_once()).await {
+                        match crate::panic_recovery::join_recoverable(
+                            crate::panic_recovery::spawn_blocking_recoverable(move || {
+                                manager.reconcile_once()
+                            }),
+                        )
+                        .await
+                        {
                             Ok(Ok(())) => {}
                             Ok(Err(error)) => {
                                 iroha_logger::warn!(
@@ -4315,10 +4320,9 @@ impl SoracloudRuntimeManager {
                                     "Soracloud runtime-manager reconciliation failed"
                                 );
                             }
-                            Err(error) => {
+                            Err(_panic) => {
                                 self.quarantine_local_inrou_runtime();
                                 iroha_logger::warn!(
-                                    ?error,
                                     state_dir = %self.config.state_dir.display(),
                                     "Soracloud runtime-manager reconciliation task panicked"
                                 );
@@ -5532,14 +5536,12 @@ impl SoracloudRuntimeManager {
                         && usage.cpu_millis <= u64::from(capability.max_cpu_millis)
                         && usage.memory_bytes <= capability.max_memory_bytes
                         && usage.storage_bytes <= capability.max_storage_bytes
-                        && world.public_lane_validators().iter().any(
-                            |((lane_id, validator_account_id), record)| {
-                                lane_id == &record.lane_id
-                                    && validator_account_id == &record.validator
-                                    && validator_account_id == &placement.validator_account_id
-                                    && record.status == PublicLaneValidatorStatus::Active
-                                    && record.peer_id.to_string() == placement.peer_id
-                            },
+                        && iroha_core::soracloud_runtime::soracloud_validator_has_active_peer_binding(
+                            world,
+                            &placement.validator_account_id,
+                            &placement.peer_id,
+                            current_height,
+                            |lane_id| view.is_lane_active_for_authority(lane_id),
                         )
                 });
             if placement.host_availability.is_available() != exact_host_is_eligible {
@@ -10014,6 +10016,8 @@ fn local_inrou_replica_placements(
     service_version: &str,
     local_validator_account_id: Option<&AccountId>,
     local_peer_id: Option<&str>,
+    current_height: u64,
+    lane_is_active_for_authority: impl Fn(iroha_data_model::nexus::LaneId) -> bool,
 ) -> Vec<SoraInrouReplicaPlacementV1> {
     let Some(local_validator_account_id) = local_validator_account_id else {
         return Vec::new();
@@ -10022,16 +10026,13 @@ fn local_inrou_replica_placements(
         return Vec::new();
     };
     let has_active_peer_binding =
-        world
-            .public_lane_validators()
-            .iter()
-            .any(|((lane_id, validator_account_id), record)| {
-                lane_id == &record.lane_id
-                    && validator_account_id == &record.validator
-                    && validator_account_id == local_validator_account_id
-                    && record.status == PublicLaneValidatorStatus::Active
-                    && record.peer_id.to_string() == local_peer_id
-            });
+        iroha_core::soracloud_runtime::soracloud_validator_has_active_peer_binding(
+            world,
+            local_validator_account_id,
+            local_peer_id,
+            current_height,
+            lane_is_active_for_authority,
+        );
     if !has_active_peer_binding {
         return Vec::new();
     }
@@ -10162,6 +10163,8 @@ fn build_runtime_snapshot(
                     &service_version,
                     local_validator_account_id,
                     local_peer_id,
+                    current_height,
+                    |lane_id| view.is_lane_active_for_authority(lane_id),
                 )
             } else {
                 Vec::new()
@@ -10621,6 +10624,8 @@ fn collect_authoritative_single_revision_inrou_runtime_plans<'snapshot>(
                 service_version,
                 local_validator_account_id,
                 local_peer_id,
+                current_height,
+                |lane_id| view.is_lane_active_for_authority(lane_id),
             )
         } else {
             Vec::new()
@@ -24328,8 +24333,8 @@ mod tests {
                     self_stake: Quantity::from(1_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: Some(1),
-                    activation_height: Some(1),
+                    activation_height: 1,
+                    deactivation_height: None,
                     last_reward_epoch: None,
                 },
             );
@@ -27715,7 +27720,7 @@ mod tests {
                 fee_payer: iroha_config::parameters::actual::SoracloudRuntimeFeePayer::Authority,
                 signer: Some(
                     iroha_config::parameters::actual::SoracloudRuntimeMutationSignerBinding {
-                        handle: "hsm://soracloud/runtime-primary".to_owned(),
+                        handle: "provider://soracloud/runtime-primary".to_owned(),
                         authority: AccountId::new(ALICE_KEYPAIR.public_key().clone()),
                         algorithm: iroha_crypto::Algorithm::Ed25519,
                         public_key: ALICE_KEYPAIR.public_key().clone(),

@@ -70,7 +70,8 @@ use iroha_data_model::{
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
     asset::{
-        AssetDefinitionAlias, AssetTransferAvailability,
+        AssetDefinitionAlias, AssetTransferAvailability, AssetTransferControlWindow,
+        AssetTransferLimit,
         definition::{AssetDefinition, NewAssetDefinition},
         id::{AssetDefinitionId, AssetId},
         validate_asset_transfer_availability_reason,
@@ -92,7 +93,9 @@ use iroha_data_model::{
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
         SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
         Unregister, UnregisterBox, UnregisterKaigiRelay,
-        asset_transfer_control::SetAssetTransferAvailability,
+        asset_transfer_control::{
+            SetAssetTransferAvailability, SetAssetTransferBlacklist, SetAssetTransferControl,
+        },
         escrow::CancelAssetLock,
         governance::{
             CastPlainBallot, CastZkBallot, ProposeDeployContract, ProposeValidationFeePolicy,
@@ -289,14 +292,19 @@ const JS_MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 pub fn connect_norito_bridge_abi_version() -> u32 {
     PRIVACY_BRIDGE_ABI_VERSION_V1
 }
+/// Return the exact first-release Kagemusha native contract revision.
+#[napi(js_name = "kagemushaNativeContractRevision")]
+pub fn kagemusha_native_contract_revision() -> u32 {
+    1
+}
 /// Fail-closed validation for the exact Kagemusha operation-status JSON
 /// returned by Torii.
 ///
 /// Applied top-ups recompute the complete V4 anchor digest and authenticate its
 /// balanced Merkle path and execution commitment. Commit-QC signature
 /// verification remains a separate release-pinned finality-verifier step.
-#[napi(js_name = "kagemushaOfflineOperationStatusJsonValidateV1")]
-pub fn kagemusha_offline_operation_status_json_validate_v1(
+#[napi(js_name = "kagemushaOfflineOperationStatusJsonValidateV2")]
+pub fn kagemusha_offline_operation_status_json_validate_v2(
     status_json: Uint8Array,
 ) -> napi::Result<()> {
     use iroha::client::{OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES, OfflineOperationStatus};
@@ -7525,6 +7533,8 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 || map.contains_key("CancelSmartContractCodeUpload")
                 || map.contains_key("CancelAssetLock")
                 || map.contains_key("SetAssetTransferAvailability")
+                || map.contains_key("SetAssetTransferBlacklist")
+                || map.contains_key("SetAssetTransferControl")
                 || map.contains_key("ProposeValidationFeePolicy")
     );
     if !requires_explicit_parser {
@@ -7645,6 +7655,172 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     reason,
                 )
                 .into());
+            }
+            if let Some(payload) = map.remove("SetAssetTransferBlacklist") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "SetAssetTransferBlacklist instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                let json::Value::Object(mut fields) = payload else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "SetAssetTransferBlacklist must be an object",
+                    ));
+                };
+                require_exact_json_fields(
+                    &fields,
+                    &["account_id", "asset_definition_id", "blacklisted"],
+                    "SetAssetTransferBlacklist",
+                )?;
+                let account_id = parse_account_id_value(
+                    required_value(&mut fields, "account_id", "SetAssetTransferBlacklist")?,
+                    "SetAssetTransferBlacklist.account_id",
+                )?;
+                let asset_definition_literal = parse_string_value(
+                    required_value(
+                        &mut fields,
+                        "asset_definition_id",
+                        "SetAssetTransferBlacklist",
+                    )?,
+                    "SetAssetTransferBlacklist.asset_definition_id",
+                )?;
+                let asset_definition_id = AssetDefinitionId::parse_address_literal(
+                    &asset_definition_literal,
+                )
+                .map_err(|error| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("invalid SetAssetTransferBlacklist.asset_definition_id: {error}"),
+                    )
+                })?;
+                let blacklisted = match required_value(
+                    &mut fields,
+                    "blacklisted",
+                    "SetAssetTransferBlacklist",
+                )? {
+                    json::Value::Bool(value) => value,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "SetAssetTransferBlacklist.blacklisted must be a boolean (found {other:?})"
+                            ),
+                        ));
+                    }
+                };
+                return Ok(SetAssetTransferBlacklist::new(
+                    account_id,
+                    asset_definition_id,
+                    blacklisted,
+                )
+                .into());
+            }
+            if let Some(payload) = map.remove("SetAssetTransferControl") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "SetAssetTransferControl instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                let json::Value::Object(mut fields) = payload else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "SetAssetTransferControl must be an object",
+                    ));
+                };
+                require_exact_json_fields(
+                    &fields,
+                    &["account_id", "asset_definition_id", "limits"],
+                    "SetAssetTransferControl",
+                )?;
+                let account_id = parse_account_id_value(
+                    required_value(&mut fields, "account_id", "SetAssetTransferControl")?,
+                    "SetAssetTransferControl.account_id",
+                )?;
+                let asset_definition_literal = parse_string_value(
+                    required_value(
+                        &mut fields,
+                        "asset_definition_id",
+                        "SetAssetTransferControl",
+                    )?,
+                    "SetAssetTransferControl.asset_definition_id",
+                )?;
+                let asset_definition_id = AssetDefinitionId::parse_address_literal(
+                    &asset_definition_literal,
+                )
+                .map_err(|error| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("invalid SetAssetTransferControl.asset_definition_id: {error}"),
+                    )
+                })?;
+                let limits_value =
+                    required_value(&mut fields, "limits", "SetAssetTransferControl")?;
+                let json::Value::Array(limit_values) = limits_value else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "SetAssetTransferControl.limits must be an array",
+                    ));
+                };
+                let mut limits = Vec::with_capacity(limit_values.len());
+                for (index, value) in limit_values.into_iter().enumerate() {
+                    let context = format!("SetAssetTransferControl.limits[{index}]");
+                    let json::Value::Object(mut limit_fields) = value else {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("{context} must be an object"),
+                        ));
+                    };
+                    require_exact_json_fields(&limit_fields, &["window", "cap_amount"], &context)?;
+                    let window = match required_value(&mut limit_fields, "window", &context)? {
+                        json::Value::String(value) if value == "Day" => {
+                            AssetTransferControlWindow::Day
+                        }
+                        json::Value::String(value) if value == "Week" => {
+                            AssetTransferControlWindow::Week
+                        }
+                        json::Value::String(value) if value == "Month" => {
+                            AssetTransferControlWindow::Month
+                        }
+                        other => {
+                            return Err(napi::Error::new(
+                                napi::Status::InvalidArg,
+                                format!(
+                                    "{context}.window must be exactly \"Day\", \"Week\", or \"Month\" (found {other:?})"
+                                ),
+                            ));
+                        }
+                    };
+                    if limits
+                        .iter()
+                        .any(|limit: &AssetTransferLimit| limit.window == window)
+                    {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("{context}.window duplicates {window}"),
+                        ));
+                    }
+                    let cap_amount =
+                        match required_value(&mut limit_fields, "cap_amount", &context)? {
+                            json::Value::Null => None,
+                            value => Some(parse_canonical_quantity_value(
+                                value,
+                                &format!("{context}.cap_amount"),
+                            )?),
+                        };
+                    limits.push(AssetTransferLimit { window, cap_amount });
+                }
+                return Ok(
+                    SetAssetTransferControl::new(account_id, asset_definition_id, limits).into(),
+                );
             }
             if let Some(payload) = map.remove("DeploySoracloudService") {
                 if !map.is_empty() {
@@ -9468,6 +9644,83 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         let mut outer = json::Map::new();
         outer.insert(
             "SetAssetTransferAvailability".to_owned(),
+            json::Value::Object(inner),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+    if let Some(blacklist) = instruction_ref
+        .as_any()
+        .downcast_ref::<SetAssetTransferBlacklist>()
+    {
+        let mut inner = json::Map::new();
+        inner.insert(
+            "account_id".to_owned(),
+            json::to_value(&blacklist.account_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "asset_definition_id".to_owned(),
+            json::to_value(&blacklist.asset_definition_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "blacklisted".to_owned(),
+            json::Value::Bool(blacklist.blacklisted),
+        );
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SetAssetTransferBlacklist".to_owned(),
+            json::Value::Object(inner),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+    if let Some(control) = instruction_ref
+        .as_any()
+        .downcast_ref::<SetAssetTransferControl>()
+    {
+        let mut inner = json::Map::new();
+        inner.insert(
+            "account_id".to_owned(),
+            json::to_value(&control.account_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "asset_definition_id".to_owned(),
+            json::to_value(&control.asset_definition_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "limits".to_owned(),
+            json::Value::Array(
+                control
+                    .limits
+                    .iter()
+                    .map(|limit| {
+                        let mut fields = json::Map::new();
+                        fields.insert(
+                            "window".to_owned(),
+                            json::Value::String(
+                                match limit.window {
+                                    AssetTransferControlWindow::Day => "Day",
+                                    AssetTransferControlWindow::Week => "Week",
+                                    AssetTransferControlWindow::Month => "Month",
+                                }
+                                .to_owned(),
+                            ),
+                        );
+                        fields.insert(
+                            "cap_amount".to_owned(),
+                            limit
+                                .cap_amount
+                                .as_ref()
+                                .map_or(json::Value::Null, |value| {
+                                    json::Value::String(value.to_string())
+                                }),
+                        );
+                        json::Value::Object(fields)
+                    })
+                    .collect(),
+            ),
+        );
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SetAssetTransferControl".to_owned(),
             json::Value::Object(inner),
         );
         return Ok(json::Value::Object(outer));
@@ -12197,11 +12450,13 @@ mod tests {
     #[test]
     fn kagemusha_status_json_napi_boundary_validates_exact_structure() {
         let operation_id = "11".repeat(32);
+        let request_authority_digest = "33".repeat(32);
+        let canonical_request_digest = "55".repeat(32);
         let transaction_hash = format!("{}25", "22".repeat(31));
         let pending = format!(
-            r#"{{"state":"pending","value":{{"operation_id":"{operation_id}","kind":{{"kind":"top_up","value":null}},"transaction_hash":"{transaction_hash}","submitted_at_ms":1}}}}"#
+            r#"{{"state":"pending","value":{{"identity":{{"operation_id":"{operation_id}","request_authority_digest":"{request_authority_digest}","canonical_request_digest":"{canonical_request_digest}","kind":{{"kind":"top_up","value":null}},"issued_at_ms":1,"expires_at_ms":2}},"transaction_hash":"{transaction_hash}"}}}}"#
         );
-        kagemusha_offline_operation_status_json_validate_v1(Uint8Array::from(pending.into_bytes()))
+        kagemusha_offline_operation_status_json_validate_v2(Uint8Array::from(pending.into_bytes()))
             .expect("canonical Pending status");
 
         for invalid in [
@@ -12209,7 +12464,7 @@ mod tests {
             br#"{"state":"pending","value":{"operation_id":"00"}}"#.as_slice(),
         ] {
             assert!(
-                kagemusha_offline_operation_status_json_validate_v1(Uint8Array::from(
+                kagemusha_offline_operation_status_json_validate_v2(Uint8Array::from(
                     invalid.to_vec()
                 ))
                 .is_err()
@@ -14564,6 +14819,176 @@ seiyaku Privacy {
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
+    }
+    #[test]
+    fn asset_transfer_blacklist_instruction_json_roundtrip() {
+        let account_id = sample_account("wonderland");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let instruction: InstructionBox =
+            SetAssetTransferBlacklist::new(account_id.clone(), asset_definition.clone(), true)
+                .into();
+        let json_value = instruction_to_json_value(&instruction)
+            .expect("serialize SetAssetTransferBlacklist instruction");
+        assert_eq!(
+            json_value,
+            norito_json!({
+                "SetAssetTransferBlacklist": norito_json!({
+                    "account_id": json::to_value(&account_id).expect("serialize account"),
+                    "asset_definition_id": json::to_value(&asset_definition)
+                        .expect("serialize asset definition"),
+                    "blacklisted": true,
+                }),
+            })
+        );
+        let reconstructed = value_to_instruction(json_value)
+            .expect("deserialize SetAssetTransferBlacklist instruction");
+        assert_eq!(reconstructed, instruction);
+    }
+    #[test]
+    fn asset_transfer_control_instruction_json_roundtrip() {
+        let account_id = sample_account("wonderland");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let instruction: InstructionBox = SetAssetTransferControl::new(
+            account_id.clone(),
+            asset_definition.clone(),
+            vec![
+                AssetTransferLimit {
+                    window: AssetTransferControlWindow::Day,
+                    cap_amount: Some(Quantity::from_str("10.5").expect("valid quantity")),
+                },
+                AssetTransferLimit {
+                    window: AssetTransferControlWindow::Month,
+                    cap_amount: None,
+                },
+            ],
+        )
+        .into();
+        let json_value = instruction_to_json_value(&instruction)
+            .expect("serialize SetAssetTransferControl instruction");
+        assert_eq!(
+            json_value,
+            norito_json!({
+                "SetAssetTransferControl": norito_json!({
+                    "account_id": json::to_value(&account_id).expect("serialize account"),
+                    "asset_definition_id": json::to_value(&asset_definition)
+                        .expect("serialize asset definition"),
+                    "limits": vec![
+                        norito_json!({"window": "Day", "cap_amount": "10.5"}),
+                        norito_json!({"window": "Month", "cap_amount": json::Value::Null}),
+                    ],
+                }),
+            })
+        );
+        let reconstructed = value_to_instruction(json_value)
+            .expect("deserialize SetAssetTransferControl instruction");
+        assert_eq!(reconstructed, instruction);
+    }
+    #[test]
+    fn asset_transfer_control_instruction_json_rejects_noncanonical_payloads() {
+        let account_id = sample_account("wonderland");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let account_value = json::to_value(&account_id).expect("serialize account");
+        let asset_definition_value = json::Value::String(asset_definition.to_string());
+        let invalid = [
+            (
+                "blacklist type",
+                norito_json!({
+                    "SetAssetTransferBlacklist": norito_json!({
+                        "account_id": account_value.clone(),
+                        "asset_definition_id": asset_definition_value.clone(),
+                        "blacklisted": "true",
+                    }),
+                }),
+                "blacklisted must be a boolean",
+            ),
+            (
+                "blacklist extra field",
+                norito_json!({
+                    "SetAssetTransferBlacklist": norito_json!({
+                        "account_id": account_value.clone(),
+                        "asset_definition_id": asset_definition_value.clone(),
+                        "blacklisted": true,
+                        "reason": "not on the wire",
+                    }),
+                }),
+                "must contain exactly",
+            ),
+            (
+                "window spelling",
+                norito_json!({
+                    "SetAssetTransferControl": norito_json!({
+                        "account_id": account_value.clone(),
+                        "asset_definition_id": asset_definition_value.clone(),
+                        "limits": vec![norito_json!({
+                            "window": "DAY",
+                            "cap_amount": "1",
+                        })],
+                    }),
+                }),
+                "must be exactly",
+            ),
+            (
+                "duplicate window",
+                norito_json!({
+                    "SetAssetTransferControl": norito_json!({
+                        "account_id": account_value.clone(),
+                        "asset_definition_id": asset_definition_value.clone(),
+                        "limits": vec![
+                            norito_json!({"window": "Day", "cap_amount": "1"}),
+                            norito_json!({"window": "Day", "cap_amount": json::Value::Null}),
+                        ],
+                    }),
+                }),
+                "duplicates DAY",
+            ),
+            (
+                "quantity spelling",
+                norito_json!({
+                    "SetAssetTransferControl": norito_json!({
+                        "account_id": account_value.clone(),
+                        "asset_definition_id": asset_definition_value.clone(),
+                        "limits": vec![norito_json!({
+                            "window": "Week",
+                            "cap_amount": "01",
+                        })],
+                    }),
+                }),
+                "canonical Quantity text",
+            ),
+            (
+                "limit extra field",
+                norito_json!({
+                    "SetAssetTransferControl": norito_json!({
+                        "account_id": account_value,
+                        "asset_definition_id": asset_definition_value,
+                        "limits": vec![norito_json!({
+                            "window": "Month",
+                            "cap_amount": json::Value::Null,
+                            "reset": true,
+                        })],
+                    }),
+                }),
+                "must contain exactly",
+            ),
+        ];
+        for (label, value, expected) in invalid {
+            let error = value_to_instruction(value)
+                .expect_err("noncanonical asset-transfer control JSON must fail closed");
+            assert!(
+                error.reason.contains(expected),
+                "{label} produced unexpected error: {}",
+                error.reason
+            );
+        }
     }
     #[test]
     fn transfer_asset_batch_instruction_json_roundtrip() {

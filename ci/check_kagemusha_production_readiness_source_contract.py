@@ -511,9 +511,9 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         "connect_norito_kagemusha_recursive_spend_append_v4",
         "connect_norito_kagemusha_recursive_spend_verify_v4",
         "connect_norito_kagemusha_recursive_spend_redeem_v4",
-        "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+        "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5",
         "connect_norito_kagemusha_secret_free_buffer",
-        "KagemushaRecursiveSpendRedemptionChangePrepareRequestV4",
+        "KagemushaRecursiveSpendRedemptionChangePrepareRequestV5",
         "KagemushaRecursiveSpendRedemptionChangePrepareResultV4",
     )
     rq(
@@ -523,7 +523,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         "CONNECT_NORITO_BRIDGE_ABI_VERSION 23",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
         "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
-        "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+        "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5",
         "connect_norito_kagemusha_secret_free_buffer",
         "promotion_record_norito_ptr",
     )

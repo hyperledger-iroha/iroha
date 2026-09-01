@@ -61,8 +61,8 @@ fn exact_stake_authority_fixture(
                 self_stake: minimum_stake.clone(),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
-                activation_epoch: Some(0),
-                activation_height: Some(0),
+                activation_height: 1,
+                deactivation_height: None,
                 last_reward_epoch: None,
             },
         );

@@ -5043,7 +5043,7 @@ mod tests {
         let (mut store, _) =
             CertifiedServePayloadStoreV1::open(temporary.path(), &context).expect("open store");
         let pending = store.persist_pending(&request).expect("persist pending");
-        store
+        let _ = store
             .persist_negative(
                 pending.id(),
                 CertifiedServePayloadNegativeOutcome::Rejected(17),
@@ -5305,7 +5305,7 @@ mod tests {
             CertifiedServePayloadStoreV1::open(temporary.path(), &context).expect("open store");
         let pending = store.persist_pending(&request).expect("persist pending");
         let outcome = CertifiedServePayloadNegativeOutcome::Rejected(11);
-        store
+        let _ = store
             .persist_negative(pending.id(), outcome)
             .expect("persist terminal companion");
         let canonical_path = store.path_for(pending.id());
@@ -5318,7 +5318,7 @@ mod tests {
             .expect("authenticate terminal companion pair");
         assert!(matches!(
             recovery.get(pending.id()).expect("recover terminal pair").state(),
-            RecoveredCertifiedServePayloadState::Negative(recovered) if *recovered == outcome
+            RecoveredCertifiedServePayloadState::Negative(recovered) if recovered == outcome
         ));
         assert_eq!(
             fs::read(&canonical_path).expect("reread canonical Pending frame"),
@@ -5359,7 +5359,7 @@ mod tests {
             .expect("recover terminal final selected before directory fsync");
         assert!(matches!(
             recovery.get(pending.id()).expect("recover terminal pair").state(),
-            RecoveredCertifiedServePayloadState::Negative(recovered) if *recovered == outcome
+            RecoveredCertifiedServePayloadState::Negative(recovered) if recovered == outcome
         ));
     }
 
@@ -5412,7 +5412,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn startup_rejects_a_private_mode_leaf_with_an_extended_acl() {
-        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        use std::os::unix::fs::MetadataExt as _;
 
         let temporary = TempDir::new().expect("temporary ACL payload directory");
         let (context, keys) = context_and_keys();
@@ -6349,7 +6349,7 @@ mod tests {
             fs::read(&first_quarantine).expect("read first quarantine slot"),
             first_partial
         );
-        store
+        let _ = store
             .persist_pending(&request)
             .expect("retry and publish canonical Pending frame");
         drop(store);
@@ -6459,7 +6459,7 @@ mod tests {
         );
         assert!(matches!(
             recovery.get(pending.id()).expect("recover terminal state").state(),
-            RecoveredCertifiedServePayloadState::Negative(recovered) if *recovered == outcome
+            RecoveredCertifiedServePayloadState::Negative(recovered) if recovered == outcome
         ));
     }
     #[test]

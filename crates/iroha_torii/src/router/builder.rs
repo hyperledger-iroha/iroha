@@ -10,12 +10,12 @@ use axum::{
     handler::Handler,
     http::{Method, Request},
     response::IntoResponse,
-    routing::{MethodRouter, Route, any, delete, get, post},
+    routing::{MethodFilter, MethodRouter, Route, any, delete, on, post},
 };
 use iroha_torii_shared::route_catalog::{
     AdmissionPolicy, ApiSurface, AuthenticationPolicy, CatalogProjection, CatalogValidationError,
     EnabledFeatures, HttpMethod, ImplicitRouteDescriptor, Listener, RouteCatalog, RouteDescriptor,
-    RouteEffect, RouteProjections,
+    RouteEffect, RouteProjections, RouteTransport,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -64,6 +64,7 @@ pub(crate) struct MatchedRouteMetadata {
     listener: Option<Listener>,
     effect: Option<RouteEffect>,
     admission: Option<AdmissionPolicy>,
+    transport: Option<RouteTransport>,
     private_no_store: bool,
     projections: RouteProjections,
 }
@@ -111,6 +112,15 @@ impl MatchedRouteMetadata {
     pub(crate) const fn admission(&self) -> Option<AdmissionPolicy> {
         self.admission
     }
+    /// Application transport selected by an exact catalog operation.
+    ///
+    /// Framework responses such as 404, 405, and CORS preflight return
+    /// `None`; callers must treat them as ordinary HTTP rather than inheriting
+    /// a streaming transport from another method at the same path.
+    #[must_use]
+    pub(crate) const fn transport(&self) -> Option<RouteTransport> {
+        self.transport
+    }
     /// Whether the catalog requires every response to be private and non-cacheable.
     #[must_use]
     pub(crate) const fn requires_private_no_store(&self) -> bool {
@@ -130,6 +140,7 @@ impl MatchedRouteMetadata {
             listener: Some(descriptor.listener()),
             effect: Some(descriptor.effect()),
             admission: Some(descriptor.admission()),
+            transport: Some(descriptor.transport()),
             private_no_store: descriptor.requires_private_no_store(),
             projections: descriptor.projections(),
         }
@@ -150,6 +161,7 @@ impl MatchedRouteMetadata {
             listener,
             effect,
             admission,
+            transport: None,
             private_no_store,
             projections: RouteProjections::NONE,
         }
@@ -180,13 +192,6 @@ impl MountedRouteIndex {
         }
         if let Some(descriptor) = self.explicit.get(&("ANY", path_template)) {
             return MatchedRouteMetadata::from_descriptor(*descriptor);
-        }
-        if method == Method::HEAD {
-            if let Some(descriptor) = self.explicit.get(&("GET", path_template)) {
-                if descriptor.implicit_head() {
-                    return MatchedRouteMetadata::from_descriptor(*descriptor);
-                }
-            }
         }
         if method == Method::OPTIONS && self.cors_paths.contains(path_template) {
             let descriptor = self.by_path.get(path_template).copied();
@@ -233,7 +238,7 @@ impl MountedRouteManifest {
     pub(crate) fn explicit_routes(&self) -> &[RouteDescriptor] {
         &self.explicit_routes
     }
-    /// Framework-level HEAD and CORS OPTIONS behavior.
+    /// Framework-level CORS OPTIONS behavior.
     #[must_use]
     pub(crate) fn implicit_routes(&self) -> &[ImplicitRouteDescriptor] {
         &self.implicit_routes
@@ -759,7 +764,24 @@ macro_rules! catalog_method_constructor {
         }
     };
 }
-catalog_method_constructor!(catalog_get, Get, get);
+/// Construct a sealed GET-only router.
+///
+/// Axum's convenience `get` constructor also dispatches HEAD requests to the
+/// GET handler. Catalog routes are exact-method operations, so use an exact
+/// method filter and require any future HEAD operation to be declared and
+/// mounted explicitly.
+pub(crate) fn catalog_get<H, T, S>(handler: H) -> CatalogMethodRouter<S, ToriiDefaultAuthentication>
+where
+    H: Handler<T, S>,
+    T: 'static,
+    S: Clone + Send + Sync + 'static,
+{
+    CatalogMethodRouter {
+        method: HttpMethod::Get,
+        authentication: ToriiDefaultAuthentication,
+        inner: on(MethodFilter::GET, handler),
+    }
+}
 catalog_method_constructor!(catalog_post, Post, post);
 catalog_method_constructor!(catalog_delete, Delete, delete);
 catalog_method_constructor!(catalog_any, Any, any);
@@ -920,6 +942,7 @@ mod tests {
     use iroha_torii_shared::route_catalog::{
         ApiSurface, FeatureGate, ImplicitRouteKind, Listener, RouteProjections,
     };
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tower::ServiceExt as _;
     const READ: RouteDescriptor = RouteDescriptor::new(
         "test.read",
@@ -931,7 +954,6 @@ mod tests {
         AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     const WRITE: RouteDescriptor = RouteDescriptor::new(
         "test.write",
@@ -952,8 +974,7 @@ mod tests {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     )
-    .with_feature_gate(FeatureGate::Feature("test_feature"))
-    .with_implicit_head(true);
+    .with_feature_gate(FeatureGate::Feature("test_feature"));
     const HANDSHAKE: RouteDescriptor = RouteDescriptor::new(
         "test.handshake",
         HttpMethod::Get,
@@ -1091,19 +1112,27 @@ mod tests {
         StatusCode::IM_A_TEAPOT
     }
     #[tokio::test]
-    async fn complete_manifest_matches_registered_routes_and_separates_implicit_methods() {
+    async fn complete_manifest_matches_registered_routes_and_keeps_get_exact() {
         let mut builder =
             RouterBuilder::new((), RouteCatalog::new(ROUTES), EnabledFeatures::none())
                 .expect("valid catalog");
         assert_eq!(builder.catalog_by_id.len(), ROUTES.len());
-        builder.route(&READ, catalog_get(|| async { "read" }));
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let handler_calls = std::sync::Arc::clone(&calls);
+        builder.route(
+            &READ,
+            catalog_get(move || {
+                let handler_calls = std::sync::Arc::clone(&handler_calls);
+                async move {
+                    handler_calls.fetch_add(1, Ordering::SeqCst);
+                    "read"
+                }
+            }),
+        );
         builder.route(&WRITE, catalog_post(|| async { StatusCode::NO_CONTENT }));
         let (router, manifest) = builder.finish().expect("complete registration");
         assert_eq!(manifest.explicit_routes(), &[READ, WRITE]);
-        assert_eq!(manifest.implicit_routes().len(), 2);
-        assert!(manifest.implicit_routes().iter().any(|route| {
-            route.kind() == ImplicitRouteKind::Head && route.path() == READ.path()
-        }));
+        assert_eq!(manifest.implicit_routes().len(), 1);
         assert!(manifest.implicit_routes().iter().any(|route| {
             route.kind() == ImplicitRouteKind::CorsOptions && route.path() == READ.path()
         }));
@@ -1112,6 +1141,12 @@ mod tests {
             .resolve(&Method::GET, Some(READ.path()));
         assert_eq!(matched.effect(), Some(RouteEffect::ReadOnly));
         assert_eq!(matched.admission(), Some(AdmissionPolicy::Public));
+        assert_eq!(matched.transport(), Some(RouteTransport::Http));
+        let head = manifest
+            .route_index()
+            .resolve(&Method::HEAD, Some(READ.path()));
+        assert_eq!(head.stable_route_id(), "http.method_not_allowed");
+        assert_eq!(head.transport(), None);
         let response = router
             .oneshot(
                 Request::builder()
@@ -1122,7 +1157,8 @@ mod tests {
             )
             .await
             .expect("response");
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
     #[test]
     fn unsafe_effect_and_admission_metadata_cannot_reach_mounting() {

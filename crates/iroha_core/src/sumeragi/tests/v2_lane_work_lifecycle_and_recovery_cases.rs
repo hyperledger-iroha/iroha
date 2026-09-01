@@ -647,6 +647,8 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
         NonZeroU64::new(adapter.context.height).expect("fixture boundary height is non-zero");
     let mut npos_parameters = SumeragiNposParameters::default();
     npos_parameters.epoch_length_blocks = epoch_length;
+    npos_parameters.evidence_horizon_blocks = epoch_length.get().saturating_mul(2);
+    npos_parameters.slashing_delay_blocks = epoch_length.get();
     npos_parameters
         .validate()
         .expect("short fixture NPoS epoch remains valid");

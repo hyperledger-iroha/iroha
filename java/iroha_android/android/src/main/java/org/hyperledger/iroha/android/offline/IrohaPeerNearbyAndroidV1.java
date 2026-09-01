@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.offline;
 
 import android.content.Context;
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyConnectionsConfigurationV1;
@@ -17,11 +18,20 @@ public final class IrohaPeerNearbyAndroidV1 {
       final IrohaPeerNearbyRoleV1 role,
       final byte[] sessionId,
       final byte[] requestCanonicalHash) {
-    return new IrohaPeerNearbyDiscoveryContextV1(
-        IrohaPeerNfcV1.sharedProfile(Objects.requireNonNull(profile, "profile")),
-        Objects.requireNonNull(role, "role").toShared(),
-        Objects.requireNonNull(sessionId, "sessionId").clone(),
-        Objects.requireNonNull(requestCanonicalHash, "requestCanonicalHash").clone());
+    final byte[] requiredSession = requireLength(sessionId, 16, "sessionId");
+    final byte[] requiredRequest = requireLength(requestCanonicalHash, 32, "requestCanonicalHash");
+    final byte[] ownedSession = requiredSession.clone();
+    final byte[] ownedRequest = requiredRequest.clone();
+    try {
+      return new IrohaPeerNearbyDiscoveryContextV1(
+          IrohaPeerNfcV1.sharedProfile(Objects.requireNonNull(profile, "profile")),
+          Objects.requireNonNull(role, "role").toShared(),
+          ownedSession,
+          ownedRequest);
+    } finally {
+      Arrays.fill(ownedRequest, (byte) 0);
+      Arrays.fill(ownedSession, (byte) 0);
+    }
   }
 
   /** Discovery-only all-zero sentinel; it is never accepted by the IPN1 secure channel. */
@@ -71,5 +81,14 @@ public final class IrohaPeerNearbyAndroidV1 {
   public static byte[] openIpm1(
       final IrohaPeerNearbySecureChannelV1 channel, final byte[] encryptedRecord) {
     return channel.openIpm1(encryptedRecord);
+  }
+
+  private static byte[] requireLength(
+      final byte[] value, final int expectedLength, final String name) {
+    final byte[] required = Objects.requireNonNull(value, name);
+    if (required.length != expectedLength) {
+      throw new IllegalArgumentException(name + " length is outside its Nearby V1 bound");
+    }
+    return required;
   }
 }

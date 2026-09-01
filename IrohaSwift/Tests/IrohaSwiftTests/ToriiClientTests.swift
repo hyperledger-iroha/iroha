@@ -30,15 +30,32 @@ private func kagemushaOperationRequestArchive(
     operationIdFieldIndex: Int,
     issuedAtMs: UInt64 = 1
 ) -> Data {
-    let operationId = Data(repeating: 0x11, count: 32)
+    precondition(issuedAtMs < UInt64.max)
+    let operationId = Data(hexString: try! KagemushaOperationIdentityDerivation
+        .operationID(
+            compactAuthorityPayload: kagemushaTestAuthorityPayload,
+            nonce: kagemushaTestAuthorizationNonce
+        ))!
     var authorization = CompactNoritoWriter()
     for index in 0..<10 {
         let field: Data
         switch index {
+        case 0:
+            field = kagemushaTestAuthorityPayload
+        case 1:
+            field = CompactNorito.encodeString("swift-kagemusha-fixture")
         case 3:
             field = operationId
         case 4:
             field = CompactNorito.encodeUInt64(issuedAtMs)
+        case 5:
+            field = CompactNorito.encodeUInt64(issuedAtMs + 1)
+        case 6:
+            field = kagemushaTestAuthorizationNonce
+        case 7:
+            field = Data(repeating: 0x77, count: 32)
+        case 8:
+            field = Data(repeating: 0x99, count: 32)
         default:
             field = Data([UInt8(index + 1)])
         }
@@ -64,21 +81,66 @@ private func kagemushaOperationRequestArchive(
     )
 }
 
-private func kagemushaOperationReference(
-    operationId: String,
+private func kagemushaOperationIdentity(
+    operationID: String = String(repeating: "11", count: 32),
+    requestAuthorityDigest: String = String(repeating: "33", count: 32),
+    canonicalRequestDigest: String = String(repeating: "55", count: 32),
     kind: KagemushaOperationKind,
-    transactionHash: String = String(repeating: "22", count: 31) + "23",
-    submittedAtMs: UInt64 = 1
-) throws -> KagemushaOperationReference {
-    try KagemushaOperationReference(
-        operationId: operationId,
+    issuedAtMs: UInt64 = 1,
+    expiresAtMs: UInt64? = nil
+) throws -> KagemushaOperationIdentity {
+    try KagemushaOperationIdentity(
+        operationID: operationID,
+        requestAuthorityDigest: requestAuthorityDigest,
+        canonicalRequestDigest: canonicalRequestDigest,
         kind: kind,
-        state: .pending,
-        transactionHash: transactionHash,
-        statusUri: "/v1/offline/operations/\(operationId)",
-        submittedAtMs: submittedAtMs
+        issuedAtMs: issuedAtMs,
+        expiresAtMs: expiresAtMs ?? issuedAtMs + 1
     )
 }
+
+private func kagemushaOperationReference(
+    identity: KagemushaOperationIdentity,
+    transactionHash: String = String(repeating: "22", count: 31) + "23",
+) throws -> KagemushaOperationReference {
+    try KagemushaOperationReference(
+        identity: identity,
+        state: .pending,
+        transactionHash: transactionHash,
+        statusUri: "/v1/offline/operations/\(identity.operationID)"
+    )
+}
+
+private func kagemushaPendingStatusArchive(
+    identity: KagemushaOperationIdentity,
+    transactionHash: String
+) -> Data {
+    var encodedIdentity = CompactNoritoWriter()
+    encodedIdentity.writeField(CompactNorito.encodeString(identity.operationID))
+    encodedIdentity.writeField(CompactNorito.encodeString(identity.requestAuthorityDigest))
+    encodedIdentity.writeField(CompactNorito.encodeString(identity.canonicalRequestDigest))
+    encodedIdentity.writeField(CompactNorito.encodeUInt32(identity.kind == .topUp ? 0 : 1))
+    encodedIdentity.writeField(CompactNorito.encodeUInt64(identity.issuedAtMs))
+    encodedIdentity.writeField(CompactNorito.encodeUInt64(identity.expiresAtMs))
+    var status = CompactNoritoWriter()
+    status.writeUInt32LE(0)
+    status.writeField(encodedIdentity.data)
+    status.writeField(CompactNorito.encodeString(transactionHash))
+    return noritoEncode(
+        typeName: "iroha_torii_shared::offline_api::OfflineOperationStatus",
+        payload: status.data,
+        flags: NoritoHeader.compactLen,
+        payloadAlignment: 8
+    )
+}
+
+private let kagemushaTestAuthorityPayload: Data = {
+    let keypair = try! Keypair(privateKeyBytes: Data(repeating: 0x42, count: 32))
+    let address = try! AccountAddress.fromAccount(publicKey: keypair.publicKey)
+    return try! address.compactNoritoAccountControllerPayload()
+}()
+
+private let kagemushaTestAuthorizationNonce = Data(repeating: 0x51, count: 32)
 
 final class StubURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data?))?
@@ -13127,35 +13189,32 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testOfflineOperationsUseCanonicalPathsAndDirectNoritoBodies() async throws {
-        let operationId = String(repeating: "11", count: 32)
         let transactionHash = String(repeating: "22", count: 31) + "23"
-        func reference(_ kind: KagemushaOperationKind) throws -> KagemushaOperationReference {
-            try KagemushaOperationReference(
-                operationId: operationId,
-                kind: kind,
-                state: .pending,
-                transactionHash: transactionHash,
-                statusUri: "/v1/offline/operations/\(operationId)",
-                submittedAtMs: UInt64.max
-            )
-        }
-        let topUpResponseArchive = KagemushaOperationCodec.encodeReference(try reference(.topUp))
-        let redeemResponseArchive = KagemushaOperationCodec.encodeReference(try reference(.redeem))
         let topUpRequestArchive = kagemushaOperationRequestArchive(
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
             fieldCount: 8,
             operationIdFieldIndex: 6,
-            issuedAtMs: UInt64.max
+            issuedAtMs: UInt64.max - 1
         )
         let redeemRequestArchive = kagemushaOperationRequestArchive(
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
             fieldCount: 10,
             operationIdFieldIndex: 8,
-            issuedAtMs: UInt64.max
+            issuedAtMs: UInt64.max - 1
         )
-        let pendingStatusArchive = try XCTUnwrap(Data(hexString:
-            "4e5254300000fb04214104df1bdcd39249bddd4db23a0096000000000000008b9a6668d701e20402000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323308ffffffffffffffff"
-        ))
+        let topUpRequest = try KagemushaTopUpRequest(noritoArchive: topUpRequestArchive)
+        let redeemRequest = try KagemushaRedeemRequest(noritoArchive: redeemRequestArchive)
+        let operationId = topUpRequest.identity.operationID
+        let topUpResponseArchive = KagemushaOperationCodec.encodeReference(
+            try kagemushaOperationReference(identity: topUpRequest.identity)
+        )
+        let redeemResponseArchive = KagemushaOperationCodec.encodeReference(
+            try kagemushaOperationReference(identity: redeemRequest.identity)
+        )
+        let pendingStatusArchive = kagemushaPendingStatusArchive(
+            identity: topUpRequest.identity,
+            transactionHash: transactionHash
+        )
 
         StubURLProtocol.handler = { request in
             let path = request.url?.path
@@ -13201,11 +13260,17 @@ final class ToriiClientTests: XCTestCase {
         let acceptedTopUp = try await client.submitKagemushaTopUp(
             KagemushaTopUpRequest(noritoArchive: topUpRequestArchive)
         )
-        XCTAssertEqual(acceptedTopUp, try reference(.topUp))
+        XCTAssertEqual(
+            acceptedTopUp,
+            try kagemushaOperationReference(identity: topUpRequest.identity)
+        )
         let acceptedRedeem = try await client.submitKagemushaRedeem(
             KagemushaRedeemRequest(noritoArchive: redeemRequestArchive)
         )
-        XCTAssertEqual(acceptedRedeem, try reference(.redeem))
+        XCTAssertEqual(
+            acceptedRedeem,
+            try kagemushaOperationReference(identity: redeemRequest.identity)
+        )
         let operationStatus = try await client.getKagemushaOperationStatus(
             acceptedTopUp,
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
@@ -13213,10 +13278,8 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(
             operationStatus,
             .pending(try .init(
-                operationId: operationId,
-                kind: .topUp,
-                transactionHash: transactionHash,
-                submittedAtMs: UInt64.max
+                identity: topUpRequest.identity,
+                transactionHash: transactionHash
             ))
         )
     }
@@ -13244,8 +13307,10 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 try kagemushaOperationReference(
-                    operationId: operationId,
-                    kind: .topUp
+                    identity: kagemushaOperationIdentity(
+                        operationID: operationId,
+                        kind: .topUp
+                    )
                 ),
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
@@ -13453,8 +13518,10 @@ final class ToriiClientTests: XCTestCase {
     func testOfflineOperationResponsesAreStreamingBoundedBeforeCodecParsing() async throws {
         let operationId = String(repeating: "11", count: 32)
         let reference = try kagemushaOperationReference(
-            operationId: operationId,
-            kind: .topUp
+            identity: kagemushaOperationIdentity(
+                operationID: operationId,
+                kind: .topUp
+            )
         )
 
         func install(
@@ -13591,7 +13658,6 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testOfflineSubmissionRejectsUnboundReferencesMediaTypesAndLocations() async throws {
-        let submittedOperationId = String(repeating: "11", count: 32)
         let otherOperationId = String(repeating: "33", count: 32)
         let transactionHash = String(repeating: "22", count: 31) + "23"
         let request = try KagemushaTopUpRequest(
@@ -13601,20 +13667,26 @@ final class ToriiClientTests: XCTestCase {
                 operationIdFieldIndex: 6
             )
         )
+        let submittedOperationId = request.identity.operationID
 
         func reference(
             operationId: String,
             kind: KagemushaOperationKind,
             submittedAtMs: UInt64 = 1
         ) throws -> Data {
-            KagemushaOperationCodec.encodeReference(try KagemushaOperationReference(
-                operationId: operationId,
+            let identity = try kagemushaOperationIdentity(
+                operationID: operationId,
+                requestAuthorityDigest: request.identity.requestAuthorityDigest,
+                canonicalRequestDigest: request.identity.canonicalRequestDigest,
                 kind: kind,
-                state: .pending,
-                transactionHash: transactionHash,
-                statusUri: "/v1/offline/operations/\(operationId)",
-                submittedAtMs: submittedAtMs
-            ))
+                issuedAtMs: submittedAtMs
+            )
+            return KagemushaOperationCodec.encodeReference(
+                try kagemushaOperationReference(
+                    identity: identity,
+                    transactionHash: transactionHash
+                )
+            )
         }
 
         let cases: [(Data, [String: String], String)] = [
@@ -13737,30 +13809,40 @@ final class ToriiClientTests: XCTestCase {
     func testOfflineStatusRejectsWrongResourceIdentityKindAndMediaType() async throws {
         let operationId = String(repeating: "11", count: 32)
         let otherOperationId = String(repeating: "33", count: 32)
-        let wrongIdentityReference = try kagemushaOperationReference(
-            operationId: otherOperationId,
+        let identity = try kagemushaOperationIdentity(
+            operationID: operationId,
             kind: .topUp,
-            submittedAtMs: UInt64.max
+            issuedAtMs: UInt64.max - 1
+        )
+        let wrongIdentityReference = try kagemushaOperationReference(
+            identity: kagemushaOperationIdentity(
+                operationID: otherOperationId,
+                kind: .topUp,
+                issuedAtMs: UInt64.max - 1
+            )
         )
         let wrongKindReference = try kagemushaOperationReference(
-            operationId: operationId,
-            kind: .redeem,
-            submittedAtMs: UInt64.max
+            identity: kagemushaOperationIdentity(
+                operationID: operationId,
+                kind: .redeem,
+                issuedAtMs: UInt64.max - 1
+            )
         )
         let reference = try kagemushaOperationReference(
-            operationId: operationId,
-            kind: .topUp,
-            transactionHash: String(repeating: "44", count: 31) + "45",
-            submittedAtMs: UInt64.max
+            identity: identity,
+            transactionHash: String(repeating: "44", count: 31) + "45"
         )
         let wrongTimestampReference = try kagemushaOperationReference(
-            operationId: operationId,
-            kind: .topUp,
-            submittedAtMs: UInt64.max - 1
+            identity: kagemushaOperationIdentity(
+                operationID: operationId,
+                kind: .topUp,
+                issuedAtMs: UInt64.max - 2
+            )
         )
-        let pendingStatus = try XCTUnwrap(Data(hexString:
-            "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff"
-        ))
+        let pendingStatus = kagemushaPendingStatusArchive(
+            identity: identity,
+            transactionHash: String(repeating: "22", count: 31) + "23"
+        )
 
         StubURLProtocol.handler = { request in
             let response = HTTPURLResponse(
@@ -13780,16 +13862,16 @@ final class ToriiClientTests: XCTestCase {
             return XCTFail("expected Pending replacement carrier")
         }
         XCTAssertNotEqual(replacementPending.transactionHash, reference.transactionHash)
-        XCTAssertEqual(replacementPending.submittedAtMs, reference.submittedAtMs)
+        XCTAssertEqual(replacementPending.identity, reference.identity)
 
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 wrongTimestampReference,
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
-            XCTFail("Pending must retain the accepted signed request timestamp")
+            XCTFail("Pending must retain the complete accepted identity")
         } catch {
-            XCTAssertTrue(String(describing: error).contains("signed request timestamp"))
+            XCTAssertTrue(String(describing: error).contains("status identity"))
         }
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
@@ -13798,7 +13880,7 @@ final class ToriiClientTests: XCTestCase {
             )
             XCTFail("expected operation identity mismatch to fail")
         } catch {
-            XCTAssertTrue(String(describing: error).contains("identity or kind"))
+            XCTAssertTrue(String(describing: error).contains("status identity"))
         }
 
         do {
@@ -13808,7 +13890,7 @@ final class ToriiClientTests: XCTestCase {
             )
             XCTFail("expected operation kind mismatch to fail")
         } catch {
-            XCTAssertTrue(String(describing: error).contains("identity or kind"))
+            XCTAssertTrue(String(describing: error).contains("status identity"))
         }
 
         for headers in [

@@ -984,7 +984,7 @@ impl GovernanceDagSealedCheckpointStore for TestRuntimeDagCheckpointStore {
         Ok(())
     }
 }
-const TEST_FENCED_PUBLISHER_HANDLE: &str = "hsm:governance:fenced-privacy-primary";
+const TEST_FENCED_PUBLISHER_HANDLE: &str = "provider:governance:fenced-privacy-primary";
 const TEST_FENCED_PUBLISHER_POLICY_DIGEST: [u8; 32] = [0x72; 32];
 const TEST_FENCED_HEAD_READER_HANDLE: &str = TEST_FENCED_PUBLISHER_HANDLE;
 const TEST_FENCED_HEAD_READER_POLICY_DIGEST: [u8; 32] = TEST_FENCED_PUBLISHER_POLICY_DIGEST;
@@ -1448,7 +1448,7 @@ fn sample_privacy_authorization_for(
         .expect("privacy leader scope");
     assert_eq!(scope.cycle_id(), publication.block.cycle_id);
     let lease_binding = crate::TransparencyRuntimeProviderBindingV1::try_new(
-        "hsm:transparency:leader-primary",
+        "provider:transparency:leader-primary",
         1,
         [0x96; 32],
     )

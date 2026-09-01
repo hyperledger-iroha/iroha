@@ -145,8 +145,8 @@ impl PartialOrd for NposConsensusEffects {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NposConsensusSlashAction {
-    /// Consensus evidence key.
-    pub evidence_key: Vec<u8>,
+    /// Domain-separated consensus evidence digest.
+    pub evidence_key: Hash,
     /// Signer index in the evidence roster.
     pub signer: u32,
     /// Peer identity resolved from the evidence roster.
@@ -161,11 +161,11 @@ pub struct NposConsensusSlashAction {
     pub amount: Quantity,
 }
 /// Marker that a consensus evidence record's penalty was applied.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NposMarkConsensusEvidenceAppliedAction {
-    /// Consensus evidence key.
-    pub evidence_key: Vec<u8>,
+    /// Domain-separated consensus evidence digest.
+    pub evidence_key: Hash,
     /// Block height that applied the marker.
     pub height: u64,
 }
@@ -701,7 +701,7 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     #[derive(Encode)]
     struct ForgedNposConsensusSlashAction {
-        evidence_key: Vec<u8>,
+        evidence_key: Hash,
         signer: u32,
         peer_id: crate::peer::PeerId,
         lane_id: crate::nexus::LaneId,
@@ -855,7 +855,7 @@ mod tests {
         let key_pair = checked_random_keypair();
         let peer_id = crate::peer::PeerId::new(key_pair.public_key().clone());
         let slash = ForgedNposConsensusSlashAction {
-            evidence_key: vec![0xA5],
+            evidence_key: Hash::new(b"forged-negative-consensus-slash"),
             signer: 0,
             peer_id,
             lane_id: crate::nexus::LaneId::SINGLE,

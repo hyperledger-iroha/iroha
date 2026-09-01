@@ -79,9 +79,18 @@ fn assert_rejected(config: ToriiKagemushaCommands) {
 fn parses_minimal_kagemusha_submission_authority() {
     let parsed = parse_valid(sample());
     assert_eq!(
+        defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY,
+        145
+    );
+    assert_eq!(
+        defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_BYTES,
+        593_920
+    );
+    assert_eq!(
         parsed.operation_registry_max_entries.get(),
         defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES
     );
+    assert_eq!(parsed.operation_registry_max_bytes.get(), 593_920);
     assert_eq!(parsed.minimum_xor_balance, Quantity::from(25_u32));
     assert!(!parsed.max_tx_value.is_zero());
 }

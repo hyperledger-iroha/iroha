@@ -132,6 +132,20 @@ impl NposGenesisParams {
         {
             return Err("NPoS finality and reconfiguration bounds must be greater than zero");
         }
+        let accountability_window = self
+            .evidence_horizon_blocks
+            .checked_add(self.slashing_delay_blocks)
+            .ok_or("NPoS evidence-and-slashing window overflows u64")?;
+        let retained_roster_window = self
+            .epoch_length_blocks
+            .get()
+            .checked_mul(3)
+            .ok_or("NPoS three-epoch evidence capacity window overflows u64")?;
+        if accountability_window > retained_roster_window {
+            return Err(
+                "evidence_horizon_blocks + slashing_delay_blocks must not exceed three epoch lengths",
+            );
+        }
         Ok(())
     }
 }
@@ -199,9 +213,11 @@ pub struct SumeragiV2EquivocationEvidence {
 ///
 /// The first release has one evidence shape. Retired global-v1 kind/payload
 /// enums are intentionally absent, so old wire and storage layouts fail decode.
-/// This wrapper is a binary persistence/instruction type; typed JSON embeds the
-/// closed [`SumeragiV2EquivocationEvidence`] object directly where required.
+/// Snapshot JSON persists this wrapper directly so restart cannot discard an
+/// admitted penalty or replay fence.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct Evidence {
     /// Frozen height context, roster proofs, and exact conflicting signed artifacts.
     pub equivocation: SumeragiV2EquivocationEvidence,
@@ -220,6 +236,13 @@ impl PartialOrd for Evidence {
 }
 /// Closed penalty lifecycle for one committed evidence record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(
+    tag = "status",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum EvidencePenaltyStatus {
     /// The deterministic penalty delay has not elapsed or no action has run yet.
     Pending,
@@ -248,8 +271,11 @@ impl EvidencePenaltyStatus {
 /// Shortened records are rejected instead of receiving implicit penalty state.
 /// Penalty state is a closed sum type so impossible combinations such as an
 /// applied-and-cancelled record cannot enter WSV or its binary representation.
-/// The type is binary-only; endpoint JSON uses a purpose-built audit projection.
+/// Endpoint JSON still uses a purpose-built audit projection; this closed JSON
+/// layout is reserved for canonical state snapshots.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct EvidenceRecord {
     /// Slashing material captured for governance processing.
     pub evidence: Evidence,

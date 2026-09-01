@@ -14,7 +14,9 @@ use iroha_data_model::{
     NetworkId,
     block::{
         BlockHeader,
-        consensus::{Evidence, EvidenceRecord, SumeragiV2EquivocationEvidence},
+        consensus::{
+            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
+        },
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
             ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
@@ -144,10 +146,7 @@ async fn evidence_count_endpoint_reports_increase() {
             recorded_at_height: (idx + 1) as u64,
             recorded_at_view: 0,
             recorded_at_ms: 0,
-            penalty_applied: false,
-            penalty_cancelled: false,
-            penalty_cancelled_at_height: None,
-            penalty_applied_at_height: None,
+            penalty_status: EvidencePenaltyStatus::Pending,
         };
         insert_evidence_record_for_test(state_mut, record);
     }

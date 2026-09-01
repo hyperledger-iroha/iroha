@@ -1567,16 +1567,26 @@ impl PorCoordinatorRuntime {
         }
         provider.accept_verified(submission, current_epoch)
     }
-    /// Spawn a Tokio task that periodically runs [`run_once`](Self::run_once`) until shutdown.
-    pub fn spawn(self: Arc<Self>, shutdown: ShutdownSignal) {
+    /// Spawn the supervised Tokio task that periodically runs [`run_once`](Self::run_once) until
+    /// shutdown.
+    pub(crate) fn spawn(
+        self: Arc<Self>,
+        shutdown: ShutdownSignal,
+    ) -> tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit> {
         const TICK_INTERVAL_SECS: u64 = 60;
         tokio::spawn(async move {
             let mut ticker = interval(StdDuration::from_secs(TICK_INTERVAL_SECS));
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
-                    _ = shutdown.receive() => break,
+                    biased;
+                    _ = shutdown.receive() => {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
                     _ = ticker.tick() => {
+                        if shutdown.is_sent() {
+                            return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                        }
                         if let Err(err) = self.run_once().await {
                             self.record_scheduler_failure();
                             iroha_logger::error!(%err, "PoR coordinator runtime tick failed");
@@ -1584,7 +1594,7 @@ impl PorCoordinatorRuntime {
                     }
                 }
             }
-        });
+        })
     }
 }
 #[cfg(feature = "app_api")]

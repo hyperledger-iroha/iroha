@@ -24,6 +24,58 @@ struct MusubiPersistedState<'a> {
     replication_shortfall_releases: u64,
 }
 
+fn validate_asset_transfer_control_persistence_v1(world: &World) -> Result<(), json::Error> {
+    let accounts = world.accounts.view();
+    let asset_definitions = world.asset_definitions.view();
+    for (account_id, account) in accounts.iter() {
+        let Some(raw) = account
+            .metadata()
+            .get(iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY)
+        else {
+            continue;
+        };
+        let store = raw
+            .clone()
+            .try_into_any_norito::<iroha_data_model::asset::AssetTransferControlStoreV1>()
+            .map_err(|error| json::Error::InvalidField {
+                field: "accounts.*.metadata.asset_transfer_controls".to_owned(),
+                message: format!(
+                    "first-release snapshot is incompatible: account {account_id} has undecodable native asset transfer-control state: {error}"
+                ),
+            })?;
+        if store.controls.is_empty() {
+            return Err(json::Error::InvalidField {
+                field: "accounts.*.metadata.asset_transfer_controls".to_owned(),
+                message: format!(
+                    "first-release snapshot is incompatible: account {account_id} persists an empty native asset transfer-control store"
+                ),
+            });
+        }
+        store
+            .validate_canonical()
+            .map_err(|error| json::Error::InvalidField {
+                field: "accounts.*.metadata.asset_transfer_controls".to_owned(),
+                message: format!(
+                    "first-release snapshot is incompatible: account {account_id} has non-canonical native asset transfer-control state: {error}"
+                ),
+            })?;
+        if let Some(record) = store
+            .controls
+            .iter()
+            .find(|record| asset_definitions.get(&record.asset_definition_id).is_none())
+        {
+            return Err(json::Error::InvalidField {
+                field: "accounts.*.metadata.asset_transfer_controls".to_owned(),
+                message: format!(
+                    "first-release snapshot is incompatible: account {account_id} has native transfer-control state for missing asset definition {}",
+                    record.asset_definition_id
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn proposal_status_matches_latest_attempt_v1(
     proposal_status: GovernanceProposalStatus,
     attempt_status: Option<iroha_data_model::governance::types::GovernanceAttemptStatusV1>,
@@ -7732,6 +7784,8 @@ fn parse_world(
     let merge_hint_roots: Cell<Vec<Hash>> = take_required(&mut map, "merge_hint_roots")?;
     let merge_global_state_root: Cell<Option<Hash>> =
         take_required(&mut map, "merge_global_state_root")?;
+    let consensus_evidence: Storage<Hash, EvidenceRecord> =
+        take_required(&mut map, "consensus_evidence")?;
     reject_unknown(&map, "world")?;
     let mut world = World {
         parameters,
@@ -7993,9 +8047,10 @@ fn parse_world(
         global_beacon_pulse_slots: Storage::default(),
         merge_hint_roots,
         merge_global_state_root,
-        consensus_evidence: Storage::default(),
+        consensus_evidence,
         external_event_buf,
     };
+    validate_asset_transfer_control_persistence_v1(&world)?;
     world
         .rebuild_global_beacon_pulse_slots()
         .map_err(invalid_global_beacon_persistence)?;
@@ -8317,6 +8372,116 @@ fn parse_world(
         })?;
     Ok(world)
 }
+
+#[cfg(test)]
+mod asset_transfer_control_persistence_tests {
+    use super::*;
+    use iroha_data_model::{
+        Registrable,
+        account::Account,
+        asset::{
+            ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetBalancePolicy, AssetDefinition,
+            AssetDefinitionId, AssetTransferControlRecord, AssetTransferControlStoreV1,
+        },
+        domain::DomainId,
+        metadata::Metadata,
+    };
+    use iroha_primitives::json::Json;
+    use iroha_test_samples::ALICE_ID;
+
+    fn account_with_transfer_store(store: AssetTransferControlStoreV1) -> Account {
+        let authority = (*ALICE_ID).clone();
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("transfer-control metadata key"),
+            Json::new(store),
+        );
+        Account::new(authority.clone())
+            .with_metadata(metadata)
+            .build(&authority)
+    }
+
+    fn world_with_transfer_store(store: AssetTransferControlStoreV1) -> World {
+        let authority = (*ALICE_ID).clone();
+        let asset_definition_id = transfer_asset_definition_id();
+        World::with(
+            [],
+            [account_with_transfer_store(store)],
+            [AssetDefinition::numeric(
+                asset_definition_id,
+                "rose".to_owned(),
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&authority)],
+        )
+    }
+
+    fn transfer_asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("transfer", "controls").expect("domain id"),
+            "rose".parse().expect("asset name"),
+        )
+    }
+
+    fn active_record() -> AssetTransferControlRecord {
+        let mut record = AssetTransferControlRecord::new(transfer_asset_definition_id());
+        record.blacklisted = true;
+        record
+    }
+
+    #[test]
+    fn snapshot_transfer_control_store_must_be_nonempty_and_canonical() {
+        let record = active_record();
+        assert!(
+            validate_asset_transfer_control_persistence_v1(&world_with_transfer_store(
+                AssetTransferControlStoreV1 {
+                    controls: vec![record.clone()],
+                },
+            ))
+            .is_ok()
+        );
+
+        for invalid in [
+            AssetTransferControlStoreV1::default(),
+            AssetTransferControlStoreV1 {
+                controls: vec![record.clone(), record],
+            },
+        ] {
+            let error =
+                validate_asset_transfer_control_persistence_v1(&world_with_transfer_store(invalid))
+                    .expect_err("ambiguous first-release transfer-control snapshot must fail fast");
+            assert!(
+                error
+                    .to_string()
+                    .contains("first-release snapshot is incompatible"),
+                "unexpected snapshot incompatibility: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_transfer_control_store_rejects_missing_asset_definition() {
+        let record = active_record();
+        let world = World::with(
+            [],
+            [account_with_transfer_store(AssetTransferControlStoreV1 {
+                controls: vec![record],
+            })],
+            [],
+        );
+
+        let error = validate_asset_transfer_control_persistence_v1(&world)
+            .expect_err("first-release restore must reject orphaned transfer controls");
+        assert!(
+            error.to_string().contains("missing asset definition"),
+            "unexpected snapshot incompatibility: {error}"
+        );
+    }
+}
+
 struct BuildStateInputs {
     world: World,
     block_hashes: BlockHashes,
@@ -8379,6 +8544,19 @@ fn build_state(
             "restored committed height does not fit the Parliament height domain: {error}"
         ))
     })?;
+    if !emergency_fast {
+        crate::sumeragi::evidence::validate_persisted_v2_evidence_records(
+            &world.view(),
+            kura.as_ref(),
+            &network_id,
+            restored_height,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "restored Sumeragi v2 evidence state is invalid: {error}"
+            ))
+        })?;
+    }
     crate::smartcontracts::isi::sorafs_moderation::validate_persisted_moderation_schema_v1(
         &world.view(),
     )

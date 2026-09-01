@@ -343,7 +343,7 @@ mod stock_registry_tests {
             ),
             (
                 IrohaRuntimeProviderSlotV1::MusubiProviderAttestationApprovalSigner,
-                "hsm://musubi/provider-attestation/approval",
+                "provider://musubi/provider-attestation/approval",
             ),
             (
                 IrohaRuntimeProviderSlotV1::MusubiProviderAttestationAuthenticatedInventory,

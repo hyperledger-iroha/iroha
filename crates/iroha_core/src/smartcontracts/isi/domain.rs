@@ -28,10 +28,10 @@ pub mod isi {
             curve::{CurveId, CurveRegistryError},
         },
         alias_setup::{AccountAliasRoleV1, AliasAccountIntentV1},
-        asset::AssetBalancePolicy,
         asset::definition::{
             validate_asset_alias_against_names, validate_asset_description, validate_asset_name,
         },
+        asset::{ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetBalancePolicy},
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
         name::Name,
@@ -1056,6 +1056,21 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account: Account = self.object().clone().build(authority);
+            if let Some(reserved_key) = [
+                ASSET_TRANSFER_CONTROL_METADATA_KEY,
+                iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+            ]
+            .into_iter()
+            .find(|key| account.metadata().get(*key).is_some())
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "account metadata key `{reserved_key}` is reserved for native state; register the account without it and use the dedicated lifecycle instruction"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             crate::smartcontracts::limits::enforce_metadata_value_sizes(
                 state_transaction,
                 account.metadata(),
@@ -1258,6 +1273,20 @@ pub mod isi {
                 )
                 .into());
             }
+            if let Some(reference) =
+                crate::smartcontracts::isi::sorafs_moderation::retained_moderation_account_reference(
+                    state_transaction.world(),
+                    &account_id,
+                )?
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is retained by moderation {reference}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             crate::smartcontracts::isi::kaigi::ensure_kaigi_account_can_unregister(
                 state_transaction,
                 &account_id,
@@ -1369,6 +1398,21 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister account {account_id}: it has native contract deployment nonce state; retain the account to preserve deployment address monotonicity and audit history"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if state_transaction
+                .world
+                .account(&account_id)?
+                .metadata()
+                .get(ASSET_TRANSFER_CONTROL_METADATA_KEY)
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it has native asset transfer-control state; clear every control through dedicated instructions first"
                     )
                     .into(),
                 )
@@ -2314,6 +2358,11 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
+            crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_transfer_controls(
+                state_transaction,
+                &BTreeSet::from([asset_definition_id.clone()]),
+                &format!("unregister asset definition {asset_definition_id}"),
+            )?;
             if let Some((proposal_id, reference_kind)) =
                 crate::validation_fee::retained_enacted_validation_fee_asset_reference(
                     state_transaction,
@@ -3466,14 +3515,16 @@ mod tests {
             AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
         },
         asset::{
-            Asset, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId, AssetId, Mintable,
-            NewAssetDefinition, ResolvedAssetDefinitionAliasV1,
+            ASSET_TRANSFER_CONTROL_METADATA_KEY, Asset, AssetDefinition, AssetDefinitionAlias,
+            AssetDefinitionId, AssetId, AssetTransferControlRecord, AssetTransferControlStoreV1,
+            Mintable, NewAssetDefinition, ResolvedAssetDefinitionAliasV1,
         },
         block::BlockHeader,
         events::data::space_directory::{
             SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
         },
         isi::{
+            SetAssetTransferBlacklist,
             alias_setup::{CompareAndSetPrimaryAccountAlias, EnsureAlias, RebindAccountAlias},
             error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         },
@@ -3518,6 +3569,131 @@ mod tests {
     }
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("domain ISI fixture key generation should succeed")
+    }
+
+    #[test]
+    fn account_registration_rejects_reserved_native_metadata() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("transfer", "controls").expect("domain id"),
+            "rose".parse().expect("asset name"),
+        );
+        let mut record = AssetTransferControlRecord::new(asset_definition_id);
+        record.blacklisted = true;
+        let duplicate_store = AssetTransferControlStoreV1 {
+            controls: vec![record.clone(), record],
+        };
+        let reserved_values = [
+            (
+                ASSET_TRANSFER_CONTROL_METADATA_KEY,
+                Json::new(duplicate_store),
+            ),
+            (
+                iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+                Json::new(7_u64),
+            ),
+        ];
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        for (key, value) in reserved_values {
+            let account_id = AccountId::new(checked_keypair().public_key().clone());
+            let mut metadata = Metadata::default();
+            metadata.insert(key.parse().expect("reserved metadata key"), value);
+            let error =
+                Register::account(NewAccount::new(account_id.clone()).with_metadata(metadata))
+                    .execute(&authority, &mut transaction)
+                    .expect_err("public registration must not seed reserved native metadata");
+            assert!(
+                error.to_string().contains("reserved for native state"),
+                "unexpected registration rejection: {error}"
+            );
+            assert!(
+                transaction.world.account(&account_id).is_err(),
+                "rejected account registration must not mutate world state"
+            );
+        }
+    }
+
+    #[test]
+    fn account_unregistration_requires_dedicated_transfer_control_clear() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id = DomainId::try_new("transfer", "controls").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "rose".parse().expect("asset name"),
+        );
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "rose".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&authority, &mut transaction)
+        .expect("register controlled asset definition");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut transaction)
+            .expect("register controlled account");
+        let mut record = AssetTransferControlRecord::new(asset_definition_id.clone());
+        record.blacklisted = true;
+        record.updated_at_ms = Some(1);
+        let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+            .parse()
+            .expect("asset transfer-control metadata key");
+        transaction
+            .world
+            .account_mut(&account_id)
+            .expect("registered account")
+            .insert(
+                metadata_key.clone(),
+                Json::new(AssetTransferControlStoreV1 {
+                    controls: vec![record],
+                }),
+            );
+
+        let error = Unregister::account(account_id.clone())
+            .execute(&authority, &mut transaction)
+            .expect_err("native transfer-control history must survive generic account removal");
+        assert!(
+            error.to_string().contains("dedicated instructions"),
+            "unexpected account-removal rejection: {error}"
+        );
+        assert!(transaction.world.account(&account_id).is_ok());
+
+        let asset_error = Unregister::asset_definition(asset_definition_id.clone())
+            .execute(&authority, &mut transaction)
+            .expect_err("asset definition must remain while native controls reference it");
+        assert!(
+            asset_error.to_string().contains("dedicated instructions"),
+            "unexpected asset-definition removal rejection: {asset_error}"
+        );
+
+        SetAssetTransferBlacklist::new(account_id.clone(), asset_definition_id, false)
+            .execute(&authority, &mut transaction)
+            .expect("dedicated instruction clears the last native transfer control");
+        assert!(
+            transaction
+                .world
+                .account(&account_id)
+                .expect("account remains until explicit removal")
+                .metadata()
+                .get(&metadata_key)
+                .is_none()
+        );
+        Unregister::asset_definition(asset_definition_id)
+            .execute(&authority, &mut transaction)
+            .expect("asset definition can be removed after dedicated control clearance");
+        Unregister::account(account_id.clone())
+            .execute(&authority, &mut transaction)
+            .expect("account can be removed after dedicated control clearance");
+        assert!(transaction.world.account(&account_id).is_err());
     }
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
@@ -8124,8 +8300,8 @@ mod tests {
                         self_stake: Quantity::from(1_u32),
                         metadata: Metadata::default(),
                         status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                        activation_epoch: Some(1),
-                        activation_height: Some(1),
+                        activation_height: 1,
+                        deactivation_height: None,
                         last_reward_epoch: None,
                     },
                 );
@@ -8150,8 +8326,8 @@ mod tests {
                         self_stake: Quantity::from(1_u32),
                         metadata: Metadata::default(),
                         status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                        activation_epoch: Some(1),
-                        activation_height: Some(1),
+                        activation_height: 1,
+                        deactivation_height: None,
                         last_reward_epoch: None,
                     },
                 );

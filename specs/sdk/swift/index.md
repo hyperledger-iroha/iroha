@@ -246,25 +246,38 @@ claim.
 
 Torii exposes the asset-neutral `GET /v1/offline/readiness`
 universal capability endpoint,
-plus `POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
+the canonical-account-authenticated `POST /v1/offline/receiver-lineage` proof
+query, plus `POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
 `GET /v1/offline/operations/{operation_id}` for separate online consensus
-lifecycles. Use `getOfflineCapability()`, `submitKagemushaTopUp(_:)`,
-`submitKagemushaRedeem(_:)`, and
+lifecycles. Use `getOfflineCapability()`,
+`getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`,
+`submitKagemushaTopUp(_:)`, `submitKagemushaRedeem(_:)`, and
 `getKagemushaOperationStatus(_:chainDiscriminant:)` with the accepted
 `KagemushaOperationReference`.
 Capability discovery takes no selector.
 
+The receiver-lineage request and response use canonical Norito. The query is
+signed with Torii canonical account-authentication headers, and Swift caps the
+proof-bearing response at 4 MiB before native verification. It does not create
+an operation resource or alter the offline-capability result.
+
 Capability discovery is not per-asset or per-dataspace backend readiness. The
 SDK accepts only the exact four-field ABI-21/V4 `cash_handoff_v1` contract with
 native bridge ABI 23, maximum hop count 8, and `ready: true`.
+The native recursion capability must advertise the sole release profile's
+exact 191,862-byte proof-pair maximum; the separate 384 KiB constant is only a
+defensive raw-archive ceiling and is not an alternate accepted profile.
 No asset metadata, escrow catalog, dataspace enrollment, or backend enable flag
 is required for an app to expose offline user interfaces. Apps must not gate
 offline UI on this network discovery call; Torii reachability is not an
 offline-capability prerequisite.
 
-Top-up and redemption derive the operation id and immutable request timestamp
-from the signed authorization inside each canonical Norito archive and require
-the initial acknowledgement to match both. They return a
+Top-up and redemption derive one immutable nested identity from the complete
+canonical Norito request archive: `operation_id` uses the full standalone
+canonical authority archive plus the 32-byte nonce, while authority and request
+digests, kind, issue time, and expiry complete the identity. References and all
+Pending, Applied, and Rejected states carry that exact identity; there is no
+flat compatibility schema. They return a
 `KagemushaOperationReference`; follow its status URI until the tagged
 `KagemushaOperationStatus` is applied or rejected. Command-specific proof and
 verifier material is validated when the corresponding operation consumes it

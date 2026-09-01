@@ -56,7 +56,7 @@ const RECONCILIATION_FRESHNESS_GRACE_POLLS: u32 = 2;
 type ReputationReconciliationResult =
     Result<sorafs_node::reputation::runtime::ReputationRuntimeTickOutcomeV1>;
 type ReputationJoinedReconciliationResult =
-    std::result::Result<ReputationReconciliationResult, tokio::task::JoinError>;
+    std::result::Result<ReputationReconciliationResult, crate::panic_recovery::RecoverablePanic>;
 /// Runtime-only dependencies for the committed reputation worker.
 #[derive(Clone)]
 pub(crate) struct ReputationRuntimeDependenciesV1 {
@@ -655,13 +655,15 @@ async fn run_active_worker(
                 let retention_control = worker.retention_control.clone();
                 worker.liveness.begin_tick();
                 let mut reconciliation =
-                    tokio::task::spawn_blocking(move || {
+                    crate::panic_recovery::spawn_blocking_recoverable(move || {
                         let outcome = runtime.reconcile_once().map_err(eyre::Report::new)?;
                         reconcile_retention_control(retention_control.as_deref())?;
                         Ok(outcome)
                     });
                 let timely_result = tokio::select! {
-                    result = &mut reconciliation => Some(result),
+                    result = &mut reconciliation => {
+                        Some(crate::panic_recovery::recover_joined(result))
+                    },
                     () = tokio::time::sleep(worker.liveness.tick_timeout) => None,
                     () = shutdown_signal.receive() => {
                         worker.liveness.mark_shutdown();
@@ -691,7 +693,9 @@ async fn run_active_worker(
                     "committed SoraFS reputation reconciliation exceeded its deadline"
                 );
                 let late_result = tokio::select! {
-                    result = &mut reconciliation => Some(result),
+                    result = &mut reconciliation => {
+                        Some(crate::panic_recovery::recover_joined(result))
+                    },
                     () = shutdown_signal.receive() => {
                         worker.liveness.mark_shutdown();
                         reconciliation.abort();
@@ -703,14 +707,12 @@ async fn run_active_worker(
                     }
                 };
                 worker.liveness.mark_late_tick_finished();
-                if let Some(Err(error)) = late_result {
+                if let Some(Err(_panic)) = late_result {
                     worker
                         .counters
                         .panicked
                         .fetch_add(1, Ordering::Relaxed);
                     iroha_logger::error!(
-                        cancelled = error.is_cancelled(),
-                        panicked = error.is_panic(),
                         "timed-out SoraFS reputation reconciliation later failed"
                     );
                 } else {
@@ -774,7 +776,7 @@ fn record_reputation_tick_result(
                 "committed SoraFS reputation reconciliation failed"
             );
         }
-        Err(error) => {
+        Err(_panic) => {
             if let Err(liveness_error) = worker.liveness.finish_tick(false) {
                 worker.liveness.mark_timeout();
                 iroha_logger::error!(
@@ -784,11 +786,7 @@ fn record_reputation_tick_result(
             }
             worker.counters.panicked.fetch_add(1, Ordering::Relaxed);
             record_tick_metric("panic");
-            iroha_logger::error!(
-                cancelled = error.is_cancelled(),
-                panicked = error.is_panic(),
-                "committed SoraFS reputation worker task failed"
-            );
+            iroha_logger::error!("committed SoraFS reputation worker task failed");
         }
     }
 }
@@ -1918,7 +1916,7 @@ mod tests {
         let finalized_archive_root = state_dir.with_extension("finalized-archive");
         let journal_checkpoint_provider_handle = "sealed.reputation.journal.primary".to_owned();
         let journal_transaction_submitter_handle = "queue.reputation.journal".to_owned();
-        let threshold_signer_handle = "hsm.reputation.threshold".to_owned();
+        let threshold_signer_handle = "provider.reputation.threshold".to_owned();
         let governance_dag_handle = "governance.dag.publisher".to_owned();
         let governance_publisher_peer_id = b"12D3KooWProductionPublisher".to_vec();
         let governance_publisher_public_key = public_key(0x73);
@@ -2528,7 +2526,7 @@ mod tests {
             "https://operator:secret@reputation.example",
             "https://reputation.example/query?token=secret",
             "https://reputation.example/query#fragment",
-            "hsm://reputation/dummy/signer",
+            "provider://reputation/dummy/signer",
         ] {
             let mut invalid_handle_config = config(
                 temp.path().to_path_buf(),

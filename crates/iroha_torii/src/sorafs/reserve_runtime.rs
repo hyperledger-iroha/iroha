@@ -157,15 +157,14 @@ const fn reserve_worker_supervision(
         role_active: storage_enabled || generation_enabled,
     }
 }
-fn spawn_reserve_worker_when_active(
+fn spawn_reserve_worker_when_active<T>(
     supervision: ReserveWorkerSupervisionV1,
-    spawn: impl FnOnce(),
-) -> bool {
+    spawn: impl FnOnce() -> T,
+) -> Option<T> {
     if !supervision.role_active {
-        return false;
+        return None;
     }
-    spawn();
-    true
+    Some(spawn())
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReserveGeneratedCandidateV1 {
@@ -1068,11 +1067,11 @@ fn decode_exact_reserve_signed_transaction(
 pub(crate) fn spawn_sorafs_reserve_transaction_forwarder_worker(
     state: SharedAppState,
     shutdown_signal: ShutdownSignal,
-) {
+) -> Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
     let policy = state.sorafs_node.config().reserve_worker_policy();
     let supervision =
         reserve_worker_supervision(state.sorafs_node.config().enabled(), policy.enabled());
-    let spawned = spawn_reserve_worker_when_active(supervision, move || {
+    let worker = spawn_reserve_worker_when_active(supervision, move || {
         if !supervision.generation_enabled {
             debug!(
                 "SoraFS reserve/rent generation is disabled; storage-enabled durable drain and finalized reconciliation remain active"
@@ -1089,8 +1088,14 @@ pub(crate) fn spawn_sorafs_reserve_transaction_forwarder_worker(
             let mut cursor = SorafsReserveTransactionForwarderCursorV1::default();
             loop {
                 tokio::select! {
-                    () = shutdown_signal.receive() => break,
+                    biased;
+                    () = shutdown_signal.receive() => {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
                     _ = interval.tick() => {
+                        if shutdown_signal.is_sent() {
+                            return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                        }
                         let scan =
                             run_sorafs_reserve_transaction_forwarder_scan(&state, &mut cursor).await;
                         if scan.generated != 0
@@ -1122,13 +1127,14 @@ pub(crate) fn spawn_sorafs_reserve_transaction_forwarder_worker(
                     }
                 }
             }
-        });
+        })
     });
-    if !spawned {
+    if worker.is_none() {
         debug!(
             "SoraFS reserve/rent worker is paused because storage and generation are disabled; no external work was started"
         );
     }
+    worker
 }
 pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
     state: &SharedAppState,
@@ -2345,15 +2351,19 @@ mod tests {
     #[test]
     fn disabled_reserve_supervision_does_not_invoke_spawn_adapter() {
         let spawn_count = std::cell::Cell::new(0_u32);
-        assert!(!spawn_reserve_worker_when_active(
-            reserve_worker_supervision(false, false),
-            || spawn_count.set(spawn_count.get() + 1),
-        ));
+        assert!(
+            spawn_reserve_worker_when_active(reserve_worker_supervision(false, false), || {
+                spawn_count.set(spawn_count.get() + 1);
+            })
+            .is_none()
+        );
         assert_eq!(spawn_count.get(), 0);
-        assert!(spawn_reserve_worker_when_active(
-            reserve_worker_supervision(true, false),
-            || spawn_count.set(spawn_count.get() + 1),
-        ));
+        assert!(
+            spawn_reserve_worker_when_active(reserve_worker_supervision(true, false), || {
+                spawn_count.set(spawn_count.get() + 1);
+            })
+            .is_some()
+        );
         assert_eq!(spawn_count.get(), 1);
     }
     #[test]

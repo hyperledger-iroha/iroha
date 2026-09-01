@@ -26743,9 +26743,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     ) async throws -> KagemushaOperationReference {
         try await submitKagemushaOperation(
             path: KagemushaToriiAPI.Endpoint.topUp.path,
-            operationId: requestBody.operationId,
-            expectedKind: .topUp,
-            expectedSubmittedAtMs: requestBody.issuedAtMs,
+            expectedIdentity: requestBody.identity,
             archive: requestBody.noritoArchive()
         )
     }
@@ -26755,9 +26753,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     ) async throws -> KagemushaOperationReference {
         try await submitKagemushaOperation(
             path: KagemushaToriiAPI.Endpoint.redeem.path,
-            operationId: requestBody.operationId,
-            expectedKind: .redeem,
-            expectedSubmittedAtMs: requestBody.issuedAtMs,
+            expectedIdentity: requestBody.identity,
             archive: requestBody.noritoArchive()
         )
     }
@@ -26769,7 +26765,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ reference: KagemushaOperationReference,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
-        let path = try KagemushaToriiAPI.operationPath(reference.operationId)
+        let path = try KagemushaToriiAPI.operationPath(reference.identity.operationID)
         guard reference.state == .pending,
               reference.statusUri == path else {
             throw ToriiClientError.invalidPayload(
@@ -26778,9 +26774,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
         return try await getKagemushaOperationStatus(
             path: path,
-            expectedOperationId: reference.operationId,
-            expectedKind: reference.kind,
-            expectedSubmittedAtMs: reference.submittedAtMs,
+            expectedIdentity: reference.identity,
             chainDiscriminant: chainDiscriminant
         )
     }
@@ -26794,9 +26788,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         if let acceptedReference {
-            guard acceptedReference.operationId == operation.operationId,
-                  acceptedReference.kind == operation.kind,
-                  acceptedReference.submittedAtMs == operation.issuedAtMs else {
+            guard acceptedReference.identity == operation.identity else {
                 throw ToriiClientError.invalidPayload(
                     "Kagemusha operation reference does not match the signed request"
                 )
@@ -26806,21 +26798,17 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 chainDiscriminant: chainDiscriminant
             )
         }
-        let path = try KagemushaToriiAPI.operationPath(operation.operationId)
+        let path = try KagemushaToriiAPI.operationPath(operation.identity.operationID)
         return try await getKagemushaOperationStatus(
             path: path,
-            expectedOperationId: operation.operationId,
-            expectedKind: operation.kind,
-            expectedSubmittedAtMs: operation.issuedAtMs,
+            expectedIdentity: operation.identity,
             chainDiscriminant: chainDiscriminant
         )
     }
 
     private func getKagemushaOperationStatus(
         path: String,
-        expectedOperationId: String,
-        expectedKind: KagemushaOperationKind,
-        expectedSubmittedAtMs: UInt64,
+        expectedIdentity: KagemushaOperationIdentity,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         let request = try makeRequest(
@@ -26841,16 +26829,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             responseData,
             chainDiscriminant: chainDiscriminant
         )
-        guard status.operationId == expectedOperationId,
-              status.kind == expectedKind else {
+        guard status.identity == expectedIdentity else {
             throw ToriiClientError.invalidPayload(
-                "Kagemusha operation status identity or kind does not match the requested resource"
-            )
-        }
-        if case let .pending(pending) = status,
-           pending.submittedAtMs != expectedSubmittedAtMs {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha Pending status changed the signed request timestamp"
+                "Kagemusha operation status identity does not match the requested resource"
             )
         }
         return status
@@ -26858,9 +26839,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     private func submitKagemushaOperation(
         path: String,
-        operationId: String,
-        expectedKind: KagemushaOperationKind,
-        expectedSubmittedAtMs: UInt64,
+        expectedIdentity: KagemushaOperationIdentity,
         archive: Data
     ) async throws -> KagemushaOperationReference {
         let request = try makeRequest(
@@ -26870,7 +26849,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             headers: [
                 "Content-Type": "application/x-norito",
                 "Accept": "application/x-norito",
-                "Idempotency-Key": operationId,
+                "Idempotency-Key": expectedIdentity.operationID,
             ]
         )
         let (data, response) = try await sendBoundedSccpResponse(
@@ -26884,12 +26863,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             throw ToriiClientError.emptyBody
         }
         let reference = try KagemushaOperationCodec.decodeReference(data)
-        let expectedStatusUri = try KagemushaToriiAPI.operationPath(operationId)
-        guard reference.operationId == operationId,
-              reference.kind == expectedKind,
+        let expectedStatusUri = try KagemushaToriiAPI.operationPath(
+            expectedIdentity.operationID
+        )
+        guard reference.identity == expectedIdentity,
               reference.state == .pending,
-              reference.statusUri == expectedStatusUri,
-              reference.submittedAtMs == expectedSubmittedAtMs else {
+              reference.statusUri == expectedStatusUri else {
             throw ToriiClientError.invalidPayload(
                 "Kagemusha operation reference does not match the signed request"
             )

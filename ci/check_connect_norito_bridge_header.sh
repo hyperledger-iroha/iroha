@@ -95,7 +95,8 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
     "connect_norito_kagemusha_output_membership_frontier_build_v4",
     "connect_norito_kagemusha_output_membership_paths_derive_v4",
-    "connect_norito_kagemusha_offline_operation_status_validate_v1",
+    "connect_norito_kagemusha_native_contract_revision",
+    "connect_norito_kagemusha_offline_operation_status_validate_v2",
     "connect_norito_kagemusha_recursive_spend_append_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
@@ -115,16 +116,16 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_v4",
-    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5",
     "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
     "connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4",
     "connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4",
     "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_topup_v4",
     "connect_norito_kagemusha_recursive_spend_verify_v4",
-    "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
-    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
-    "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
+    "connect_norito_kagemusha_request_authorization_finalize_hardware_v3",
+    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3",
+    "connect_norito_kagemusha_request_authorization_signing_bytes_v3",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
     "connect_norito_kagemusha_secret_free_buffer",
@@ -132,7 +133,8 @@ KAGEMUSHA_EXPORTS = {
 KAGEMUSHA_AUXILIARY_EXPORTS = {
     # C# receives operation status as JSON. Swift consumes canonical Norito and
     # therefore deliberately does not surface this transport-specific helper.
-    "connect_norito_kagemusha_offline_operation_status_json_validate_v1",
+    "connect_norito_kagemusha_offline_operation_status_json_validate_v2",
+    "connect_norito_kagemusha_operation_id_derive_v4",
 }
 KAGEMUSHA_CANDIDATE_LAB_EXPORTS = {
     "connect_norito_kagemusha_recursive_spend_candidate_lab_accepted_identity_v4",

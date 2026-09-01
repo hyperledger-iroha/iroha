@@ -22,8 +22,8 @@ spellings are rejected.
 
 ### `GET /v1/sumeragi/evidence/count`
 
-- Returns a monotonic count of unique evidence records observed by the node
-  during the retention horizon.
+- Returns the current count of unique committed evidence records retained in
+  WSV during the governed evidence horizon.
 - Response body (JSON):
 
 ```json
@@ -43,7 +43,7 @@ parameters (`EvidenceListQuery`):
 | Parameter | Type | Default | Notes |
 |-----------|------|---------|-------|
 | `limit`   | `usize` | 50 | Must be a canonical unsigned decimal integer in `1..=1000`. |
-| `offset`  | `usize` | `0` | Canonical unsigned decimal offset into the ordered snapshot. |
+| `offset`  | `usize` | `0` | Canonical unsigned decimal offset in `0..=10000`. |
 | `kind`    | `string` | _none_ | The sole accepted value is `SumeragiV2Equivocation`. |
 
 Response JSON is a Norito JSON object:
@@ -65,7 +65,13 @@ Response JSON is a Norito JSON object:
       "recorded_height": 2048,
       "recorded_view": 16,
       "recorded_ms": 1731883656123,
-      "consensus_admitted_height": 2049
+      "consensus_admitted_height": 2048,
+      "penalty_status": {
+        "status": "applied",
+        "details": {
+          "height": 2050
+        }
+      }
     }
   ]
 }
@@ -81,9 +87,14 @@ The binary record additionally contains the complete frozen context,
 roster-ordered BLS proofs of possession, and both exact artifacts.
 Retired global-v1 kind/payload layouts fail binary decode and are never
 upgraded or reconstructed by the endpoint.
-The JSON record includes `consensus_admitted_height`: `null` means the exact v2
-proof is only a node-local pending observation and is not slash-eligible. A
-numeric value is the committed block height that admitted the proof. Candidate
+Every JSON record has a numeric `consensus_admitted_height`, equal to the WSV
+record's committed admission height. Node-local observations have no
+`EvidenceRecord` and never appear in either endpoint. The required closed
+`penalty_status` object is exactly one of
+`{ "status": "pending", "details": null }`,
+`{ "status": "applied", "details": { "height": <u64> } }`, or
+`{ "status": "cancelled", "details": { "height": <u64> } }`. Retired
+penalty booleans and nullable terminal-height fields are not emitted. Candidate
 blocks carry at most eight proofs and 4 MiB of encoded evidence in canonical
 key order; every follower anchors the embedded context to immutable committed
 v2 context history, revalidates the self-contained proof, and only permits

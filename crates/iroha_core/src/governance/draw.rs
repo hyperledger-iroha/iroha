@@ -3,7 +3,7 @@ use crate::governance::sortition;
 use iroha_config::parameters::actual::Governance;
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{NetworkId, account::AccountId, governance::types::ParliamentBody};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// Bodies selected before a narrow Policy Jury result can trigger a fresh Confirmation Jury.
 const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
     ParliamentBody::RulesCommittee,
@@ -21,7 +21,7 @@ const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
 pub(crate) struct ParliamentDrawPlan {
     /// Rosters derived from the committed candidate snapshot and future pulse.
     pub(crate) rosters: BTreeMap<ParliamentBody, ParliamentDrawRoster>,
-    /// Smallest feasible maximum number of primary bodies assigned to one citizen.
+    /// Smallest allocator-feasible maximum body invitations assigned to one citizen.
     pub(crate) assignment_cap: u32,
 }
 /// One attempt-local roster derived from a committed candidate snapshot and future pulse.
@@ -83,14 +83,19 @@ fn smallest_feasible_assignment_cap(
     gov_cfg: &Governance,
     candidate_count: usize,
     bodies: &[ParliamentBody],
+    alternates_per_body: usize,
 ) -> u32 {
     if candidate_count == 0 || bodies.is_empty() {
         return 0;
     }
-    let required_seats = bodies.iter().fold(0usize, |total, body| {
-        total.saturating_add(body_committee_size(gov_cfg, *body).min(candidate_count))
+    let required_invitations = bodies.iter().fold(0usize, |total, body| {
+        let primary = body_committee_size(gov_cfg, *body).min(candidate_count);
+        let alternates = alternates_per_body.min(candidate_count.saturating_sub(primary));
+        total.saturating_add(primary.saturating_add(alternates))
     });
-    let cap = required_seats.div_ceil(candidate_count).min(bodies.len());
+    let cap = required_invitations
+        .div_ceil(candidate_count)
+        .min(bodies.len());
     u32::try_from(cap).unwrap_or(u32::MAX)
 }
 
@@ -105,7 +110,6 @@ fn derive_body_plan(
 ) -> ParliamentDrawPlan {
     let candidate_count = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
     let alternates_per_body = gov_cfg.parliament_alternate_size;
-    let assignment_cap = smallest_feasible_assignment_cap(gov_cfg, candidates.len(), bodies);
     let mut rankings = BTreeMap::new();
     for body in bodies {
         rankings.insert(
@@ -113,6 +117,35 @@ fn derive_body_plan(
             ranked_body_candidates(network_id, epoch, beacon, candidates, *body),
         );
     }
+    let minimum_cap =
+        smallest_feasible_assignment_cap(gov_cfg, candidates.len(), bodies, alternates_per_body);
+    let maximum_cap = u32::try_from(bodies.len()).unwrap_or(u32::MAX);
+    for assignment_cap in minimum_cap..=maximum_cap {
+        if let Some(plan) = try_derive_body_plan_with_cap(
+            gov_cfg,
+            candidates,
+            bodies,
+            &rankings,
+            alternates_per_body,
+            candidate_count,
+            assignment_cap,
+        ) {
+            return plan;
+        }
+    }
+    unreachable!("a per-body invitation cap must admit every duplicate-free body plan")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_derive_body_plan_with_cap(
+    gov_cfg: &Governance,
+    candidates: &[AccountId],
+    bodies: &[ParliamentBody],
+    rankings: &BTreeMap<ParliamentBody, Vec<AccountId>>,
+    alternates_per_body: usize,
+    candidate_count: u32,
+    assignment_cap: u32,
+) -> Option<ParliamentDrawPlan> {
     let mut loads: BTreeMap<AccountId, u32> = candidates
         .iter()
         .cloned()
@@ -121,9 +154,7 @@ fn derive_body_plan(
     let mut selected: BTreeMap<ParliamentBody, Vec<AccountId>> = BTreeMap::new();
     for body in bodies {
         let target = body_committee_size(gov_cfg, *body).min(candidates.len());
-        let ranked = rankings
-            .get(body)
-            .expect("every requested body has a deterministic ranking");
+        let ranked = rankings.get(body)?;
         let mut eligible: Vec<_> = ranked
             .iter()
             .enumerate()
@@ -150,6 +181,9 @@ fn derive_body_plan(
             .filter(|candidate| chosen_set.contains(*candidate))
             .cloned()
             .collect();
+        if members.len() != target {
+            return None;
+        }
         for member in &members {
             let load = loads
                 .get_mut(member)
@@ -159,18 +193,19 @@ fn derive_body_plan(
         selected.insert(*body, members);
     }
 
+    let alternates = derive_alternates_with_cap(
+        candidates,
+        bodies,
+        rankings,
+        &selected,
+        &loads,
+        alternates_per_body,
+        assignment_cap,
+    )?;
     let mut rosters = BTreeMap::new();
     for body in bodies {
         let members = selected.remove(body).unwrap_or_default();
-        let member_set: BTreeSet<_> = members.iter().cloned().collect();
-        let alternates = rankings
-            .remove(body)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|candidate| !member_set.contains(candidate))
-            .filter(|candidate| loads.get(candidate).copied().unwrap_or(0) < assignment_cap)
-            .take(alternates_per_body)
-            .collect();
+        let alternates = alternates.get(body)?.clone();
         rosters.insert(
             *body,
             ParliamentDrawRoster {
@@ -182,10 +217,169 @@ fn derive_body_plan(
             },
         );
     }
-    ParliamentDrawPlan {
+    Some(ParliamentDrawPlan {
         rosters,
         assignment_cap,
+    })
+}
+
+/// Reserve a capacity-bounded, duplicate-free alternate matching.
+///
+/// Greedy selection alone can strand a later body even when the requested cap
+/// is feasible. The deterministic alternating-path search below reassigns an
+/// earlier reservation when necessary. Final vectors are restored to their
+/// body-local beacon ranking before they are committed.
+#[allow(clippy::too_many_arguments)]
+fn derive_alternates_with_cap(
+    candidates: &[AccountId],
+    bodies: &[ParliamentBody],
+    rankings: &BTreeMap<ParliamentBody, Vec<AccountId>>,
+    primary: &BTreeMap<ParliamentBody, Vec<AccountId>>,
+    primary_loads: &BTreeMap<AccountId, u32>,
+    alternates_per_body: usize,
+    assignment_cap: u32,
+) -> Option<BTreeMap<ParliamentBody, Vec<AccountId>>> {
+    let candidate_indices: BTreeMap<_, _> = candidates
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, candidate)| (candidate, index))
+        .collect();
+    let mut ranked_indices = Vec::with_capacity(bodies.len());
+    let mut primary_indices = Vec::with_capacity(bodies.len());
+    let mut alternate_targets = Vec::with_capacity(bodies.len());
+    for body in bodies {
+        let ranked = rankings.get(body)?;
+        let ranked = ranked
+            .iter()
+            .map(|candidate| candidate_indices.get(candidate).copied())
+            .collect::<Option<Vec<_>>>()?;
+        let members = primary.get(body)?;
+        let member_indices = members
+            .iter()
+            .map(|candidate| candidate_indices.get(candidate).copied())
+            .collect::<Option<BTreeSet<_>>>()?;
+        alternate_targets
+            .push(alternates_per_body.min(candidates.len().saturating_sub(member_indices.len())));
+        ranked_indices.push(ranked);
+        primary_indices.push(member_indices);
     }
+
+    let mut capacities = Vec::with_capacity(candidates.len());
+    let mut total_loads = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let primary_load = primary_loads.get(candidate).copied().unwrap_or(0);
+        capacities.push(assignment_cap.saturating_sub(primary_load) as usize);
+        total_loads.push(primary_load as usize);
+    }
+    let mut matching = vec![BTreeSet::<usize>::new(); bodies.len()];
+    for (body_index, target) in alternate_targets.into_iter().enumerate() {
+        while matching[body_index].len() < target {
+            if !augment_alternate_matching(
+                body_index,
+                &ranked_indices,
+                &primary_indices,
+                &capacities,
+                &mut total_loads,
+                &mut matching,
+            ) {
+                return None;
+            }
+        }
+    }
+
+    let mut result = BTreeMap::new();
+    for (body_index, body) in bodies.iter().copied().enumerate() {
+        let alternates = ranked_indices[body_index]
+            .iter()
+            .filter(|candidate| matching[body_index].contains(candidate))
+            .map(|candidate| candidates[*candidate].clone())
+            .collect();
+        result.insert(body, alternates);
+    }
+    Some(result)
+}
+
+/// Add one alternate reservation through a deterministic alternating path.
+fn augment_alternate_matching(
+    root_body: usize,
+    ranked_indices: &[Vec<usize>],
+    primary_indices: &[BTreeSet<usize>],
+    capacities: &[usize],
+    total_loads: &mut [usize],
+    matching: &mut [BTreeSet<usize>],
+) -> bool {
+    let body_count = matching.len();
+    let mut parents = vec![None; body_count.saturating_add(capacities.len())];
+    parents[root_body] = Some(root_body);
+    let mut queue = VecDeque::from([root_body]);
+    let mut terminal_candidate = None;
+
+    while let Some(node) = queue.pop_front() {
+        if node < body_count {
+            let mut eligible = ranked_indices[node]
+                .iter()
+                .enumerate()
+                .filter(|(_, candidate)| {
+                    !primary_indices[node].contains(candidate)
+                        && !matching[node].contains(candidate)
+                })
+                .map(|(rank, candidate)| (total_loads[*candidate], rank, *candidate))
+                .collect::<Vec<_>>();
+            eligible.sort_unstable();
+            for (_, _, candidate) in eligible {
+                let candidate_node = body_count + candidate;
+                if capacities[candidate] == 0 || parents[candidate_node].is_some() {
+                    continue;
+                }
+                parents[candidate_node] = Some(node);
+                let alternate_load = matching
+                    .iter()
+                    .filter(|assignments| assignments.contains(&candidate))
+                    .count();
+                if alternate_load < capacities[candidate] {
+                    terminal_candidate = Some(candidate_node);
+                    break;
+                }
+                queue.push_back(candidate_node);
+            }
+            if terminal_candidate.is_some() {
+                break;
+            }
+        } else {
+            let candidate = node - body_count;
+            for (owner_body, assignments) in matching.iter().enumerate() {
+                if assignments.contains(&candidate) && parents[owner_body].is_none() {
+                    parents[owner_body] = Some(node);
+                    queue.push_back(owner_body);
+                }
+            }
+        }
+    }
+
+    let Some(mut candidate_node) = terminal_candidate else {
+        return false;
+    };
+    loop {
+        let body = parents[candidate_node].expect("candidate on an alternating path has a parent");
+        let candidate = candidate_node - body_count;
+        if body != root_body {
+            let previous_candidate_node =
+                parents[body].expect("intermediate body on an alternating path has a parent");
+            let previous_candidate = previous_candidate_node - body_count;
+            assert!(matching[body].remove(&previous_candidate));
+            total_loads[previous_candidate] = total_loads[previous_candidate]
+                .checked_sub(1)
+                .expect("matched alternate contributes one candidate load");
+            candidate_node = previous_candidate_node;
+        }
+        assert!(matching[body].insert(candidate));
+        total_loads[candidate] = total_loads[candidate].saturating_add(1);
+        if body == root_body {
+            break;
+        }
+    }
+    true
 }
 
 fn same_matter_overlap(
@@ -433,5 +627,94 @@ mod tests {
             .collect();
         let unique: BTreeSet<_> = members.iter().copied().collect();
         assert_eq!(members.len(), unique.len());
+    }
+
+    #[test]
+    fn alternate_matching_reassigns_an_earlier_reservation() {
+        let ranked = vec![vec![0, 1], vec![0, 1]];
+        let primary = vec![BTreeSet::new(), BTreeSet::from([1])];
+        let capacities = [1, 1];
+        let mut loads = [0, 0];
+        let mut matching = vec![BTreeSet::new(), BTreeSet::new()];
+
+        assert!(augment_alternate_matching(
+            0,
+            &ranked,
+            &primary,
+            &capacities,
+            &mut loads,
+            &mut matching,
+        ));
+        assert_eq!(matching[0], BTreeSet::from([0]));
+        assert!(augment_alternate_matching(
+            1,
+            &ranked,
+            &primary,
+            &capacities,
+            &mut loads,
+            &mut matching,
+        ));
+        assert_eq!(matching[0], BTreeSet::from([1]));
+        assert_eq!(matching[1], BTreeSet::from([0]));
+        assert_eq!(loads, [1, 1]);
+    }
+
+    #[test]
+    fn exact_primary_fill_reserves_ranked_alternates_within_the_persisted_cap() {
+        let network_id = network_id(b"body-alternate-cap-demo");
+        let beacon = [0xE6; 32];
+        let accounts: Vec<_> = (1..=18).map(mk_account).collect();
+        let cfg = Governance {
+            rules_committee_size: 2,
+            agenda_council_size: 2,
+            interest_panel_size: 2,
+            review_panel_size: 2,
+            coordination_council_size: 2,
+            mpc_committee_size: 2,
+            fma_committee_size: 2,
+            oversight_committee_size: 2,
+            policy_jury_size: 2,
+            parliament_alternate_size: 2,
+            ..Governance::default()
+        };
+        let plan = derive_body_plan(
+            &cfg,
+            &network_id,
+            21,
+            &beacon,
+            &accounts,
+            &PRIMARY_PARLIAMENT_BODIES_V1,
+        );
+        let repeated = derive_body_plan(
+            &cfg,
+            &network_id,
+            21,
+            &beacon,
+            &accounts,
+            &PRIMARY_PARLIAMENT_BODIES_V1,
+        );
+
+        assert_eq!(plan, repeated);
+        assert_eq!(plan.assignment_cap, 2);
+        let mut invitation_loads = BTreeMap::<AccountId, u32>::new();
+        for roster in plan.rosters.values() {
+            assert_eq!(roster.members.len(), 2);
+            assert_eq!(roster.alternates.len(), 2);
+            let invited = roster
+                .members
+                .iter()
+                .chain(&roster.alternates)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(invited.len(), 4);
+            for invited in roster.members.iter().chain(&roster.alternates) {
+                *invitation_loads.entry(invited.clone()).or_default() += 1;
+            }
+        }
+        assert_eq!(invitation_loads.len(), accounts.len());
+        assert!(
+            invitation_loads
+                .values()
+                .all(|load| *load <= plan.assignment_cap)
+        );
     }
 }

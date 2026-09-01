@@ -10,9 +10,30 @@ import org.hyperledger.iroha.sdk.crypto.KeyGenerationOutcome
 import org.hyperledger.iroha.sdk.crypto.KeyManagementException
 import org.hyperledger.iroha.sdk.crypto.KeyProvider
 import org.hyperledger.iroha.sdk.crypto.KeyProviderMetadata
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.crypto.SoftwareKeyProvider
+import org.hyperledger.iroha.sdk.telemetry.KeystoreTelemetryEmitter
 
 class KeystoreKeySecurityPolicyTest {
+    @Test
+    fun `default providers always include a software signing path`() {
+        val parameters = KeyGenParameters.builder()
+            .setSigningAlgorithm(SigningAlgorithm.ML_DSA)
+            .build()
+        for (manager in listOf(
+            IrohaKeyManager.withDefaultProviders(parameters),
+            IrohaKeyManager.withDefaultProviders(
+                parameters,
+                KeystoreTelemetryEmitter.noop(),
+            ),
+        )) {
+            assertEquals(
+                listOf(KeyProviderMetadata.HardwareSecurityLevel.NONE),
+                manager.providerMetadata().map { it.securityLevel },
+            )
+        }
+    }
+
     @Test
     fun `required hardware policies reject a weaker existing alias`() {
         val existing = SoftwareKeyProvider().generateEphemeral()

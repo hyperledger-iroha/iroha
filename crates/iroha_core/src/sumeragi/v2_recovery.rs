@@ -32,6 +32,7 @@ use crate::{
         CommitManifestBindingState, ExactReplayBoundary, Kura, KuraInstanceIdentity,
         KuraV2CommitReceipt, V2StartupFinalityVerificationSession, V2StartupReplayStorageBinding,
     },
+    smartcontracts::isi::staking::validator_election_eligible_at_height,
     state::{
         State, WorldReadOnly, live_consensus_key_pop_for_peer,
         public_lane_validator_record_matches_key,
@@ -41,7 +42,6 @@ use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
 use iroha_data_model::{
     account::AccountId,
     block::{BlockHeader, consensus_v2 as wire},
-    nexus::PublicLaneValidatorStatus,
 };
 use mv::storage::StorageReadOnly;
 use std::{
@@ -2456,12 +2456,17 @@ fn successor_proofs_of_possession(parent: &wire::finality::V2FinalityArtifact) -
 }
 pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
     let view = state.view();
-    let active_validators = view
+    // A height context is frozen from its predecessor state, so committed
+    // height `h` supplies the exact validator tenure for target height `h + 1`.
+    let target_height = u64::try_from(view.block_hashes.len())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let eligible_validators = view
         .world()
         .public_lane_validators()
         .iter()
         .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
-        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| validator_election_eligible_at_height(record, target_height))
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect::<Vec<_>>();
     let retained_lane_lineage = view
@@ -2479,7 +2484,7 @@ pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
     iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
         &view.nexus,
         &view.pipeline,
-        &active_validators,
+        &eligible_validators,
         &retained_lane_lineage,
     )
 }
@@ -2694,4 +2699,88 @@ pub(in crate::sumeragi) fn production_empty_genesis_complete_tip_fixture_for_tes
 #[cfg(test)]
 mod tests {
     include!("v2_recovery_tests.rs");
+
+    fn committed_nexus_hash_with_tenure_record(
+        status: Option<iroha_data_model::nexus::PublicLaneValidatorStatus>,
+        activation_height: u64,
+        deactivation_height: Option<u64>,
+    ) -> Hash {
+        let keys = verified_keys();
+        let network_id =
+            crate::sumeragi::synthetic_network_id("committed-nexus-tenure-boundary-test");
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_consensus_keys(&kura, network_id, &keys);
+        let context = verified_context_for_policy_state(&state, network_id, &keys);
+        let block = dummy_block(&keys[0], 1, None);
+        commit_to_state(&state, &block, context.context());
+
+        if let Some(status) = status {
+            let peer_id = PeerId::new(keys[0].public_key().clone());
+            let validator = AccountId::new(peer_id.public_key().clone());
+            let lane_id = LaneId::new(91);
+            let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
+                lane_id,
+                validator: validator.clone(),
+                peer_id,
+                stake_account: validator.clone(),
+                total_stake: iroha_primitives::numeric::Quantity::from(0_u64),
+                self_stake: iroha_primitives::numeric::Quantity::from(0_u64),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status,
+                activation_height,
+                deactivation_height,
+                last_reward_epoch: None,
+            };
+            let mut validators = state.world.public_lane_validators.block();
+            validators.insert((lane_id, validator), record);
+            validators.commit();
+        }
+
+        committed_nexus_amx_context_hash(&state)
+    }
+
+    #[test]
+    fn committed_hash_uses_successor_height_half_open_validator_tenure() {
+        use iroha_data_model::nexus::PublicLaneValidatorStatus;
+
+        let empty_hash = committed_nexus_hash_with_tenure_record(None, 0, None);
+        assert_ne!(
+            committed_nexus_hash_with_tenure_record(
+                Some(PublicLaneValidatorStatus::PendingActivation(2)),
+                2,
+                None,
+            ),
+            empty_hash,
+            "committed height one freezes due activation for successor height two"
+        );
+        assert_ne!(
+            committed_nexus_hash_with_tenure_record(
+                Some(PublicLaneValidatorStatus::Exiting(u64::MAX)),
+                1,
+                Some(3),
+            ),
+            empty_hash,
+            "an exiting label cannot suppress tenure retained at successor height two"
+        );
+        assert_ne!(
+            committed_nexus_hash_with_tenure_record(
+                Some(PublicLaneValidatorStatus::Slashed(Hash::new(
+                    b"successor-height slash",
+                ))),
+                1,
+                Some(3),
+            ),
+            empty_hash,
+            "a slashed label cannot suppress tenure retained at successor height two"
+        );
+        assert_eq!(
+            committed_nexus_hash_with_tenure_record(
+                Some(PublicLaneValidatorStatus::Exiting(u64::MAX)),
+                1,
+                Some(2),
+            ),
+            empty_hash,
+            "successor height two is outside a tenure ending at height two"
+        );
+    }
 }

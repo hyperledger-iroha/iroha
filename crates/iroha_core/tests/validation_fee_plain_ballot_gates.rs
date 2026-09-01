@@ -8,7 +8,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{
-        GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
+        GovernanceProposalRecord, GovernanceProposalStatus,
         GovernanceReferendumRecord, GovernanceReferendumStatus, State, World, WorldReadOnly,
     },
 };
@@ -111,22 +111,25 @@ fn validation_fee_proposal_rejects_plain_ballot_without_state_effects() {
             status: GovernanceProposalStatus::Proposed,
         },
     );
-    state_transaction.world.governance_referenda_mut().insert(
-        referendum_id.clone(),
-        GovernanceReferendumRecord {
-            h_start: BALLOT_HEIGHT,
-            h_end: BALLOT_HEIGHT + 100,
-            status: GovernanceReferendumStatus::Open,
-            mode: GovernanceReferendumMode::Plain,
-        },
-    );
+    state_transaction
+        .world
+        .put_governance_referendum_for_testing(
+            referendum_id.clone(),
+            GovernanceReferendumRecord {
+                h_start: BALLOT_HEIGHT,
+                h_end: BALLOT_HEIGHT + 100,
+                status: GovernanceReferendumStatus::Open,
+                final_tally: None,
+            },
+        );
 
     let error = CastPlainBallot {
         referendum_id: referendum_id.clone(),
-        owner: proposer.clone(),
-        amount: Quantity::from(1_u32),
-        duration_blocks: 100,
-        direction: 0,
+        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
+            amount: Quantity::from(1_u32),
+            duration_blocks: core::num::NonZeroU64::new(100).expect("non-zero lock duration"),
+        },
     }
     .execute(&proposer, &mut state_transaction)
     .expect_err("validation-fee proposals must reject public PLAIN ballots");

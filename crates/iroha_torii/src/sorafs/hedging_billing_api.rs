@@ -845,7 +845,7 @@ fn reject_query(raw: Option<&str>) -> Result<(), QueryInputError> {
     }
 }
 fn require_method(actual: &Method, expected: Method) -> Result<(), Response> {
-    if actual == &expected || (expected == Method::GET && actual == Method::HEAD) {
+    if actual == &expected {
         Ok(())
     } else {
         Err(fixed_error(
@@ -1003,12 +1003,17 @@ mod tests {
         assert_eq!(parse_page_limit("100"), Ok(100));
     }
     #[test]
-    fn get_routes_accept_implicit_head_but_post_does_not() {
+    fn routes_require_the_exact_http_method() {
         assert!(require_method(&Method::GET, Method::GET).is_ok());
-        assert!(require_method(&Method::HEAD, Method::GET).is_ok());
         assert_eq!(
-            require_method(&Method::HEAD, Method::POST)
-                .expect_err("POST routes have no implicit HEAD")
+            require_method(&Method::HEAD, Method::GET)
+                .expect_err("HEAD must not dispatch a GET operation")
+                .status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+        assert_eq!(
+            require_method(&Method::GET, Method::POST)
+                .expect_err("GET must not dispatch a POST operation")
                 .status(),
             StatusCode::METHOD_NOT_ALLOWED
         );

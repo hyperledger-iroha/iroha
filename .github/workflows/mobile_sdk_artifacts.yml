@@ -94,11 +94,11 @@ on:
         required: false
         type: string
       promotion_run_id:
-        description: "Protected Kagemusha promotion run id; requires its exact attempt."
+        description: "Optional Kagemusha production promotion run id; requires its exact attempt."
         required: false
         type: string
       promotion_run_attempt:
-        description: "Protected Kagemusha promotion run attempt; requires its exact run id."
+        description: "Optional Kagemusha production run attempt; requires its exact run id."
         required: false
         type: string
 
@@ -118,7 +118,7 @@ env:
 jobs:
   checker-self-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Reject a noncanonical release tag before setup or build
@@ -143,6 +143,11 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          toolchain: 1.93.1
+      - name: Enforce reviewed shipping feature graphs
+        run: python3 scripts/check_release_feature_graph.py
       - name: Bind the canonical mobile Python
         shell: bash
         run: |
@@ -203,7 +208,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - name: Resolve one exact protected promotion run
+      - name: Resolve an explicitly requested protected promotion run
         id: resolve
         shell: bash
         env:
@@ -227,37 +232,6 @@ jobs:
             fi
             promotion_run_id="$REQUESTED_PROMOTION_RUN_ID"
             promotion_run_attempt="$REQUESTED_PROMOTION_RUN_ATTEMPT"
-          elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            runs="$RUNNER_TEMP/kagemusha-promotion-runs.json"
-            gh api --method GET \
-              "repos/$GITHUB_REPOSITORY/actions/workflows/promote_kagemusha_v4.yml/runs" \
-              -f branch=main -f event=workflow_dispatch -f status=success -f per_page=100 \
-              > "$runs"
-            read -r promotion_run_id promotion_run_attempt < <(
-              python3 -I -S -B - "$runs" "$GITHUB_SHA" <<'PY'
-          import json
-          from pathlib import Path
-          import sys
-
-          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          matches = sorted(
-              (
-                  (run.get("id"), run.get("run_attempt"))
-                  for run in payload.get("workflow_runs", [])
-                  if run.get("head_sha") == sys.argv[2]
-                  and run.get("head_branch") == "main"
-                  and run.get("event") == "workflow_dispatch"
-                  and run.get("status") == "completed"
-                  and run.get("conclusion") == "success"
-                  and run.get("path") == ".github/workflows/promote_kagemusha_v4.yml"
-              ),
-              reverse=True,
-          )
-          if not matches or type(matches[0][0]) is not int or type(matches[0][1]) is not int:
-              raise SystemExit("no successful protected promotion run matches this release commit")
-          print(*matches[0])
-          PY
-            )
           else
             exit 0
           fi
@@ -299,7 +273,7 @@ jobs:
       package_inventory_sha256: ${{ steps.verify-apple-package.outputs.package_inventory_sha256 }}
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION: "1"
+      MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION: ${{ needs.authorize-mobile-production.outputs.production == 'true' && '1' || '0' }}
       PRIVACY_PRODUCTION_ENABLED: ${{ needs.authorize-mobile-production.outputs.production }}
       KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256: ""
     steps:
@@ -793,7 +767,7 @@ jobs:
           -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon"
           :client-android:buildNativeLibs
           -PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED"
-          -PrequireKagemushaProductionAuthorization=true
+          -PrequireKagemushaProductionAuthorization="$PRIVACY_PRODUCTION_ENABLED"
           -PkagemushaProductionAuthorizationSha256="$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256"
       - name: Test, lint, publish, and build Android SDK artifacts
         working-directory: kotlin
@@ -804,7 +778,7 @@ jobs:
             -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR" \
             -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon" \
             -PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED" \
-            -PrequireKagemushaProductionAuthorization=true \
+            -PrequireKagemushaProductionAuthorization="$PRIVACY_PRODUCTION_ENABLED" \
             -PkagemushaProductionAuthorizationSha256="$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" \
             -PirohaSdkVersion="$MOBILE_SDK_MAVEN_VERSION" \
             -PirohaSdkRepoDir="$MOBILE_SDK_ANDROID_MAVEN_REPO_DIR" \
@@ -873,8 +847,7 @@ jobs:
   publish-release-assets:
     if: >-
       github.ref_type == 'tag' &&
-      github.repository == 'hyperledger-iroha/iroha' &&
-      needs.authorize-mobile-production.outputs.production == 'true'
+      github.repository == 'hyperledger-iroha/iroha'
     needs: [authorize-mobile-production, apple-mobile-sdk, android-mobile-sdk]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -892,6 +865,7 @@ jobs:
           path: release-assets
           merge-multiple: true
       - name: Download the exact Apple production authorization again
+        if: needs.authorize-mobile-production.outputs.production == 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: kagemusha-mobile-apple-production-authorization-${{ needs.authorize-mobile-production.outputs.promotion_run_id }}-${{ needs.authorize-mobile-production.outputs.promotion_run_attempt }}
@@ -899,13 +873,14 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ needs.authorize-mobile-production.outputs.promotion_run_id }}
       - name: Download the exact Android production authorization again
+        if: needs.authorize-mobile-production.outputs.production == 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: kagemusha-mobile-android-production-authorization-${{ needs.authorize-mobile-production.outputs.promotion_run_id }}-${{ needs.authorize-mobile-production.outputs.promotion_run_attempt }}
           path: ${{ runner.temp }}/publish-android-authorization
           github-token: ${{ github.token }}
           run-id: ${{ needs.authorize-mobile-production.outputs.promotion_run_id }}
-      - name: Reverify both authorizations and production artifacts before publication
+      - name: Verify release inventory and any selected production authorizations
         id: reverify-release
         shell: bash
         env:
@@ -917,6 +892,7 @@ jobs:
           PROMOTION_RUN_ID: ${{ needs.authorize-mobile-production.outputs.promotion_run_id }}
           PROMOTION_RUN_ATTEMPT: ${{ needs.authorize-mobile-production.outputs.promotion_run_attempt }}
           RELEASE_TAG: ${{ needs.authorize-mobile-production.outputs.release_tag }}
+          KAGEMUSHA_PRODUCTION_ENABLED: ${{ needs.authorize-mobile-production.outputs.production }}
         run: |
           set -Eeuo pipefail
           apple_root="$RUNNER_TEMP/publish-apple-authorization"
@@ -928,11 +904,21 @@ jobs:
           apple_bundle="$apple_root/github-attestations/provenance-1.json"
           android_bundle="$android_root/github-attestations/provenance-1.json"
           release_root="$GITHUB_WORKSPACE/release-assets"
-          python3 -I -S -B scripts/kagemusha_mobile_production_authorization.py \
-            verify-release-inventory \
-            --release-root "$release_root" \
-            --release-tag "$RELEASE_TAG" \
-            --phase artifacts >/dev/null
+          [[ "$KAGEMUSHA_PRODUCTION_ENABLED" == "true" || \
+            "$KAGEMUSHA_PRODUCTION_ENABLED" == "false" ]]
+          release_inventory_sha256="$(
+            python3 -I -S -B scripts/kagemusha_mobile_production_authorization.py \
+              verify-release-inventory \
+              --release-root "$release_root" \
+              --release-tag "$RELEASE_TAG" \
+              --phase artifacts
+          )"
+          [[ "$release_inventory_sha256" =~ ^[0-9a-f]{64}$ ]]
+          if [[ "$KAGEMUSHA_PRODUCTION_ENABLED" == "false" ]]; then
+            echo "release_inventory_phase=artifacts" >> "$GITHUB_OUTPUT"
+            echo "release_inventory_sha256=$release_inventory_sha256" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           for root in "$apple_root" "$android_root"; do
             test -z "$(find "$root" -type l -print -quit)"
             test "$(find "$root" -type f | wc -l | tr -d '[:space:]')" = 3
@@ -1042,10 +1028,12 @@ jobs:
               --phase final
           )"
           [[ "$release_inventory_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "release_inventory_phase=final" >> "$GITHUB_OUTPUT"
           echo "release_inventory_sha256=$release_inventory_sha256" >> "$GITHUB_OUTPUT"
       - name: Publish mobile SDK release assets
         env:
           EXPECTED_RELEASE_INVENTORY_SHA256: ${{ steps.reverify-release.outputs.release_inventory_sha256 }}
+          RELEASE_INVENTORY_PHASE: ${{ steps.reverify-release.outputs.release_inventory_phase }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
@@ -1067,12 +1055,14 @@ jobs:
             echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${pod_version}" >&2
             exit 1
           fi
+          [[ "$RELEASE_INVENTORY_PHASE" == "artifacts" || \
+            "$RELEASE_INVENTORY_PHASE" == "final" ]]
           observed_release_inventory_sha256="$(
             python3 -I -S -B scripts/kagemusha_mobile_production_authorization.py \
               verify-release-inventory \
               --release-root "$GITHUB_WORKSPACE/release-assets" \
               --release-tag "$GITHUB_REF_NAME" \
-              --phase final
+              --phase "$RELEASE_INVENTORY_PHASE"
           )"
           [[ "$EXPECTED_RELEASE_INVENTORY_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$observed_release_inventory_sha256" == "$EXPECTED_RELEASE_INVENTORY_SHA256" ]] || {

@@ -51,12 +51,17 @@ use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
 struct SubscriptionHarness {
-    app: axum::Router,
+    app: iroha_torii::TestApiRouterRuntime,
     state: Arc<State>,
     queue: Arc<Queue>,
     charge_asset_id: AssetDefinitionId,
     subscription_id: NftId,
     billing_trigger_id: TriggerId,
+}
+impl SubscriptionHarness {
+    async fn shutdown(self) {
+        self.app.shutdown().await;
+    }
 }
 fn build_subscription_plan(charge_asset_id: AssetDefinitionId) -> SubscriptionPlan {
     SubscriptionPlan {
@@ -308,6 +313,7 @@ async fn subscription_mutation_routes_are_registered() {
             "subscription route `{uri}` should be registered"
         );
     }
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn subscription_list_and_get_return_generic_plan_metadata() {
@@ -357,6 +363,7 @@ async fn subscription_list_and_get_return_generic_plan_metadata() {
     let get_invoice: SubscriptionInvoice =
         norito::json::from_value(get_json["invoice"].clone()).expect("subscription invoice");
     assert_eq!(get_invoice.asset_definition, harness.charge_asset_id);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn subscription_resume_route_returns_exact_unsigned_draft_without_mutating() {
@@ -444,6 +451,7 @@ async fn subscription_resume_route_returns_exact_unsigned_draft_without_mutating
             .is_some(),
         "draft construction must not replace the committed billing trigger"
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn subscription_action_route_rejects_legacy_private_key_payload() {
@@ -465,6 +473,7 @@ async fn subscription_action_route_rejects_legacy_private_key_payload() {
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(harness.queue.queued_len(), 0);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn subscription_cancel_route_requires_exact_tagged_mode() {
@@ -499,4 +508,5 @@ async fn subscription_cancel_route_requires_exact_tagged_mode() {
         norito::json::Value::Null
     );
     assert_eq!(harness.queue.queued_len(), 0);
+    harness.shutdown().await;
 }

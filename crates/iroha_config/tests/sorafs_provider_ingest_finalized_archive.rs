@@ -123,7 +123,7 @@ enabled = true
 clock_seal_handle = "sealed://sorafs/provider-attestation/clock-primary"
 clock_seal_revision = 11
 clock_seal_policy_digest_hex = "{}"
-approval_signer_handle = "hsm://sorafs/provider-attestation/approval-primary"
+approval_signer_handle = "provider://sorafs/provider-attestation/approval-primary"
 approval_signer_revision = 12
 approval_signer_policy_digest_hex = "{}"
 inventory_handle = "coordinator://sorafs/provider-attestation/inventory-primary"
@@ -192,7 +192,7 @@ fn attestation_journal_projects_exact_public_bindings_and_bounds() {
     assert_eq!(journal.clock_seal.policy_digest, [0xC1; 32]);
     assert_eq!(
         journal.approval_signer.handle,
-        "hsm://sorafs/provider-attestation/approval-primary"
+        "provider://sorafs/provider-attestation/approval-primary"
     );
     assert_eq!(journal.approval_signer.revision, 12);
     assert_eq!(journal.approval_signer.policy_digest, [0xC2; 32]);

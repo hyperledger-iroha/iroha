@@ -473,7 +473,7 @@ class IrohaKeyManager private constructor(
             signingAlgorithm,
         )
 
-        /** Creates a manager with the detected hardware-backed keystore provider. */
+        /** Creates a manager with an optional keystore provider and a software fallback. */
         @JvmStatic
         fun withDefaultProviders(): IrohaKeyManager =
             withDefaultProviders(KeyGenParameters.builder().build())
@@ -487,7 +487,7 @@ class IrohaKeyManager private constructor(
                     .build()
             )
 
-        /** Creates a manager with the detected hardware-backed keystore provider. */
+        /** Creates a manager with an optional keystore provider and a software fallback. */
         @JvmStatic
         fun withDefaultProviders(keyGenParameters: KeyGenParameters): IrohaKeyManager {
             val signingAlgorithm = keyGenParameters.signingAlgorithm()
@@ -495,10 +495,11 @@ class IrohaKeyManager private constructor(
             if (signingAlgorithm.supportsHardwareBackedKeys()) {
                 KeystoreKeyProvider.maybeCreate(keyGenParameters)?.let { providers.add(it) }
             }
+            providers.add(SoftwareKeyProvider(signingAlgorithm))
             return IrohaKeyManager(providers, KeystoreTelemetryEmitter.noop(), signingAlgorithm)
         }
 
-        /** Creates a manager with the detected hardware-backed keystore provider and telemetry. */
+        /** Creates a manager with an optional keystore provider, software fallback, and telemetry. */
         @JvmStatic
         fun withDefaultProviders(
             keyGenParameters: KeyGenParameters,
@@ -509,6 +510,7 @@ class IrohaKeyManager private constructor(
             if (signingAlgorithm.supportsHardwareBackedKeys()) {
                 KeystoreKeyProvider.maybeCreate(keyGenParameters)?.let { providers.add(it) }
             }
+            providers.add(SoftwareKeyProvider(signingAlgorithm))
             return IrohaKeyManager(providers, telemetry, signingAlgorithm)
         }
 

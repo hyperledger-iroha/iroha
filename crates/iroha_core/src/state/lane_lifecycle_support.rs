@@ -573,6 +573,8 @@ impl PendingAutoscaleTransition {
 }
 const LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON: &str =
     "it contains live shared-dataspace staking state across a canonical owner reset or change";
+const LIVE_LANE_STAKING_CUSTODY_REASON: &str =
+    "it retains active validator state or bonded or pending-unbond stake custody";
 
 fn static_staking_owner_for_dataspace_at_height(
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -601,12 +603,18 @@ fn static_staking_owner_for_dataspace_at_height(
 fn live_staking_projection_lane_for_lanes(
     world: &impl WorldReadOnly,
     lanes: &BTreeSet<LaneId>,
+    block_height: u64,
 ) -> Option<LaneId> {
     let validator_lanes = world
         .public_lane_validators()
         .iter()
         .filter(|(_, record)| {
-            !matches!(record.status, PublicLaneValidatorStatus::Exited)
+            record
+                .deactivation_height
+                .is_none_or(|deactivation_height| {
+                    deactivation_height < record.activation_height
+                        || block_height < deactivation_height
+                })
                 || !record.total_stake.is_zero()
                 || !record.self_stake.is_zero()
         })
@@ -636,6 +644,15 @@ fn ensure_live_shared_dataspace_staking_owner_is_not_reset(
     lanes_to_reset: &BTreeSet<LaneId>,
     block_height: u64,
 ) -> Result<(), LaneLifecycleError> {
+    if let Some(live_lane) =
+        live_staking_projection_lane_for_lanes(world, lanes_to_reset, block_height)
+    {
+        return Err(LaneLifecycleError::UnsafeRetirement {
+            lane: live_lane,
+            reason: LIVE_LANE_STAKING_CUSTODY_REASON,
+        });
+    }
+
     let dataspaces = nexus
         .lane_catalog
         .lanes()
@@ -707,7 +724,9 @@ fn ensure_live_shared_dataspace_staking_owner_is_not_reset(
         } else {
             BTreeSet::from([current_owner.expect("reset owner must exist")])
         };
-        if let Some(live_lane) = live_staking_projection_lane_for_lanes(world, &relevant_lanes) {
+        if let Some(live_lane) =
+            live_staking_projection_lane_for_lanes(world, &relevant_lanes, block_height)
+        {
             return Err(LaneLifecycleError::UnsafeRetirement {
                 lane: current_owner.unwrap_or(live_lane),
                 reason: LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON,
@@ -716,4 +735,22 @@ fn ensure_live_shared_dataspace_staking_owner_is_not_reset(
     }
 
     Ok(())
+}
+
+fn ensure_pending_autoscale_lifecycle_staking_is_safe(
+    world: &impl WorldReadOnly,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    pending: &PendingAutoscaleLaneLifecycle,
+    block_height: u64,
+) -> Result<(), LaneLifecycleError> {
+    let mut prospective_nexus = nexus.clone();
+    prospective_nexus.lane_catalog = pending.catalog_update.updated_catalog.clone();
+    prospective_nexus.lane_config = pending.catalog_update.updated_lane_config.clone();
+    ensure_live_shared_dataspace_staking_owner_is_not_reset(
+        world,
+        nexus,
+        &prospective_nexus,
+        &pending.catalog_update.lanes_to_reset,
+        block_height,
+    )
 }

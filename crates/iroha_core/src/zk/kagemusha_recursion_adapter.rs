@@ -20,6 +20,7 @@ use halo2_proofs::halo2curves::{
     CurveAffine,
     pasta::{Fp, Fq},
 };
+pub(crate) use iroha_data_model::offline::KAGEMUSHA_PASTA_PROOF_PAIR_VERSION_V4;
 #[cfg(test)]
 use iroha_data_model::offline::KAGEMUSHA_PASTA_PUBLIC_BOOTSTRAP_SELECTOR_V4;
 use iroha_data_model::offline::{
@@ -1606,7 +1607,8 @@ impl KagemushaStepBootstrapV4 {
         expected_parity: KagemushaPastaCycleParityV1,
         expected_structure_sha256: [u8; 32],
     ) -> Result<Self, String> {
-        // A bootstrap cannot exceed its release pair; do not inherit the generic artifact cap.
+        // Bound raw bootstrap decoding by the absolute proof-pair ceiling; authenticated fields
+        // and the release descriptor impose the exact profile after decoding.
         let maximum = usize::try_from(
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
         )
@@ -2999,8 +3001,6 @@ pub(crate) struct KagemushaPastaCycleProofPairV4 {
     /// BGH19 proof folding the current Ep opening with its parent lineage.
     pub(crate) step_ep_accumulation_proof: KagemushaIpaAccumulationProofV4,
 }
-/// Exact backend-native layout version of [`KagemushaPastaCycleProofPairV4`].
-pub(crate) const KAGEMUSHA_PASTA_PROOF_PAIR_VERSION_V4: u16 = 5;
 impl KagemushaPastaCycleProofPairV4 {
     /// Validate the pair against authenticated release parameters and its measured payload cap.
     pub(crate) fn validate(
@@ -3032,11 +3032,7 @@ impl KagemushaPastaCycleProofPairV4 {
             .validate(step_ep_params.k, has_parent)?;
         let maximum = usize::try_from(max_pair_bytes)
             .map_err(|_| "Kagemusha V4 pair bound does not fit usize".to_owned())?;
-        let absolute_maximum = usize::try_from(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
-        )
-        .map_err(|_| "Kagemusha V4 absolute pair bound does not fit usize".to_owned())?;
-        if maximum == 0 || maximum > absolute_maximum {
+        if max_pair_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4 {
             return Err("Kagemusha V4 authenticated pair bound is invalid".to_owned());
         }
         let encoded = norito::encode_canonical(self)
@@ -3058,11 +3054,7 @@ impl KagemushaPastaCycleProofPairV4 {
     ) -> Result<Self, String> {
         let maximum = usize::try_from(max_pair_bytes)
             .map_err(|_| "Kagemusha V4 pair bound does not fit usize".to_owned())?;
-        let absolute_maximum = usize::try_from(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
-        )
-        .map_err(|_| "Kagemusha V4 absolute pair bound does not fit usize".to_owned())?;
-        if maximum == 0 || maximum > absolute_maximum {
+        if max_pair_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4 {
             return Err("Kagemusha V4 authenticated pair bound is invalid".to_owned());
         }
         if bytes.is_empty() || bytes.len() > maximum {
@@ -7652,9 +7644,7 @@ impl KagemushaPastaCycleSourceBackedVerifierV4 {
         source: Arc<super::kagemusha_artifact_source_v4::KagemushaQualifiedArtifactSourceV4>,
     ) -> Result<Self, String> {
         let max_pair_bytes = source.authenticated_release().manifest().max_proof_bytes;
-        if max_pair_bytes == 0
-            || max_pair_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
-        {
+        if max_pair_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4 {
             return Err("Kagemusha V4 qualified proof-pair bound is invalid".to_owned());
         }
         Ok(Self {
@@ -8002,9 +7992,7 @@ impl KagemushaPastaCycleSourceBackedProverV4 {
     ) -> Result<Self, String> {
         let manifest_sha256 = source.authenticated_release().manifest_sha256();
         let max_pair_bytes = source.authenticated_release().manifest().max_proof_bytes;
-        if max_pair_bytes == 0
-            || max_pair_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
-        {
+        if max_pair_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4 {
             return Err("Kagemusha V4 qualified proof-pair bound is invalid".to_owned());
         }
         Ok(Self {
@@ -12708,8 +12696,7 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
             step_ep_circuit_params.k,
         )?,
     };
-    let absolute_pair_max =
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4;
+    let release_pair_max = preflight.max_recursive_pair_bytes;
     // Both release-sized proving keys and all populated circuits are gone.
     // Only now materialize the two terminal VK domains together.
     let step_eq_terminal_verifying_key =
@@ -12738,20 +12725,20 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
         &measured_pair,
         &step_eq_circuit_params,
         &step_ep_circuit_params,
-        absolute_pair_max,
+        release_pair_max,
     )?;
     drop(step_eq_terminal_verifying_key);
     drop(step_ep_terminal_verifying_key);
     let measured_live_pair_bytes = measured_pair.encode_authenticated(
         &step_eq_circuit_params,
         &step_ep_circuit_params,
-        absolute_pair_max,
+        release_pair_max,
     )?;
     KagemushaPastaCycleProofPairV4::decode_authenticated(
         &measured_live_pair_bytes,
         &step_eq_circuit_params,
         &step_ep_circuit_params,
-        absolute_pair_max,
+        release_pair_max,
     )?;
     let measured_initial_pair_bytes = u32::try_from(measured_live_pair_bytes.len())
         .map_err(|_| "Kagemusha V5 initialization pair length does not fit u32".to_owned())?;

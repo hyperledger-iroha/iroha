@@ -2,7 +2,6 @@
 //! Ensure Torii account endpoints accept canonical I105 account path segments.
 #![cfg(all(feature = "app_api", feature = "telemetry"))]
 use axum::{
-    Router,
     body::Body,
     http::{Request, StatusCode},
 };
@@ -89,6 +88,7 @@ async fn transactions_endpoint_accepts_encoded_account_segments() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn transactions_endpoint_rejects_invalid_account_segment() {
@@ -105,6 +105,7 @@ async fn transactions_endpoint_rejects_invalid_account_segment() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn transactions_endpoint_accepts_default_domain_without_suffix() {
@@ -129,6 +130,7 @@ async fn transactions_endpoint_accepts_default_domain_without_suffix() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn transactions_query_accepts_default_domain_without_suffix() {
@@ -155,6 +157,7 @@ async fn transactions_query_accepts_default_domain_without_suffix() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn transactions_endpoint_rejects_public_key_segments() {
@@ -183,6 +186,7 @@ async fn transactions_endpoint_rejects_public_key_segments() {
         before + 1,
         "public-key segments must increment invalid counter"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn invalid_account_segments_increment_metric() {
@@ -215,6 +219,7 @@ async fn invalid_account_segments_increment_metric() {
         before + 1,
         "torii_address_invalid_total delta mismatch"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn malformed_segments_increment_invalid_metric() {
@@ -247,6 +252,7 @@ async fn malformed_segments_increment_invalid_metric() {
         before_invalid + 1,
         "torii_address_invalid_total delta mismatch for malformed input"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn transactions_query_endpoint_accepts_encoded_account_segments() {
@@ -273,6 +279,7 @@ async fn transactions_query_endpoint_accepts_encoded_account_segments() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn transactions_query_endpoint_rejects_invalid_account_segment() {
@@ -291,6 +298,7 @@ async fn transactions_query_endpoint_rejects_invalid_account_segment() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn transactions_query_invalid_segments_increment_metric() {
@@ -325,6 +333,7 @@ async fn transactions_query_invalid_segments_increment_metric() {
         before + 1,
         "torii_address_invalid_total delta mismatch for transactions/query"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn transactions_query_rejects_checksum_mismatch() {
@@ -353,6 +362,7 @@ async fn transactions_query_rejects_checksum_mismatch() {
         before + 1,
         "checksum mismatches should increment invalid counter"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn transactions_query_placeholder_literal_rejected_without_shim() {
@@ -383,6 +393,7 @@ async fn transactions_query_placeholder_literal_rejected_without_shim() {
         before + 1,
         "placeholder literal should be treated as invalid"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
@@ -417,6 +428,7 @@ async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
         after, before,
         "valid tx query literals must not increment invalid counter"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn transactions_query_endpoint_rejects_public_key_segment() {
@@ -447,6 +459,7 @@ async fn transactions_query_endpoint_rejects_public_key_segment() {
         before + 1,
         "public-key transactions/query segment must increment invalid counter"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn assets_endpoint_accepts_encoded_account_segments() {
@@ -471,6 +484,7 @@ async fn assets_endpoint_accepts_encoded_account_segments() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn assets_endpoint_accepts_default_domain_without_suffix() {
@@ -495,6 +509,7 @@ async fn assets_endpoint_accepts_default_domain_without_suffix() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn assets_endpoint_rejects_invalid_segment() {
@@ -511,6 +526,7 @@ async fn assets_endpoint_rejects_invalid_segment() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn assets_endpoint_invalid_segments_increment_metric() {
@@ -543,6 +559,7 @@ async fn assets_endpoint_invalid_segments_increment_metric() {
         before + 1,
         "torii_address_invalid_total delta mismatch for assets endpoint"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn assets_endpoint_rejects_public_key_segments() {
@@ -571,6 +588,7 @@ async fn assets_endpoint_rejects_public_key_segments() {
         before + 1,
         "public-key asset segments must increment invalid counter"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn assets_query_endpoint_accepts_encoded_account_segments() {
@@ -597,6 +615,7 @@ async fn assets_query_endpoint_accepts_encoded_account_segments() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn assets_query_endpoint_invalid_segments_increment_metric() {
@@ -631,6 +650,7 @@ async fn assets_query_endpoint_invalid_segments_increment_metric() {
         before + 1,
         "torii_address_invalid_total delta mismatch for assets/query"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn assets_query_endpoint_rejects_public_key_segments() {
@@ -661,6 +681,7 @@ async fn assets_query_endpoint_rejects_public_key_segments() {
         before + 1,
         "public-key assets/query segments must increment invalid counter"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn permissions_endpoint_accepts_encoded_account_segments() {
@@ -685,6 +706,7 @@ async fn permissions_endpoint_accepts_encoded_account_segments() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn permissions_endpoint_accepts_default_domain_without_suffix() {
@@ -709,6 +731,7 @@ async fn permissions_endpoint_accepts_default_domain_without_suffix() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn permissions_endpoint_invalid_segments_increment_metric() {
@@ -741,6 +764,7 @@ async fn permissions_endpoint_invalid_segments_increment_metric() {
         before + 1,
         "torii_address_invalid_total delta mismatch for permissions endpoint"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn explorer_domains_query_accepts_encoded_account_params() {
@@ -765,6 +789,7 @@ async fn explorer_domains_query_accepts_encoded_account_params() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn explorer_domains_query_invalid_account_param_records_metric() {
@@ -798,6 +823,7 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
         before + 1,
         "torii_address_invalid_total delta mismatch for explorer domains query"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn explorer_account_detail_accepts_encoded_account_segments() {
@@ -822,6 +848,7 @@ async fn explorer_account_detail_accepts_encoded_account_segments() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn explorer_account_detail_invalid_segments_increment_metric() {
@@ -855,6 +882,7 @@ async fn explorer_account_detail_invalid_segments_increment_metric() {
         before + 1,
         "torii_address_invalid_total delta mismatch for explorer account detail"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn explorer_account_qr_returns_svg_literal() {
@@ -871,6 +899,7 @@ async fn explorer_account_qr_returns_svg_literal() {
         .await
         .unwrap();
     if resp.status() == StatusCode::TOO_MANY_REQUESTS {
+        app.shutdown().await;
         return;
     }
     assert_eq!(resp.status(), StatusCode::OK);
@@ -894,6 +923,7 @@ async fn explorer_account_qr_returns_svg_literal() {
         svg.trim_start().starts_with("<svg"),
         "qr response should include svg payload"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn repo_agreements_query_filter_accepts_encoded_literals() {
@@ -921,6 +951,7 @@ async fn repo_agreements_query_filter_accepts_encoded_literals() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn repo_agreements_query_filter_accepts_default_domain_literals() {
@@ -948,6 +979,7 @@ async fn repo_agreements_query_filter_accepts_default_domain_literals() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn repo_agreements_query_filter_rejects_invalid_literal() {
@@ -979,6 +1011,7 @@ async fn repo_agreements_query_filter_rejects_invalid_literal() {
         before + 1,
         "invalid repo filter literal should increment torii_address_invalid_total"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn repo_agreements_query_filter_rejects_malformed_literal() {
@@ -1010,6 +1043,7 @@ async fn repo_agreements_query_filter_rejects_malformed_literal() {
         invalid_before + 1,
         "invalid repo filter literal should increment torii_address_invalid_total"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_relay_detail_accepts_encoded_segments() {
@@ -1037,6 +1071,7 @@ async fn kaigi_relay_detail_accepts_encoded_segments() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_relay_detail_rejects_invalid_segment() {
@@ -1056,6 +1091,7 @@ async fn kaigi_relay_detail_rejects_invalid_segment() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_relay_detail_invalid_segment_increments_metric() {
@@ -1083,6 +1119,7 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(counter.get(), before + 1);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_relay_detail_malformed_segment_increments_invalid_metric() {
@@ -1110,6 +1147,7 @@ async fn kaigi_relay_detail_malformed_segment_increments_invalid_metric() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(invalid_counter.get(), invalid_before + 1);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_accepts_validator_literals() {
@@ -1137,6 +1175,7 @@ async fn nexus_public_lane_stake_accepts_validator_literals() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
@@ -1155,6 +1194,7 @@ async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
@@ -1182,6 +1222,7 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
             resp.status()
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_rejects_public_key_validator() {
@@ -1213,6 +1254,7 @@ async fn nexus_public_lane_stake_rejects_public_key_validator() {
         before + 1,
         "public-key validator literals must increment invalid counter"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
@@ -1240,6 +1282,7 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(counter.get(), before + 1);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_malformed_literal_increments_invalid_metric() {
@@ -1267,19 +1310,20 @@ async fn nexus_public_lane_stake_malformed_literal_increments_invalid_metric() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(invalid_counter.get(), invalid_before + 1);
+    app.shutdown().await;
 }
-fn test_router() -> Router {
+fn test_router() -> iroha_torii::TestApiRouterRuntime {
     build_test_router().0
 }
-fn test_router_with_metrics() -> (Router, Arc<Metrics>) {
+fn test_router_with_metrics() -> (iroha_torii::TestApiRouterRuntime, Arc<Metrics>) {
     let (router, metrics, _operator_key_pair) = build_test_router();
     (router, metrics)
 }
-fn test_router_with_operator_key() -> (Router, KeyPair) {
+fn test_router_with_operator_key() -> (iroha_torii::TestApiRouterRuntime, KeyPair) {
     let (router, _metrics, operator_key_pair) = build_test_router();
     (router, operator_key_pair)
 }
-fn build_test_router() -> (Router, Arc<Metrics>, KeyPair) {
+fn build_test_router() -> (iroha_torii::TestApiRouterRuntime, Arc<Metrics>, KeyPair) {
     use iroha_data_model::Registrable;
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());

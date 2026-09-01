@@ -19,12 +19,18 @@ use std::{
     time::Duration,
 };
 
+#[cfg(windows)]
+use std::{
+    fs::{self, OpenOptions},
+    path::PathBuf,
+};
+
 use base64::Engine as _;
 use iroha_config::parameters::actual::{ToriiSccpReplayArchive, ToriiSccpReplayArchiveReplica};
 use iroha_core::{
     bridge::rebuild_sccp_replay_archive_from_kura_v1,
     kura::Kura,
-    state::{State as CoreState, WorldReadOnly as _},
+    state::{State as CoreState, StateReadOnly as _, WorldReadOnly as _},
 };
 use iroha_data_model::bridge::{
     SccpLaneIdV1, SccpNetworkV1, SccpReplayAccumulatorIdV1, SccpReplayActorV1,
@@ -32,7 +38,7 @@ use iroha_data_model::bridge::{
     SccpSparseMerkleWitnessV1, sccp_replay_domain_hash_v1, sccp_replay_key_v1,
 };
 use iroha_sccp::{
-    SccpReplayArchiveCheckpointBodyV1, SccpReplayArchiveDecodeLimitsV1,
+    SccpReplayArchiveCheckpointBodyV1, SccpReplayArchiveDecodeLimitsV1, SccpReplayArchiveError,
     SccpReplayArchiveProviderErrorV1, SccpReplayArchiveProviderV1,
     SccpReplayArchiveReplicaBindingV1, SccpReplayArchiveReplicaPolicyV1,
     SccpReplayArchiveSignedCheckpointV1, SccpReplayArchiveSnapshotV1, SccpReplayArchiveV1,
@@ -52,12 +58,77 @@ pub const SCCP_REPLAY_REFRESH_RETRY_MINIMUM_V1: Duration = Duration::from_secs(3
 
 const HEAD_MANIFEST_VERSION_V1: u8 = 1;
 const HEAD_MANIFEST_FILENAME_V1: &str = "head-v1.norito";
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const PROCESS_LOCK_FILENAME_V1: &str = "archive-v1.lock";
 const CHECKPOINT_SET_DIGEST_DOMAIN_V1: &[u8] = b"SCCP-REPLAY-CHECKPOINT-SET-V1";
 const MAX_PERSISTED_CHECKPOINT_BYTES_V1: usize = 4 * 1024 * 1024;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const SECURE_TEMP_RETRIES_V1: usize = 32;
+
+#[cfg(windows)]
+mod windows_fs {
+    #![allow(unsafe_code)]
+
+    use std::{
+        io,
+        os::windows::ffi::OsStrExt as _,
+        path::{Component, Path, Prefix},
+    };
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "MoveFileExW"]
+        fn move_file_ex_w(existing: *const u16, replacement: *const u16, flags: u32) -> i32;
+    }
+
+    fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
+        let needs_verbatim_prefix = matches!(
+            path.components().next(),
+            Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
+        );
+        let mut wide = if needs_verbatim_prefix {
+            "\\\\?\\".encode_utf16().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        wide.extend(path.as_os_str().encode_wide().map(|unit| {
+            if needs_verbatim_prefix && unit == u16::from(b'/') {
+                u16::from(b'\\')
+            } else {
+                unit
+            }
+        }));
+        if wide.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Windows replay-store path contains NUL",
+            ));
+        }
+        wide.push(0);
+        Ok(wide)
+    }
+
+    pub(super) fn replace_file(existing: &Path, replacement: &Path) -> io::Result<()> {
+        let existing = wide_path(existing)?;
+        let replacement = wide_path(replacement)?;
+        // SAFETY: both buffers are live, NUL-terminated UTF-16 paths for the duration of the
+        // call. The flags request one same-volume replacement and synchronous write-through.
+        let succeeded = unsafe {
+            move_file_ex_w(
+                existing.as_ptr(),
+                replacement.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if succeeded == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// One complete signed checkpoint and its exact canonical snapshot bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
@@ -96,6 +167,22 @@ pub trait SccpReplayCheckpointSourceV1: Send + Sync {
         max_response_bytes: usize,
         timeout: Duration,
     ) -> Result<Vec<u8>, SccpReplayCheckpointSourceErrorV1>;
+
+    /// Fetch one response and compare it with the already bounded canonical
+    /// response without requiring callers to retain another full body.
+    ///
+    /// Test and isolated transports may use the allocating default. The
+    /// production HTTPS source overrides this method with streaming comparison.
+    fn fetch_matches(
+        &self,
+        replica: &ToriiSccpReplayArchiveReplica,
+        expected: &[u8],
+        max_response_bytes: usize,
+        timeout: Duration,
+    ) -> Result<bool, SccpReplayCheckpointSourceErrorV1> {
+        self.fetch(replica, max_response_bytes, timeout)
+            .map(|response| response == expected)
+    }
 }
 
 /// HTTPS implementation used by production Torii startup and refreshes.
@@ -115,20 +202,14 @@ impl HttpsSccpReplayCheckpointSourceV1 {
             .map_err(|_| SccpReplayCheckpointSourceErrorV1::Transport)?;
         Ok(Self { client })
     }
-}
 
-impl SccpReplayCheckpointSourceV1 for HttpsSccpReplayCheckpointSourceV1 {
-    fn fetch(
+    fn validated_response(
         &self,
         replica: &ToriiSccpReplayArchiveReplica,
         max_response_bytes: usize,
-        _timeout: Duration,
-    ) -> Result<Vec<u8>, SccpReplayCheckpointSourceErrorV1> {
+    ) -> Result<reqwest::blocking::Response, SccpReplayCheckpointSourceErrorV1> {
         let max_response_bytes_u64 = u64::try_from(max_response_bytes)
             .map_err(|_| SccpReplayCheckpointSourceErrorV1::Limit)?;
-        let read_limit = max_response_bytes_u64
-            .checked_add(1)
-            .ok_or(SccpReplayCheckpointSourceErrorV1::Limit)?;
         let url = replica
             .origin
             .join(SCCP_REPLAY_CHECKPOINT_SET_PATH_V1)
@@ -139,7 +220,7 @@ impl SccpReplayCheckpointSourceV1 for HttpsSccpReplayCheckpointSourceV1 {
         {
             return Err(SccpReplayCheckpointSourceErrorV1::Protocol);
         }
-        let mut response = self
+        let response = self
             .client
             .get(url)
             .header(
@@ -170,6 +251,23 @@ impl SccpReplayCheckpointSourceV1 for HttpsSccpReplayCheckpointSourceV1 {
         {
             return Err(SccpReplayCheckpointSourceErrorV1::Limit);
         }
+        Ok(response)
+    }
+}
+
+impl SccpReplayCheckpointSourceV1 for HttpsSccpReplayCheckpointSourceV1 {
+    fn fetch(
+        &self,
+        replica: &ToriiSccpReplayArchiveReplica,
+        max_response_bytes: usize,
+        _timeout: Duration,
+    ) -> Result<Vec<u8>, SccpReplayCheckpointSourceErrorV1> {
+        let max_response_bytes_u64 = u64::try_from(max_response_bytes)
+            .map_err(|_| SccpReplayCheckpointSourceErrorV1::Limit)?;
+        let read_limit = max_response_bytes_u64
+            .checked_add(1)
+            .ok_or(SccpReplayCheckpointSourceErrorV1::Limit)?;
+        let mut response = self.validated_response(replica, max_response_bytes)?;
         let mut bytes = Vec::new();
         (&mut response)
             .take(read_limit)
@@ -179,6 +277,46 @@ impl SccpReplayCheckpointSourceV1 for HttpsSccpReplayCheckpointSourceV1 {
             return Err(SccpReplayCheckpointSourceErrorV1::Limit);
         }
         Ok(bytes)
+    }
+
+    fn fetch_matches(
+        &self,
+        replica: &ToriiSccpReplayArchiveReplica,
+        expected: &[u8],
+        max_response_bytes: usize,
+        _timeout: Duration,
+    ) -> Result<bool, SccpReplayCheckpointSourceErrorV1> {
+        if expected.is_empty() || expected.len() > max_response_bytes {
+            return Err(SccpReplayCheckpointSourceErrorV1::Limit);
+        }
+        let mut response = self.validated_response(replica, max_response_bytes)?;
+        if response
+            .content_length()
+            .is_some_and(|length| usize::try_from(length).ok() != Some(expected.len()))
+        {
+            return Ok(false);
+        }
+
+        let mut chunk = [0_u8; 64 * 1024];
+        let mut total = 0_usize;
+        let mut matches = true;
+        loop {
+            let read = response
+                .read(&mut chunk)
+                .map_err(|_| SccpReplayCheckpointSourceErrorV1::Transport)?;
+            if read == 0 {
+                break;
+            }
+            let next = total
+                .checked_add(read)
+                .filter(|next| *next <= max_response_bytes)
+                .ok_or(SccpReplayCheckpointSourceErrorV1::Limit)?;
+            if expected.get(total..next) != Some(&chunk[..read]) {
+                matches = false;
+            }
+            total = next;
+        }
+        Ok(matches && total == expected.len())
     }
 }
 
@@ -196,6 +334,13 @@ pub enum SccpReplayLocalAuthorityErrorV1 {
 /// Narrow boundary that proves a remote forest inventory against local Core
 /// state and commit-authenticated Kura execution.
 pub trait SccpReplayLocalAuthorityV1: Send + Sync {
+    /// Confirm the exact current accumulator cardinality before any untrusted
+    /// checkpoint entry is decoded or authenticated.
+    fn validate_current_accumulator_count(
+        &self,
+        expected_count: usize,
+    ) -> Result<(), SccpReplayLocalAuthorityErrorV1>;
+
     /// Confirm that the complete published replay inventory still equals current Core state.
     fn validate_current_inventory(
         &self,
@@ -240,41 +385,69 @@ impl CoreKuraSccpReplayLocalAuthorityV1 {
         expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
         require_current_coordinate: bool,
     ) -> Result<SccpReplayArchiveV1, SccpReplayLocalAuthorityErrorV1> {
-        let committed_height = self.state.committed_height();
-        let checkpoint_height = usize::try_from(finality.finalized_height)
-            .ok()
-            .and_then(NonZeroUsize::new)
-            .filter(|height| {
-                if require_current_coordinate {
-                    height.get() == committed_height
-                } else {
-                    height.get() <= committed_height
-                }
-            })
-            .ok_or(SccpReplayLocalAuthorityErrorV1::Finality)?;
-        if finality.network_identity_sha256
-            != sccp_replay_archive_network_identity_sha256_v1(self.state.network_id_ref())
-            || self
-                .kura
-                .get_block_hash(checkpoint_height)
-                .map(|hash| *hash.as_ref())
-                != Some(finality.finalized_block_hash)
+        let checkpoint_height = {
+            let view = self.state.query_view();
+            let checkpoint_height =
+                validate_checkpoint_against_core_view(&view, finality, require_current_coordinate)?;
+            if &authoritative_core_replay_inventory(&view)? != expected {
+                return Err(SccpReplayLocalAuthorityErrorV1::CoreMismatch);
+            }
+            checkpoint_height
+        };
+        if self
+            .kura
+            .get_durable_block_hash(checkpoint_height)
+            .map(|hash| *hash.as_ref())
+            != Some(finality.finalized_block_hash)
         {
             return Err(SccpReplayLocalAuthorityErrorV1::Finality);
         }
-        self.validate_current_inventory(expected)?;
 
-        rebuild_sccp_replay_archive_from_kura_v1(&self.kura, checkpoint_height, expected)
-            .map_err(|_| SccpReplayLocalAuthorityErrorV1::Rebuild)
+        let archive =
+            rebuild_sccp_replay_archive_from_kura_v1(&self.kura, checkpoint_height, expected)
+                .map_err(|_| SccpReplayLocalAuthorityErrorV1::Rebuild)?;
+
+        // Re-authenticate both sources after the scan. This closes a check/use
+        // window where a concurrent commit or Kura recovery could otherwise
+        // make the rebuilt forest belong to a different Core coordinate.
+        let view = self.state.query_view();
+        // Exact-tip admission linearizes before the scan. Afterwards the
+        // checkpoint may be below a newer unrelated tip, but its historical
+        // journal entry must remain canonical and the complete current replay
+        // inventory must still be unchanged.
+        validate_checkpoint_against_core_view(&view, finality, false)?;
+        if &authoritative_core_replay_inventory(&view)? != expected {
+            return Err(SccpReplayLocalAuthorityErrorV1::CoreMismatch);
+        }
+        if self
+            .kura
+            .get_durable_block_hash(checkpoint_height)
+            .map(|hash| *hash.as_ref())
+            != Some(finality.finalized_block_hash)
+        {
+            return Err(SccpReplayLocalAuthorityErrorV1::Finality);
+        }
+        Ok(archive)
     }
 }
 
 impl SccpReplayLocalAuthorityV1 for CoreKuraSccpReplayLocalAuthorityV1 {
+    fn validate_current_accumulator_count(
+        &self,
+        expected_count: usize,
+    ) -> Result<(), SccpReplayLocalAuthorityErrorV1> {
+        let view = self.state.query_view();
+        (core_replay_accumulator_count(&view)? == expected_count)
+            .then_some(())
+            .ok_or(SccpReplayLocalAuthorityErrorV1::CoreMismatch)
+    }
+
     fn validate_current_inventory(
         &self,
         expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
     ) -> Result<(), SccpReplayLocalAuthorityErrorV1> {
-        (&authoritative_core_replay_inventory(&self.state)? == expected)
+        let view = self.state.query_view();
+        core_replay_inventory_matches(&view, expected)?
             .then_some(())
             .ok_or(SccpReplayLocalAuthorityErrorV1::CoreMismatch)
     }
@@ -296,14 +469,43 @@ impl SccpReplayLocalAuthorityV1 for CoreKuraSccpReplayLocalAuthorityV1 {
     }
 }
 
+fn validate_checkpoint_against_core_view(
+    state: &impl iroha_core::state::StateReadOnly,
+    finality: iroha_sccp::SccpReplayArchiveFinalityV1,
+    require_current_coordinate: bool,
+) -> Result<NonZeroUsize, SccpReplayLocalAuthorityErrorV1> {
+    let checkpoint_height = usize::try_from(finality.finalized_height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .filter(|height| {
+            if require_current_coordinate {
+                height.get() == state.block_hashes().len()
+            } else {
+                height.get() <= state.block_hashes().len()
+            }
+        })
+        .ok_or(SccpReplayLocalAuthorityErrorV1::Finality)?;
+    if finality.network_identity_sha256
+        != sccp_replay_archive_network_identity_sha256_v1(state.network_id())
+        || state
+            .block_hashes()
+            .get(checkpoint_height.get() - 1)
+            .map(|hash| *hash.as_ref())
+            != Some(finality.finalized_block_hash)
+    {
+        return Err(SccpReplayLocalAuthorityErrorV1::Finality);
+    }
+    Ok(checkpoint_height)
+}
+
 fn authoritative_core_replay_inventory(
-    state: &CoreState,
+    state: &impl iroha_core::state::StateReadOnly,
 ) -> Result<
     BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
     SccpReplayLocalAuthorityErrorV1,
 > {
-    let registry = state.sccp_registry_snapshot();
-    let world = state.world_view();
+    let registry = state.sccp_registry();
+    let world = state.world();
     let mut authoritative = BTreeMap::new();
     for route in registry.lanes().iter().flat_map(|lane| &lane.routes) {
         let route_key = route.key();
@@ -355,6 +557,75 @@ fn authoritative_core_replay_inventory(
     Ok(authoritative)
 }
 
+fn core_replay_inventory_matches(
+    state: &impl iroha_core::state::StateReadOnly,
+    expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
+) -> Result<bool, SccpReplayLocalAuthorityErrorV1> {
+    let route_count = core_replay_accumulator_count(state)?;
+    if expected.len() != route_count {
+        return Ok(false);
+    }
+
+    let registry = state.sccp_registry();
+    let world = state.world();
+    for (id, (domain, forest)) in expected {
+        if id.validate_domain(domain).is_err()
+            || id.boundary != domain.boundary
+            || domain.actor != SccpReplayActorV1::Route
+        {
+            return Ok(false);
+        }
+        let Some(route) =
+            registry.historical_route_by_configuration(domain.route_configuration_hash)
+        else {
+            return Ok(false);
+        };
+        if route.lane_id != id.route_key.lane_id
+            || route.route_id.as_str() != id.route_key.route_id.as_str()
+            || route.asset_key.as_str() != id.route_key.asset_key.as_str()
+            || route.revision != id.route_key.revision
+            || route.revision != domain.route_revision
+        {
+            return Ok(false);
+        }
+        let expected_direction = match domain.boundary {
+            SccpReplayBoundaryV1::SoraOutboundLock => (route.lane_id.target, route.lane_id.source),
+            SccpReplayBoundaryV1::SoraInboundRelease => {
+                (route.lane_id.source, route.lane_id.target)
+            }
+            _ => return Ok(false),
+        };
+        if (domain.source_network, domain.target_network) != expected_direction {
+            return Ok(false);
+        }
+        match world.sccp_replay_forests().get(id) {
+            Some(current) if current != forest => return Ok(false),
+            None if forest != &SccpReplayForestV1::default() => return Ok(false),
+            Some(_) | None => {}
+        }
+    }
+    if world.sccp_replay_forests().iter().any(|(id, forest)| {
+        expected
+            .get(id)
+            .is_none_or(|(_, expected_forest)| expected_forest != forest)
+    }) {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn core_replay_accumulator_count(
+    state: &impl iroha_core::state::StateReadOnly,
+) -> Result<usize, SccpReplayLocalAuthorityErrorV1> {
+    state
+        .sccp_registry()
+        .lanes()
+        .iter()
+        .try_fold(0_usize, |count, lane| count.checked_add(lane.routes.len()))
+        .and_then(|count| count.checked_mul(2))
+        .ok_or(SccpReplayLocalAuthorityErrorV1::CoreMismatch)
+}
+
 /// Stable, payload-free startup/refresh failures suitable for operator logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToriiSccpReplayStartupErrorV1 {
@@ -372,9 +643,9 @@ pub enum ToriiSccpReplayStartupErrorV1 {
     Continuity,
     /// Current Core or Kura state disagreed with the signed forest inventory.
     LocalAuthority,
-    /// The owner-only descriptor-relative store could not be trusted or synced.
+    /// The owner-exclusive secure store could not be trusted or synced.
     Persistence,
-    /// Secure descriptor-relative publication is unavailable on this platform.
+    /// Secure replay persistence is unavailable on this platform.
     UnsupportedPlatform,
 }
 
@@ -483,6 +754,21 @@ struct PersistedReplayHeadEntryV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+struct PersistedReplayHeadHeaderV1 {
+    version: u8,
+    checkpoint_set_sha256: [u8; 32],
+    network_identity_sha256: [u8; 32],
+    finalized_height: u64,
+    finalized_block_hash: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+enum PersistedReplayHeadRecordV1 {
+    Head(PersistedReplayHeadHeaderV1),
+    Entry(PersistedReplayHeadEntryV1),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PersistedReplayHeadV1 {
     version: u8,
     checkpoint_set_sha256: [u8; 32],
@@ -490,6 +776,86 @@ struct PersistedReplayHeadV1 {
     finalized_height: u64,
     finalized_block_hash: [u8; 32],
     entries: Vec<PersistedReplayHeadEntryV1>,
+}
+
+fn encode_persisted_replay_head_v1(
+    manifest: &PersistedReplayHeadV1,
+) -> Result<Vec<u8>, ToriiSccpReplayStartupErrorV1> {
+    let mut records = Vec::new();
+    records
+        .try_reserve_exact(
+            manifest
+                .entries
+                .len()
+                .checked_add(1)
+                .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?,
+        )
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    records.push(PersistedReplayHeadRecordV1::Head(
+        PersistedReplayHeadHeaderV1 {
+            version: manifest.version,
+            checkpoint_set_sha256: manifest.checkpoint_set_sha256,
+            network_identity_sha256: manifest.network_identity_sha256,
+            finalized_height: manifest.finalized_height,
+            finalized_block_hash: manifest.finalized_block_hash,
+        },
+    ));
+    records.extend(
+        manifest
+            .entries
+            .iter()
+            .cloned()
+            .map(PersistedReplayHeadRecordV1::Entry),
+    );
+    norito::encode_canonical(&records).map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)
+}
+
+fn decode_persisted_replay_head_v1(
+    bytes: &[u8],
+    max_accumulators: usize,
+) -> Result<PersistedReplayHeadV1, ToriiSccpReplayStartupErrorV1> {
+    let max_records = max_accumulators
+        .checked_add(1)
+        .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let record_count = norito::inspect_stream_vec_len_bounded_from_reader::<
+        _,
+        PersistedReplayHeadRecordV1,
+    >(bytes, max_records)
+    .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if record_count < 2 {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    let records: Vec<PersistedReplayHeadRecordV1> =
+        norito::decode_canonical_with_limits(bytes, norito::canonical_decode_limits(bytes.len()))
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if records.len() != record_count {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    let mut records = records.into_iter();
+    let PersistedReplayHeadRecordV1::Head(header) = records
+        .next()
+        .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?
+    else {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    };
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(record_count - 1)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    for record in records {
+        let PersistedReplayHeadRecordV1::Entry(entry) = record else {
+            return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+        };
+        entries.push(entry);
+    }
+    Ok(PersistedReplayHeadV1 {
+        version: header.version,
+        checkpoint_set_sha256: header.checkpoint_set_sha256,
+        network_identity_sha256: header.network_identity_sha256,
+        finalized_height: header.finalized_height,
+        finalized_block_hash: header.finalized_block_hash,
+        entries,
+    })
 }
 
 struct ValidatedCheckpointEntryV1 {
@@ -523,6 +889,7 @@ impl From<iroha_sccp::SccpReplayArchiveFinalityV1> for ReplayFinalityCoordinateV
     }
 }
 
+#[derive(Clone)]
 struct PublishedReplayStateV1 {
     archive: SccpReplayArchiveV1,
     inventory: BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
@@ -596,7 +963,7 @@ pub struct ToriiSccpReplayArchiveServiceV1 {
     store: SecureReplayStoreV1,
     update_lock: Mutex<()>,
     available: AtomicBool,
-    published: RwLock<PublishedReplayStateV1>,
+    published: RwLock<Arc<PublishedReplayStateV1>>,
 }
 
 impl ToriiSccpReplayArchiveServiceV1 {
@@ -643,7 +1010,7 @@ impl ToriiSccpReplayArchiveServiceV1 {
                 store,
                 update_lock: Mutex::new(()),
                 available: AtomicBool::new(true),
-                published: RwLock::new(published),
+                published: RwLock::new(Arc::new(published)),
             }));
         }
         let bytes = fetch_exact_three(&config, source.as_ref())?;
@@ -670,7 +1037,7 @@ impl ToriiSccpReplayArchiveServiceV1 {
             store,
             update_lock: Mutex::new(()),
             available: AtomicBool::new(true),
-            published: RwLock::new(candidate.published),
+            published: RwLock::new(Arc::new(candidate.published)),
         }))
     }
 
@@ -697,7 +1064,7 @@ impl ToriiSccpReplayArchiveServiceV1 {
                 *self
                     .published
                     .write()
-                    .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)? = restored;
+                    .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)? = Arc::new(restored);
                 self.available.store(true, Ordering::Release);
             }
         }
@@ -747,7 +1114,7 @@ impl ToriiSccpReplayArchiveServiceV1 {
             self.available.store(false, Ordering::Release);
             return Err(ToriiSccpReplayStartupErrorV1::Persistence);
         }
-        *published = candidate.published;
+        *published = Arc::new(candidate.published);
         self.available.store(true, Ordering::Release);
         drop(published);
         if self
@@ -820,9 +1187,13 @@ impl ToriiSccpReplayArchiveServiceV1 {
             .checkpoints
             .get(accumulator_id)
             .ok_or(ToriiSccpReplayEndpointErrorV1::NotFound)?;
-        let authenticated =
-            verify_sccp_replay_archive_checkpoint_v1(&replica_policy(&self.config), checkpoint)
-                .map_err(|_| ToriiSccpReplayEndpointErrorV1::Integrity)?;
+        // `PublishedReplayStateV1` is private and immutable behind an owned
+        // generation. Every construction path authenticates these signatures
+        // before publication, so public reads only need to rebind the cached
+        // body to the same atomic archive generation. Repeating three Ed25519
+        // verifications for every witness would make replica authentication a
+        // public CPU-amplification primitive.
+        let authenticated = &checkpoint.body;
         if &authenticated.accumulator_id != accumulator_id
             || authenticated.domain != domain
             || authenticated.forest != forest
@@ -860,14 +1231,14 @@ impl ToriiSccpReplayArchiveServiceV1 {
 
     fn current_published(
         &self,
-    ) -> Result<
-        std::sync::RwLockReadGuard<'_, PublishedReplayStateV1>,
-        SccpReplayArchiveProviderErrorV1,
-    > {
-        let published = self
-            .published
-            .read()
-            .map_err(|_| SccpReplayArchiveProviderErrorV1::Integrity)?;
+    ) -> Result<Arc<PublishedReplayStateV1>, SccpReplayArchiveProviderErrorV1> {
+        let published = {
+            let guard = self
+                .published
+                .read()
+                .map_err(|_| SccpReplayArchiveProviderErrorV1::Integrity)?;
+            Arc::clone(&*guard)
+        };
         if !self.available.load(Ordering::Acquire)
             || published.checkpoint_set_sha256 == [0; 32]
             || self
@@ -878,6 +1249,37 @@ impl ToriiSccpReplayArchiveServiceV1 {
             return Err(SccpReplayArchiveProviderErrorV1::Unavailable);
         }
         Ok(published)
+    }
+
+    #[cfg(test)]
+    fn forest(
+        &self,
+        accumulator_id: &SccpReplayAccumulatorIdV1,
+    ) -> Result<(SccpReplayDomainV1, SccpReplayForestV1), SccpReplayArchiveProviderErrorV1> {
+        let published = self.current_published()?;
+        SccpReplayArchiveProviderV1::forest(&published.archive, accumulator_id)
+    }
+
+    #[cfg(test)]
+    fn witness(
+        &self,
+        accumulator_id: &SccpReplayAccumulatorIdV1,
+        key: [u8; 32],
+    ) -> Result<SccpSparseMerkleWitnessV1, SccpReplayArchiveProviderErrorV1> {
+        let published = self.current_published()?;
+        SccpReplayArchiveProviderV1::witness(&published.archive, accumulator_id, key)
+    }
+
+    #[cfg(test)]
+    fn checkpoint(
+        &self,
+        accumulator_id: &SccpReplayAccumulatorIdV1,
+    ) -> Result<SccpReplayArchiveSignedCheckpointV1, SccpReplayArchiveProviderErrorV1> {
+        self.current_published()?
+            .checkpoints
+            .get(accumulator_id)
+            .cloned()
+            .ok_or(SccpReplayArchiveProviderErrorV1::NotFound)
     }
 }
 
@@ -1003,36 +1405,6 @@ fn validate_runtime_config(
     Ok(())
 }
 
-impl SccpReplayArchiveProviderV1 for ToriiSccpReplayArchiveServiceV1 {
-    fn forest(
-        &self,
-        accumulator_id: &SccpReplayAccumulatorIdV1,
-    ) -> Result<(SccpReplayDomainV1, SccpReplayForestV1), SccpReplayArchiveProviderErrorV1> {
-        let published = self.current_published()?;
-        SccpReplayArchiveProviderV1::forest(&published.archive, accumulator_id)
-    }
-
-    fn witness(
-        &self,
-        accumulator_id: &SccpReplayAccumulatorIdV1,
-        key: [u8; 32],
-    ) -> Result<SccpSparseMerkleWitnessV1, SccpReplayArchiveProviderErrorV1> {
-        let published = self.current_published()?;
-        SccpReplayArchiveProviderV1::witness(&published.archive, accumulator_id, key)
-    }
-
-    fn checkpoint(
-        &self,
-        accumulator_id: &SccpReplayAccumulatorIdV1,
-    ) -> Result<SccpReplayArchiveSignedCheckpointV1, SccpReplayArchiveProviderErrorV1> {
-        self.current_published()?
-            .checkpoints
-            .get(accumulator_id)
-            .cloned()
-            .ok_or(SccpReplayArchiveProviderErrorV1::NotFound)
-    }
-}
-
 fn replica_policy(config: &ToriiSccpReplayArchive) -> SccpReplayArchiveReplicaPolicyV1 {
     SccpReplayArchiveReplicaPolicyV1 {
         replicas: config
@@ -1049,36 +1421,65 @@ fn fetch_exact_three(
     config: &ToriiSccpReplayArchive,
     source: &dyn SccpReplayCheckpointSourceV1,
 ) -> Result<Vec<u8>, ToriiSccpReplayStartupErrorV1> {
-    let responses = std::thread::scope(|scope| {
-        let handles = config.replicas.each_ref().map(|replica| {
-            scope.spawn(move || {
-                source.fetch(replica, config.max_response_bytes, config.request_timeout)
-            })
-        });
-        handles.map(|handle| handle.join())
-    });
-    let mut agreed: Option<Vec<u8>> = None;
-    for response in responses {
-        let bytes = response
-            .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?
-            .map_err(|error| match error {
-                SccpReplayCheckpointSourceErrorV1::Limit => {
-                    ToriiSccpReplayStartupErrorV1::ResourceLimit
-                }
-                SccpReplayCheckpointSourceErrorV1::Transport
-                | SccpReplayCheckpointSourceErrorV1::Protocol => {
-                    ToriiSccpReplayStartupErrorV1::Transport
-                }
-            })?;
-        if let Some(expected) = &agreed {
-            if expected != &bytes {
-                return Err(ToriiSccpReplayStartupErrorV1::ReplicaDisagreement);
+    let map_source_error = |error| match error {
+        SccpReplayCheckpointSourceErrorV1::Limit => ToriiSccpReplayStartupErrorV1::ResourceLimit,
+        SccpReplayCheckpointSourceErrorV1::Transport
+        | SccpReplayCheckpointSourceErrorV1::Protocol => ToriiSccpReplayStartupErrorV1::Transport,
+    };
+    let agreed = match iroha_core::panic_hook::catch_unwind_suppressed(|| {
+        source.fetch(
+            &config.replicas[0],
+            config.max_response_bytes,
+            config.request_timeout,
+        )
+    }) {
+        Ok(result) => result.map_err(map_source_error)?,
+        Err(_) => return Err(ToriiSccpReplayStartupErrorV1::Transport),
+    };
+    let matches = std::thread::scope(|scope| {
+        let second = std::thread::Builder::new().spawn_scoped(scope, || {
+            match iroha_core::panic_hook::catch_unwind_suppressed(|| {
+                source.fetch_matches(
+                    &config.replicas[1],
+                    &agreed,
+                    config.max_response_bytes,
+                    config.request_timeout,
+                )
+            }) {
+                Ok(result) => result,
+                Err(_) => Err(SccpReplayCheckpointSourceErrorV1::Transport),
             }
-        } else {
-            agreed = Some(bytes);
+        });
+        let third = std::thread::Builder::new().spawn_scoped(scope, || {
+            match iroha_core::panic_hook::catch_unwind_suppressed(|| {
+                source.fetch_matches(
+                    &config.replicas[2],
+                    &agreed,
+                    config.max_response_bytes,
+                    config.request_timeout,
+                )
+            }) {
+                Ok(result) => result,
+                Err(_) => Err(SccpReplayCheckpointSourceErrorV1::Transport),
+            }
+        });
+        let second = second.map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?;
+        let third = third.map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?;
+        Ok::<_, ToriiSccpReplayStartupErrorV1>([
+            second
+                .join()
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?,
+            third
+                .join()
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?,
+        ])
+    })?;
+    for matches in matches {
+        if !matches.map_err(map_source_error)? {
+            return Err(ToriiSccpReplayStartupErrorV1::ReplicaDisagreement);
         }
     }
-    agreed.ok_or(ToriiSccpReplayStartupErrorV1::ReplicaDisagreement)
+    Ok(agreed)
 }
 
 fn validate_candidate(
@@ -1093,10 +1494,10 @@ fn validate_candidate(
     if bytes.len() > config.max_response_bytes {
         return Err(ToriiSccpReplayStartupErrorV1::ResourceLimit);
     }
-    norito::inspect_stream_vec_len_bounded_from_reader::<_, SccpReplayReplicaCheckpointEntryV1>(
-        bytes,
-        config.max_accumulators,
-    )
+    let record_count = norito::inspect_stream_vec_len_bounded_from_reader::<
+        _,
+        SccpReplayReplicaCheckpointEntryV1,
+    >(bytes, config.max_accumulators)
     .map_err(|error| {
         if error.is_decode_resource_limit() {
             ToriiSccpReplayStartupErrorV1::ResourceLimit
@@ -1104,6 +1505,12 @@ fn validate_candidate(
             ToriiSccpReplayStartupErrorV1::Malformed
         }
     })?;
+    if record_count == 0 {
+        return Err(ToriiSccpReplayStartupErrorV1::Malformed);
+    }
+    local_authority
+        .validate_current_accumulator_count(record_count)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::LocalAuthority)?;
     let set: SccpReplayReplicaCheckpointSetV1 =
         norito::decode_canonical_with_limits(bytes, norito::canonical_decode_limits(bytes.len()))
             .map_err(|error| {
@@ -1214,8 +1621,12 @@ fn validate_entry(
     {
         return Err(ToriiSccpReplayStartupErrorV1::Malformed);
     }
-    let snapshot = decode_sccp_replay_archive_snapshot_v1(&snapshot_bytes, limits)
-        .map_err(|_| ToriiSccpReplayStartupErrorV1::Malformed)?;
+    let snapshot = decode_sccp_replay_archive_snapshot_v1(&snapshot_bytes, limits).map_err(
+        |error| match error {
+            SccpReplayArchiveError::SnapshotLimit => ToriiSccpReplayStartupErrorV1::ResourceLimit,
+            _ => ToriiSccpReplayStartupErrorV1::Malformed,
+        },
+    )?;
     if authenticated_body.accumulator_id != snapshot.accumulator_id
         || authenticated_body.domain != snapshot.domain
         || authenticated_body.finality != snapshot.finality
@@ -1281,6 +1692,11 @@ fn validate_continuity(
     {
         return Err(ToriiSccpReplayStartupErrorV1::Continuity);
     }
+    let is_adjacent = previous
+        .manifest
+        .finalized_height
+        .checked_add(1)
+        .is_some_and(|height| height == finalized_height);
     let current = entries
         .iter()
         .map(|entry| (entry.snapshot.accumulator_id.clone(), entry))
@@ -1290,26 +1706,33 @@ fn validate_continuity(
         .iter()
         .map(|entry| entry.snapshot.accumulator_id.clone())
         .collect::<BTreeSet<_>>();
-    if current.iter().any(|(id, entry)| {
-        !previous_ids.contains(id) && entry.snapshot.finality.predecessor_snapshot_sha256 != [0; 32]
-    }) {
+    if is_adjacent
+        && current.iter().any(|(id, entry)| {
+            !previous_ids.contains(id)
+                && entry.snapshot.finality.predecessor_snapshot_sha256 != [0; 32]
+        })
+    {
         return Err(ToriiSccpReplayStartupErrorV1::Continuity);
     }
     for prior in &previous.entries {
-        let next = current
-            .get(&prior.snapshot.accumulator_id)
-            .ok_or(ToriiSccpReplayStartupErrorV1::Continuity)?;
+        let Some(next) = current.get(&prior.snapshot.accumulator_id) else {
+            // Governance may remove a staged route only before its replay
+            // accumulator is ever occupied. Preserve any observed replay fact,
+            // but do not retain a permanently empty accumulator after the
+            // authoritative route itself has disappeared.
+            if prior.snapshot.forest == SccpReplayForestV1::default()
+                && prior.snapshot.leaves.is_empty()
+            {
+                continue;
+            }
+            return Err(ToriiSccpReplayStartupErrorV1::Continuity);
+        };
         // The endpoint carries only the latest complete snapshot, so an
         // offline node may legitimately miss one or more predecessor heads.
         // The full local Kura rebuild authenticates the current forest; these
         // checks additionally prove that the candidate did not discard any
         // locally observed replay fact while advancing.
         let predecessor = next.snapshot.finality.predecessor_snapshot_sha256;
-        let is_adjacent = previous
-            .manifest
-            .finalized_height
-            .checked_add(1)
-            .is_some_and(|height| height == finalized_height);
         if predecessor == [0; 32]
             || (is_adjacent && predecessor != prior.checkpoint.body.snapshot_sha256)
             || next.snapshot.domain != prior.snapshot.domain
@@ -1350,17 +1773,164 @@ fn snapshot_contains_prior_leaves(
 
 struct SecureReplayStoreV1 {
     directory: File,
+    #[cfg(windows)]
+    directory_path: PathBuf,
+    #[cfg(windows)]
+    directory_identity: crate::secure_file_metadata::SecureMetadata,
+    #[cfg(windows)]
+    pinned_ancestors: Vec<WindowsPinnedDirectoryV1>,
     _process_lock: File,
 }
 
 impl SecureReplayStoreV1 {
     fn open(path: &Path) -> Result<Self, ToriiSccpReplayStartupErrorV1> {
-        let directory = open_secure_state_directory(path)?;
-        let process_lock = open_and_lock_process_file(&directory)?;
-        Ok(Self {
-            directory,
-            _process_lock: process_lock,
-        })
+        #[cfg(unix)]
+        {
+            let directory = open_secure_state_directory(path)?;
+            let process_lock = open_and_lock_process_file(&directory)?;
+            return Ok(Self {
+                directory,
+                _process_lock: process_lock,
+            });
+        }
+        #[cfg(windows)]
+        {
+            let opened = open_secure_state_directory_windows(path)?;
+            let process_lock = open_and_lock_process_file_windows(&opened)?;
+            let WindowsSecureStateDirectoryV1 {
+                path: directory_path,
+                file: directory,
+                identity: directory_identity,
+                ancestors: pinned_ancestors,
+            } = opened;
+            return Ok(Self {
+                directory,
+                directory_path,
+                directory_identity,
+                pinned_ancestors,
+                _process_lock: process_lock,
+            });
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = path;
+            Err(ToriiSccpReplayStartupErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    #[cfg(windows)]
+    fn validate_directory(&self) -> Result<(), ToriiSccpReplayStartupErrorV1> {
+        validate_windows_state_directory(
+            &self.directory_path,
+            &self.directory,
+            &self.directory_identity,
+            &self.pinned_ancestors,
+        )
+    }
+
+    fn read_relative(
+        &self,
+        name: &str,
+        max_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, ToriiSccpReplayStartupErrorV1> {
+        #[cfg(unix)]
+        {
+            return secure_read_relative(&self.directory, name, max_bytes);
+        }
+        #[cfg(windows)]
+        {
+            self.validate_directory()?;
+            let result = secure_read_relative_windows(&self.directory_path, name, max_bytes);
+            self.validate_directory()?;
+            return result;
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (name, max_bytes);
+            Err(ToriiSccpReplayStartupErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    fn write_immutable_relative(
+        &self,
+        name: &str,
+        bytes: &[u8],
+        max_bytes: usize,
+    ) -> Result<(), ToriiSccpReplayStartupErrorV1> {
+        #[cfg(unix)]
+        {
+            return secure_write_immutable_relative(&self.directory, name, bytes, max_bytes);
+        }
+        #[cfg(windows)]
+        {
+            self.validate_directory()?;
+            let result = secure_write_immutable_relative_windows(
+                &self.directory_path,
+                name,
+                bytes,
+                max_bytes,
+            );
+            self.validate_directory()?;
+            return result;
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (name, bytes, max_bytes);
+            Err(ToriiSccpReplayStartupErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    fn write_manifest_last_relative(
+        &self,
+        name: &str,
+        bytes: &[u8],
+        max_bytes: usize,
+    ) -> Result<(), ManifestPublicationFailureV1> {
+        #[cfg(unix)]
+        {
+            return secure_write_manifest_last_relative(&self.directory, name, bytes, max_bytes);
+        }
+        #[cfg(windows)]
+        {
+            self.validate_directory()
+                .map_err(|_| ManifestPublicationFailureV1::BeforeCommit)?;
+            let result = secure_write_manifest_last_relative_windows(
+                &self.directory_path,
+                name,
+                bytes,
+                max_bytes,
+            );
+            match result {
+                Ok(()) => self
+                    .validate_directory()
+                    .map_err(|_| ManifestPublicationFailureV1::AfterRename),
+                Err(error) => Err(error),
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (name, bytes, max_bytes);
+            Err(ManifestPublicationFailureV1::BeforeCommit)
+        }
+    }
+
+    fn sync_directory(&self) -> Result<(), ToriiSccpReplayStartupErrorV1> {
+        #[cfg(unix)]
+        {
+            return self
+                .directory
+                .sync_all()
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence);
+        }
+        #[cfg(windows)]
+        {
+            self.validate_directory()?;
+            crate::durable_fs::sync_direct_directory(&self.directory_path)
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+            return self.validate_directory();
+        }
+        #[cfg(not(any(unix, windows)))]
+        Err(ToriiSccpReplayStartupErrorV1::UnsupportedPlatform)
     }
 
     fn manifest_limit(config: &ToriiSccpReplayArchive) -> usize {
@@ -1383,7 +1953,17 @@ impl SecureReplayStoreV1 {
                 max_store_names(config.max_accumulators)?,
             );
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            self.validate_directory()?;
+            let result = recover_interrupted_publications_windows(
+                &self.directory_path,
+                max_store_names(config.max_accumulators)?,
+            );
+            self.validate_directory()?;
+            return result;
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = config;
             Err(ToriiSccpReplayStartupErrorV1::UnsupportedPlatform)
@@ -1413,7 +1993,28 @@ impl SecureReplayStoreV1 {
                 max_store_names(config.max_accumulators)?,
             );
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let mut retained = BTreeSet::new();
+            if let Some(manifest) = manifest {
+                for entry in &manifest.entries {
+                    if !retained.insert(snapshot_filename(entry.snapshot_sha256))
+                        || !retained.insert(checkpoint_filename(entry.checkpoint_sha256))
+                    {
+                        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+                    }
+                }
+            }
+            self.validate_directory()?;
+            let result = prune_replay_artifacts_windows(
+                &self.directory_path,
+                &retained,
+                max_store_names(config.max_accumulators)?,
+            );
+            self.validate_directory()?;
+            return result;
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = (config, manifest);
             Err(ToriiSccpReplayStartupErrorV1::UnsupportedPlatform)
@@ -1424,19 +2025,12 @@ impl SecureReplayStoreV1 {
         &self,
         config: &ToriiSccpReplayArchive,
     ) -> Result<Option<PersistedReplayHeadStateV1>, ToriiSccpReplayStartupErrorV1> {
-        let Some(bytes) = secure_read_relative(
-            &self.directory,
-            HEAD_MANIFEST_FILENAME_V1,
-            Self::manifest_limit(config),
-        )?
+        let Some(bytes) =
+            self.read_relative(HEAD_MANIFEST_FILENAME_V1, Self::manifest_limit(config))?
         else {
             return Ok(None);
         };
-        let manifest: PersistedReplayHeadV1 = norito::decode_canonical_with_limits(
-            &bytes,
-            norito::canonical_decode_limits(bytes.len()),
-        )
-        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        let manifest = decode_persisted_replay_head_v1(&bytes, config.max_accumulators)?;
         if manifest.version != HEAD_MANIFEST_VERSION_V1
             || manifest.checkpoint_set_sha256 == [0; 32]
             || manifest.network_identity_sha256 == [0; 32]
@@ -1472,9 +2066,9 @@ impl SecureReplayStoreV1 {
                     .filter(|remaining| *remaining != 0)
                     .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?,
             );
-            let snapshot_bytes =
-                secure_read_relative(&self.directory, &snapshot_name, snapshot_limit)?
-                    .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
+            let snapshot_bytes = self
+                .read_relative(&snapshot_name, snapshot_limit)?
+                .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
             aggregate_bytes = aggregate_bytes
                 .checked_add(snapshot_bytes.len())
                 .filter(|bytes| *bytes <= config.max_response_bytes)
@@ -1486,9 +2080,9 @@ impl SecureReplayStoreV1 {
                     .filter(|remaining| *remaining != 0)
                     .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?,
             );
-            let checkpoint_bytes =
-                secure_read_relative(&self.directory, &checkpoint_name, checkpoint_limit)?
-                    .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
+            let checkpoint_bytes = self
+                .read_relative(&checkpoint_name, checkpoint_limit)?
+                .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
             aggregate_bytes = aggregate_bytes
                 .checked_add(checkpoint_bytes.len())
                 .filter(|bytes| *bytes <= config.max_response_bytes)
@@ -1546,14 +2140,12 @@ impl SecureReplayStoreV1 {
         candidate: &CandidateReplayStateV1,
     ) -> Result<(), ToriiSccpReplayStartupErrorV1> {
         for entry in &candidate.entries {
-            secure_write_immutable_relative(
-                &self.directory,
+            self.write_immutable_relative(
                 &snapshot_filename(entry.checkpoint.body.snapshot_sha256),
                 &entry.snapshot_bytes,
                 config.max_snapshot_bytes,
             )?;
-            secure_write_immutable_relative(
-                &self.directory,
+            self.write_immutable_relative(
                 &checkpoint_filename(entry.checkpoint_sha256),
                 &entry.checkpoint_bytes,
                 MAX_PERSISTED_CHECKPOINT_BYTES_V1,
@@ -1567,10 +2159,9 @@ impl SecureReplayStoreV1 {
         config: &ToriiSccpReplayArchive,
         candidate: &CandidateReplayStateV1,
     ) -> Result<(), ManifestPublicationFailureV1> {
-        let manifest_bytes = norito::encode_canonical(&candidate.manifest)
+        let manifest_bytes = encode_persisted_replay_head_v1(&candidate.manifest)
             .map_err(|_| ManifestPublicationFailureV1::BeforeCommit)?;
-        secure_write_manifest_last_relative(
-            &self.directory,
+        self.write_manifest_last_relative(
             HEAD_MANIFEST_FILENAME_V1,
             &manifest_bytes,
             Self::manifest_limit(config),
@@ -1582,17 +2173,11 @@ impl SecureReplayStoreV1 {
         config: &ToriiSccpReplayArchive,
         candidate: &CandidateReplayStateV1,
     ) -> Result<(), ToriiSccpReplayStartupErrorV1> {
-        let expected = norito::encode_canonical(&candidate.manifest)
-            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
-        self.directory
-            .sync_all()
-            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
-        let actual = secure_read_relative(
-            &self.directory,
-            HEAD_MANIFEST_FILENAME_V1,
-            Self::manifest_limit(config),
-        )?
-        .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
+        let expected = encode_persisted_replay_head_v1(&candidate.manifest)?;
+        self.sync_directory()?;
+        let actual = self
+            .read_relative(HEAD_MANIFEST_FILENAME_V1, Self::manifest_limit(config))?
+            .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
         (actual == expected)
             .then_some(())
             .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)
@@ -1607,7 +2192,7 @@ fn checkpoint_filename(digest: [u8; 32]) -> String {
     format!("checkpoint-{}.norito", hex::encode(digest))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn max_store_names(max_accumulators: usize) -> Result<usize, ToriiSccpReplayStartupErrorV1> {
     max_accumulators
         .checked_mul(4)
@@ -1615,14 +2200,14 @@ fn max_store_names(max_accumulators: usize) -> Result<usize, ToriiSccpReplayStar
         .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn is_lower_hex(bytes: &[u8]) -> bool {
     bytes
         .iter()
         .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn is_replay_artifact_filename(name: &str) -> bool {
     ["snapshot-", "checkpoint-"].iter().any(|prefix| {
         name.strip_prefix(prefix)
@@ -1631,7 +2216,7 @@ fn is_replay_artifact_filename(name: &str) -> bool {
     })
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn temporary_destination(name: &str) -> Option<&str> {
     let body = name.strip_prefix('.')?.strip_suffix(".tmp")?;
     let (destination, suffix) = body.rsplit_once('.')?;
@@ -1761,6 +2346,159 @@ fn prune_replay_artifacts(
     unlink_and_sync_all(directory, &removals)
 }
 
+#[cfg(windows)]
+fn secure_store_names_windows(
+    directory: &Path,
+    max_entries: usize,
+) -> Result<BTreeSet<String>, ToriiSccpReplayStartupErrorV1> {
+    let mut names = BTreeSet::new();
+    let entries =
+        fs::read_dir(directory).map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    for entry in entries {
+        let entry = entry.map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        if !names.insert(name) || names.len() > max_entries {
+            return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+        }
+    }
+    Ok(names)
+}
+
+#[cfg(windows)]
+fn validate_windows_regular(
+    path: &Path,
+) -> Result<crate::secure_file_metadata::SecureMetadata, ToriiSccpReplayStartupErrorV1> {
+    let file = crate::secure_file_metadata::open_direct_file(path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    sorafs_node::validate_private_local_storage_acl(&file, path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let metadata = crate::secure_file_metadata::from_file(&file)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let named = crate::secure_file_metadata::from_path(path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if !crate::secure_file_metadata::is_direct_file(&metadata)
+        || !crate::secure_file_metadata::is_direct_file(&named)
+        || !matches!(
+            crate::secure_file_metadata::number_of_links(&metadata),
+            Some(1 | 2)
+        )
+        || crate::secure_file_metadata::number_of_links(&metadata)
+            != crate::secure_file_metadata::number_of_links(&named)
+        || !crate::secure_file_metadata::unchanged(&metadata, &named)
+    {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    Ok(metadata)
+}
+
+#[cfg(windows)]
+fn remove_windows_files_and_sync(
+    directory: &Path,
+    removals: Vec<(PathBuf, crate::secure_file_metadata::SecureMetadata)>,
+) -> Result<(), ToriiSccpReplayStartupErrorV1> {
+    let mut mutated = false;
+    let mut failed = false;
+    let mut removed_paths = Vec::new();
+    for (path, expected) in removals {
+        let Ok(current) = crate::secure_file_metadata::from_path(&path) else {
+            failed = true;
+            continue;
+        };
+        if !crate::secure_file_metadata::is_direct_file(&current)
+            || !crate::secure_file_metadata::unchanged(&expected, &current)
+        {
+            failed = true;
+            continue;
+        }
+        // Windows keeps an unlinked name delete-pending while retained metadata handles are
+        // alive. Identity was checked under the store-owner lock; release snapshots before the
+        // path deletion, then rescan the bounded directory after the durable namespace flush.
+        drop((expected, current));
+        match fs::remove_file(&path) {
+            Ok(()) => {
+                mutated = true;
+                removed_paths.push(path);
+            }
+            Err(_) => failed = true,
+        }
+    }
+    if mutated && crate::durable_fs::sync_direct_directory(directory).is_err() {
+        failed = true;
+    }
+    for path in removed_paths {
+        match crate::secure_file_metadata::from_path(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => failed = true,
+        }
+    }
+    if failed {
+        Err(ToriiSccpReplayStartupErrorV1::Persistence)
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn recover_interrupted_publications_windows(
+    directory: &Path,
+    max_entries: usize,
+) -> Result<(), ToriiSccpReplayStartupErrorV1> {
+    let names = secure_store_names_windows(directory, max_entries)?;
+    let mut removals = Vec::new();
+    for name in &names {
+        let Some(destination) = temporary_destination(name) else {
+            continue;
+        };
+        let temporary_path = directory.join(name);
+        let temporary = validate_windows_regular(&temporary_path)?;
+        match crate::secure_file_metadata::number_of_links(&temporary) {
+            Some(1) => {}
+            Some(2) => {
+                let destination = validate_windows_regular(&directory.join(destination))?;
+                if crate::secure_file_metadata::number_of_links(&destination) != Some(2)
+                    || !crate::secure_file_metadata::same_file(&temporary, &destination)
+                {
+                    return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+                }
+            }
+            _ => return Err(ToriiSccpReplayStartupErrorV1::Persistence),
+        }
+        removals.push((temporary_path, temporary));
+    }
+    remove_windows_files_and_sync(directory, removals)
+}
+
+#[cfg(windows)]
+fn prune_replay_artifacts_windows(
+    directory: &Path,
+    retained: &BTreeSet<String>,
+    max_entries: usize,
+) -> Result<(), ToriiSccpReplayStartupErrorV1> {
+    recover_interrupted_publications_windows(directory, max_entries)?;
+    let names = secure_store_names_windows(directory, max_entries)?;
+    let mut removals = Vec::new();
+    for name in names {
+        if name == PROCESS_LOCK_FILENAME_V1 || name == HEAD_MANIFEST_FILENAME_V1 {
+            continue;
+        }
+        if !is_replay_artifact_filename(&name) {
+            return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+        }
+        let path = directory.join(&name);
+        let metadata = validate_windows_regular(&path)?;
+        if crate::secure_file_metadata::number_of_links(&metadata) != Some(1) {
+            return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+        }
+        if !retained.contains(&name) {
+            removals.push((path, metadata));
+        }
+    }
+    remove_windows_files_and_sync(directory, removals)
+}
+
 struct BoundedSha256WriterV1 {
     hasher: Sha256,
     written: usize,
@@ -1816,6 +2554,195 @@ fn sha256(parts: &[&[u8]]) -> [u8; 32] {
         hasher.update(part);
     }
     hasher.finalize().into()
+}
+
+#[cfg(windows)]
+struct WindowsPinnedDirectoryV1 {
+    path: PathBuf,
+    file: File,
+    identity: crate::secure_file_metadata::SecureMetadata,
+}
+
+#[cfg(windows)]
+struct WindowsSecureStateDirectoryV1 {
+    path: PathBuf,
+    file: File,
+    identity: crate::secure_file_metadata::SecureMetadata,
+    ancestors: Vec<WindowsPinnedDirectoryV1>,
+}
+
+#[cfg(windows)]
+fn validate_windows_pinned_directory(
+    pinned: &WindowsPinnedDirectoryV1,
+) -> Result<(), ToriiSccpReplayStartupErrorV1> {
+    let opened = crate::secure_file_metadata::from_file(&pinned.file)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let named = crate::secure_file_metadata::from_path(&pinned.path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if !crate::secure_file_metadata::is_direct_directory(&opened)
+        || !crate::secure_file_metadata::is_direct_directory(&named)
+        || !crate::secure_file_metadata::same_file(&pinned.identity, &opened)
+        || !crate::secure_file_metadata::same_file(&opened, &named)
+    {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_windows_state_directory(
+    path: &Path,
+    directory: &File,
+    identity: &crate::secure_file_metadata::SecureMetadata,
+    ancestors: &[WindowsPinnedDirectoryV1],
+) -> Result<(), ToriiSccpReplayStartupErrorV1> {
+    for ancestor in ancestors {
+        validate_windows_pinned_directory(ancestor)?;
+    }
+    let opened = crate::secure_file_metadata::from_file(directory)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let named = crate::secure_file_metadata::from_path(path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if !crate::secure_file_metadata::is_direct_directory(&opened)
+        || !crate::secure_file_metadata::is_direct_directory(&named)
+        || !crate::secure_file_metadata::same_file(identity, &opened)
+        || !crate::secure_file_metadata::same_file(&opened, &named)
+    {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    sorafs_node::validate_private_local_storage_acl(directory, path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_pinned_windows_directory(
+    path: &Path,
+    private_storage: bool,
+) -> Result<(File, crate::secure_file_metadata::SecureMetadata), ToriiSccpReplayStartupErrorV1> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    const READ_CONTROL: u32 = 0x0002_0000;
+    const WRITE_DAC: u32 = 0x0004_0000;
+
+    let named_before = crate::secure_file_metadata::from_path(path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if !crate::secure_file_metadata::is_direct_directory(&named_before) {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    let file = OpenOptions::new()
+        .access_mode(READ_CONTROL | if private_storage { WRITE_DAC } else { 0 })
+        // Path-based Windows operations remain bound to this namespace: readers and writers
+        // may use the directory, but rename/delete is denied for this handle's lifetime.
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let opened = crate::secure_file_metadata::from_file(&file)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let named_after = crate::secure_file_metadata::from_path(path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if !crate::secure_file_metadata::is_direct_directory(&opened)
+        || !crate::secure_file_metadata::is_direct_directory(&named_after)
+        || !crate::secure_file_metadata::same_file(&named_before, &opened)
+        || !crate::secure_file_metadata::same_file(&opened, &named_after)
+    {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    if private_storage {
+        sorafs_node::validate_private_local_storage_acl(&file, path)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    }
+    Ok((file, opened))
+}
+
+#[cfg(windows)]
+fn open_secure_state_directory_windows(
+    path: &Path,
+) -> Result<WindowsSecureStateDirectoryV1, ToriiSccpReplayStartupErrorV1> {
+    use std::path::{Component, Prefix};
+
+    if !path.is_absolute()
+        || path.file_name().is_none()
+        || path.components().any(|component| match component {
+            Component::Prefix(prefix) => {
+                !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+            }
+            Component::CurDir | Component::ParentDir => true,
+            Component::RootDir | Component::Normal(_) => false,
+        })
+    {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+
+    let mut paths = path
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
+    paths.reverse();
+    if paths.len() < 2 || paths.last().is_none_or(|candidate| candidate != path) {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+
+    let mut pinned = Vec::with_capacity(paths.len());
+    let mut state_directory = None;
+    for current in paths {
+        let is_state_directory = current == path;
+        let mut created = false;
+        match crate::secure_file_metadata::from_path(&current) {
+            Ok(metadata) if crate::secure_file_metadata::is_direct_directory(&metadata) => {}
+            Ok(_) => return Err(ToriiSccpReplayStartupErrorV1::Persistence),
+            Err(error) if is_state_directory && error.kind() == std::io::ErrorKind::NotFound => {
+                for ancestor in &pinned {
+                    validate_windows_pinned_directory(ancestor)?;
+                }
+                match sorafs_node::create_private_local_storage_directory(&current) {
+                    Ok(()) => created = true,
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(_) => return Err(ToriiSccpReplayStartupErrorV1::Persistence),
+                }
+            }
+            Err(_) => return Err(ToriiSccpReplayStartupErrorV1::Persistence),
+        }
+        let (file, identity) = open_pinned_windows_directory(&current, is_state_directory)?;
+        for ancestor in &pinned {
+            validate_windows_pinned_directory(ancestor)?;
+        }
+        if is_state_directory {
+            state_directory = Some((file, identity));
+        } else {
+            pinned.push(WindowsPinnedDirectoryV1 {
+                path: current.clone(),
+                file,
+                identity,
+            });
+        }
+        if created {
+            crate::durable_fs::sync_direct_directory(&current)
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+            let parent = current
+                .parent()
+                .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
+            crate::durable_fs::sync_direct_directory(parent)
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+            for ancestor in &pinned {
+                validate_windows_pinned_directory(ancestor)?;
+            }
+        }
+    }
+    let (file, identity) = state_directory.ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
+    validate_windows_state_directory(path, &file, &identity, &pinned)?;
+    Ok(WindowsSecureStateDirectoryV1 {
+        path: path.to_path_buf(),
+        file,
+        identity,
+        ancestors: pinned,
+    })
 }
 
 #[cfg(unix)]
@@ -1909,7 +2836,7 @@ fn open_secure_state_directory(path: &Path) -> Result<File, ToriiSccpReplayStart
     Ok(current)
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn open_secure_state_directory(_path: &Path) -> Result<File, ToriiSccpReplayStartupErrorV1> {
     Err(ToriiSccpReplayStartupErrorV1::UnsupportedPlatform)
 }
@@ -1991,7 +2918,112 @@ fn open_and_lock_process_file(directory: &File) -> Result<File, ToriiSccpReplayS
     Ok(file)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn open_and_lock_process_file_windows(
+    directory: &WindowsSecureStateDirectoryV1,
+) -> Result<File, ToriiSccpReplayStartupErrorV1> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+
+    validate_windows_state_directory(
+        &directory.path,
+        &directory.file,
+        &directory.identity,
+        &directory.ancestors,
+    )?;
+    let path = directory.path.join(PROCESS_LOCK_FILENAME_V1);
+    let before = match crate::secure_file_metadata::from_path(&path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err(ToriiSccpReplayStartupErrorV1::Persistence),
+    };
+    if before.as_ref().is_some_and(|metadata| {
+        !crate::secure_file_metadata::is_direct_file(metadata)
+            || crate::secure_file_metadata::number_of_links(metadata) != Some(1)
+            || metadata.len() != 0
+    }) {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    let open_existing = || {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .access_mode(GENERIC_READ | GENERIC_WRITE)
+            // Lock contenders must be able to open the same file, while denying delete sharing
+            // pins its pathname for the lifetime of the store owner.
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&path)
+    };
+    let file = if before.is_none() {
+        match sorafs_node::create_private_local_storage_file(
+            &path,
+            sorafs_node::PrivateLocalFileSharing::ReadWrite,
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                open_existing().map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?
+            }
+            Err(_) => return Err(ToriiSccpReplayStartupErrorV1::Persistence),
+        }
+    } else {
+        open_existing().map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?
+    };
+    sorafs_node::validate_private_local_storage_acl(&file, &path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let opened = crate::secure_file_metadata::from_file(&file)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let named = crate::secure_file_metadata::from_path(&path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if !crate::secure_file_metadata::is_direct_file(&opened)
+        || !crate::secure_file_metadata::is_direct_file(&named)
+        || crate::secure_file_metadata::number_of_links(&opened) != Some(1)
+        || crate::secure_file_metadata::number_of_links(&named) != Some(1)
+        || opened.len() != 0
+        || named.len() != 0
+        || before.as_ref().is_some_and(|metadata| {
+            !crate::secure_file_metadata::same_file(metadata, &opened)
+                || !crate::secure_file_metadata::unchanged(metadata, &opened)
+        })
+        || !crate::secure_file_metadata::same_file(&opened, &named)
+        || !crate::secure_file_metadata::unchanged(&opened, &named)
+    {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock | fs::TryLockError::Error(_)) => {
+            return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+        }
+    }
+    file.sync_all()
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    crate::durable_fs::sync_direct_directory(&directory.path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let locked = crate::secure_file_metadata::from_file(&file)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let locked_named = crate::secure_file_metadata::from_path(&path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if !crate::secure_file_metadata::unchanged(&opened, &locked)
+        || !crate::secure_file_metadata::unchanged(&locked, &locked_named)
+    {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    validate_windows_state_directory(
+        &directory.path,
+        &directory.file,
+        &directory.identity,
+        &directory.ancestors,
+    )?;
+    Ok(file)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn open_and_lock_process_file(_directory: &File) -> Result<File, ToriiSccpReplayStartupErrorV1> {
     Err(ToriiSccpReplayStartupErrorV1::UnsupportedPlatform)
 }
@@ -2075,7 +3107,7 @@ fn secure_read_relative(
     Ok(Some(bytes))
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn secure_read_relative(
     _directory: &File,
     _name: &str,
@@ -2127,7 +3159,7 @@ fn secure_write_immutable_relative(
     publication
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn secure_write_immutable_relative(
     _directory: &File,
     _name: &str,
@@ -2176,7 +3208,7 @@ fn secure_write_manifest_last_relative(
         .ok_or(ManifestPublicationFailureV1::AfterRename)
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn secure_write_manifest_last_relative(
     _directory: &File,
     _name: &str,
@@ -2184,6 +3216,284 @@ fn secure_write_manifest_last_relative(
     _max_bytes: usize,
 ) -> Result<(), ManifestPublicationFailureV1> {
     Err(ManifestPublicationFailureV1::BeforeCommit)
+}
+
+#[cfg(windows)]
+fn secure_read_relative_windows(
+    directory: &Path,
+    name: &str,
+    max_bytes: usize,
+) -> Result<Option<Vec<u8>>, ToriiSccpReplayStartupErrorV1> {
+    if !secure_filename(name) || max_bytes == 0 {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    let max_bytes_u64 =
+        u64::try_from(max_bytes).map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let read_limit = max_bytes_u64
+        .checked_add(1)
+        .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let path = directory.join(name);
+    let before = match crate::secure_file_metadata::from_path(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(ToriiSccpReplayStartupErrorV1::Persistence),
+    };
+    if !crate::secure_file_metadata::is_direct_file(&before)
+        || crate::secure_file_metadata::number_of_links(&before) != Some(1)
+        || before.len() > max_bytes_u64
+    {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    let mut file = crate::secure_file_metadata::open_direct_file(&path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    sorafs_node::validate_private_local_storage_acl(&file, &path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let opened = crate::secure_file_metadata::from_file(&file)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let named_after_open = crate::secure_file_metadata::from_path(&path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if !crate::secure_file_metadata::is_direct_file(&opened)
+        || !crate::secure_file_metadata::is_direct_file(&named_after_open)
+        || crate::secure_file_metadata::number_of_links(&opened) != Some(1)
+        || crate::secure_file_metadata::number_of_links(&named_after_open) != Some(1)
+        || !crate::secure_file_metadata::unchanged(&before, &opened)
+        || !crate::secure_file_metadata::unchanged(&opened, &named_after_open)
+    {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    let opened_len =
+        usize::try_from(opened.len()).map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(opened_len)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    (&mut file)
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if bytes.len() > max_bytes {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    let opened_after = crate::secure_file_metadata::from_file(&file)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    let named_after_read = crate::secure_file_metadata::from_path(&path)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+    if !crate::secure_file_metadata::is_direct_file(&opened_after)
+        || !crate::secure_file_metadata::is_direct_file(&named_after_read)
+        || crate::secure_file_metadata::number_of_links(&opened_after) != Some(1)
+        || crate::secure_file_metadata::number_of_links(&named_after_read) != Some(1)
+        || !crate::secure_file_metadata::unchanged(&opened, &opened_after)
+        || !crate::secure_file_metadata::unchanged(&opened_after, &named_after_read)
+        || !crate::secure_file_metadata::unchanged(&before, &named_after_read)
+        || u64::try_from(bytes.len()).ok() != Some(opened.len())
+    {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    Ok(Some(bytes))
+}
+
+#[cfg(windows)]
+fn create_secure_temporary_windows(
+    directory: &Path,
+    destination: &str,
+) -> Result<(File, String, PathBuf), ToriiSccpReplayStartupErrorV1> {
+    for _ in 0..SECURE_TEMP_RETRIES_V1 {
+        let suffix: [u8; 16] = rand::random();
+        let name = format!(".{destination}.{}.tmp", hex::encode(suffix));
+        let path = directory.join(&name);
+        let file = match sorafs_node::create_private_local_storage_file(
+            &path,
+            sorafs_node::PrivateLocalFileSharing::ReadDelete,
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err(ToriiSccpReplayStartupErrorV1::Persistence),
+        };
+        sorafs_node::validate_private_local_storage_acl(&file, &path)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        let opened = crate::secure_file_metadata::from_file(&file)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        let named = crate::secure_file_metadata::from_path(&path)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        if !crate::secure_file_metadata::is_direct_file(&opened)
+            || !crate::secure_file_metadata::is_direct_file(&named)
+            || crate::secure_file_metadata::number_of_links(&opened) != Some(1)
+            || crate::secure_file_metadata::number_of_links(&named) != Some(1)
+            || opened.len() != 0
+            || !crate::secure_file_metadata::unchanged(&opened, &named)
+        {
+            return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+        }
+        return Ok((file, name, path));
+    }
+    Err(ToriiSccpReplayStartupErrorV1::Persistence)
+}
+
+#[cfg(windows)]
+fn secure_write_immutable_relative_windows(
+    directory: &Path,
+    name: &str,
+    bytes: &[u8],
+    max_bytes: usize,
+) -> Result<(), ToriiSccpReplayStartupErrorV1> {
+    if bytes.is_empty() || bytes.len() > max_bytes || !secure_filename(name) {
+        return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+    if let Some(existing) = secure_read_relative_windows(directory, name, max_bytes)? {
+        return (existing == bytes)
+            .then_some(())
+            .ok_or(ToriiSccpReplayStartupErrorV1::Persistence);
+    }
+
+    let (mut temporary, _temporary_name, temporary_path) =
+        create_secure_temporary_windows(directory, name)?;
+    let destination_path = directory.join(name);
+    let publication = (|| {
+        let created = crate::secure_file_metadata::from_file(&temporary)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        temporary
+            .write_all(bytes)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        temporary
+            .sync_all()
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        let written = crate::secure_file_metadata::from_file(&temporary)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        let named_written = crate::secure_file_metadata::from_path(&temporary_path)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        if !crate::secure_file_metadata::is_direct_file(&written)
+            || crate::secure_file_metadata::number_of_links(&written) != Some(1)
+            || !crate::secure_file_metadata::same_file(&created, &written)
+            || !crate::secure_file_metadata::unchanged(&written, &named_written)
+            || u64::try_from(bytes.len()).ok() != Some(written.len())
+        {
+            return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+        }
+
+        if fs::hard_link(&temporary_path, &destination_path).is_err() {
+            let _ = fs::remove_file(&temporary_path);
+            return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+        }
+        let linked_temporary = crate::secure_file_metadata::from_path(&temporary_path)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        let linked_destination = crate::secure_file_metadata::from_path(&destination_path)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        if crate::secure_file_metadata::number_of_links(&linked_temporary) != Some(2)
+            || crate::secure_file_metadata::number_of_links(&linked_destination) != Some(2)
+            || !crate::secure_file_metadata::same_file(&written, &linked_temporary)
+            || !crate::secure_file_metadata::same_file(&linked_temporary, &linked_destination)
+        {
+            return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+        }
+        fs::remove_file(&temporary_path).map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        // The removed hard-link name remains delete-pending until every handle closes on
+        // Windows. Release all snapshots and the writer before asserting the one-link durable
+        // destination and performing the stable readback.
+        drop((
+            created,
+            written,
+            named_written,
+            linked_temporary,
+            linked_destination,
+        ));
+        drop(temporary);
+        match crate::secure_file_metadata::from_path(&temporary_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return Err(ToriiSccpReplayStartupErrorV1::Persistence),
+        }
+        let published = crate::secure_file_metadata::from_path(&destination_path)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        if !crate::secure_file_metadata::is_direct_file(&published)
+            || crate::secure_file_metadata::number_of_links(&published) != Some(1)
+            || u64::try_from(bytes.len()).ok() != Some(published.len())
+        {
+            return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+        }
+        crate::durable_fs::sync_direct_directory(directory)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        let durable = crate::secure_file_metadata::from_path(&destination_path)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        if !crate::secure_file_metadata::unchanged(&published, &durable) {
+            return Err(ToriiSccpReplayStartupErrorV1::Persistence);
+        }
+        drop((published, durable));
+        let readback = secure_read_relative_windows(directory, name, max_bytes)?
+            .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
+        (readback == bytes)
+            .then_some(())
+            .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)
+    })();
+    if publication.is_err() {
+        let _ = fs::remove_file(temporary_path);
+    }
+    publication
+}
+
+#[cfg(windows)]
+fn secure_write_manifest_last_relative_windows(
+    directory: &Path,
+    name: &str,
+    bytes: &[u8],
+    max_bytes: usize,
+) -> Result<(), ManifestPublicationFailureV1> {
+    if bytes.is_empty() || bytes.len() > max_bytes || !secure_filename(name) {
+        return Err(ManifestPublicationFailureV1::BeforeCommit);
+    }
+    let (mut temporary, _temporary_name, temporary_path) =
+        create_secure_temporary_windows(directory, name)
+            .map_err(|_| ManifestPublicationFailureV1::BeforeCommit)?;
+    let destination_path = directory.join(name);
+    let prepared = (|| {
+        let created = crate::secure_file_metadata::from_file(&temporary)
+            .map_err(|_| ManifestPublicationFailureV1::BeforeCommit)?;
+        temporary
+            .write_all(bytes)
+            .and_then(|()| temporary.sync_all())
+            .map_err(|_| ManifestPublicationFailureV1::BeforeCommit)?;
+        let written = crate::secure_file_metadata::from_file(&temporary)
+            .map_err(|_| ManifestPublicationFailureV1::BeforeCommit)?;
+        let named_written = crate::secure_file_metadata::from_path(&temporary_path)
+            .map_err(|_| ManifestPublicationFailureV1::BeforeCommit)?;
+        if !crate::secure_file_metadata::is_direct_file(&written)
+            || crate::secure_file_metadata::number_of_links(&written) != Some(1)
+            || !crate::secure_file_metadata::same_file(&created, &written)
+            || !crate::secure_file_metadata::unchanged(&written, &named_written)
+            || u64::try_from(bytes.len()).ok() != Some(written.len())
+        {
+            return Err(ManifestPublicationFailureV1::BeforeCommit);
+        }
+        if secure_read_relative_windows(directory, name, max_bytes).is_err() {
+            return Err(ManifestPublicationFailureV1::BeforeCommit);
+        }
+        windows_fs::replace_file(&temporary_path, &destination_path)
+            .map_err(|_| ManifestPublicationFailureV1::BeforeCommit)?;
+        let published = crate::secure_file_metadata::from_path(&destination_path)
+            .map_err(|_| ManifestPublicationFailureV1::AfterRename)?;
+        if crate::secure_file_metadata::number_of_links(&published) != Some(1)
+            || !crate::secure_file_metadata::same_file(&written, &published)
+        {
+            return Err(ManifestPublicationFailureV1::AfterRename);
+        }
+        crate::durable_fs::sync_direct_directory(directory)
+            .map_err(|_| ManifestPublicationFailureV1::AfterRename)?;
+        let durable = crate::secure_file_metadata::from_path(&destination_path)
+            .map_err(|_| ManifestPublicationFailureV1::AfterRename)?;
+        if !crate::secure_file_metadata::unchanged(&published, &durable) {
+            return Err(ManifestPublicationFailureV1::AfterRename);
+        }
+        drop((created, written, named_written, published, durable));
+        drop(temporary);
+        let readback = secure_read_relative_windows(directory, name, max_bytes)
+            .map_err(|_| ManifestPublicationFailureV1::AfterRename)?
+            .ok_or(ManifestPublicationFailureV1::AfterRename)?;
+        (readback == bytes)
+            .then_some(())
+            .ok_or(ManifestPublicationFailureV1::AfterRename)
+    })();
+    if matches!(prepared, Err(ManifestPublicationFailureV1::BeforeCommit)) {
+        let _ = fs::remove_file(temporary_path);
+    }
+    prepared
 }
 
 #[cfg(unix)]
@@ -2247,7 +3557,7 @@ fn publish_noreplace(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn secure_filename(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 192
@@ -2257,13 +3567,16 @@ fn secure_filename(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use std::{
         collections::BTreeMap,
         fs,
         path::PathBuf,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Condvar, Mutex,
+            atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        },
         time::Duration,
     };
 
@@ -2286,6 +3599,96 @@ mod tests {
     struct MutableSource {
         responses: Mutex<BTreeMap<[u8; 32], Vec<u8>>>,
         pollution_path: Mutex<Option<PathBuf>>,
+    }
+
+    struct ConcurrentMatchSource {
+        body: Vec<u8>,
+        arrivals: Mutex<usize>,
+        arrivals_changed: Condvar,
+    }
+
+    struct PanickingMatchSource {
+        body: Vec<u8>,
+        calls: AtomicUsize,
+        suppressed_calls: AtomicUsize,
+    }
+
+    impl ConcurrentMatchSource {
+        fn new(body: Vec<u8>) -> Self {
+            Self {
+                body,
+                arrivals: Mutex::new(0),
+                arrivals_changed: Condvar::new(),
+            }
+        }
+    }
+
+    impl SccpReplayCheckpointSourceV1 for ConcurrentMatchSource {
+        fn fetch(
+            &self,
+            _replica: &ToriiSccpReplayArchiveReplica,
+            max_response_bytes: usize,
+            _timeout: Duration,
+        ) -> Result<Vec<u8>, SccpReplayCheckpointSourceErrorV1> {
+            if self.body.len() > max_response_bytes {
+                return Err(SccpReplayCheckpointSourceErrorV1::Limit);
+            }
+            Ok(self.body.clone())
+        }
+
+        fn fetch_matches(
+            &self,
+            _replica: &ToriiSccpReplayArchiveReplica,
+            expected: &[u8],
+            max_response_bytes: usize,
+            _timeout: Duration,
+        ) -> Result<bool, SccpReplayCheckpointSourceErrorV1> {
+            if self.body.len() > max_response_bytes {
+                return Err(SccpReplayCheckpointSourceErrorV1::Limit);
+            }
+            let mut arrivals = self
+                .arrivals
+                .lock()
+                .map_err(|_| SccpReplayCheckpointSourceErrorV1::Transport)?;
+            *arrivals += 1;
+            self.arrivals_changed.notify_all();
+            let (arrivals, timeout) = self
+                .arrivals_changed
+                .wait_timeout_while(arrivals, Duration::from_secs(2), |arrivals| *arrivals < 2)
+                .map_err(|_| SccpReplayCheckpointSourceErrorV1::Transport)?;
+            if *arrivals < 2 && timeout.timed_out() {
+                return Err(SccpReplayCheckpointSourceErrorV1::Transport);
+            }
+            Ok(self.body == expected)
+        }
+    }
+
+    impl SccpReplayCheckpointSourceV1 for PanickingMatchSource {
+        fn fetch(
+            &self,
+            _replica: &ToriiSccpReplayArchiveReplica,
+            max_response_bytes: usize,
+            _timeout: Duration,
+        ) -> Result<Vec<u8>, SccpReplayCheckpointSourceErrorV1> {
+            if self.body.len() > max_response_bytes {
+                return Err(SccpReplayCheckpointSourceErrorV1::Limit);
+            }
+            Ok(self.body.clone())
+        }
+
+        fn fetch_matches(
+            &self,
+            _replica: &ToriiSccpReplayArchiveReplica,
+            _expected: &[u8],
+            _max_response_bytes: usize,
+            _timeout: Duration,
+        ) -> Result<bool, SccpReplayCheckpointSourceErrorV1> {
+            self.calls.fetch_add(1, AtomicOrdering::SeqCst);
+            if iroha_core::panic_hook::is_suppressed() {
+                self.suppressed_calls.fetch_add(1, AtomicOrdering::SeqCst);
+            }
+            panic!("injected replica comparison panic");
+        }
     }
 
     impl MutableSource {
@@ -2337,9 +3740,9 @@ mod tests {
                 .pollution_path
                 .lock()
                 .map_err(|_| SccpReplayCheckpointSourceErrorV1::Transport)?
-                .as_ref()
+                .take()
             {
-                fs::write(path, b"unexpected same-uid store entry")
+                fs::write(&path, b"unexpected same-uid store entry")
                     .map_err(|_| SccpReplayCheckpointSourceErrorV1::Transport)?;
             }
             if bytes.len() > max_response_bytes {
@@ -2352,6 +3755,7 @@ mod tests {
     struct EmptyForestLocalAuthority {
         checkpoint_hashes: Mutex<BTreeMap<u64, [u8; 32]>>,
         current_coordinate: Mutex<(u64, [u8; 32])>,
+        current_accumulator_count: Mutex<usize>,
         inventory_current: Mutex<bool>,
         transient_inventory_mismatches: Mutex<usize>,
     }
@@ -2364,6 +3768,7 @@ mod tests {
                     finalized_block_hash,
                 )])),
                 current_coordinate: Mutex::new((finalized_height, finalized_block_hash)),
+                current_accumulator_count: Mutex::new(1),
                 inventory_current: Mutex::new(true),
                 transient_inventory_mismatches: Mutex::new(0),
             }
@@ -2386,6 +3791,13 @@ mod tests {
                 .inventory_current
                 .lock()
                 .expect("local-authority inventory lock is healthy") = current;
+        }
+
+        fn set_accumulator_count(&self, count: usize) {
+            *self
+                .current_accumulator_count
+                .lock()
+                .expect("local-authority accumulator-count lock is healthy") = count;
         }
 
         fn reject_next_inventory_validation(&self) {
@@ -2433,6 +3845,19 @@ mod tests {
     }
 
     impl SccpReplayLocalAuthorityV1 for EmptyForestLocalAuthority {
+        fn validate_current_accumulator_count(
+            &self,
+            expected_count: usize,
+        ) -> Result<(), SccpReplayLocalAuthorityErrorV1> {
+            (*self
+                .current_accumulator_count
+                .lock()
+                .map_err(|_| SccpReplayLocalAuthorityErrorV1::CoreMismatch)?
+                == expected_count)
+                .then_some(())
+                .ok_or(SccpReplayLocalAuthorityErrorV1::CoreMismatch)
+        }
+
         fn validate_current_inventory(
             &self,
             expected: &BTreeMap<
@@ -2490,6 +3915,13 @@ mod tests {
     struct RejectingLocalAuthority;
 
     impl SccpReplayLocalAuthorityV1 for RejectingLocalAuthority {
+        fn validate_current_accumulator_count(
+            &self,
+            _expected_count: usize,
+        ) -> Result<(), SccpReplayLocalAuthorityErrorV1> {
+            Err(SccpReplayLocalAuthorityErrorV1::CoreMismatch)
+        }
+
         fn validate_current_inventory(
             &self,
             _expected: &BTreeMap<
@@ -2752,6 +4184,7 @@ mod tests {
 
     #[test]
     fn bootstrap_persists_manifest_last_and_serves_verified_empty_witness() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt as _;
 
         let fixture = Fixture::new();
@@ -2777,17 +4210,75 @@ mod tests {
         );
 
         let directory = fs::metadata(&fixture.config.state_dir).expect("state dir exists");
+        #[cfg(unix)]
         assert_eq!(directory.permissions().mode() & 0o777, 0o700);
+        #[cfg(windows)]
+        assert!(crate::secure_file_metadata::is_direct_directory(
+            &crate::secure_file_metadata::from_path(&fixture.config.state_dir)
+                .expect("state directory has stable direct metadata")
+        ));
         let head = fixture.config.state_dir.join(HEAD_MANIFEST_FILENAME_V1);
         assert!(head.is_file());
         for entry in fs::read_dir(&fixture.config.state_dir).expect("state dir is readable") {
-            let metadata = entry
-                .expect("valid directory entry")
-                .metadata()
-                .expect("entry metadata is readable");
+            let entry = entry.expect("valid directory entry");
+            let metadata = entry.metadata().expect("entry metadata is readable");
             assert!(metadata.is_file());
+            #[cfg(unix)]
             assert_eq!(metadata.permissions().mode() & 0o077, 0);
+            #[cfg(windows)]
+            assert!(crate::secure_file_metadata::is_direct_file(
+                &crate::secure_file_metadata::from_path(&entry.path())
+                    .expect("store entry has stable direct metadata")
+            ));
         }
+    }
+
+    #[test]
+    fn replica_comparison_streams_both_remaining_origins_concurrently() {
+        let fixture = Fixture::new();
+        let source = ConcurrentMatchSource::new(fixture.first_bytes.clone());
+
+        let agreed = fetch_exact_three(&fixture.config, &source)
+            .expect("both bounded comparison streams overlap and agree");
+
+        assert_eq!(agreed, fixture.first_bytes);
+        assert_eq!(*source.arrivals.lock().expect("arrival lock is healthy"), 2);
+    }
+
+    #[test]
+    fn replica_comparison_contains_child_thread_panics() {
+        let fixture = Fixture::new();
+        let source = PanickingMatchSource {
+            body: fixture.first_bytes.clone(),
+            calls: AtomicUsize::new(0),
+            suppressed_calls: AtomicUsize::new(0),
+        };
+
+        assert_eq!(
+            fetch_exact_three(&fixture.config, &source),
+            Err(ToriiSccpReplayStartupErrorV1::Transport)
+        );
+        assert_eq!(source.calls.load(AtomicOrdering::SeqCst), 2);
+        assert_eq!(source.suppressed_calls.load(AtomicOrdering::SeqCst), 2);
+        assert!(!iroha_core::panic_hook::is_suppressed());
+    }
+
+    #[test]
+    fn published_snapshot_arc_releases_the_swap_lock_before_read_work() {
+        let fixture = Fixture::new();
+        let service = fixture.bootstrap().expect("valid exact-three bootstrap");
+        let published = service
+            .current_published()
+            .expect("authenticated generation is readable");
+        let digest = published.checkpoint_set_sha256;
+
+        let publication_guard = service
+            .published
+            .try_write()
+            .expect("an owned read generation does not retain the publication lock");
+
+        assert_eq!(published.checkpoint_set_sha256, digest);
+        assert_eq!(publication_guard.checkpoint_set_sha256, digest);
     }
 
     #[test]
@@ -2859,6 +4350,7 @@ mod tests {
     #[test]
     fn multi_accumulator_checkpoints_bind_one_coordinate_but_independent_predecessors() {
         let fixture = Fixture::new();
+        fixture.local_authority.set_accumulator_count(2);
         let alternate_id = alternate_accumulator_id();
         let alternate_domain = alternate_domain();
         let initial = [
@@ -2991,15 +4483,17 @@ mod tests {
             Err(ToriiSccpReplayEndpointErrorV1::NotFound)
         );
 
-        service
+        let mut published = service
             .published
             .write()
-            .expect("published state lock is healthy")
+            .expect("published state lock is healthy");
+        Arc::make_mut(&mut published)
             .checkpoints
             .get_mut(&fixture.accumulator_id)
             .expect("fixture checkpoint is present")
-            .attestations[0]
-            .signature[0] ^= 1;
+            .body
+            .snapshot_sha256[0] ^= 1;
+        drop(published);
         assert_eq!(
             service
                 .read_non_membership_witness(&fixture.accumulator_id, [0x5a; 32])
@@ -3089,6 +4583,75 @@ mod tests {
             )
             .err(),
             Some(ToriiSccpReplayStartupErrorV1::ResourceLimit)
+        );
+    }
+
+    #[test]
+    fn checkpoint_set_count_must_equal_current_core_inventory_before_decode() {
+        let fixture = Fixture::new();
+        let alternate_id = alternate_accumulator_id();
+        let snapshots = [
+            snapshot(
+                &fixture.accumulator_id,
+                fixture.domain,
+                SccpReplayArchiveFinalityV1 {
+                    network_identity_sha256: [0x91; 32],
+                    finalized_height: 1,
+                    finalized_block_hash: [0x41; 32],
+                    predecessor_snapshot_sha256: [0; 32],
+                },
+            ),
+            snapshot(
+                &alternate_id,
+                alternate_domain(),
+                SccpReplayArchiveFinalityV1 {
+                    network_identity_sha256: [0x91; 32],
+                    finalized_height: 1,
+                    finalized_block_hash: [0x41; 32],
+                    predecessor_snapshot_sha256: [0; 32],
+                },
+            ),
+        ];
+        let bytes = checkpoint_set_bytes_for_snapshots(
+            &snapshots,
+            &fixture.key_pairs,
+            &fixture.config.replicas,
+        );
+
+        assert_eq!(
+            validate_candidate(
+                &fixture.config,
+                &bytes,
+                None,
+                fixture.local_authority.as_ref(),
+            )
+            .err(),
+            Some(ToriiSccpReplayStartupErrorV1::LocalAuthority),
+            "the authenticated Core cardinality rejects an oversized inventory before entry work"
+        );
+    }
+
+    #[test]
+    fn persisted_manifest_count_is_rejected_before_record_allocation() {
+        let entry = PersistedReplayHeadEntryV1 {
+            accumulator_id: accumulator_id(),
+            snapshot_sha256: [0x11; 32],
+            checkpoint_agreement_digest: [0x22; 32],
+            checkpoint_sha256: [0x33; 32],
+        };
+        let manifest = PersistedReplayHeadV1 {
+            version: HEAD_MANIFEST_VERSION_V1,
+            checkpoint_set_sha256: [0x44; 32],
+            network_identity_sha256: [0x55; 32],
+            finalized_height: 1,
+            finalized_block_hash: [0x66; 32],
+            entries: vec![entry.clone(), entry],
+        };
+        let bytes = encode_persisted_replay_head_v1(&manifest)
+            .expect("fixture manifest canonically encodes");
+        assert_eq!(
+            decode_persisted_replay_head_v1(&bytes, 1),
+            Err(ToriiSccpReplayStartupErrorV1::Persistence)
         );
     }
 
@@ -3266,11 +4829,12 @@ mod tests {
     }
 
     #[test]
-    fn successor_requires_existing_and_new_accumulator_predecessor_sentinels() {
+    fn adjacent_successor_requires_existing_and_new_accumulator_predecessor_sentinels() {
         let fixture = Fixture::new();
         let service = fixture.bootstrap().expect("initial checkpoint bootstraps");
         let alternate_id = alternate_accumulator_id();
         let alternate_domain = alternate_domain();
+        fixture.local_authority.set_accumulator_count(2);
         fixture.local_authority.set_coordinate(2, [0x42; 32]);
         let existing = snapshot(
             &fixture.accumulator_id,
@@ -3329,6 +4893,124 @@ mod tests {
     }
 
     #[test]
+    fn refresh_accepts_new_accumulator_with_unseen_predecessor_after_a_gap() {
+        let fixture = Fixture::new();
+        let service = fixture.bootstrap().expect("initial checkpoint bootstraps");
+        let alternate_id = alternate_accumulator_id();
+        let alternate_domain = alternate_domain();
+        fixture.local_authority.set_accumulator_count(2);
+        fixture.local_authority.set_coordinate(3, [0x43; 32]);
+        let current = [
+            snapshot(
+                &fixture.accumulator_id,
+                fixture.domain,
+                SccpReplayArchiveFinalityV1 {
+                    network_identity_sha256: [0x91; 32],
+                    finalized_height: 3,
+                    finalized_block_hash: [0x43; 32],
+                    predecessor_snapshot_sha256: [0x81; 32],
+                },
+            ),
+            snapshot(
+                &alternate_id,
+                alternate_domain,
+                SccpReplayArchiveFinalityV1 {
+                    network_identity_sha256: [0x91; 32],
+                    finalized_height: 3,
+                    finalized_block_hash: [0x43; 32],
+                    predecessor_snapshot_sha256: [0x82; 32],
+                },
+            ),
+        ];
+        let bytes = checkpoint_set_bytes_for_snapshots(
+            &current,
+            &fixture.key_pairs,
+            &fixture.config.replicas,
+        );
+        fixture.source.set_all(&fixture.config.replicas, &bytes);
+
+        service
+            .refresh()
+            .expect("the local Kura rebuild authenticates accumulators first seen after a gap");
+        service
+            .read_non_membership_witness(&alternate_id, [0x5a; 32])
+            .expect("the accumulator introduced while offline is published");
+    }
+
+    #[test]
+    fn refresh_forgets_only_a_removed_empty_accumulator() {
+        let fixture = Fixture::new();
+        let service = fixture.bootstrap().expect("initial checkpoint bootstraps");
+        let alternate_id = alternate_accumulator_id();
+        let alternate_domain = alternate_domain();
+        fixture.local_authority.set_coordinate(2, [0x42; 32]);
+        let replacement = snapshot(
+            &alternate_id,
+            alternate_domain,
+            SccpReplayArchiveFinalityV1 {
+                network_identity_sha256: [0x91; 32],
+                finalized_height: 2,
+                finalized_block_hash: [0x42; 32],
+                predecessor_snapshot_sha256: [0; 32],
+            },
+        );
+        let bytes =
+            checkpoint_set_bytes(&replacement, &fixture.key_pairs, &fixture.config.replicas);
+        fixture.source.set_all(&fixture.config.replicas, &bytes);
+
+        service
+            .refresh()
+            .expect("governance may remove a staged route whose accumulator stayed empty");
+        assert_eq!(
+            service.read_non_membership_witness(&fixture.accumulator_id, [0x5a; 32]),
+            Err(ToriiSccpReplayEndpointErrorV1::NotFound),
+            "the removed empty accumulator is not retained as a phantom route"
+        );
+        service
+            .read_non_membership_witness(&alternate_id, [0x5a; 32])
+            .expect("the replacement accumulator is published");
+    }
+
+    #[test]
+    fn continuity_rejects_disappearance_of_a_nonempty_accumulator() {
+        let fixture = Fixture::new();
+        let service = fixture.bootstrap().expect("initial checkpoint bootstraps");
+        let mut previous = service
+            .store
+            .load_head(&fixture.config)
+            .expect("persisted head is readable")
+            .expect("persisted head exists");
+        previous.entries[0].snapshot.forest.leaf_count = 1;
+        previous.entries[0].snapshot.forest.update_sequence = 1;
+
+        let alternate_id = alternate_accumulator_id();
+        let replacement = snapshot(
+            &alternate_id,
+            alternate_domain(),
+            SccpReplayArchiveFinalityV1 {
+                network_identity_sha256: [0x91; 32],
+                finalized_height: 2,
+                finalized_block_hash: [0x42; 32],
+                predecessor_snapshot_sha256: [0; 32],
+            },
+        );
+        let bytes =
+            checkpoint_set_bytes(&replacement, &fixture.key_pairs, &fixture.config.replicas);
+
+        assert_eq!(
+            validate_candidate(
+                &fixture.config,
+                &bytes,
+                Some(&previous),
+                fixture.local_authority.as_ref(),
+            )
+            .map(|_| ()),
+            Err(ToriiSccpReplayStartupErrorV1::Continuity),
+            "a route removal cannot discard any previously observed replay fact"
+        );
+    }
+
+    #[test]
     fn process_lock_rejects_a_second_writer_but_restart_reuses_the_head() {
         let fixture = Fixture::new();
         let service = fixture.bootstrap().expect("initial checkpoint bootstraps");
@@ -3358,6 +5040,86 @@ mod tests {
                 .snapshot_sha256,
             fixture.first_snapshot_sha256
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_replaces_the_manifest_across_repeated_refreshes() {
+        let fixture = Fixture::new();
+        let service = fixture.bootstrap().expect("initial checkpoint bootstraps");
+        let (second, second_snapshot_sha256) =
+            fixture.bytes_at(2, [0x42; 32], fixture.first_snapshot_sha256);
+        fixture.source.set_all(&fixture.config.replicas, &second);
+        service
+            .refresh()
+            .expect("second head replaces the manifest");
+
+        let (third, third_snapshot_sha256) =
+            fixture.bytes_at(3, [0x43; 32], second_snapshot_sha256);
+        fixture.source.set_all(&fixture.config.replicas, &third);
+        service.refresh().expect("third head replaces the manifest");
+        assert_eq!(
+            service
+                .checkpoint(&fixture.accumulator_id)
+                .expect("third checkpoint is published")
+                .body
+                .snapshot_sha256,
+            third_snapshot_sha256
+        );
+
+        drop(service);
+        fixture.source.clear();
+        let restarted = fixture
+            .bootstrap()
+            .expect("the twice-replaced durable manifest restarts");
+        assert_eq!(
+            restarted
+                .checkpoint(&fixture.accumulator_id)
+                .expect("third checkpoint survives restart")
+                .body
+                .snapshot_sha256,
+            third_snapshot_sha256
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_replaces_the_manifest_beyond_the_legacy_path_limit() {
+        use std::os::windows::ffi::OsStrExt as _;
+
+        let mut fixture = Fixture::new();
+        let mut deep_parent = fixture._temporary_root.path().to_path_buf();
+        for index in 0..4 {
+            deep_parent.push(format!("{index}-{}", "x".repeat(72)));
+            fs::create_dir(&deep_parent).expect("long-path ancestor is created");
+        }
+        fixture.config.state_dir = deep_parent.join("sccp-replay");
+        assert!(
+            fixture.config.state_dir.as_os_str().encode_wide().count() > 260,
+            "fixture must exercise a path beyond the legacy Win32 limit"
+        );
+
+        let service = fixture.bootstrap().expect("long-path bootstrap succeeds");
+        let (second, second_snapshot_sha256) =
+            fixture.bytes_at(2, [0x42; 32], fixture.first_snapshot_sha256);
+        fixture.source.set_all(&fixture.config.replicas, &second);
+        service
+            .refresh()
+            .expect("long-path manifest replacement succeeds");
+        assert_eq!(
+            service
+                .checkpoint(&fixture.accumulator_id)
+                .expect("replacement checkpoint is published")
+                .body
+                .snapshot_sha256,
+            second_snapshot_sha256
+        );
+
+        drop(service);
+        fixture.source.clear();
+        fixture
+            .bootstrap()
+            .expect("long-path manifest survives restart");
     }
 
     #[test]
@@ -3552,6 +5314,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn startup_rejects_insecure_or_symlinked_state_directories() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
@@ -3577,6 +5340,23 @@ mod tests {
         assert_eq!(
             fixture.bootstrap().map(|_| ()),
             Err(ToriiSccpReplayStartupErrorV1::Persistence)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn startup_rejects_a_regular_file_as_the_state_directory() {
+        let fixture = Fixture::new();
+        fs::write(&fixture.config.state_dir, b"not a replay directory")
+            .expect("regular state path is created");
+
+        assert_eq!(
+            fixture.bootstrap().map(|_| ()),
+            Err(ToriiSccpReplayStartupErrorV1::Persistence)
+        );
+        assert_eq!(
+            fs::read(&fixture.config.state_dir).expect("rejected state path is untouched"),
+            b"not a replay directory"
         );
     }
 
@@ -3611,6 +5391,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn startup_never_follows_a_substituted_lock_file() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};

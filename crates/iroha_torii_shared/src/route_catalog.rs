@@ -65,6 +65,16 @@ pub enum Listener {
     /// The single configured Torii HTTP listener.
     Torii,
 }
+/// Application transport used by a route after the HTTP request is accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RouteTransport {
+    /// Bounded HTTP request and response.
+    Http,
+    /// Server-sent event stream.
+    ServerSentEvents,
+    /// WebSocket session established through an HTTP upgrade.
+    WebSocket,
+}
 /// Authentication contract enforced by the route boundary.
 ///
 /// Most policies are middleware-backed. Protocol exchanges and explicitly reviewed handlers may
@@ -157,7 +167,7 @@ pub enum RouteEffect {
     ExpensiveCompute,
     /// Ledger, durable-service, or retained-job mutation.
     Mutation,
-    /// SSE, WebSocket, or another response which deliberately remains open.
+    /// SSE or WebSocket response which deliberately remains open.
     LongLivedStream,
 }
 /// Principal eligibility required before a route may perform its effect.
@@ -330,9 +340,6 @@ pub enum CatalogProjection {
 /// operation in `OpenAPI`, SDK, or MCP projections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ImplicitRouteKind {
-    /// Axum's GET method router also answers HEAD without invoking a distinct
-    /// application operation.
-    Head,
     /// CORS middleware may terminate a preflight OPTIONS request before the application handler.
     CorsOptions,
 }
@@ -370,6 +377,7 @@ pub struct RouteDescriptor {
     surface: ApiSurface,
     listener: Listener,
     effect: RouteEffect,
+    transport: RouteTransport,
     admission: AdmissionPolicy,
     authentication: AuthenticationPolicy,
     feature_gate: FeatureGate,
@@ -378,12 +386,11 @@ pub struct RouteDescriptor {
     path_policy: PathPolicy,
     path_normalization: PathNormalization,
     private_no_store: bool,
-    implicit_head: bool,
     cors_options: bool,
 }
 impl RouteDescriptor {
-    /// Construct a route with explicit effect and admission metadata. No effect or admission
-    /// default exists: every descriptor must state both security axes at its declaration site.
+    /// Construct a bounded HTTP route with explicit effect and admission metadata. No effect or
+    /// admission default exists; streaming routes must also replace the default HTTP transport.
     #[must_use]
     pub const fn new(
         stable_route_id: &'static str,
@@ -402,6 +409,7 @@ impl RouteDescriptor {
             surface,
             listener,
             effect,
+            transport: RouteTransport::Http,
             admission,
             authentication: AuthenticationPolicy::ToriiDefault,
             feature_gate: FeatureGate::Always,
@@ -410,7 +418,6 @@ impl RouteDescriptor {
             path_policy: PathPolicy::CanonicalV1,
             path_normalization: PathNormalization::Strict,
             private_no_store: false,
-            implicit_head: false,
             cors_options: false,
         }
     }
@@ -430,6 +437,12 @@ impl RouteDescriptor {
     #[must_use]
     pub const fn with_effect(mut self, effect: RouteEffect) -> Self {
         self.effect = effect;
+        self
+    }
+    /// Set the application transport used after request admission.
+    #[must_use]
+    pub const fn with_transport(mut self, transport: RouteTransport) -> Self {
+        self.transport = transport;
         self
     }
     /// Replace the explicitly declared admission policy with a more precise classification.
@@ -460,12 +473,6 @@ impl RouteDescriptor {
     #[must_use]
     pub const fn with_private_no_store(mut self) -> Self {
         self.private_no_store = true;
-        self
-    }
-    /// Declare whether GET may also generate framework-level HEAD behavior.
-    #[must_use]
-    pub const fn with_implicit_head(mut self, implicit_head: bool) -> Self {
-        self.implicit_head = implicit_head;
         self
     }
     /// Declare whether CORS middleware may answer OPTIONS for this path.
@@ -503,6 +510,11 @@ impl RouteDescriptor {
     #[must_use]
     pub const fn effect(self) -> RouteEffect {
         self.effect
+    }
+    /// Return the application transport used after request admission.
+    #[must_use]
+    pub const fn transport(self) -> RouteTransport {
+        self.transport
     }
     /// Return the principal eligibility required before executing the route.
     #[must_use]
@@ -543,11 +555,6 @@ impl RouteDescriptor {
     #[must_use]
     pub const fn requires_private_no_store(self) -> bool {
         self.private_no_store || self.authentication.requires_private_no_store()
-    }
-    /// Return whether framework-level HEAD behavior is declared.
-    #[must_use]
-    pub const fn implicit_head(self) -> bool {
-        self.implicit_head
     }
     /// Return whether CORS middleware may answer OPTIONS.
     #[must_use]
@@ -616,9 +623,9 @@ impl<'a> RouteCatalog<'a> {
             .filter(|route| route.is_in_projection(projection, features))
             .collect()
     }
-    /// Materialize declared framework-level HEAD and CORS OPTIONS behavior.
-    /// These entries remain separate from explicit application operations so
-    /// projections never accidentally generate SDK or MCP methods for them.
+    /// Materialize declared framework-level CORS OPTIONS behavior.
+    /// These entries remain separate from explicit application operations so projections never
+    /// accidentally generate SDK or MCP methods for them.
     #[must_use]
     pub fn implicit_routes(self, features: EnabledFeatures<'_>) -> Vec<ImplicitRouteDescriptor> {
         let mut routes = Vec::new();
@@ -628,13 +635,6 @@ impl<'a> RouteCatalog<'a> {
             .iter()
             .filter(|route| route.is_in_projection(CatalogProjection::Mounted, features))
         {
-            if route.implicit_head {
-                routes.push(ImplicitRouteDescriptor {
-                    parent_route_id: route.stable_route_id,
-                    path: route.path,
-                    kind: ImplicitRouteKind::Head,
-                });
-            }
             if route.cors_options && cors_paths.insert(route.path) {
                 routes.push(ImplicitRouteDescriptor {
                     parent_route_id: route.stable_route_id,
@@ -722,14 +722,14 @@ pub enum CatalogValidationErrorKind {
     GovernedAuditorAdmissionRequiresAuthentication,
     /// Operator admission lacks an operator-capable credential boundary.
     OperatorAdmissionRequiresAuthentication,
-    /// Long-lived streams must use GET or a reviewed protocol catch-all.
-    LongLivedStreamRequiresGetOrAny,
+    /// SSE and WebSocket transports must use GET.
+    StreamingTransportRequiresGet,
+    /// SSE and WebSocket transports must be classified as long-lived streams.
+    StreamingTransportRequiresLongLivedStream,
+    /// Long-lived streams must declare either SSE or WebSocket transport.
+    LongLivedStreamRequiresStreamingTransport,
     /// Long-lived streams require handler or middleware authentication.
     LongLivedStreamRequiresAuthentication,
-    /// Only GET descriptors may request implicit HEAD handling.
-    ImplicitHeadRequiresGet,
-    /// Axum GET routing always provides framework-level HEAD handling.
-    GetRequiresImplicitHead,
     /// Catch-all method routing is reserved for protocol-native gateways.
     AnyMethodRequiresProtocolSurface,
     /// Catch-all method routing cannot be projected into generated tooling.
@@ -967,11 +967,25 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::OperatorAdmissionRequiresAuthentication,
             });
         }
-        if route.effect == RouteEffect::LongLivedStream {
-            if !matches!(route.method, HttpMethod::Get | HttpMethod::Any) {
+        if route.transport != RouteTransport::Http {
+            if route.method != HttpMethod::Get {
                 errors.push(CatalogValidationError {
                     stable_route_id: route_id,
-                    kind: CatalogValidationErrorKind::LongLivedStreamRequiresGetOrAny,
+                    kind: CatalogValidationErrorKind::StreamingTransportRequiresGet,
+                });
+            }
+            if route.effect != RouteEffect::LongLivedStream {
+                errors.push(CatalogValidationError {
+                    stable_route_id: route_id,
+                    kind: CatalogValidationErrorKind::StreamingTransportRequiresLongLivedStream,
+                });
+            }
+        }
+        if route.effect == RouteEffect::LongLivedStream {
+            if route.transport == RouteTransport::Http {
+                errors.push(CatalogValidationError {
+                    stable_route_id: route_id,
+                    kind: CatalogValidationErrorKind::LongLivedStreamRequiresStreamingTransport,
                 });
             }
             if matches!(
@@ -983,17 +997,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                     kind: CatalogValidationErrorKind::LongLivedStreamRequiresAuthentication,
                 });
             }
-        }
-        if route.implicit_head && route.method != HttpMethod::Get {
-            errors.push(CatalogValidationError {
-                stable_route_id: route_id,
-                kind: CatalogValidationErrorKind::ImplicitHeadRequiresGet,
-            });
-        } else if route.method == HttpMethod::Get && !route.implicit_head {
-            errors.push(CatalogValidationError {
-                stable_route_id: route_id,
-                kind: CatalogValidationErrorKind::GetRequiresImplicitHead,
-            });
         }
         if route.method == HttpMethod::Any {
             if route.surface != ApiSurface::Protocol {
@@ -1201,7 +1204,6 @@ pub mod offline {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Descriptor for proof-bearing receiver-registration lineage resolution.
     pub const RECIPIENT_LINEAGE: RouteDescriptor = RouteDescriptor::new(
@@ -1271,7 +1273,6 @@ pub mod offline {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Canonical first-release offline API catalog.
     pub const ROUTES: &[RouteDescriptor] = &[
@@ -1441,7 +1442,6 @@ pub mod operator_authentication {
         )
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_projections(RouteProjections::OPENAPI)
-        .with_implicit_head(matches!(method, HttpMethod::Get))
         .with_cors_options(true)
     }
     /// Start operator `WebAuthn` credential registration.
@@ -1505,7 +1505,6 @@ pub mod core {
         AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::ALL)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read the node-local connected-peer snapshot as an authenticated operator.
     pub const PEERS: RouteDescriptor = RouteDescriptor::new(
@@ -1518,8 +1517,7 @@ pub mod core {
         AdmissionPolicy::Operator,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true);
+    .with_projections(RouteProjections::OPENAPI_AND_SDK);
     /// Orchestrator-compatible liveness probe.
     pub const HEALTH: RouteDescriptor = RouteDescriptor::new(
         "protocol.health",
@@ -1534,8 +1532,7 @@ pub mod core {
     .with_projections(RouteProjections::ALL)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "orchestrator health-probe convention",
-    })
-    .with_implicit_head(true);
+    });
     /// Process-only liveness probe. This does not imply protocol readiness.
     pub const LIVEZ: RouteDescriptor = RouteDescriptor::new(
         "protocol.livez",
@@ -1550,8 +1547,7 @@ pub mod core {
     .with_projections(RouteProjections::ALL)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "orchestrator liveness-probe convention",
-    })
-    .with_implicit_head(true);
+    });
     /// Complete node readiness probe, independent of optional application state.
     pub const READYZ: RouteDescriptor = RouteDescriptor::new(
         "protocol.readyz",
@@ -1566,8 +1562,7 @@ pub mod core {
     .with_projections(RouteProjections::ALL)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "orchestrator readiness-probe convention",
-    })
-    .with_implicit_head(true);
+    });
     /// Read the effective node configuration.
     pub const CONFIGURATION_GET: RouteDescriptor = RouteDescriptor::new(
         "operator.configuration.read",
@@ -1579,8 +1574,7 @@ pub mod core {
         AdmissionPolicy::Operator,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
-    .with_projections(RouteProjections::OPENAPI)
-    .with_implicit_head(true);
+    .with_projections(RouteProjections::OPENAPI);
     /// Update mutable node configuration.
     pub const CONFIGURATION_POST: RouteDescriptor = RouteDescriptor::new(
         "operator.configuration.update",
@@ -1604,7 +1598,6 @@ pub mod core {
         AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read newest ledger headers.
     pub const LEDGER_HEADERS: RouteDescriptor = RouteDescriptor::new(
@@ -1617,7 +1610,6 @@ pub mod core {
         AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read a ledger execution-state root with exact Sumeragi-v2 finality.
     pub const LEDGER_STATE_ROOT: RouteDescriptor = RouteDescriptor::new(
@@ -1630,7 +1622,6 @@ pub mod core {
         AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read exact Sumeragi-v2 ledger execution-state finality.
     pub const LEDGER_STATE_PROOF: RouteDescriptor = RouteDescriptor::new(
@@ -1643,7 +1634,6 @@ pub mod core {
         AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read the exact canonical executed block wire at one finalized height.
     pub const LEDGER_EXECUTED_BLOCK_WIRE: RouteDescriptor = RouteDescriptor::new(
@@ -1656,7 +1646,6 @@ pub mod core {
         AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read a transaction-entry proof from a block.
     pub const LEDGER_BLOCK_PROOF: RouteDescriptor = RouteDescriptor::new(
@@ -1669,7 +1658,6 @@ pub mod core {
         AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Internal peer-to-peer Torii HTTP proxy.
     pub const INTERNAL_PROXY: RouteDescriptor = RouteDescriptor::new(
@@ -1694,7 +1682,6 @@ pub mod core {
         AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Create a VPN price quote.
     pub const VPN_QUOTE_CREATE: RouteDescriptor = RouteDescriptor::new(
@@ -1734,7 +1721,6 @@ pub mod core {
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Submit a VPN settlement receipt.
     pub const VPN_RECEIPT_SUBMIT: RouteDescriptor = RouteDescriptor::new(
@@ -1761,7 +1747,6 @@ pub mod core {
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read the node's wall-clock sample.
     pub const TIME_NOW: RouteDescriptor = RouteDescriptor::new(
@@ -1774,7 +1759,6 @@ pub mod core {
         AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read node-local time synchronization status as an authenticated operator.
     pub const TIME_STATUS: RouteDescriptor = RouteDescriptor::new(
@@ -1787,8 +1771,7 @@ pub mod core {
         AdmissionPolicy::Operator,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true);
+    .with_projections(RouteProjections::OPENAPI_AND_SDK);
     /// Core information routes registered by `add_core_info_routes`.
     pub const INFO_ROUTES: &[RouteDescriptor] = &[
         API_VERSION,
@@ -1836,8 +1819,7 @@ pub mod diagnostic {
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "established infrastructure status endpoint",
-    })
-    .with_implicit_head(true);
+    });
     /// Canonical committed block-height diagnostic.
     pub const STATUS_BLOCKS: RouteDescriptor = RouteDescriptor::new(
         "diagnostic.status_blocks",
@@ -1853,8 +1835,7 @@ pub mod diagnostic {
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "established infrastructure block-height probe",
-    })
-    .with_implicit_head(true);
+    });
     /// Current online-peer-count diagnostic.
     pub const STATUS_PEERS: RouteDescriptor = RouteDescriptor::new(
         "diagnostic.status_peers",
@@ -1870,8 +1851,7 @@ pub mod diagnostic {
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "established infrastructure peer-count probe",
-    })
-    .with_implicit_head(true);
+    });
     /// Prometheus metrics exposition.
     pub const METRICS: RouteDescriptor = RouteDescriptor::new(
         "diagnostic.metrics",
@@ -1887,8 +1867,7 @@ pub mod diagnostic {
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "Prometheus exposition convention",
-    })
-    .with_implicit_head(true);
+    });
     /// CPU profiling capture.
     pub const PROFILE: RouteDescriptor = RouteDescriptor::new(
         "diagnostic.cpu_profile",
@@ -1904,8 +1883,7 @@ pub mod diagnostic {
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "pprof tooling convention",
-    })
-    .with_implicit_head(true);
+    });
     /// Runtime schema document.
     pub const SCHEMA: RouteDescriptor = RouteDescriptor::new(
         "protocol.schema",
@@ -1917,8 +1895,7 @@ pub mod diagnostic {
         AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("schema"))
-    .with_projections(RouteProjections::OPENAPI)
-    .with_implicit_head(true);
+    .with_projections(RouteProjections::OPENAPI);
     /// `OpenAPI` document at its media-typed filename.
     pub const OPENAPI_JSON: RouteDescriptor = RouteDescriptor::new(
         "protocol.openapi_json",
@@ -1932,8 +1909,7 @@ pub mod diagnostic {
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "OpenAPI document discovery convention",
-    })
-    .with_implicit_head(true);
+    });
     /// Schema route registered by `add_schema_routes`.
     pub const SCHEMA_ROUTES: &[RouteDescriptor] = &[SCHEMA];
     /// `OpenAPI` routes registered by `add_openapi_routes`.
@@ -2021,7 +1997,6 @@ pub mod pipeline {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read node-local proof-retention state as an authenticated operator.
     pub const PROOF_RETENTION: RouteDescriptor = RouteDescriptor::new(
@@ -2034,8 +2009,7 @@ pub mod pipeline {
         AdmissionPolicy::Operator,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true);
+    .with_projections(RouteProjections::OPENAPI_AND_SDK);
     /// Read the status of a submitted pipeline transaction.
     pub const TRANSACTION_STATUS: RouteDescriptor = RouteDescriptor::new(
         "pipeline.transaction_status",
@@ -2047,7 +2021,6 @@ pub mod pipeline {
         AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read exact committed transaction details through a one-shot signed query.
     pub const TRANSACTION_DETAILS: RouteDescriptor = RouteDescriptor::new(
@@ -2073,8 +2046,7 @@ pub mod pipeline {
         AdmissionPolicy::Operator,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true);
+    .with_projections(RouteProjections::OPENAPI_AND_SDK);
     /// List trigger completion records.
     pub const TRIGGER_COMPLETIONS: RouteDescriptor = RouteDescriptor::new(
         "trigger.completion.list",
@@ -2087,7 +2059,6 @@ pub mod pipeline {
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read node-local recovery information for one height as an authenticated operator.
     pub const RECOVERY: RouteDescriptor = RouteDescriptor::new(
@@ -2100,8 +2071,7 @@ pub mod pipeline {
         AdmissionPolicy::Operator,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true);
+    .with_projections(RouteProjections::OPENAPI_AND_SDK);
     /// Read `FastPQ` proofs associated with one recovery height.
     pub const RECOVERY_FASTPQ_PROOFS: RouteDescriptor = RouteDescriptor::new(
         "pipeline.recovery_fastpq_proofs",
@@ -2114,7 +2084,6 @@ pub mod pipeline {
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read the effective node-local policy document as an authenticated operator.
     pub const POLICY: RouteDescriptor = RouteDescriptor::new(
@@ -2127,8 +2096,7 @@ pub mod pipeline {
         AdmissionPolicy::Operator,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true);
+    .with_projections(RouteProjections::OPENAPI_AND_SDK);
     /// Pipeline routes currently registered through the authoritative builder.
     pub const ROUTES: &[RouteDescriptor] = &[
         TRANSACTION,
@@ -2178,7 +2146,6 @@ pub mod iso20022 {
         )
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_projections(RouteProjections::ALL)
-        .with_implicit_head(true)
         .with_cors_options(true)
     }
     /// Submit a pacs.008 customer-credit-transfer message.
@@ -2289,7 +2256,6 @@ pub mod data_availability {
             AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::ALL)
-        .with_implicit_head(true)
         .with_cors_options(true)
     }
     /// Ingest a data-availability blob and routing manifest.
@@ -2376,7 +2342,7 @@ pub mod private_settlement;
 pub mod streaming {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
-        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections, RouteTransport,
     };
     /// SSE event stream.
     pub const EVENTS_SSE: RouteDescriptor = RouteDescriptor::new(
@@ -2390,11 +2356,11 @@ pub mod streaming {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::OptionalCanonicalAccountSignature)
+    .with_transport(RouteTransport::ServerSentEvents)
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "SSE transport endpoint; stream contract is not an ordinary resource",
-    })
-    .with_implicit_head(true);
+    });
     /// Contract-event SSE stream.
     pub const CONTRACT_EVENTS_SSE: RouteDescriptor = RouteDescriptor::new(
         "contracts.events_stream_sse",
@@ -2407,11 +2373,11 @@ pub mod streaming {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::OptionalCanonicalAccountSignature)
+    .with_transport(RouteTransport::ServerSentEvents)
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "SSE transport endpoint; stream contract is not an ordinary resource",
-    })
-    .with_implicit_head(true);
+    });
     /// Event subscription WebSocket.
     pub const SUBSCRIPTION_WS: RouteDescriptor = RouteDescriptor::new(
         "events.stream_websocket",
@@ -2424,11 +2390,11 @@ pub mod streaming {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::OptionalCanonicalAccountSignature)
+    .with_transport(RouteTransport::WebSocket)
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "WebSocket transport endpoint",
-    })
-    .with_implicit_head(true);
+    });
     /// Block stream WebSocket.
     pub const BLOCKS_WS: RouteDescriptor = RouteDescriptor::new(
         "blocks.stream_websocket",
@@ -2441,11 +2407,11 @@ pub mod streaming {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_transport(RouteTransport::WebSocket)
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "WebSocket transport endpoint",
-    })
-    .with_implicit_head(true);
+    });
     /// Application streaming routes registered when `app_api` is compiled.
     pub const APP_ROUTES: &[RouteDescriptor] =
         &[EVENTS_SSE, CONTRACT_EVENTS_SSE, SUBSCRIPTION_WS, BLOCKS_WS];
@@ -2475,7 +2441,6 @@ pub mod telemetry {
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_feature_gate(FeatureGate::Feature("telemetry"))
         .with_projections(RouteProjections::ALL)
-        .with_implicit_head(true)
     }
     const fn telemetry_collector_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -2504,7 +2469,6 @@ pub mod telemetry {
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::ALL)
-        .with_implicit_head(true)
         .with_cors_options(true)
     }
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -2560,7 +2524,7 @@ pub mod telemetry {
 pub mod sumeragi {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
-        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections, RouteTransport,
     };
     const fn public_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -2573,7 +2537,6 @@ pub mod sumeragi {
             AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::ALL)
-        .with_implicit_head(true)
         .with_cors_options(true)
     }
     const fn public_sccp_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -2591,7 +2554,6 @@ pub mod sumeragi {
         )
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
-        .with_implicit_head(true)
         .with_cors_options(true)
     }
     const fn telemetry_operator_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -2608,12 +2570,12 @@ pub mod sumeragi {
             AdmissionPolicy::Operator,
         )
         .with_authentication(AuthenticationPolicy::OperatorSignature)
+        .with_transport(RouteTransport::ServerSentEvents)
         .with_feature_gate(FeatureGate::Feature("telemetry"))
         .with_projections(RouteProjections::OPENAPI)
         .with_path_policy(PathPolicy::ProtocolException {
             reason: "SSE transport endpoint; stream contract is not an ordinary resource",
         })
-        .with_implicit_head(true)
     }
     /// Count persisted consensus evidence records as an authenticated operator.
     pub const EVIDENCE_COUNT: RouteDescriptor =
@@ -2710,7 +2672,7 @@ pub mod sumeragi {
 pub mod runtime_governance {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
-        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections, RouteTransport,
     };
     const fn public_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -2723,7 +2685,6 @@ pub mod runtime_governance {
             AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
-        .with_implicit_head(true)
         .with_cors_options(true)
     }
     const fn public_post(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -2758,7 +2719,6 @@ pub mod runtime_governance {
         )
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_projections(RouteProjections::OPENAPI)
-        .with_implicit_head(true)
     }
     const fn operator_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -3042,11 +3002,11 @@ pub mod runtime_governance {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_transport(RouteTransport::ServerSentEvents)
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "governance SSE transport endpoint",
-    })
-    .with_implicit_head(true);
+    });
     /// Read governance unlock statistics.
     pub const GOV_UNLOCK_STATS: RouteDescriptor =
         app_signed_get("governance.unlock.stats", "/v1/gov/unlocks/stats");
@@ -3137,7 +3097,7 @@ pub mod sorafs {
     };
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
-        PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections, RouteTransport,
     };
     const fn public_get(
         stable_route_id: &'static str,
@@ -3155,7 +3115,6 @@ pub mod sorafs {
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(projections)
-        .with_implicit_head(true)
         .with_cors_options(true)
     }
     const fn public_gateway_get(
@@ -3175,7 +3134,6 @@ pub mod sorafs {
         )
         .with_authentication(AuthenticationPolicy::Unauthenticated)
         .with_projections(projections)
-        .with_implicit_head(true)
         .with_cors_options(true)
     }
     const fn public_post(
@@ -3232,8 +3190,8 @@ pub mod sorafs {
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+        .with_transport(RouteTransport::ServerSentEvents)
         .with_projections(RouteProjections::OPENAPI)
-        .with_implicit_head(true)
     }
     /// Read configured `SoraFS` publication peers.
     pub const STORAGE_PEERS: RouteDescriptor =
@@ -3458,46 +3416,40 @@ pub mod sorafs {
     pub const REPUTATION_LATEST_GET: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_snapshot.latest",
         "/v1/sorafs/reputation/latest",
-    )
-    .with_implicit_head(true);
+    );
     /// Read one historical reputation snapshot.
     pub const REPUTATION_SNAPSHOT: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_snapshot.read",
         "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}",
-    )
-    .with_implicit_head(true);
+    );
     /// Read one provider's reputation record and proof.
     pub const REPUTATION_PROVIDER: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_provider.read",
         "/v1/sorafs/reputation/providers/{provider_id}",
-    )
-    .with_implicit_head(true);
+    );
     /// Read the active reputation weights.
     pub const REPUTATION_WEIGHTS: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_weight.read",
         "/v1/sorafs/reputation/weights",
-    )
-    .with_implicit_head(true);
+    );
     /// Read a bounded reputation-event snapshot.
     pub const REPUTATION_EVENTS: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_event.list",
         "/v1/sorafs/reputation/events",
-    )
-    .with_implicit_head(true);
+    );
     /// Stream reputation events over SSE.
     pub const REPUTATION_EVENTS_STREAM: RouteDescriptor = stream_get(
         "protocol.sorafs.reputation_event_stream",
         "/v1/sorafs/reputation/events/stream",
     )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_implicit_head(true);
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Stream reputation events over WebSocket.
     pub const REPUTATION_EVENTS_WEBSOCKET: RouteDescriptor = stream_get(
         "protocol.sorafs.reputation_event_websocket",
         "/v1/sorafs/reputation/events/ws",
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_implicit_head(true);
+    .with_transport(RouteTransport::WebSocket);
     /// Read the `SoraFS` pin registry.
     pub const PIN_REGISTRY: RouteDescriptor = documented_get("sorafs.pin.list", "/v1/sorafs/pin");
     /// Read one `SoraFS` pin manifest.
@@ -3716,7 +3668,7 @@ pub mod sorafs {
 pub mod application_api {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
-        PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections, RouteTransport,
     };
     const fn app_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -3730,7 +3682,6 @@ pub mod application_api {
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
-        .with_implicit_head(true)
         .with_cors_options(true)
     }
     const fn internal_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -3745,7 +3696,6 @@ pub mod application_api {
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::NONE)
-        .with_implicit_head(true)
     }
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -3847,12 +3797,12 @@ pub mod application_api {
             AdmissionPolicy::AuthenticatedAccount,
         )
         .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+        .with_transport(RouteTransport::ServerSentEvents)
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI)
         .with_path_policy(PathPolicy::ProtocolException {
             reason: "streaming transport endpoint",
         })
-        .with_implicit_head(true)
     }
     const fn dataspace_protocol_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_protocol_get(id, path)
@@ -3880,7 +3830,6 @@ pub mod application_api {
             AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::All(&["app_api", "telemetry"]))
-        .with_implicit_head(true)
     }
     const fn telemetry_documented_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         telemetry_diagnostic_get(id, path).with_projections(RouteProjections::OPENAPI)
@@ -4098,7 +4047,7 @@ pub mod application_api {
 pub mod contracts_and_verification_keys {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
-        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections, RouteTransport,
     };
     const fn app_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -4112,7 +4061,6 @@ pub mod contracts_and_verification_keys {
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
-        .with_implicit_head(true)
         .with_cors_options(true)
     }
     const fn app_account_read_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -4213,15 +4161,21 @@ pub mod contracts_and_verification_keys {
             AdmissionPolicy::AuthenticatedAccount,
         )
         .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+        .with_transport(RouteTransport::ServerSentEvents)
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI)
         .with_path_policy(PathPolicy::ProtocolException {
             reason: "streaming transport endpoint",
         })
-        .with_implicit_head(true)
     }
     const fn app_unprojected_protocol_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_protocol_get(id, path).with_projections(RouteProjections::NONE)
+    }
+    const fn app_unprojected_websocket_get(
+        id: &'static str,
+        path: &'static str,
+    ) -> RouteDescriptor {
+        app_unprojected_protocol_get(id, path).with_transport(RouteTransport::WebSocket)
     }
     macro_rules! declare_routes {
         ($($name:ident => $factory:ident($id:literal, $path:literal);)+) => {
@@ -4283,7 +4237,7 @@ pub mod contracts_and_verification_keys {
         SORAFS_ORDERBOOK_CHANNELS_GET => app_sdk_get("contracts.sorafs_orderbook_channels_get", "/v1/sorafs/orderbook/channels");
         SORAFS_ORDERBOOK_EVENTS_GET => app_sdk_get("contracts.sorafs_orderbook_events_get", "/v1/sorafs/orderbook/events");
         SORAFS_ORDERBOOK_EVENTS_STREAM_GET => app_unprojected_protocol_get("contracts.sorafs_orderbook_events_stream_get", "/v1/sorafs/orderbook/events/stream");
-        SORAFS_ORDERBOOK_EVENTS_WS_GET => app_unprojected_protocol_get("contracts.sorafs_orderbook_events_ws_get", "/v1/sorafs/orderbook/events/ws");
+        SORAFS_ORDERBOOK_EVENTS_WS_GET => app_unprojected_websocket_get("contracts.sorafs_orderbook_events_ws_get", "/v1/sorafs/orderbook/events/ws");
         SORAFS_RESERVE_POLICY_GET => app_account_read_sdk_get("contracts.sorafs_reserve_policy_get", "/v1/sorafs/reserve/policy");
         SORAFS_RESERVE_PROVIDERS_GET => app_account_read_sdk_get("contracts.sorafs_reserve_providers_get", "/v1/sorafs/reserve/providers");
         SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => app_account_read_sdk_get("contracts.sorafs_reserve_providers_by_provider_id_hex_get", "/v1/sorafs/reserve/providers/{provider_id_hex}");
@@ -4300,7 +4254,7 @@ pub mod contracts_and_verification_keys {
         SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_DECISION_POST => app_signed_body_mutation_sdk_post("contracts.sorafs_reserve_appeals_by_appeal_id_hex_decision_post", "/v1/sorafs/reserve/appeals/{appeal_id_hex}/decision");
         SORAFS_RESERVE_EVENTS_GET => app_account_read_sdk_get("contracts.sorafs_reserve_events_get", "/v1/sorafs/reserve/events");
         SORAFS_RESERVE_EVENTS_STREAM_GET => app_unprojected_protocol_get("contracts.sorafs_reserve_events_stream_get", "/v1/sorafs/reserve/events/stream");
-        SORAFS_RESERVE_EVENTS_WS_GET => app_unprojected_protocol_get("contracts.sorafs_reserve_events_ws_get", "/v1/sorafs/reserve/events/ws");
+        SORAFS_RESERVE_EVENTS_WS_GET => app_unprojected_websocket_get("contracts.sorafs_reserve_events_ws_get", "/v1/sorafs/reserve/events/ws");
         SORAFS_GATEWAY_COMPLIANCE_FEEDS_BY_FEED_ID_GET => app_account_read_get("contracts.sorafs_gateway_compliance_feeds_by_feed_id_get", "/v1/sorafs/gateway/compliance/feeds/{feed_id}");
         SORAFS_GATEWAY_COMPLIANCE_STATUS_GET => app_account_read_get("contracts.sorafs_gateway_compliance_status_get", "/v1/sorafs/gateway/compliance/status");
         SORAFS_GATEWAY_COMPLIANCE_STAGE_POST => app_account_mutation_post("contracts.sorafs_gateway_compliance_stage_post", "/v1/sorafs/gateway/compliance/stage");
@@ -4443,7 +4397,6 @@ pub mod content_directory {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI)
     .with_route_match(RouteMatch::Wildcard)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read the latest signed `SoraDNS` directory snapshot.
     pub const SORADNS_LATEST: RouteDescriptor = RouteDescriptor::new(
@@ -4457,7 +4410,6 @@ pub mod content_directory {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Read the bounded `SoraDNS` directory event snapshot.
     pub const SORADNS_EVENTS: RouteDescriptor = RouteDescriptor::new(
@@ -4471,7 +4423,6 @@ pub mod content_directory {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI)
-    .with_implicit_head(true)
     .with_cors_options(true);
     /// Canonical raw-content and directory route set.
     pub const ROUTES: &[RouteDescriptor] = &[CONTENT, SORADNS_LATEST, SORADNS_EVENTS];

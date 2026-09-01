@@ -25,10 +25,12 @@ struct SeededDomainRecord {
     literal: String,
     status: NameStatus,
 }
-fn test_router() -> Router {
+fn test_router() -> iroha_torii::TestApiRouterRuntime {
     test_router_with_domain_records(Vec::new())
 }
-fn test_router_with_domain_records(records: Vec<SeededDomainRecord>) -> Router {
+fn test_router_with_domain_records(
+    records: Vec<SeededDomainRecord>,
+) -> iroha_torii::TestApiRouterRuntime {
     let cfg = test_utils::mk_minimal_root_cfg();
     let mut world = World::default();
     for record in records {
@@ -115,6 +117,7 @@ async fn sns_fetch_seeded_record_and_policy_round_trip() {
     assert!(matches!(record.status, NameStatus::Active));
     let policy_resp = get(&app, format!("/v1/sns/policies/{DOMAIN_NAME_SUFFIX_ID}")).await;
     assert_eq!(policy_resp.status(), StatusCode::OK);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn sns_fetch_accepts_noncanonical_domain_path_literal() {
@@ -126,6 +129,7 @@ async fn sns_fetch_accepts_noncanonical_domain_path_literal() {
         norito::json::from_slice(&record_resp.into_body().collect().await.unwrap().to_bytes())
             .expect("decode record");
     assert_eq!(record.selector.normalized_label(), "casepath.universal");
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn sns_fetch_returns_seeded_frozen_status() {
@@ -142,30 +146,35 @@ async fn sns_fetch_returns_seeded_frozen_status() {
         norito::json::from_slice(&record_resp.into_body().collect().await.unwrap().to_bytes())
             .expect("decode record");
     assert!(matches!(record.status, NameStatus::Frozen(_)));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn sns_fetch_rejects_bare_domain_literal() {
     let app = test_router();
     let record_resp = get(&app, "/v1/sns/names/domain/lookupcanon").await;
     assert_eq!(record_resp.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn sns_fetch_missing_name_returns_not_found() {
     let app = test_router();
     let record_resp = get(&app, "/v1/sns/names/domain/missing.universal").await;
     assert_eq!(record_resp.status(), StatusCode::NOT_FOUND);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn sns_fetch_rejects_unknown_namespace() {
     let app = test_router();
     let record_resp = get(&app, "/v1/sns/names/not-a-namespace/casepath.universal").await;
     assert_eq!(record_resp.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn sns_missing_policy_returns_not_found() {
     let app = test_router();
     let policy_resp = get(&app, "/v1/sns/policies/65535").await;
     assert_eq!(policy_resp.status(), StatusCode::NOT_FOUND);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn sns_mutation_routes_are_absent() {
@@ -185,4 +194,5 @@ async fn sns_mutation_routes_are_absent() {
             "obsolete SNS mutation route must be absent: {method} {path}"
         );
     }
+    app.shutdown().await;
 }

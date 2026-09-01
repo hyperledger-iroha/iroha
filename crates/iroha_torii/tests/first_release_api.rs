@@ -99,7 +99,8 @@ async fn assert_canonical_early_error(
 }
 #[tokio::test]
 async fn unknown_routes_use_negotiated_typed_error_envelopes() {
-    let router = build_router();
+    let runtime = build_router();
+    let router = runtime.router();
     for accept in ["application/json", "application/x-norito"] {
         let response = router
             .clone()
@@ -118,10 +119,12 @@ async fn unknown_routes_use_negotiated_typed_error_envelopes() {
         assert_eq!(envelope.code(), "route_not_found", "Accept: {accept}");
         assert!(header_contains_token(&headers, VARY, "Accept"));
     }
+    runtime.shutdown().await;
 }
 #[tokio::test]
 async fn retired_legacy_finality_routes_are_absent() {
-    let router = build_router();
+    let runtime = build_router();
+    let router = runtime.router();
     for path in [
         "/v1/sumeragi/commit-certificates",
         "/v1/sumeragi/commit-qcs/00",
@@ -144,10 +147,12 @@ async fn retired_legacy_finality_routes_are_absent() {
         assert_eq!(status, StatusCode::NOT_FOUND, "path={path}");
         assert_eq!(envelope.code(), "route_not_found", "path={path}");
     }
+    runtime.shutdown().await;
 }
 #[tokio::test]
 async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
-    let router = build_router();
+    let runtime = build_router();
+    let router = runtime.router();
     let invalid_path = router
         .clone()
         .oneshot(
@@ -215,10 +220,12 @@ async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
         "early-accept-406",
     )
     .await;
+    runtime.shutdown().await;
 }
 #[tokio::test]
 async fn offline_command_header_admission_precedes_body_decoding() {
-    let router = build_router();
+    let runtime = build_router();
+    let router = runtime.router();
     for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
         let response = router
             .clone()
@@ -261,10 +268,12 @@ async fn offline_command_header_admission_precedes_body_decoding() {
             "path={path}"
         );
     }
+    runtime.shutdown().await;
 }
 #[tokio::test]
 async fn wrong_methods_use_negotiated_typed_errors_and_retain_allow() {
-    let router = build_router();
+    let runtime = build_router();
+    let router = runtime.router();
     for accept in ["application/json", "application/x-norito"] {
         let response = router
             .clone()
@@ -286,6 +295,7 @@ async fn wrong_methods_use_negotiated_typed_errors_and_retain_allow() {
         assert!(header_contains_token(&headers, ALLOW, "HEAD"));
         assert!(header_contains_token(&headers, VARY, "Accept"));
     }
+    runtime.shutdown().await;
 }
 #[tokio::test]
 async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
@@ -310,7 +320,8 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
             .to_bytes()
             .to_vec()
     }
-    let router = build_router();
+    let runtime = build_router();
+    let router = runtime.router();
     let before = por_status_snapshot(&router).await;
     let unsupported = [
         "/v1/sorafs/capacity/por-challenge",
@@ -374,11 +385,13 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
             "active route was removed: POST {active_path}"
         );
     }
+    runtime.shutdown().await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn canonical_sumeragi_spellings_reach_their_resource_handlers() {
-    let router = build_router();
+    let runtime = build_router();
+    let router = runtime.router();
     for path in ["/v1/sumeragi/bls-keys"] {
         let response = router
             .clone()
@@ -398,8 +411,9 @@ async fn canonical_sumeragi_spellings_reach_their_resource_handlers() {
             "canonical route must resolve: {path}"
         );
     }
+    runtime.shutdown().await;
 }
-fn build_router() -> axum::Router {
+fn build_router() -> iroha_torii::TestApiRouterRuntime {
     let cfg = test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();

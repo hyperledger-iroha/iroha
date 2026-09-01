@@ -32,6 +32,11 @@ fn sumeragi_doc_mentions_governed_reconfig_defaults_and_errors() {
         doc.contains("mode_activation_height requires next_mode to be set in the same block"),
         "specs/sumeragi.md must document the joint-consensus staging error message"
     );
+    assert!(
+        doc.contains("immutable after the initial signed installation")
+            && doc.contains("horizon plus delay may span at most three epochs"),
+        "specs/sumeragi.md must pin the first-release accountability-capacity invariant"
+    );
 }
 #[test]
 fn governance_api_doc_covers_joint_consensus_flow() {
@@ -62,6 +67,20 @@ fn governance_api_doc_covers_joint_consensus_flow() {
     assert!(
         doc.contains("mode_activation_height requires next_mode to be set in the same block"),
         "specs/governance_api.md must document the joint-consensus staging error message"
+    );
+    assert!(
+        doc.contains("become immutable after their initial")
+            && doc.contains("horizon plus delay cannot exceed three epochs"),
+        "specs/governance_api.md must pin immutable bounded accountability windows"
+    );
+
+    let lane_doc = std::fs::read_to_string(repo_root.join("specs/nexus_public_lanes.md"))
+        .expect("read nexus_public_lanes.md");
+    assert!(
+        lane_doc.contains(
+            "slashable_through_height + evidence_horizon_blocks + slashing_delay_blocks"
+        ) && lane_doc.contains("Consensus effects run before ordinary transactions"),
+        "public-lane docs must pin the inclusive effects-first unbond liability formula"
     );
 }
 fn workspace_root() -> &'static Path {

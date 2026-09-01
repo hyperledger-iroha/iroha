@@ -289,13 +289,14 @@ impl V2GlobalBeaconLifecycle {
         if active.view.is_some_and(|previous| view < previous) {
             return Err(V2GlobalBeaconError::WrongView);
         }
-        active.view = Some(view);
-        active.retransmit = None;
 
+        let mut next_aggregator = active.aggregator.clone();
+        let mut next_finalized = active.finalized;
+        let mut next_retransmit = None;
         if let (Some(local_validator), Some(signer)) = (self.local_validator, self.signer.as_ref())
         {
             let partial = signer
-                .sign_partial(&active.session, active.aggregator.payload())
+                .sign_partial(&active.session, next_aggregator.payload())
                 .map_err(|_| V2GlobalBeaconError::LocalSigning)?;
             let expected_index = u16::try_from(local_validator)
                 .ok()
@@ -313,11 +314,11 @@ impl V2GlobalBeaconLifecycle {
                 partial.signature_share[0] ^= 1;
                 partial
             } else {
-                let _ = active.aggregator.accept_partial(partial)?;
+                let _ = next_aggregator.accept_partial(partial)?;
                 partial
             };
             #[cfg(not(feature = "test-network-parliament-signers"))]
-            let _ = active.aggregator.accept_partial(partial)?;
+            let _ = next_aggregator.accept_partial(partial)?;
             let message = wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(
                     wire::GlobalBeaconPartialSignature {
@@ -330,23 +331,29 @@ impl V2GlobalBeaconLifecycle {
                     },
                 ),
             );
-            active.retransmit = Some(message.clone());
-            self.outbound.push(message);
+            next_retransmit = Some(message);
             #[cfg(not(feature = "test-network-parliament-signers"))]
-            if active.finalized.is_none()
-                && active.aggregator.verified_partial_count()
+            if next_finalized.is_none()
+                && next_aggregator.verified_partial_count()
                     >= usize::from(active.session.record().threshold)
             {
-                active.finalized = Some(active.aggregator.finalize()?);
+                next_finalized = Some(next_aggregator.finalize()?);
             }
             #[cfg(feature = "test-network-parliament-signers")]
             if !deliberately_invalid_outbound
-                && active.finalized.is_none()
-                && active.aggregator.verified_partial_count()
+                && next_finalized.is_none()
+                && next_aggregator.verified_partial_count()
                     >= usize::from(active.session.record().threshold)
             {
-                active.finalized = Some(active.aggregator.finalize()?);
+                next_finalized = Some(next_aggregator.finalize()?);
             }
+        }
+        active.aggregator = next_aggregator;
+        active.finalized = next_finalized;
+        active.view = Some(view);
+        active.retransmit = next_retransmit;
+        if let Some(message) = active.retransmit.clone() {
+            self.outbound.push(message);
         }
         Ok(())
     }

@@ -2651,7 +2651,10 @@ pub(crate) mod tests {
         peer::PeerId,
     };
     use rand::rngs::StdRng;
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     struct AcceptingAdaptiveDkgCrypto;
 
@@ -3126,6 +3129,24 @@ pub(crate) mod tests {
         recipient_index: u16,
     ) -> Arc<dyn GlobalThresholdBeaconPartialSignerV1> {
         Arc::new(live_fixture_in_memory_signer(fixture, recipient_index))
+    }
+
+    struct FailOnceBeaconSigner {
+        inner: Arc<dyn GlobalThresholdBeaconPartialSignerV1>,
+        attempts: Arc<AtomicUsize>,
+    }
+
+    impl GlobalThresholdBeaconPartialSignerV1 for FailOnceBeaconSigner {
+        fn sign_partial(
+            &self,
+            session: &ValidatedGlobalThresholdBeaconSessionV1,
+            payload: &[u8],
+        ) -> Result<GlobalThresholdBeaconPartialSignatureV1, String> {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err("transient signer failure".to_owned());
+            }
+            self.inner.sign_partial(session, payload)
+        }
     }
 
     #[cfg(feature = "test-network-parliament-signers")]
@@ -4017,6 +4038,66 @@ pub(crate) mod tests {
             invalid_producer.finalized_pulse(0).is_none(),
             "the malformed outbound share must neither be pre-counted locally nor admitted on ingress",
         );
+    }
+
+    #[test]
+    fn transient_local_signing_failure_retries_same_view_and_allows_inbound_progress() {
+        let keys = live_producer_keys();
+        let network_id = beacon_fixture_network_id(0xA8);
+        let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD8; 32]));
+        let context = live_producer_context(&keys, network_id, parent_hash);
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let mut dkg_session = adaptive_dkg_session_fixture();
+        dkg_session.network_id = network_id;
+        dkg_session.roster_hash = global_threshold_beacon_roster_hash_v1(&roster);
+        let fixture = adaptive_beacon_fixture_for_session(dkg_session);
+        let cursor = GlobalThresholdBeaconPulseLinkV1 {
+            pulse_id: [0x69; 32],
+            seed: [0x6A; 32],
+            height: 0,
+            round: 0,
+        };
+        let state = live_producer_state(&fixture, cursor, parent_hash);
+
+        let mut remote = V2GlobalBeaconLifecycle::open(
+            &context,
+            &state,
+            Some(1),
+            Some(live_fixture_signer(&fixture, 2)),
+        )
+        .expect("open remote beacon producer");
+        remote.begin_round(0).expect("produce remote beacon share");
+        let remote =
+            beacon_partial_payload(remote.take_outbound().pop().expect("remote beacon partial"));
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let flaky: Arc<dyn GlobalThresholdBeaconPartialSignerV1> = Arc::new(FailOnceBeaconSigner {
+            inner: live_fixture_signer(&fixture, 1),
+            attempts: Arc::clone(&attempts),
+        });
+        let mut producer = V2GlobalBeaconLifecycle::open(&context, &state, Some(0), Some(flaky))
+            .expect("open fail-once beacon producer");
+
+        assert!(matches!(
+            producer.begin_round(0),
+            Err(V2GlobalBeaconError::LocalSigning)
+        ));
+        assert!(producer.take_outbound().is_empty());
+        assert!(producer.retransmission().is_empty());
+        assert_eq!(
+            producer
+                .accept_partial(remote, &roster[1], 0)
+                .expect("retry local signing before admitting the inbound share"),
+            V2GlobalBeaconIngressOutcome::Finalized
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(producer.take_outbound().len(), 1);
+        assert_eq!(producer.retransmission().len(), 1);
+        assert!(producer.finalized_pulse(0).is_some());
     }
 
     #[test]

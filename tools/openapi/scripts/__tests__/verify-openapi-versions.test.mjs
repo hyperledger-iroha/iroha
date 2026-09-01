@@ -31,6 +31,10 @@ function releaseSpec(marker) {
   );
 }
 
+function releaseSpecWithDuplicateResponse(marker) {
+  return `{"openapi":"3.1.0","info":{"title":"Torii ${marker}","version":"1.0.0"},"paths":{"/${marker}":{"get":{"responses":{"408":{"description":"first"},"4\\u00308":{"description":"second"}}}}},"components":{"schemas":{"Fixture":{"type":"object"}}}}`;
+}
+
 test('verify CLI binds every canonical input to one explicit output directory', () => {
   assert.deepEqual(
     parseArgs([
@@ -478,6 +482,20 @@ test('verifyOpenApiVersions rejects an empty OpenAPI stub', async () => {
   await assert.rejects(
     () => verifyOpenApiVersions(context),
     /empty\/stub specifications are forbidden/i,
+  );
+});
+
+test('verifyOpenApiVersions rejects duplicate spec members', async () => {
+  const context = await setupFixture();
+  await writeFile(
+    join(context.outputDir, 'torii.json'),
+    releaseSpecWithDuplicateResponse('duplicate'),
+    'utf8',
+  );
+
+  await assert.rejects(
+    () => verifyOpenApiVersions(context),
+    /duplicate JSON member "408"/i,
   );
 });
 

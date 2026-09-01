@@ -23131,7 +23131,8 @@ def test_shipped_hedging_billing_service_surface_is_exact_and_authenticated() ->
         )
     ]
     assert api_source.count("require_method(&method, Method::GET)") == 5
-    assert "expected == Method::GET && actual == Method::HEAD" in method_guard
+    assert "actual == &expected" in method_guard
+    assert "Method::HEAD" not in method_guard
     sorafs_catalog_start = route_catalog_source.index("pub mod sorafs {")
     public_get_start = route_catalog_source.index(
         "    const fn public_get(", sorafs_catalog_start
@@ -23142,7 +23143,7 @@ def test_shipped_hedging_billing_service_surface_is_exact_and_authenticated() ->
     public_get_catalog = route_catalog_source[
         public_get_start:public_post_start
     ]
-    assert ".with_implicit_head(true)" in public_get_catalog
+    assert ".with_implicit_head(" not in public_get_catalog
 
     expected_routes = dict(SHIPPED_HEDGING_BILLING_ROUTES)
     for spec_path in (

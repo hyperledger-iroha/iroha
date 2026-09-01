@@ -4,6 +4,7 @@ import Foundation
 public enum KagemushaQRStreamError: Error, Equatable, LocalizedError, Sendable {
     case invalidOptions
     case payloadTooLarge(actual: Int, maximum: Int)
+    case tooManyFrames(actual: Int, maximum: Int)
     case malformedFrame
     case nonCanonicalFrame
     case checksumMismatch
@@ -20,6 +21,8 @@ public enum KagemushaQRStreamError: Error, Equatable, LocalizedError, Sendable {
             return "Kagemusha QR stream options are outside the supported bounds."
         case .payloadTooLarge(let actual, let maximum):
             return "Kagemusha QR payload is \(actual) bytes; the limit is \(maximum)."
+        case .tooManyFrames(let actual, let maximum):
+            return "Kagemusha QR stream requires \(actual) frames; the limit is \(maximum)."
         case .malformedFrame:
             return "Kagemusha QR stream frame is malformed."
         case .nonCanonicalFrame:
@@ -89,6 +92,9 @@ public struct KagemushaQRDecodeResult: Equatable, Sendable {
 ///
 /// Each parity frame recovers at most one missing chunk in its fixed group.
 public enum KagemushaQRStreamCodec {
+    /// Maximum number of frames in one stream, including its header.
+    public static let maximumStreamFrames = 4_096
+
     /// Exact upper bound for an unpadded base64url frame, including `PKKQ1.`.
     /// This is checked before allocating the decoded frame bytes.
     static let maximumFrameTextBytes =
@@ -99,7 +105,8 @@ public enum KagemushaQRStreamCodec {
         _ payload: KagemushaPeerPayload,
         options: KagemushaQRStreamOptions = .standard
     ) throws -> [String] {
-        let archive = payload.archive
+        var archive = payload.archive
+        defer { archive.zeroize() }
         guard !archive.isEmpty,
               archive.count <= KagemushaPeerTransportContract.maximumArchiveBytes else {
             throw KagemushaQRStreamError.payloadTooLarge(
@@ -107,12 +114,14 @@ public enum KagemushaQRStreamCodec {
                 maximum: KagemushaPeerTransportContract.maximumArchiveBytes
             )
         }
-        let header = try KagemushaQRStreamEnvelope(
+        var header = try KagemushaQRStreamEnvelope(
             kind: payload.kind,
             payload: archive,
             options: options
         )
-        let streamID = header.streamID
+        defer { header.zeroize() }
+        var streamID = header.streamID
+        defer { streamID.zeroize() }
         var frames = [try KagemushaQRStreamFrame(
             kind: .header,
             streamID: streamID,
@@ -120,9 +129,14 @@ public enum KagemushaQRStreamCodec {
             total: 1,
             payload: header.encode()
         )]
+        frames.reserveCapacity(1 + header.dataChunks + header.parityChunks)
 
         var chunks: [Data] = []
         chunks.reserveCapacity(header.dataChunks)
+        defer {
+            for index in chunks.indices { chunks[index].zeroize() }
+            for index in frames.indices { frames[index].zeroize() }
+        }
         for offset in stride(from: 0, to: archive.count, by: options.chunkSize) {
             chunks.append(
                 archive.subdata(in: offset..<min(offset + options.chunkSize, archive.count))
@@ -156,9 +170,35 @@ public enum KagemushaQRStreamCodec {
             ))
         }
 
-        return frames.map { KagemushaPeerTransportContract.qrStreamTextPrefix +
-            KagemushaPeerTextCodec.base64URLEncode($0.encode())
+        return frames.map { frame in
+            var encoded = frame.encode()
+            defer { encoded.zeroize() }
+            return KagemushaPeerTransportContract.qrStreamTextPrefix +
+                KagemushaPeerTextCodec.base64URLEncode(encoded)
         }
+    }
+
+    static func preflightStreamFrameCount(
+        payloadBytes: Int,
+        options: KagemushaQRStreamOptions
+    ) throws -> Int {
+        guard (1...KagemushaPeerTransportContract.maximumArchiveBytes)
+            .contains(payloadBytes) else {
+            throw KagemushaQRStreamError.payloadTooLarge(
+                actual: payloadBytes,
+                maximum: KagemushaPeerTransportContract.maximumArchiveBytes
+            )
+        }
+        let dataChunks = (payloadBytes + options.chunkSize - 1) / options.chunkSize
+        let parityChunks = (dataChunks + options.parityGroup - 1) / options.parityGroup
+        let frameCount = 1 + dataChunks + parityChunks
+        guard frameCount <= maximumStreamFrames else {
+            throw KagemushaQRStreamError.tooManyFrames(
+                actual: frameCount,
+                maximum: maximumStreamFrames
+            )
+        }
+        return frameCount
     }
 
     static func decodeFrameText(_ value: String) throws -> KagemushaQRStreamFrame {
@@ -168,9 +208,10 @@ public enum KagemushaQRStreamCodec {
             throw KagemushaQRStreamError.nonCanonicalFrame
         }
         let body = String(value.dropFirst(prefix.count))
-        guard let bytes = KagemushaPeerTextCodec.base64URLDecode(body) else {
+        guard var bytes = KagemushaPeerTextCodec.base64URLDecode(body) else {
             throw KagemushaQRStreamError.nonCanonicalFrame
         }
+        defer { bytes.zeroize() }
         guard prefix + KagemushaPeerTextCodec.base64URLEncode(bytes) == value else {
             throw KagemushaQRStreamError.nonCanonicalFrame
         }
@@ -179,35 +220,14 @@ public enum KagemushaQRStreamCodec {
 }
 
 public final class KagemushaQRStreamDecoder: @unchecked Sendable {
-    private static let maximumDataFrames =
-        (KagemushaPeerTransportContract.maximumArchiveBytes
-            + KagemushaQRStreamOptions.minimumChunkSize - 1)
-            / KagemushaQRStreamOptions.minimumChunkSize
-    private static let maximumParityFrames =
-        (maximumDataFrames + KagemushaQRStreamOptions.minimumParityGroup - 1)
-            / KagemushaQRStreamOptions.minimumParityGroup
-
     private let lock = NSLock()
     private let chainDiscriminant: UInt16
     private var streamID: Data?
     private var envelope: KagemushaQRStreamEnvelope?
     private var dataFrames: [Int: Data] = [:]
-    private var dataFrameTotals: [Int: Int] = [:]
     private var parityFrames: [Int: Data] = [:]
-    private var parityFrameTotals: [Int: Int] = [:]
     private var recovered = Set<Int>()
     private var completedPayload: KagemushaPeerPayload?
-
-    private struct State {
-        let streamID: Data?
-        let envelope: KagemushaQRStreamEnvelope?
-        let dataFrames: [Int: Data]
-        let dataFrameTotals: [Int: Int]
-        let parityFrames: [Int: Data]
-        let parityFrameTotals: [Int: Int]
-        let recovered: Set<Int>
-        let completedPayload: KagemushaPeerPayload?
-    }
 
     public init(chainDiscriminant: UInt16) {
         self.chainDiscriminant = chainDiscriminant
@@ -216,185 +236,189 @@ public final class KagemushaQRStreamDecoder: @unchecked Sendable {
     public func reset() {
         lock.lock()
         defer { lock.unlock() }
-        streamID = nil
-        envelope = nil
-        dataFrames.removeAll(keepingCapacity: false)
-        dataFrameTotals.removeAll(keepingCapacity: false)
-        parityFrames.removeAll(keepingCapacity: false)
-        parityFrameTotals.removeAll(keepingCapacity: false)
-        recovered.removeAll(keepingCapacity: false)
-        completedPayload = nil
+        resetLocked()
     }
 
     public func ingest(_ frameText: String) throws -> KagemushaQRDecodeResult {
-        let frame = try KagemushaQRStreamCodec.decodeFrameText(frameText)
+        var frame = try KagemushaQRStreamCodec.decodeFrameText(frameText)
+        defer { frame.zeroize() }
         lock.lock()
         defer { lock.unlock() }
-        let previousState = state
-        do {
-            return try ingestLocked(frame)
-        } catch {
-            // An invalid frame is a failed transaction: stream selection,
-            // buffered frames, parity recovery, and completion all roll back.
-            // A subsequent valid frame from this or another stream therefore
-            // observes exactly the state that existed before the bad input.
-            state = previousState
-            throw error
-        }
-    }
-
-    private var state: State {
-        get {
-            State(
-                streamID: streamID,
-                envelope: envelope,
-                dataFrames: dataFrames,
-                dataFrameTotals: dataFrameTotals,
-                parityFrames: parityFrames,
-                parityFrameTotals: parityFrameTotals,
-                recovered: recovered,
-                completedPayload: completedPayload
-            )
-        }
-        set {
-            streamID = newValue.streamID
-            envelope = newValue.envelope
-            dataFrames = newValue.dataFrames
-            dataFrameTotals = newValue.dataFrameTotals
-            parityFrames = newValue.parityFrames
-            parityFrameTotals = newValue.parityFrameTotals
-            recovered = newValue.recovered
-            completedPayload = newValue.completedPayload
-        }
+        return try ingestLocked(frame)
     }
 
     private func ingestLocked(_ frame: KagemushaQRStreamFrame) throws
         -> KagemushaQRDecodeResult
     {
+        guard let header = envelope else {
+            guard frame.kind == .header else {
+                throw KagemushaQRStreamError.malformedFrame
+            }
+            var decoded = try KagemushaQRStreamEnvelope.decode(frame.payload)
+            var decodedStreamID = decoded.streamID
+            defer { decodedStreamID.zeroize() }
+            guard decodedStreamID == frame.streamID else {
+                decoded.zeroize()
+                throw KagemushaQRStreamError.digestMismatch
+            }
+            streamID = frame.streamID
+            envelope = decoded
+            return result()
+        }
+
         if let streamID {
             guard streamID == frame.streamID else {
                 throw KagemushaQRStreamError.wrongStream
             }
-        } else {
-            streamID = frame.streamID
         }
 
         switch frame.kind {
         case .header:
-            let decoded = try KagemushaQRStreamEnvelope.decode(frame.payload)
-            guard decoded.streamID == frame.streamID else {
+            var decoded = try KagemushaQRStreamEnvelope.decode(frame.payload)
+            defer { decoded.zeroize() }
+            var decodedStreamID = decoded.streamID
+            defer { decodedStreamID.zeroize() }
+            guard decodedStreamID == frame.streamID else {
                 throw KagemushaQRStreamError.digestMismatch
             }
-            if let envelope, envelope != decoded {
+            if header != decoded {
                 throw KagemushaQRStreamError.conflictingFrame
             }
-            envelope = decoded
         case .data:
-            guard frame.total <= Self.maximumDataFrames else {
-                throw KagemushaQRStreamError.malformedFrame
-            }
-            try store(
-                frame.payload,
-                index: frame.index,
-                total: frame.total,
-                in: &dataFrames,
-                totals: &dataFrameTotals
-            )
+            try ingestData(frame, header: header)
         case .parity:
-            guard frame.total <= Self.maximumParityFrames else {
-                throw KagemushaQRStreamError.malformedFrame
-            }
-            try store(
-                frame.payload,
-                index: frame.index,
-                total: frame.total,
-                in: &parityFrames,
-                totals: &parityFrameTotals
-            )
-        }
-
-        if let envelope {
-            try validateBufferedFrames(against: envelope)
-            try recoverSingleMissingFrames(envelope)
-            completedPayload = try completedPayload ?? finalizeIfComplete(envelope)
+            try ingestParity(frame, header: header)
         }
         return result()
     }
 
-    private func store(
-        _ payload: Data,
-        index: Int,
-        total: Int,
-        in frames: inout [Int: Data],
-        totals: inout [Int: Int]
+    private func ingestData(
+        _ frame: KagemushaQRStreamFrame,
+        header: KagemushaQRStreamEnvelope
     ) throws {
-        guard index >= 0, index < total else {
+        guard frame.total == header.dataChunks,
+              frame.index >= 0,
+              frame.index < header.dataChunks,
+              frame.payload.count == header.expectedDataChunkLength(index: frame.index) else {
             throw KagemushaQRStreamError.malformedFrame
         }
-        if let existing = frames[index] {
-            guard existing == payload, totals[index] == total else {
+        if let existing = dataFrames[frame.index] {
+            guard existing == frame.payload else {
                 throw KagemushaQRStreamError.conflictingFrame
             }
-        } else {
-            frames[index] = payload
-            totals[index] = total
+            return
+        }
+        dataFrames[frame.index] = frame.payload
+        try finishNewFrame(
+            kind: .data,
+            index: frame.index,
+            parityGroup: frame.index / header.parityGroup,
+            header: header
+        )
+    }
+
+    private func ingestParity(
+        _ frame: KagemushaQRStreamFrame,
+        header: KagemushaQRStreamEnvelope
+    ) throws {
+        guard frame.total == header.parityChunks,
+              frame.index >= 0,
+              frame.index < header.parityChunks,
+              frame.payload.count == header.chunkSize else {
+            throw KagemushaQRStreamError.malformedFrame
+        }
+        if let existing = parityFrames[frame.index] {
+            guard existing == frame.payload else {
+                throw KagemushaQRStreamError.conflictingFrame
+            }
+            return
+        }
+        parityFrames[frame.index] = frame.payload
+        try finishNewFrame(
+            kind: .parity,
+            index: frame.index,
+            parityGroup: frame.index,
+            header: header
+        )
+    }
+
+    private func finishNewFrame(
+        kind: KagemushaQRStreamFrameKind,
+        index: Int,
+        parityGroup: Int,
+        header: KagemushaQRStreamEnvelope
+    ) throws {
+        var recoveredIndex: Int? = nil
+        do {
+            recoveredIndex = try recoverSingleMissingFrame(header, group: parityGroup)
+        } catch {
+            if let recoveredIndex {
+                removeAndZeroize(recoveredIndex, from: &dataFrames)
+                recovered.remove(recoveredIndex)
+            }
+            switch kind {
+            case .data:
+                removeAndZeroize(index, from: &dataFrames)
+            case .parity:
+                removeAndZeroize(index, from: &parityFrames)
+            case .header:
+                break
+            }
+            throw error
+        }
+        guard completedPayload == nil, dataFrames.count == header.dataChunks else {
+            return
+        }
+        do {
+            completedPayload = try finalizeComplete(header)
+        } catch {
+            // Exact coverage means another final-frame retry would repeat the
+            // whole archive allocation/hash/decode. Consume the failed stream.
+            resetLocked()
+            throw error
         }
     }
 
-    private func validateBufferedFrames(
-        against envelope: KagemushaQRStreamEnvelope
-    ) throws {
-        for (index, payload) in dataFrames {
-            guard index < envelope.dataChunks,
-                  dataFrameTotals[index] == envelope.dataChunks,
-                  payload.count == envelope.expectedDataChunkLength(index: index) else {
+    private func recoverSingleMissingFrame(
+        _ envelope: KagemushaQRStreamEnvelope,
+        group: Int
+    ) throws -> Int? {
+        guard let parity = parityFrames[group] else { return nil }
+        let start = group * envelope.parityGroup
+        let end = min(start + envelope.parityGroup, envelope.dataChunks)
+        let missing = (start..<end).filter { dataFrames[$0] == nil }
+        guard missing.count == 1 else { return nil }
+        let missingIndex = missing[0]
+        var recoveredChunk = parity
+        for index in start..<end where index != missingIndex {
+            guard let chunk = dataFrames[index] else {
                 throw KagemushaQRStreamError.malformedFrame
             }
-        }
-        for (index, payload) in parityFrames {
-            guard index < envelope.parityChunks,
-                  parityFrameTotals[index] == envelope.parityChunks,
-                  payload.count == envelope.chunkSize else {
-                throw KagemushaQRStreamError.malformedFrame
+            for byteIndex in chunk.indices {
+                recoveredChunk[byteIndex] ^= chunk[byteIndex]
             }
         }
+        recoveredChunk = recoveredChunk.prefix(
+            envelope.expectedDataChunkLength(index: missingIndex)
+        )
+        dataFrames[missingIndex] = recoveredChunk
+        recovered.insert(missingIndex)
+        return missingIndex
     }
 
-    private func recoverSingleMissingFrames(
+    private func finalizeComplete(
         _ envelope: KagemushaQRStreamEnvelope
-    ) throws {
-        for group in 0..<envelope.parityChunks {
-            guard let parity = parityFrames[group] else { continue }
-            let start = group * envelope.parityGroup
-            let end = min(start + envelope.parityGroup, envelope.dataChunks)
-            let missing = (start..<end).filter { dataFrames[$0] == nil }
-            guard missing.count == 1 else { continue }
-            var recoveredChunk = parity
-            for index in start..<end where index != missing[0] {
-                guard let chunk = dataFrames[index] else {
-                    throw KagemushaQRStreamError.malformedFrame
-                }
-                for byteIndex in chunk.indices {
-                    recoveredChunk[byteIndex] ^= chunk[byteIndex]
-                }
-            }
-            recoveredChunk = recoveredChunk.prefix(
-                envelope.expectedDataChunkLength(index: missing[0])
-            )
-            dataFrames[missing[0]] = recoveredChunk
-            dataFrameTotals[missing[0]] = envelope.dataChunks
-            recovered.insert(missing[0])
+    ) throws -> KagemushaPeerPayload {
+        guard dataFrames.count == envelope.dataChunks else {
+            throw KagemushaQRStreamError.malformedFrame
         }
-    }
-
-    private func finalizeIfComplete(
-        _ envelope: KagemushaQRStreamEnvelope
-    ) throws -> KagemushaPeerPayload? {
-        guard dataFrames.count == envelope.dataChunks else { return nil }
         var archive = Data()
+        defer { archive.zeroize() }
         archive.reserveCapacity(envelope.totalBytes)
         for index in 0..<envelope.dataChunks {
-            guard let chunk = dataFrames[index] else { return nil }
+            guard let chunk = dataFrames[index] else {
+                throw KagemushaQRStreamError.malformedFrame
+            }
             archive.append(chunk)
         }
         guard archive.count == envelope.totalBytes else {
@@ -432,6 +456,26 @@ public final class KagemushaQRStreamDecoder: @unchecked Sendable {
             recoveredDataFrames: recovered.count
         )
     }
+
+    private func resetLocked() {
+        streamID?.zeroize()
+        streamID = nil
+        envelope?.zeroize()
+        envelope = nil
+        while let index = dataFrames.keys.first {
+            removeAndZeroize(index, from: &dataFrames)
+        }
+        while let index = parityFrames.keys.first {
+            removeAndZeroize(index, from: &parityFrames)
+        }
+        recovered.removeAll(keepingCapacity: false)
+        completedPayload = nil
+    }
+
+    private func removeAndZeroize(_ index: Int, from frames: inout [Int: Data]) {
+        guard var bytes = frames.removeValue(forKey: index) else { return }
+        bytes.zeroize()
+    }
 }
 
 enum KagemushaQRStreamFrameKind: UInt8, Sendable {
@@ -442,7 +486,7 @@ enum KagemushaQRStreamFrameKind: UInt8, Sendable {
 
 struct KagemushaQRStreamEnvelope: Equatable, Sendable {
     static let version: UInt8 = 1
-    static let encodedLength = 46
+    static let encodedLength = 50
 
     let payloadKind: KagemushaPeerPayloadKind
     let parityGroup: Int
@@ -450,7 +494,7 @@ struct KagemushaQRStreamEnvelope: Equatable, Sendable {
     let dataChunks: Int
     let parityChunks: Int
     let totalBytes: Int
-    let payloadDigest: Data
+    private(set) var payloadDigest: Data
 
     var streamID: Data { Data(payloadDigest.prefix(16)) }
 
@@ -466,6 +510,10 @@ struct KagemushaQRStreamEnvelope: Equatable, Sendable {
                 maximum: KagemushaPeerTransportContract.maximumArchiveBytes
             )
         }
+        _ = try KagemushaQRStreamCodec.preflightStreamFrameCount(
+            payloadBytes: payload.count,
+            options: options
+        )
         payloadKind = kind
         parityGroup = options.parityGroup
         chunkSize = options.chunkSize
@@ -491,6 +539,7 @@ struct KagemushaQRStreamEnvelope: Equatable, Sendable {
               (1...KagemushaPeerTransportContract.maximumArchiveBytes).contains(totalBytes),
               dataChunks == (totalBytes + chunkSize - 1) / chunkSize,
               parityChunks == (dataChunks + parityGroup - 1) / parityGroup,
+              1 + dataChunks + parityChunks <= KagemushaQRStreamCodec.maximumStreamFrames,
               payloadDigest.count == 32,
               payloadDigest.contains(where: { $0 != 0 }) else {
             throw KagemushaQRStreamError.invalidHeader
@@ -512,11 +561,15 @@ struct KagemushaQRStreamEnvelope: Equatable, Sendable {
     func encode() -> Data {
         var data = Data([Self.version, payloadKind.rawValue, UInt8(parityGroup), 0])
         data.appendUInt16BE(UInt16(chunkSize))
-        data.appendUInt16BE(UInt16(dataChunks))
-        data.appendUInt16BE(UInt16(parityChunks))
+        data.appendUInt32BE(UInt32(dataChunks))
+        data.appendUInt32BE(UInt32(parityChunks))
         data.appendUInt32BE(UInt32(totalBytes))
         data.append(payloadDigest)
         return data
+    }
+
+    mutating func zeroize() {
+        payloadDigest.zeroize()
     }
 
     static func decode(_ data: Data) throws -> Self {
@@ -526,14 +579,16 @@ struct KagemushaQRStreamEnvelope: Equatable, Sendable {
               data[3] == 0 else {
             throw KagemushaQRStreamError.invalidHeader
         }
+        var digest = data.subdata(in: 18..<50)
+        defer { digest.zeroize() }
         return try Self(
             payloadKind: kind,
             parityGroup: Int(data[2]),
             chunkSize: Int(data.uint16BE(at: 4)),
-            dataChunks: Int(data.uint16BE(at: 6)),
-            parityChunks: Int(data.uint16BE(at: 8)),
-            totalBytes: Int(data.uint32BE(at: 10)),
-            payloadDigest: data.subdata(in: 14..<46)
+            dataChunks: Int(data.uint32BE(at: 6)),
+            parityChunks: Int(data.uint32BE(at: 10)),
+            totalBytes: Int(data.uint32BE(at: 14)),
+            payloadDigest: digest
         )
     }
 }
@@ -541,14 +596,13 @@ struct KagemushaQRStreamEnvelope: Equatable, Sendable {
 struct KagemushaQRStreamFrame: Equatable, Sendable {
     static let magic = Data([0x4B, 0x51])
     static let version: UInt8 = 1
-    static let fixedOverhead = 30
+    static let fixedOverhead = 34
     static let maximumEncodedBytes = fixedOverhead + KagemushaQRStreamOptions.maximumChunkSize
-
     let kind: KagemushaQRStreamFrameKind
-    let streamID: Data
+    private(set) var streamID: Data
     let index: Int
     let total: Int
-    let payload: Data
+    private(set) var payload: Data
 
     init(
         kind: KagemushaQRStreamFrameKind,
@@ -562,7 +616,7 @@ struct KagemushaQRStreamFrame: Equatable, Sendable {
               index >= 0,
               index < total,
               total > 0,
-              total <= Int(UInt16.max),
+              total < KagemushaQRStreamCodec.maximumStreamFrames,
               !payload.isEmpty,
               payload.count <= KagemushaQRStreamOptions.maximumChunkSize else {
             throw KagemushaQRStreamError.malformedFrame
@@ -588,12 +642,17 @@ struct KagemushaQRStreamFrame: Equatable, Sendable {
         data.append(Self.version)
         data.append(kind.rawValue)
         data.append(streamID)
-        data.appendUInt16BE(UInt16(index))
-        data.appendUInt16BE(UInt16(total))
+        data.appendUInt32BE(UInt32(index))
+        data.appendUInt32BE(UInt32(total))
         data.appendUInt16BE(UInt16(payload.count))
         data.append(payload)
         data.appendUInt32BE(KagemushaCRC32.checksum(data.dropFirst(2)))
         return data
+    }
+
+    mutating func zeroize() {
+        streamID.zeroize()
+        payload.zeroize()
     }
 
     static func decode(_ data: Data) throws -> Self {
@@ -604,8 +663,8 @@ struct KagemushaQRStreamFrame: Equatable, Sendable {
               let kind = KagemushaQRStreamFrameKind(rawValue: data[3]) else {
             throw KagemushaQRStreamError.malformedFrame
         }
-        let payloadLength = Int(data.uint16BE(at: 24))
-        let payloadEnd = 26 + payloadLength
+        let payloadLength = Int(data.uint16BE(at: 28))
+        let payloadEnd = 30 + payloadLength
         guard payloadEnd + 4 == data.count else {
             throw KagemushaQRStreamError.malformedFrame
         }
@@ -613,12 +672,18 @@ struct KagemushaQRStreamFrame: Equatable, Sendable {
         guard expectedChecksum == KagemushaCRC32.checksum(data[2..<payloadEnd]) else {
             throw KagemushaQRStreamError.checksumMismatch
         }
+        var decodedStreamID = data.subdata(in: 4..<20)
+        var decodedPayload = data.subdata(in: 30..<payloadEnd)
+        defer {
+            decodedStreamID.zeroize()
+            decodedPayload.zeroize()
+        }
         return try Self(
             kind: kind,
-            streamID: data.subdata(in: 4..<20),
-            index: Int(data.uint16BE(at: 20)),
-            total: Int(data.uint16BE(at: 22)),
-            payload: data.subdata(in: 26..<payloadEnd)
+            streamID: decodedStreamID,
+            index: Int(data.uint32BE(at: 20)),
+            total: Int(data.uint32BE(at: 24)),
+            payload: decodedPayload
         )
     }
 }
@@ -637,6 +702,10 @@ enum KagemushaCRC32 {
 }
 
 private extension Data {
+    mutating func zeroize() {
+        resetBytes(in: startIndex..<endIndex)
+    }
+
     mutating func appendUInt16BE(_ value: UInt16) {
         append(UInt8(truncatingIfNeeded: value >> 8))
         append(UInt8(truncatingIfNeeded: value))

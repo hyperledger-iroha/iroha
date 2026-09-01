@@ -936,7 +936,10 @@ pub(super) fn run_pending_kura_lifecycle_height(
         local_validator_index(&context, &local_peer, config.role)?
     };
     if block_sync_server.is_none() {
-        let limits = HistoricalBodyServeLimits::first_release(certified_request_capacity)?;
+        let limits = HistoricalBodyServeLimits::first_release(
+            certified_request_capacity,
+            network.reply_route_source_capacity(),
+        )?;
         block_sync_server = Some(V2BlockSyncServer::new_with_historical_body_service(
             context.network_id,
             certified_request_capacity,

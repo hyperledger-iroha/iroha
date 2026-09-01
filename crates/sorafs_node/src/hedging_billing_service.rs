@@ -7406,9 +7406,9 @@ mod tests {
         next.feed_trust_policy_digest = next_feed
             .canonical_digest()
             .expect("next feed policy digest");
-        next.statement_signer.signer_id = "billing-hsm-2".to_owned();
+        next.statement_signer.signer_id = "billing-provider-2".to_owned();
         next.statement_signer.public_key = rotated_statement_key().verifying_key().to_bytes();
-        next.transition_authority.authority_id = "billing-transition-hsm-2".to_owned();
+        next.transition_authority.authority_id = "billing-transition-provider-2".to_owned();
         next.transition_authority.public_key = rotated_transition_key().verifying_key().to_bytes();
         (next, next_feed)
     }
@@ -7534,7 +7534,7 @@ mod tests {
             max_divergence_bps: 500,
             statement_signer: BillingStatementSignerPolicyV1 {
                 version: BILLING_STATEMENT_SIGNER_POLICY_VERSION_V1,
-                signer_id: "billing-hsm-1".to_owned(),
+                signer_id: "billing-provider-1".to_owned(),
                 public_key: statement_key().verifying_key().to_bytes(),
                 valid_from_block_height: 1,
                 revoked_at_block_height: None,
@@ -7547,7 +7547,7 @@ mod tests {
             },
             transition_authority: HedgingBillingTransitionAuthorityV1 {
                 version: HEDGING_BILLING_TRANSITION_AUTHORITY_VERSION_V1,
-                authority_id: "billing-transition-hsm-1".to_owned(),
+                authority_id: "billing-transition-provider-1".to_owned(),
                 public_key: transition_key().verifying_key().to_bytes(),
             },
             epoch_witness_store_handle: "billing-epoch-witness-test".to_owned(),
@@ -7801,7 +7801,7 @@ mod tests {
         fn valid() -> Self {
             Self {
                 key: statement_key(),
-                signer_id: "billing-hsm-1".to_owned(),
+                signer_id: "billing-provider-1".to_owned(),
                 corrupt: AtomicBool::new(false),
                 sign_calls: AtomicUsize::new(0),
             }
@@ -7809,7 +7809,7 @@ mod tests {
         fn transition() -> Self {
             Self {
                 key: transition_key(),
-                signer_id: "billing-transition-hsm-1".to_owned(),
+                signer_id: "billing-transition-provider-1".to_owned(),
                 corrupt: AtomicBool::new(false),
                 sign_calls: AtomicUsize::new(0),
             }
@@ -7817,7 +7817,7 @@ mod tests {
     }
     impl HedgingBillingRuntimeProviderV1 for TestSigner {
         fn handle(&self) -> &str {
-            "billing-statement-hsm-test"
+            "billing-statement-provider-test"
         }
         fn qualification(
             &self,
@@ -7833,7 +7833,7 @@ mod tests {
             &self,
         ) -> Result<BillingStatementSignerIdentityV1, HedgingBillingExternalError> {
             Ok(BillingStatementSignerIdentityV1 {
-                provider_handle: "billing-statement-hsm-test".to_owned(),
+                provider_handle: "billing-statement-provider-test".to_owned(),
                 signer_id: self.signer_id.clone(),
                 public_key: self.key.verifying_key().to_bytes(),
             })
@@ -8257,7 +8257,7 @@ mod tests {
         ) -> Result<BillingStatementSignerIdentityV1, HedgingBillingExternalError> {
             Ok(BillingStatementSignerIdentityV1 {
                 provider_handle: self.handle.clone(),
-                signer_id: "billing-hsm-1".to_owned(),
+                signer_id: "billing-provider-1".to_owned(),
                 public_key: statement_key().verifying_key().to_bytes(),
             })
         }
@@ -8472,7 +8472,7 @@ mod tests {
     #[test]
     fn runtime_provider_handles_use_canonical_production_grammar() {
         for handle in [
-            "hsm://sorafs/billing/statement-primary",
+            "provider://sorafs/billing/statement-primary",
             "sealed://sorafs/billing/epoch-primary",
         ] {
             assert_eq!(
@@ -8481,11 +8481,11 @@ mod tests {
             );
         }
         for handle in [
-            "hsm://sorafs/billing/operator@statement",
-            "hsm://sorafs/billing/statement?token",
-            "hsm://sorafs/billing/statement#fragment",
-            "hsm://sorafs/billing/%73tatement",
-            "hsm://sorafs/billing/statement\\primary",
+            "provider://sorafs/billing/operator@statement",
+            "provider://sorafs/billing/statement?token",
+            "provider://sorafs/billing/statement#fragment",
+            "provider://sorafs/billing/%73tatement",
+            "provider://sorafs/billing/statement\\primary",
         ] {
             assert_eq!(
                 validate_hedging_billing_runtime_provider_handle(handle, true),
@@ -8497,11 +8497,11 @@ mod tests {
             );
         }
         assert_eq!(
-            validate_hedging_billing_runtime_provider_handle("hsm://sorafs/billing/dummy", true,),
+            validate_hedging_billing_runtime_provider_handle("provider://sorafs/billing/dummy", true,),
             Err(HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle)
         );
         assert_eq!(
-            validate_hedging_billing_runtime_provider_handle("hsm://sorafs/billing/dummy", false,),
+            validate_hedging_billing_runtime_provider_handle("provider://sorafs/billing/dummy", false,),
             Err(HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle)
         );
     }
@@ -9144,7 +9144,7 @@ mod tests {
             .clone();
         let mut rotated = service_policy();
         let rotated_key = SigningKey::from_bytes(&[0x24; 32]);
-        rotated.statement_signer.signer_id = "billing-hsm-2".to_owned();
+        rotated.statement_signer.signer_id = "billing-provider-2".to_owned();
         rotated.statement_signer.public_key = rotated_key.verifying_key().to_bytes();
         assert!(matches!(
             checkpoint.validate(&rotated, &feed_policy),
@@ -9752,7 +9752,7 @@ mod tests {
     }
     include!("hedging_billing_service/replay_digest_tests.rs");
     #[test]
-    fn invalid_hsm_output_is_not_persisted_or_published() {
+    fn invalid_signer_output_is_not_persisted_or_published() {
         let root = tempfile::tempdir().expect("state root");
         let (service, _feed_policy, reference, _verifier, _publisher, _ack_authority) =
             ready_service(root.path());

@@ -2088,7 +2088,7 @@ async fn substituted_producer_binding_fails_before_all_publication_io() {
         let mut checkpoint = producer_checkpoint_from_source(source_dir, &source);
         match substitution {
             "handle" => {
-                checkpoint.signer_handle = "hsm:governance/source-signer:alternate".to_owned();
+                checkpoint.signer_handle = "provider:governance/source-signer:alternate".to_owned();
             }
             "revision" => checkpoint.signer_revision = 2,
             "policy" => checkpoint.signer_policy_digest = [0x84; 32],

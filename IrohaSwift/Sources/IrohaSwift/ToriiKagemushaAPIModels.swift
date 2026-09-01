@@ -349,14 +349,86 @@ public enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable 
     }
 }
 
+/// Immutable identity authenticated by one complete Kagemusha chain request.
+///
+/// Every lifecycle response carries this value as one nested object. The
+/// active transaction hash remains outside the identity because a retry may
+/// replace a pending carrier without changing the authorized request.
+public struct KagemushaOperationIdentity: Codable, Equatable, Sendable {
+    public let operationID: String
+    public let requestAuthorityDigest: String
+    public let canonicalRequestDigest: String
+    public let kind: KagemushaOperationKind
+    public let issuedAtMs: UInt64
+    public let expiresAtMs: UInt64
+
+    public init(
+        operationID: String,
+        requestAuthorityDigest: String,
+        canonicalRequestDigest: String,
+        kind: KagemushaOperationKind,
+        issuedAtMs: UInt64,
+        expiresAtMs: UInt64
+    ) throws {
+        self.operationID = try KagemushaOperationValidation.markedDigest(
+            operationID,
+            field: "identity.operation_id"
+        )
+        self.requestAuthorityDigest = try KagemushaOperationValidation.markedDigest(
+            requestAuthorityDigest,
+            field: "identity.request_authority_digest"
+        )
+        self.canonicalRequestDigest = try KagemushaOperationValidation.markedDigest(
+            canonicalRequestDigest,
+            field: "identity.canonical_request_digest"
+        )
+        self.kind = kind
+        self.issuedAtMs = try KagemushaOperationValidation.positive(
+            issuedAtMs,
+            field: "identity.issued_at_ms"
+        )
+        guard expiresAtMs > issuedAtMs,
+              expiresAtMs - issuedAtMs
+                <= KagemushaRecursiveSpend.maximumAuthorizationTTLMilliseconds else {
+            throw KagemushaOperationError.invalidField("identity.expires_at_ms")
+        }
+        self.expiresAtMs = expiresAtMs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            operationID: container.decode(String.self, forKey: .operationID),
+            requestAuthorityDigest: container.decode(
+                String.self,
+                forKey: .requestAuthorityDigest
+            ),
+            canonicalRequestDigest: container.decode(
+                String.self,
+                forKey: .canonicalRequestDigest
+            ),
+            kind: container.decode(KagemushaOperationKind.self, forKey: .kind),
+            issuedAtMs: container.decode(UInt64.self, forKey: .issuedAtMs),
+            expiresAtMs: container.decode(UInt64.self, forKey: .expiresAtMs)
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case operationID = "operation_id"
+        case requestAuthorityDigest = "request_authority_digest"
+        case canonicalRequestDigest = "canonical_request_digest"
+        case kind
+        case issuedAtMs = "issued_at_ms"
+        case expiresAtMs = "expires_at_ms"
+    }
+}
+
 /// A schema-bound Kagemusha top-up command submitted directly to Torii.
 public struct KagemushaTopUpRequest: Equatable, Sendable {
     /// Exact ABI-21/V4 top-up archive ceiling enforced by Torii.
     public static let maximumArchiveBytes = 512 * 1_024
-    /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
-    public let operationId: String
-    /// Immutable request creation time from the signed authorization.
-    public let issuedAtMs: UInt64
+    /// Complete immutable identity derived from the final authorized request.
+    public let identity: KagemushaOperationIdentity
     private let archive: Data
 
     /// Validates and retains a canonical first-release Kagemusha top-up request archive.
@@ -366,11 +438,11 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
             operationIdFieldIndex: 6,
             fieldCount: 8,
+            kind: .topUp,
             expectedWireVersion: KagemushaRecursiveSpend.wireVersionV4,
             maximumArchiveBytes: Self.maximumArchiveBytes
         )
-        self.operationId = validated.operationId
-        self.issuedAtMs = validated.issuedAtMs
+        self.identity = validated.identity
         self.archive = validated.archive
     }
 
@@ -381,10 +453,8 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
 public struct KagemushaRedeemRequest: Equatable, Sendable {
     /// Exact ABI-21/V4 redemption archive ceiling enforced by Torii.
     public static let maximumArchiveBytes = 48 * 1_024 * 1_024
-    /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
-    public let operationId: String
-    /// Immutable request creation time from the signed authorization.
-    public let issuedAtMs: UInt64
+    /// Complete immutable identity derived from the final authorized request.
+    public let identity: KagemushaOperationIdentity
     private let archive: Data
 
     /// Validates and retains a canonical first-release Kagemusha redemption request archive.
@@ -394,11 +464,11 @@ public struct KagemushaRedeemRequest: Equatable, Sendable {
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
             operationIdFieldIndex: 8,
             fieldCount: 10,
+            kind: .redeem,
             expectedWireVersion: KagemushaRecursiveSpend.wireVersionV4,
             maximumArchiveBytes: Self.maximumArchiveBytes
         )
-        self.operationId = validated.operationId
-        self.issuedAtMs = validated.issuedAtMs
+        self.identity = validated.identity
         self.archive = validated.archive
     }
 
@@ -406,24 +476,18 @@ public struct KagemushaRedeemRequest: Equatable, Sendable {
 }
 
 public struct KagemushaOperationReference: Codable, Equatable, Sendable {
-    public let operationId: String
-    public let kind: KagemushaOperationKind
+    public let identity: KagemushaOperationIdentity
     public let state: KagemushaOperationState
     public let transactionHash: String
     public let statusUri: String
-    public let submittedAtMs: UInt64
 
     public init(
-        operationId: String,
-        kind: KagemushaOperationKind,
+        identity: KagemushaOperationIdentity,
         state: KagemushaOperationState,
         transactionHash: String,
-        statusUri: String,
-        submittedAtMs: UInt64
+        statusUri: String
     ) throws {
-        let validatedOperationId = try KagemushaOperationValidation.operationId(operationId)
-        self.operationId = validatedOperationId
-        self.kind = kind
+        self.identity = identity
         self.state = state
         self.transactionHash = try KagemushaOperationValidation.transactionHash(
             transactionHash,
@@ -431,33 +495,25 @@ public struct KagemushaOperationReference: Codable, Equatable, Sendable {
         )
         self.statusUri = try KagemushaOperationValidation.statusUri(
             statusUri,
-            operationId: validatedOperationId
-        )
-        self.submittedAtMs = try KagemushaOperationValidation.positive(
-            submittedAtMs,
-            field: "submitted_at_ms"
+            operationId: identity.operationID
         )
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
-            operationId: container.decode(String.self, forKey: .operationId),
-            kind: container.decode(KagemushaOperationKind.self, forKey: .kind),
+            identity: container.decode(KagemushaOperationIdentity.self, forKey: .identity),
             state: container.decode(KagemushaOperationState.self, forKey: .state),
             transactionHash: container.decode(String.self, forKey: .transactionHash),
-            statusUri: container.decode(String.self, forKey: .statusUri),
-            submittedAtMs: container.decode(UInt64.self, forKey: .submittedAtMs)
+            statusUri: container.decode(String.self, forKey: .statusUri)
         )
     }
 
     private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case kind
+        case identity
         case state
         case transactionHash = "transaction_hash"
         case statusUri = "status_uri"
-        case submittedAtMs = "submitted_at_ms"
     }
 }
 
@@ -711,61 +767,57 @@ public struct KagemushaOperationErrorEnvelope: Equatable, Sendable {
 public enum KagemushaOperationStatus: Equatable, Sendable {
     /// Validated payload for a queued or not-yet-finalized operation.
     public struct Pending: Equatable, Sendable {
-        public let operationId: String
-        public let kind: KagemushaOperationKind
+        public let identity: KagemushaOperationIdentity
         public let transactionHash: String
-        public let submittedAtMs: UInt64
 
         public init(
-            operationId: String,
-            kind: KagemushaOperationKind,
-            transactionHash: String,
-            submittedAtMs: UInt64
+            identity: KagemushaOperationIdentity,
+            transactionHash: String
         ) throws {
-            self.operationId = try KagemushaOperationValidation.operationId(operationId)
-            self.kind = kind
+            self.identity = identity
             self.transactionHash = try KagemushaOperationValidation.transactionHash(
                 transactionHash,
                 field: "transaction_hash"
-            )
-            self.submittedAtMs = try KagemushaOperationValidation.positive(
-                submittedAtMs,
-                field: "submitted_at_ms"
             )
         }
     }
 
     /// Validated payload for a finalized operation.
     public struct Applied: Equatable, Sendable {
-        public let operationId: String
+        public let identity: KagemushaOperationIdentity
         public let result: KagemushaOperationResult
 
         /// Constructed only by the native-validated status decoder.
-        init(operationId: String, result: KagemushaOperationResult) throws {
-            self.operationId = try KagemushaOperationValidation.operationId(operationId)
-            if case .topUp(let topUp) = result,
-               self.operationId != topUp.anchor.operationId {
-                throw KagemushaOperationError.invalidField("operation_id.anchor_binding")
+        init(identity: KagemushaOperationIdentity, result: KagemushaOperationResult) throws {
+            switch (identity.kind, result) {
+            case let (.topUp, .topUp(topUp)):
+                guard identity.operationID == topUp.anchor.operationId else {
+                    throw KagemushaOperationError.invalidField(
+                        "identity.operation_id.anchor_binding"
+                    )
+                }
+            case (.redeem, .redeem):
+                break
+            default:
+                throw KagemushaOperationError.invalidField("identity.kind")
             }
+            self.identity = identity
             self.result = result
         }
     }
 
     /// Validated payload for one rejected, retryable carrier attempt.
     public struct Rejected: Equatable, Sendable {
-        public let operationId: String
-        public let kind: KagemushaOperationKind
+        public let identity: KagemushaOperationIdentity
         public let transactionHash: String
         public let error: KagemushaOperationErrorEnvelope
 
         public init(
-            operationId: String,
-            kind: KagemushaOperationKind,
+            identity: KagemushaOperationIdentity,
             transactionHash: String,
             error: KagemushaOperationErrorEnvelope
         ) throws {
-            self.operationId = try KagemushaOperationValidation.operationId(operationId)
-            self.kind = kind
+            self.identity = identity
             self.transactionHash = try KagemushaOperationValidation.transactionHash(
                 transactionHash,
                 field: "transaction_hash"
@@ -778,25 +830,12 @@ public enum KagemushaOperationStatus: Equatable, Sendable {
     case applied(Applied)
     case rejected(Rejected)
 
-    /// Canonical identifier shared by every tagged operation state.
-    public var operationId: String {
+    /// Complete immutable identity shared by every tagged operation state.
+    public var identity: KagemushaOperationIdentity {
         switch self {
-        case let .pending(value): value.operationId
-        case let .applied(value): value.operationId
-        case let .rejected(value): value.operationId
-        }
-    }
-
-    /// Canonical operation family shared by every tagged operation state.
-    public var kind: KagemushaOperationKind {
-        switch self {
-        case let .pending(value): value.kind
-        case let .applied(value):
-            switch value.result {
-            case .topUp: .topUp
-            case .redeem: .redeem
-            }
-        case let .rejected(value): value.kind
+        case let .pending(value): value.identity
+        case let .applied(value): value.identity
+        case let .rejected(value): value.identity
         }
     }
 }
@@ -828,10 +867,9 @@ public enum KagemushaOperationCodec {
         }
         let compact = true
         var reader = CanonicalNoritoReader(data: frame.payload)
-        let operationId = try readField(&reader, compact: compact) {
-            try readString(&$0, compact: compact)
+        let identity = try readField(&reader, compact: compact) {
+            try decodeIdentity(&$0, compact: compact)
         }
-        let kindTag = try readField(&reader, compact: compact) { try $0.readUInt32LE() }
         let stateTag = try readField(&reader, compact: compact) { try $0.readUInt32LE() }
         let transactionHash = try readField(&reader, compact: compact) {
             try readString(&$0, compact: compact)
@@ -839,39 +877,26 @@ public enum KagemushaOperationCodec {
         let statusUri = try readField(&reader, compact: compact) {
             try readString(&$0, compact: compact)
         }
-        let submittedAtMs = try readField(&reader, compact: compact) { try $0.readUInt64LE() }
         guard reader.remaining() == 0 else {
             throw KagemushaOperationError.invalidNoritoArchive
-        }
-        let kind: KagemushaOperationKind
-        switch kindTag {
-        case 0: kind = .topUp
-        case 1: kind = .redeem
-        default: throw KagemushaOperationError.invalidField("kind")
         }
         guard stateTag == 0 else {
             throw KagemushaOperationError.invalidField("state")
         }
         return try KagemushaOperationReference(
-            operationId: operationId,
-            kind: kind,
+            identity: identity,
             state: .pending,
             transactionHash: transactionHash,
-            statusUri: statusUri,
-            submittedAtMs: submittedAtMs
+            statusUri: statusUri
         )
     }
 
     public static func encodeReference(_ reference: KagemushaOperationReference) -> Data {
         var payload = CompactNoritoWriter()
-        payload.writeField(CompactNorito.encodeString(reference.operationId))
-        payload.writeField(CompactNorito.encodeUInt32(reference.kind == .topUp ? 0 : 1))
+        payload.writeField(encodeIdentity(reference.identity))
         payload.writeField(CompactNorito.encodeUInt32(0))
         payload.writeField(CompactNorito.encodeString(reference.transactionHash))
         payload.writeField(CompactNorito.encodeString(reference.statusUri))
-        var submittedAt = CompactNoritoWriter()
-        submittedAt.writeUInt64LE(reference.submittedAtMs)
-        payload.writeField(submittedAt.data)
         return noritoEncode(
             typeName: referenceSchema,
             payload: payload.data,
@@ -895,7 +920,7 @@ public enum KagemushaOperationCodec {
         let nativeValidated: Bool?
         do {
             nativeValidated = try NoritoNativeBridge.shared
-                .kagemushaOfflineOperationStatusValidateV1(
+                .kagemushaOfflineOperationStatusValidateV2(
                     statusArchive: archive
                 )
         } catch {
@@ -909,24 +934,22 @@ public enum KagemushaOperationCodec {
         let status: KagemushaOperationStatus
         switch variant {
         case 0:
-            let operationId = try readOperationIdField(&reader, compact: true)
-            let kind = try readKindField(&reader, compact: true)
+            let identity = try readField(&reader, compact: true) {
+                try decodeIdentity(&$0, compact: true)
+            }
             let transactionHash = try readExactTextField(
                 &reader,
                 compact: true,
                 field: "transaction_hash"
             )
-            let submittedAtMs = try readField(&reader, compact: true) {
-                try $0.readUInt64LE()
-            }
             status = .pending(try .init(
-                operationId: operationId,
-                kind: kind,
-                transactionHash: transactionHash,
-                submittedAtMs: submittedAtMs
+                identity: identity,
+                transactionHash: transactionHash
             ))
         case 1:
-            let operationId = try readOperationIdField(&reader, compact: true)
+            let identity = try readField(&reader, compact: true) {
+                try decodeIdentity(&$0, compact: true)
+            }
             let result = try readField(&reader, compact: true) {
                 try decodeResult(
                     &$0,
@@ -934,10 +957,11 @@ public enum KagemushaOperationCodec {
                     chainDiscriminant: chainDiscriminant
                 )
             }
-            status = .applied(try .init(operationId: operationId, result: result))
+            status = .applied(try .init(identity: identity, result: result))
         case 2:
-            let operationId = try readOperationIdField(&reader, compact: true)
-            let kind = try readKindField(&reader, compact: true)
+            let identity = try readField(&reader, compact: true) {
+                try decodeIdentity(&$0, compact: true)
+            }
             let transactionHash = try readExactTextField(
                 &reader,
                 compact: true,
@@ -947,8 +971,7 @@ public enum KagemushaOperationCodec {
                 try decodeErrorEnvelope(&$0, compact: true)
             }
             status = .rejected(try .init(
-                operationId: operationId,
-                kind: kind,
+                identity: identity,
                 transactionHash: transactionHash,
                 error: error
             ))
@@ -959,6 +982,49 @@ public enum KagemushaOperationCodec {
             throw KagemushaOperationError.invalidNoritoArchive
         }
         return status
+    }
+
+    private static func decodeIdentity(
+        _ reader: inout CanonicalNoritoReader,
+        compact: Bool
+    ) throws -> KagemushaOperationIdentity {
+        let operationID = try readOperationIdField(&reader, compact: compact)
+        let requestAuthorityDigest = try readMarkedDigestField(
+            &reader,
+            compact: compact,
+            field: "identity.request_authority_digest"
+        )
+        let canonicalRequestDigest = try readMarkedDigestField(
+            &reader,
+            compact: compact,
+            field: "identity.canonical_request_digest"
+        )
+        let kind = try readKindField(&reader, compact: compact)
+        let issuedAtMs = try readField(&reader, compact: compact) {
+            try $0.readUInt64LE()
+        }
+        let expiresAtMs = try readField(&reader, compact: compact) {
+            try $0.readUInt64LE()
+        }
+        return try KagemushaOperationIdentity(
+            operationID: operationID,
+            requestAuthorityDigest: requestAuthorityDigest,
+            canonicalRequestDigest: canonicalRequestDigest,
+            kind: kind,
+            issuedAtMs: issuedAtMs,
+            expiresAtMs: expiresAtMs
+        )
+    }
+
+    private static func encodeIdentity(_ identity: KagemushaOperationIdentity) -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(CompactNorito.encodeString(identity.operationID))
+        writer.writeField(CompactNorito.encodeString(identity.requestAuthorityDigest))
+        writer.writeField(CompactNorito.encodeString(identity.canonicalRequestDigest))
+        writer.writeField(CompactNorito.encodeUInt32(identity.kind == .topUp ? 0 : 1))
+        writer.writeField(CompactNorito.encodeUInt64(identity.issuedAtMs))
+        writer.writeField(CompactNorito.encodeUInt64(identity.expiresAtMs))
+        return writer.data
     }
 
     private static func decodeResult(
@@ -1188,7 +1254,21 @@ public enum KagemushaOperationCodec {
         let value = try readField(&reader, compact: compact) {
             try readString(&$0, compact: compact)
         }
-        return try KagemushaOperationValidation.operationId(value)
+        return try KagemushaOperationValidation.markedDigest(
+            value,
+            field: "identity.operation_id"
+        )
+    }
+
+    private static func readMarkedDigestField(
+        _ reader: inout CanonicalNoritoReader,
+        compact: Bool,
+        field: String
+    ) throws -> String {
+        let value = try readField(&reader, compact: compact) {
+            try readString(&$0, compact: compact)
+        }
+        return try KagemushaOperationValidation.markedDigest(value, field: field)
     }
 
     private static func readKindField(
@@ -1289,6 +1369,98 @@ public enum KagemushaOperationCodec {
     }
 }
 
+enum KagemushaOperationIdentityDerivation {
+    private static let operationIDDomain = Data(
+        "iroha:offline:kagemusha:operation-id:v4\0".utf8
+    )
+    private static let authorityDigestDomain = Data(
+        "iroha:offline:kagemusha:operation-outcome-authority:v4\0".utf8
+    )
+    private static let requestDigestDomain = Data(
+        "iroha:offline:kagemusha:operation-request:v4\0".utf8
+    )
+    private static let accountIDSchema =
+        "iroha_data_model::account::model::AccountId"
+
+    static func standaloneAccountIDArchive(
+        compactControllerPayload: Data
+    ) throws -> Data {
+        guard AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(
+            compactControllerPayload
+        ) else {
+            throw KagemushaOperationError.invalidField("authorization.authority")
+        }
+        let archive = noritoEncode(
+            typeName: accountIDSchema,
+            payload: compactControllerPayload,
+            flags: NoritoHeader.compactLen,
+            payloadAlignment: 8
+        )
+        guard let frame = noritoDecodeFrame(archive),
+              frame.header.schema == [
+                  0x60, 0xe8, 0x14, 0x73, 0xae, 0xd0, 0xa1, 0x27,
+                  0x6f, 0x1c, 0x57, 0x76, 0xd0, 0xf6, 0x9c, 0x38,
+              ],
+              frame.header.flags == NoritoHeader.compactLen,
+              frame.paddingLength == 0,
+              frame.payload == compactControllerPayload else {
+            throw KagemushaOperationError.invalidField("authorization.authority")
+        }
+        return archive
+    }
+
+    static func operationID(
+        compactAuthorityPayload: Data,
+        nonce: Data
+    ) throws -> String {
+        guard nonce.count == 32, nonce.contains(where: { $0 != 0 }) else {
+            throw KagemushaOperationError.invalidField("authorization.nonce")
+        }
+        let authorityArchive = try standaloneAccountIDArchive(
+            compactControllerPayload: compactAuthorityPayload
+        )
+        var preimage = operationIDDomain
+        preimage.append(littleEndianUInt64(authorityArchive.count))
+        preimage.append(authorityArchive)
+        preimage.append(nonce)
+        return markedHash(preimage).hexEncodedString()
+    }
+
+    static func requestAuthorityDigest(
+        compactAuthorityPayload: Data
+    ) throws -> String {
+        let authorityArchive = try standaloneAccountIDArchive(
+            compactControllerPayload: compactAuthorityPayload
+        )
+        var preimage = authorityDigestDomain
+        preimage.append(littleEndianUInt64(authorityArchive.count))
+        preimage.append(authorityArchive)
+        return markedHash(preimage).hexEncodedString()
+    }
+
+    static func canonicalRequestDigest(
+        requestArchive: Data,
+        kind: KagemushaOperationKind
+    ) -> String {
+        var preimage = requestDigestDomain
+        preimage.append(Data(kind == .topUp ? "top_up".utf8 : "redeem".utf8))
+        preimage.append(littleEndianUInt64(requestArchive.count))
+        preimage.append(requestArchive)
+        return markedHash(preimage).hexEncodedString()
+    }
+
+    private static func littleEndianUInt64(_ value: Int) -> Data {
+        var littleEndian = UInt64(value).littleEndian
+        return withUnsafeBytes(of: &littleEndian) { Data($0) }
+    }
+
+    private static func markedHash(_ preimage: Data) -> Data {
+        var digest = Blake2b.hash256(preimage)
+        digest[digest.index(before: digest.endIndex)] |= 1
+        return digest
+    }
+}
+
 private enum KagemushaOperationValidation {
     static func positive(_ value: UInt64, field: String) throws -> UInt64 {
         guard value > 0 else {
@@ -1298,14 +1470,19 @@ private enum KagemushaOperationValidation {
     }
 
     static func operationId(_ value: String) throws -> String {
+        try markedDigest(value, field: "operation_id")
+    }
+
+    static func markedDigest(_ value: String, field: String) throws -> String {
         let bytes = Array(value.utf8)
         guard bytes.count == 64,
               bytes.contains(where: { $0 != UInt8(ascii: "0") }),
+              bytes.last.map({ "13579bdf".utf8.contains($0) }) == true,
               bytes.allSatisfy({
                   ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
                       || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
               }) else {
-            throw KagemushaOperationError.invalidField("operation_id")
+            throw KagemushaOperationError.invalidField(field)
         }
         return value
     }
@@ -1380,9 +1557,10 @@ private enum KagemushaOperationValidation {
         schema: String,
         operationIdFieldIndex: Int,
         fieldCount: Int,
+        kind: KagemushaOperationKind,
         expectedWireVersion: UInt16,
         maximumArchiveBytes: Int
-    ) throws -> (archive: Data, operationId: String, issuedAtMs: UInt64) {
+    ) throws -> (archive: Data, identity: KagemushaOperationIdentity) {
         guard let requiredPaddingLength = KagemushaRecursiveSpend
             .requiredHeaderPaddingLength(forWireName: schema),
               !value.isEmpty,
@@ -1437,25 +1615,49 @@ private enum KagemushaOperationValidation {
             throw KagemushaOperationError.invalidNoritoArchive
         }
 
-        let operationId = fields[operationIdFieldIndex]
-        guard operationId.count == 32,
-              operationId.contains(where: { $0 != 0 }) else {
+        let outerOperationID = fields[operationIdFieldIndex]
+        guard outerOperationID.count == 32,
+              outerOperationID.contains(where: { $0 != 0 }),
+              outerOperationID.last.map({ ($0 & 1) == 1 }) == true else {
             throw KagemushaOperationError.invalidField("operation_id")
         }
-        let issuedAtMs = try requestAuthorizationIssuedAtMs(
+        let authorization = try requestAuthorizationIdentityFields(
             fields[fieldCount - 1],
-            outerOperationId: operationId
+            outerOperationID: outerOperationID
         )
-        return (Data(value), operationId.hexEncodedString(), issuedAtMs)
+        let derivedOperationID = try KagemushaOperationIdentityDerivation.operationID(
+            compactAuthorityPayload: authorization.authority,
+            nonce: authorization.nonce
+        )
+        guard derivedOperationID == outerOperationID.hexEncodedString() else {
+            throw KagemushaOperationError.invalidField("authorization.operation_id")
+        }
+        let identity = try KagemushaOperationIdentity(
+            operationID: derivedOperationID,
+            requestAuthorityDigest: try KagemushaOperationIdentityDerivation
+                .requestAuthorityDigest(
+                    compactAuthorityPayload: authorization.authority
+                ),
+            canonicalRequestDigest: KagemushaOperationIdentityDerivation
+                .canonicalRequestDigest(requestArchive: value, kind: kind),
+            kind: kind,
+            issuedAtMs: authorization.issuedAtMs,
+            expiresAtMs: authorization.expiresAtMs
+        )
+        return (Data(value), identity)
     }
 
-    private static func requestAuthorizationIssuedAtMs(
+    private static func requestAuthorizationIdentityFields(
         _ authorization: Data,
-        outerOperationId: Data
-    ) throws -> UInt64 {
+        outerOperationID: Data
+    ) throws -> (authority: Data, nonce: Data, issuedAtMs: UInt64, expiresAtMs: UInt64) {
         let fieldCount = 10
         let operationIdFieldIndex = 3
         let issuedAtMsFieldIndex = 4
+        let expiresAtMsFieldIndex = 5
+        let nonceFieldIndex = 6
+        let payloadDigestFieldIndex = 7
+        let registrationHashFieldIndex = 8
         var reader = CanonicalNoritoReader(data: authorization)
         var fields = [Data]()
         fields.reserveCapacity(fieldCount)
@@ -1477,8 +1679,39 @@ private enum KagemushaOperationValidation {
         guard canonicalAuthorization.data == authorization else {
             throw KagemushaOperationError.invalidNoritoArchive
         }
-        guard fields[operationIdFieldIndex] == outerOperationId else {
+        guard fields[operationIdFieldIndex] == outerOperationID else {
             throw KagemushaOperationError.invalidField("authorization.operation_id")
+        }
+
+        _ = try KagemushaOperationIdentityDerivation.standaloneAccountIDArchive(
+            compactControllerPayload: fields[0]
+        )
+        var deviceID = CanonicalNoritoReader(data: fields[1])
+        let deviceIDLength = try deviceID.readVarint()
+        guard deviceIDLength > 0,
+              deviceIDLength <= 128,
+              let deviceIDValue = String(
+                  data: try deviceID.readBytes(Int(deviceIDLength)),
+                  encoding: .utf8
+              ),
+              deviceID.remaining() == 0,
+              deviceIDValue.trimmingCharacters(in: .whitespacesAndNewlines) == deviceIDValue,
+              !deviceIDValue.unicodeScalars.contains(
+                  where: CharacterSet.controlCharacters.contains
+              ),
+              !fields[2].isEmpty,
+              !fields[9].isEmpty else {
+            throw KagemushaOperationError.invalidField("authorization")
+        }
+        guard fields[nonceFieldIndex].count == 32,
+              fields[nonceFieldIndex].contains(where: { $0 != 0 }) else {
+            throw KagemushaOperationError.invalidField("authorization.nonce")
+        }
+        guard fields[payloadDigestFieldIndex].count == 32,
+              fields[payloadDigestFieldIndex].last.map({ ($0 & 1) == 1 }) == true,
+              fields[registrationHashFieldIndex].count == 32,
+              fields[registrationHashFieldIndex].last.map({ ($0 & 1) == 1 }) == true else {
+            throw KagemushaOperationError.invalidField("authorization.digest")
         }
 
         let issuedAtField = fields[issuedAtMsFieldIndex]
@@ -1491,9 +1724,31 @@ private enum KagemushaOperationValidation {
                 memcpy(&decodedIssuedAtMs, baseAddress, MemoryLayout<UInt64>.size)
             }
         }
-        return try positive(
+        let issuedAtMs = try positive(
             UInt64(littleEndian: decodedIssuedAtMs),
             field: "authorization.issued_at_ms"
+        )
+        let expiresAtField = fields[expiresAtMsFieldIndex]
+        guard expiresAtField.count == MemoryLayout<UInt64>.size else {
+            throw KagemushaOperationError.invalidField("authorization.expires_at_ms")
+        }
+        var decodedExpiresAtMs: UInt64 = 0
+        expiresAtField.withUnsafeBytes { buffer in
+            if let baseAddress = buffer.baseAddress {
+                memcpy(&decodedExpiresAtMs, baseAddress, MemoryLayout<UInt64>.size)
+            }
+        }
+        let expiresAtMs = UInt64(littleEndian: decodedExpiresAtMs)
+        guard expiresAtMs > issuedAtMs,
+              expiresAtMs - issuedAtMs
+                <= KagemushaRecursiveSpend.maximumAuthorizationTTLMilliseconds else {
+            throw KagemushaOperationError.invalidField("authorization.expires_at_ms")
+        }
+        return (
+            fields[0],
+            fields[nonceFieldIndex],
+            issuedAtMs,
+            expiresAtMs
         )
     }
 }

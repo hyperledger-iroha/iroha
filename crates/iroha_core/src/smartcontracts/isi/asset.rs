@@ -562,14 +562,16 @@ pub mod isi {
             .parse()
             .expect("asset transfer control metadata key must be a valid Name")
     });
-    fn load_asset_transfer_control_store_from_account(
+    /// Decode and validate one account's persisted native transfer-control store.
+    pub(crate) fn load_asset_transfer_control_store_from_account(
         account_id: &AccountId,
         metadata: &Metadata,
     ) -> Result<AssetTransferControlStoreV1, Error> {
         let Some(raw) = metadata.get(&*ASSET_TRANSFER_CONTROL_KEY) else {
             return Ok(AssetTransferControlStoreV1::default());
         };
-        raw.try_into_any_norito::<AssetTransferControlStoreV1>()
+        let store = raw
+            .try_into_any_norito::<AssetTransferControlStoreV1>()
             .map_err(|err| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
@@ -578,7 +580,67 @@ pub mod isi {
                     )
                     .into(),
                 )
-            })
+            })?;
+        if store.controls.is_empty() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "invalid account metadata `{}` on {}: persisted transfer-control stores must not be empty",
+                    ASSET_TRANSFER_CONTROL_METADATA_KEY, account_id
+                )
+                .into(),
+            )
+            .into());
+        }
+        store.validate_canonical().map_err(|err| {
+            Error::from(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "invalid account metadata `{}` on {}: {err}",
+                    ASSET_TRANSFER_CONTROL_METADATA_KEY, account_id
+                )
+                .into(),
+            ))
+        })?;
+        Ok(store)
+    }
+    /// Reject removal of definitions still referenced by native transfer-control state.
+    ///
+    /// # Errors
+    /// Returns an invariant violation for malformed stores or for the first
+    /// retained record whose definition belongs to `asset_definition_ids`.
+    pub(crate) fn ensure_asset_definitions_not_retained_by_transfer_controls(
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_definition_ids: &BTreeSet<AssetDefinitionId>,
+        removal_target: &str,
+    ) -> Result<(), Error> {
+        if asset_definition_ids.is_empty() {
+            return Ok(());
+        }
+        for (account_id, account) in state_transaction.world.accounts.iter() {
+            if account
+                .metadata()
+                .get(ASSET_TRANSFER_CONTROL_METADATA_KEY)
+                .is_none()
+            {
+                continue;
+            }
+            let store =
+                load_asset_transfer_control_store_from_account(account_id, account.metadata())?;
+            if let Some(record) = store
+                .controls
+                .iter()
+                .find(|record| asset_definition_ids.contains(&record.asset_definition_id))
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot {removal_target}: account {account_id} retains native asset transfer-control state for {}; clear it through dedicated instructions first",
+                        record.asset_definition_id
+                    )
+                    .into(),
+                )
+                .into());
+            }
+        }
+        Ok(())
     }
     fn load_asset_transfer_control_store(
         state_transaction: &StateTransaction<'_, '_>,
@@ -592,6 +654,17 @@ pub mod isi {
         account_id: &AccountId,
         store: &AssetTransferControlStoreV1,
     ) -> Result<(), Error> {
+        if !store.controls.is_empty() {
+            store.validate_canonical().map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "refusing to persist non-canonical account metadata `{}` on {}: {err}",
+                        ASSET_TRANSFER_CONTROL_METADATA_KEY, account_id
+                    )
+                    .into(),
+                )
+            })?;
+        }
         let account = state_transaction.world.account_mut(account_id)?;
         if store.controls.is_empty() {
             if let Some(value) = account.remove(&*ASSET_TRANSFER_CONTROL_KEY) {
@@ -630,14 +703,14 @@ pub mod isi {
         asset_definition_id: &AssetDefinitionId,
         capability: TransferControlCapability,
     ) -> Result<(), Error> {
-        if state_transaction._curr_block.is_genesis() {
-            return Ok(());
-        }
         let owner = state_transaction
             .world
             .asset_definition(asset_definition_id)?
             .owned_by()
             .clone();
+        if state_transaction._curr_block.is_genesis() {
+            return Ok(());
+        }
         if owner == *authority {
             return Ok(());
         }
@@ -3208,7 +3281,7 @@ pub mod isi {
         authorization: crate::smartcontracts::isi::staking::VerifiedStakingSlashDebit,
         record_observability: bool,
     ) -> Result<(), Error> {
-        let (lane_id, validator, slash_id, source_id, destination_id, amount) =
+        let (lane_id, validator, slash_id, source_id, destination_id, amount, slashable_exposure) =
             authorization.into_parts();
         let key = (lane_id, validator.clone());
         let record = state_transaction
@@ -3220,7 +3293,7 @@ pub mod isi {
                     "staking slash capability has no retained validator record".into(),
                 )
             })?;
-        if record.total_stake < amount
+        if slashable_exposure < amount
             || !crate::smartcontracts::isi::staking::is_configured_staking_slash_movement(
                 state_transaction,
                 &record.stake_account,
@@ -3240,7 +3313,7 @@ pub mod isi {
             source_id.clone(),
             destination_id.clone(),
             amount.clone(),
-            record.total_stake.clone(),
+            slashable_exposure,
         ))?;
         let movement = PreparedNumericAssetMovement::prepare(
             state_transaction,
@@ -4172,24 +4245,24 @@ pub mod isi {
                 .unwrap_or_else(|| amount.as_numeric().scale());
             let normalized_amount =
                 normalized_numeric_to_u64(amount.as_numeric(), normalized_scale);
-            let prechecked_delta = if source_policy == NumericAssetTransferSourcePolicy::StakingSlash
-            {
-                state_transaction
-                    .world
-                    .precheck_protocol_custody_transfer_delta_exact(
-                        &source_id,
-                        &destination_id,
-                        &amount,
-                    )?
-            } else {
-                state_transaction
-                    .world
-                    .precheck_numeric_asset_transfer_delta_exact(
-                        &source_id,
-                        &destination_id,
-                        &amount,
-                    )?
-            };
+            let prechecked_delta =
+                if source_policy == NumericAssetTransferSourcePolicy::StakingSlash {
+                    state_transaction
+                        .world
+                        .precheck_protocol_custody_transfer_delta_exact(
+                            &source_id,
+                            &destination_id,
+                            &amount,
+                        )?
+                } else {
+                    state_transaction
+                        .world
+                        .precheck_numeric_asset_transfer_delta_exact(
+                            &source_id,
+                            &destination_id,
+                            &amount,
+                        )?
+                };
             Ok(Self {
                 source_id,
                 destination_id,
@@ -7554,9 +7627,9 @@ pub mod query {
         };
         use iroha_data_model::asset::{
             ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, ASSET_TRANSFER_CONTROL_METADATA_KEY,
-            AssetIssuerUsagePolicyV1, AssetSubjectBindingV1, AssetTransferControlStoreV1,
-            AssetTransferControlWindow, AssetTransferLimit, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
-            DomainAssetUsagePolicyV1,
+            AssetIssuerUsagePolicyV1, AssetSubjectBindingV1, AssetTransferControlRecord,
+            AssetTransferControlStoreV1, AssetTransferControlWindow, AssetTransferLimit,
+            DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY, DomainAssetUsagePolicyV1,
         };
         use iroha_data_model::isi::{
             error::InstructionEvaluationError,
@@ -7618,6 +7691,84 @@ pub mod query {
         }
         fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
             state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
+        }
+        #[test]
+        fn genesis_transfer_control_rejects_missing_asset_definition() {
+            let account = build_account_in_domain(&ALICE_ID, &wonderland_domain_id());
+            let world = World::with([], [account], []);
+            let state = asset_route_test_state(world);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let missing = wonderland_asset_definition_id("missing");
+            let error = SetAssetTransferBlacklist::new(ALICE_ID.clone(), missing.clone(), true)
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("genesis must not create transfer controls for a missing definition");
+            assert!(
+                matches!(error, InstructionExecutionError::Find(FindError::AssetDefinition(id)) if id == missing),
+                "unexpected missing-definition rejection: {error:?}"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .account(&ALICE_ID)
+                    .expect("account remains")
+                    .metadata()
+                    .get(ASSET_TRANSFER_CONTROL_METADATA_KEY)
+                    .is_none()
+            );
+        }
+        #[test]
+        fn duplicate_transfer_control_store_fails_closed_without_mutation() {
+            let domain_id = wonderland_domain_id();
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let asset_definition_id = wonderland_asset_definition_id("rose");
+            let asset_definition =
+                build_numeric_asset_definition(&asset_definition_id, "rose", &ALICE_ID);
+            let mut record = AssetTransferControlRecord::new(asset_definition_id.clone());
+            record.blacklisted = true;
+            let store = AssetTransferControlStoreV1 {
+                controls: vec![record.clone(), record],
+            };
+            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("asset transfer-control metadata key");
+            let mut metadata = Metadata::default();
+            metadata.insert(metadata_key.clone(), Json::new(store));
+            let account = Account::new(ALICE_ID.clone())
+                .with_metadata(metadata)
+                .build(&ALICE_ID);
+            let world = World::with([domain], [account], [asset_definition]);
+            let state = asset_route_test_state(world);
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let before = state_transaction
+                .world
+                .account(&ALICE_ID)
+                .expect("account exists")
+                .metadata()
+                .get(&metadata_key)
+                .cloned();
+            let error =
+                SetAssetTransferBlacklist::new(ALICE_ID.clone(), asset_definition_id, false)
+                    .execute(&ALICE_ID, &mut state_transaction)
+                    .expect_err("duplicate first-match transfer-control state must fail closed");
+            assert!(
+                error.to_string().contains("unique, strictly ordered"),
+                "unexpected duplicate-store rejection: {error}"
+            );
+            assert_eq!(
+                state_transaction
+                    .world
+                    .account(&ALICE_ID)
+                    .expect("account remains")
+                    .metadata()
+                    .get(&metadata_key)
+                    .cloned(),
+                before,
+                "failed validation must not rewrite ambiguous transfer-control state"
+            );
         }
         fn collect_rust_sources(
             directory: &std::path::Path,

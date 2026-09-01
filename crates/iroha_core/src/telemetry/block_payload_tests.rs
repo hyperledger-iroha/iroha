@@ -35,7 +35,7 @@ fn block_payload_detects_npos_consensus_effect_blocks() {
         v2_evidence_admissions: Vec::new(),
         penalty_actions: vec![NposPenaltyAction::MarkConsensusEvidenceApplied(
             NposMarkConsensusEvidenceAppliedAction {
-                evidence_key: b"telemetry-fixture".to_vec(),
+                evidence_key: iroha_crypto::Hash::new(b"telemetry-fixture"),
                 height: 2,
             },
         )],

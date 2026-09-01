@@ -421,6 +421,8 @@ mod epoch_schedule_tests {
         );
         let mut parameters = SumeragiNposParameters::default();
         parameters.epoch_length_blocks = NonZeroU64::new(7).expect("non-zero epoch length");
+        parameters.evidence_horizon_blocks = 14;
+        parameters.slashing_delay_blocks = 7;
         parameters
             .validate()
             .expect("test NPoS parameters must be internally consistent");

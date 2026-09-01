@@ -37,7 +37,7 @@ use std::{
 };
 use tempfile::TempDir;
 const TEST_ENVELOPE_CREATION_UNIX_MS: u64 = 1_700_000_000_000;
-const TRANSACTION_SIGNER_HANDLE: &str = "moderation-hsm-primary";
+const TRANSACTION_SIGNER_HANDLE: &str = "moderation-provider-primary";
 const STRICT_INGRESS_HANDLE: &str = "moderation-ingress-primary";
 const HANDOFF_PROVIDER_HANDLE: &str = "moderation-handoff-primary";
 const PANEL_NOTIFICATION_PROVIDER_HANDLE: &str = "moderation-notification-primary";
@@ -1657,7 +1657,7 @@ fn provider_test_request() -> ModerationTransactionRequestV1 {
 #[test]
 fn runtime_provider_handles_use_canonical_production_grammar() {
     for handle in [
-        "hsm://sorafs/moderation/signer-primary",
+        "provider://sorafs/moderation/signer-primary",
         "https-pinned-source-pool:moderation-ingress-primary",
     ] {
         assert_eq!(
@@ -1666,11 +1666,11 @@ fn runtime_provider_handles_use_canonical_production_grammar() {
         );
     }
     for handle in [
-        "hsm://sorafs/moderation/operator@signer",
-        "hsm://sorafs/moderation/signer?token",
-        "hsm://sorafs/moderation/signer#fragment",
-        "hsm://sorafs/moderation/%73igner",
-        "hsm://sorafs/moderation/signer\\primary",
+        "provider://sorafs/moderation/operator@signer",
+        "provider://sorafs/moderation/signer?token",
+        "provider://sorafs/moderation/signer#fragment",
+        "provider://sorafs/moderation/%73igner",
+        "provider://sorafs/moderation/signer\\primary",
     ] {
         assert_eq!(
             validate_moderation_runtime_provider_handle(handle, true),
@@ -1682,11 +1682,11 @@ fn runtime_provider_handles_use_canonical_production_grammar() {
         );
     }
     assert_eq!(
-        validate_moderation_runtime_provider_handle("hsm://sorafs/moderation/dummy", true,),
+        validate_moderation_runtime_provider_handle("provider://sorafs/moderation/dummy", true,),
         Err(ModerationRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle)
     );
     assert_eq!(
-        validate_moderation_runtime_provider_handle("hsm://sorafs/moderation/dummy", false,),
+        validate_moderation_runtime_provider_handle("provider://sorafs/moderation/dummy", false,),
         Err(ModerationRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle)
     );
 }
@@ -1712,7 +1712,7 @@ fn external_providers_are_qualified_before_checkpoint_access() {
             if message.contains("runtime provider binding")
     ));
     assert!(!missing_parent.exists());
-    config.transaction_signer_handle = "moderation-hsm-secondary".to_owned();
+    config.transaction_signer_handle = "moderation-provider-secondary".to_owned();
     assert_default_open_error!(config.clone(); Err(ModerationOrchestratorError::InvalidConfiguration(message)) if message.contains("runtime provider binding"));
     assert!(!missing_parent.exists());
     config.transaction_signer_handle = TRANSACTION_SIGNER_HANDLE.to_owned();

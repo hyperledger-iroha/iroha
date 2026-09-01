@@ -560,6 +560,9 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         )
         XCTAssertEqual(KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersionV4, 5)
         XCTAssertEqual(KagemushaRecursiveSpend.localWitnessVersionV4, 4)
+        XCTAssertEqual(KagemushaRecursiveSpend.topUpLocalWitnessVersionV5, 5)
+        XCTAssertEqual(KagemushaRecursiveSpend.redeemLocalWitnessVersionV5, 5)
+        XCTAssertEqual(KagemushaRecursiveSpend.authorizationPreparationVersionV3, 3)
         XCTAssertEqual(KagemushaRecursiveSpend.artifactRolesV4.count, 8)
         XCTAssertEqual(
             KagemushaRecursiveSpend.artifactRolesV4,
@@ -720,8 +723,9 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             "physical-device-benchmark",
             "production-recursive-prover-linkage",
         ]
-        let maximumProofBytes = KagemushaRecursiveSpend.absoluteMaximumProofPairBytesV4
-        XCTAssertEqual(maximumProofBytes, 384 * 1024)
+        let maximumProofBytes = KagemushaRecursiveSpend.releaseMaximumProofPairBytesV4
+        XCTAssertEqual(maximumProofBytes, 191_862)
+        XCTAssertEqual(KagemushaRecursiveSpend.absoluteMaximumProofPairBytesV4, 384 * 1024)
         let archive = KagemushaRecursiveSpend.frameArchive(
             schema: KagemushaRecursiveSpend.nativeCapabilitiesWireNameV4,
             payload: fields([
@@ -747,6 +751,26 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertEqual(capabilities.maxProofBytes, maximumProofBytes)
         XCTAssertEqual(capabilities.missingGates, gates)
         XCTAssertFalse(capabilities.proofBackendAvailable)
+
+        for wrongMaximum in [
+            maximumProofBytes - 1,
+            maximumProofBytes + 1,
+            KagemushaRecursiveSpend.absoluteMaximumProofPairBytesV4,
+        ] {
+            XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV4(
+                bridgeABIVersion: 23,
+                artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchemaV4,
+                proofBackend: KagemushaRecursiveSpend.pastaCycleBackendV4,
+                transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscriptV4,
+                proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersionV4,
+                stepEqCircuitID: KagemushaRecursiveSpend.stepEqCircuitIDV4,
+                stepEpCircuitID: KagemushaRecursiveSpend.stepEpCircuitIDV4,
+                artifactRoles: KagemushaRecursiveSpend.artifactRolesV4,
+                maxProofBytes: wrongMaximum,
+                proofBackendAvailable: false,
+                missingGates: gates
+            ))
+        }
 
         XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV4(
             bridgeABIVersion: 21,
@@ -897,13 +921,13 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             generation: "leaf-bound-test",
             manifestSHA256: fixed32(0x41)
         )
-        func buildRequest(leafIndex: UInt32) throws -> KagemushaTopUpShieldBuildRequestV4 {
-            try KagemushaTopUpShieldBuildRequestV4(
+        func buildRequest(leafIndex: UInt32) throws -> KagemushaTopUpShieldBuildRequestV5 {
+            try KagemushaTopUpShieldBuildRequestV5(
                 networkID: TestNetworkIds.canonical,
                 assetID: "\(assetDefinitionID())#\(payer)",
                 amount: KagemushaScaledAmount(atomicUnits: "1", scale: 2),
                 payer: payer,
-                operationID: fixed32(0x51),
+                nonce: fixed32(0x51),
                 opening: opening,
                 leafIndex: leafIndex,
                 zeroPath: zeroPath,

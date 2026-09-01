@@ -2702,7 +2702,7 @@ mod tests {
             "https://operator:secret@reputation.example",
             "https://reputation.example/query?token=secret",
             "https://reputation.example/query#fragment",
-            "hsm://reputation/dummy/query",
+            "provider://reputation/dummy/query",
         ] {
             assert!(
                 ArchivedReputationFinalizedQueryV1::try_new(

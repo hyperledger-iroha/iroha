@@ -1,6 +1,6 @@
 use super::{
     AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
-    PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
+    PathPolicy, RouteDescriptor, RouteEffect, RouteProjections, RouteTransport,
 };
 /// Create a wallet-pairing session.
 pub const SESSION_CREATE: RouteDescriptor = RouteDescriptor::new(
@@ -49,11 +49,11 @@ pub const WEBSOCKET: RouteDescriptor = RouteDescriptor::new(
 )
 .with_feature_gate(FeatureGate::Feature("connect"))
 .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+.with_transport(RouteTransport::WebSocket)
 .with_projections(RouteProjections::OPENAPI_AND_SDK)
 .with_path_policy(PathPolicy::ProtocolException {
     reason: "Connect WebSocket transport endpoint",
-})
-.with_implicit_head(true);
+});
 /// Read one management-token-authorized session status.
 pub const SESSION_STATUS: RouteDescriptor = RouteDescriptor::new(
     "connect.session.status",
@@ -71,7 +71,6 @@ pub const SESSION_STATUS: RouteDescriptor = RouteDescriptor::new(
     reason: "Connect management-token session status endpoint",
 })
 .with_private_no_store()
-.with_implicit_head(true)
 .with_cors_options(true);
 /// Read aggregate node-local Connect status as an authenticated operator.
 pub const STATUS: RouteDescriptor = RouteDescriptor::new(
@@ -86,7 +85,6 @@ pub const STATUS: RouteDescriptor = RouteDescriptor::new(
 .with_feature_gate(FeatureGate::Feature("connect"))
 .with_authentication(AuthenticationPolicy::OperatorSignature)
 .with_projections(RouteProjections::OPENAPI_AND_SDK)
-.with_implicit_head(true)
 .with_cors_options(true);
 /// Canonical Connect route set.
 pub const ROUTES: &[RouteDescriptor] = &[

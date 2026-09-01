@@ -1432,14 +1432,16 @@ impl ProviderIngestFinalizedLedgerV1 for ArchivedProviderIngestFinalizedLedgerV1
     > {
         let query = self.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                query.read_page_with_claim_factory(
-                    Some(&claim_factory),
-                    at_finalized_cursor,
-                    after_order_id,
-                    limit,
-                )
-            })
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    query.read_page_with_claim_factory(
+                        Some(&claim_factory),
+                        at_finalized_cursor,
+                        after_order_id,
+                        limit,
+                    )
+                }),
+            )
             .await
             .unwrap_or(Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable))
         })
@@ -1468,9 +1470,11 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1
     > {
         let query = self.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                query.read_and_sign_completed_musubi_capture_page(request)
-            })
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    query.read_and_sign_completed_musubi_capture_page(request)
+                }),
+            )
             .await
             .unwrap_or(Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable))
         })

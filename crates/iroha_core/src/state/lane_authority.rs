@@ -6,7 +6,7 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     block::{BlockExecutionContextBundle, consensus::LaneBlockDescriptorV1},
-    nexus::{DataSpaceId, LaneId, PublicLaneValidatorStatus},
+    nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
 use iroha_primitives::numeric::Quantity;
@@ -316,7 +316,10 @@ pub(super) fn live_stake_candidates_for_lanes(
     for (key, record) in world.public_lane_validators().iter() {
         if !source_lanes.contains(&key.0)
             || !public_lane_validator_record_matches_key(key, record)
-            || !matches!(record.status, PublicLaneValidatorStatus::Active)
+            || !crate::smartcontracts::isi::staking::validator_election_eligible_at_height(
+                record,
+                block_height,
+            )
             || !crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
                 minimum_stake,

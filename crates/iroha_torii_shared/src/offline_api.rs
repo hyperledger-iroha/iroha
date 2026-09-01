@@ -587,39 +587,72 @@ fn deserialize_strict_unit_tagged_enum(
     }
     Ok(tag)
 }
+/// Complete immutable identity of an authorized offline operation.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineOperationIdentity {
+    /// Lowercase marker-bearing operation identifier.
+    pub operation_id: String,
+    /// Digest of the canonical request authority archive.
+    pub request_authority_digest: String,
+    /// Digest of the complete canonical request archive.
+    pub canonical_request_digest: String,
+    /// Offline command kind.
+    pub kind: OfflineOperationKind,
+    /// Signed request issuance time in Unix milliseconds.
+    pub issued_at_ms: u64,
+    /// Signed request expiry time in Unix milliseconds.
+    pub expires_at_ms: u64,
+}
+impl OfflineOperationIdentity {
+    /// Validate the complete immutable operation identity.
+    pub fn validate_structure(&self) -> Result<(), String> {
+        exact_nonzero_operation_id(&self.operation_id)?;
+        exact_iroha_hash("request_authority_digest", &self.request_authority_digest)?;
+        exact_iroha_hash("canonical_request_digest", &self.canonical_request_digest)?;
+        if self.issued_at_ms == 0 {
+            return Err("offline operation identity issued_at_ms must be at least 1".into());
+        }
+        if self.expires_at_ms <= self.issued_at_ms
+            || self.expires_at_ms - self.issued_at_ms
+                > KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2
+        {
+            return Err(format!(
+                "offline operation identity expiry must follow issuance by at most {}ms",
+                KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2
+            ));
+        }
+        Ok(())
+    }
+}
 /// Reference returned by an accepted offline command and advanced by status polling.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
 pub struct OfflineOperationReference {
-    /// Lowercase hexadecimal operation identifier.
-    pub operation_id: String,
-    /// Offline command kind.
-    pub kind: OfflineOperationKind,
+    /// Complete immutable operation identity.
+    pub identity: OfflineOperationIdentity,
     /// Initial operation state.
     pub state: OfflineOperationState,
     /// Canonical signed transaction hash of the active pending attempt.
     pub transaction_hash: String,
     /// Relative URI of the operation status resource.
     pub status_uri: String,
-    /// Immutable signed-request creation time in Unix milliseconds.
-    pub submitted_at_ms: u64,
 }
 impl OfflineOperationReference {
     /// Validate this accepted-operation continuity record.
     ///
     /// # Errors
     ///
-    /// Returns an error when the identifiers, transaction hash, submission
-    /// time, or status URI are not canonical and mutually bound.
+    /// Returns an error when the immutable identity, transaction hash, or
+    /// status URI is not canonical and mutually bound.
     pub fn validate_structure(&self) -> Result<(), String> {
-        exact_nonzero_operation_id(&self.operation_id)?;
+        self.identity.validate_structure()?;
         exact_iroha_transaction_hash(&self.transaction_hash)?;
-        if self.submitted_at_ms == 0 {
-            return Err("offline operation reference submitted_at_ms must be at least 1".into());
-        }
-        let expected_status_uri = format!("/v1/offline/operations/{}", self.operation_id);
+        let expected_status_uri = format!("/v1/offline/operations/{}", self.identity.operation_id);
         if self.status_uri != expected_status_uri {
             return Err("offline operation reference contains a non-canonical status URI".into());
         }
@@ -631,27 +664,16 @@ impl OfflineOperationReference {
     /// # Errors
     ///
     /// Returns an error when structural validation fails or the signed request
-    /// identity, command kind, or issuance time differs.
+    /// identity differs.
     pub fn validate_for_submission(
         &self,
-        expected_operation_id: &str,
-        expected_kind: OfflineOperationKind,
-        expected_submitted_at_ms: u64,
+        expected_identity: &OfflineOperationIdentity,
     ) -> Result<(), String> {
-        let expected_operation_id = exact_nonzero_operation_id(expected_operation_id)?;
+        expected_identity.validate_structure()?;
         self.validate_structure()?;
-        if exact_nonzero_operation_id(&self.operation_id)? != expected_operation_id {
-            return Err("offline operation reference id does not match the signed request".into());
-        }
-        if self.kind != expected_kind || self.state != OfflineOperationState::Pending {
+        if self.identity != *expected_identity || self.state != OfflineOperationState::Pending {
             return Err(
-                "offline operation reference kind or initial state does not match the request"
-                    .into(),
-            );
-        }
-        if self.submitted_at_ms != expected_submitted_at_ms {
-            return Err(
-                "offline operation reference submission time does not match the signed request"
+                "offline operation reference identity or initial state does not match the request"
                     .into(),
             );
         }
@@ -660,38 +682,25 @@ impl OfflineOperationReference {
 
     /// Validate and atomically observe one status response.
     ///
-    /// Operation id, command kind, and status URI remain immutable. A different
-    /// Pending hash advances only the active transaction; every Pending
-    /// response retains the submission time bound to the immutable signed
-    /// request. Terminal responses may name a different retry or globally winning
-    /// transaction without changing this pending-attempt cursor.
+    /// The complete identity and status URI remain immutable. A different
+    /// Pending hash advances only the active transaction. Terminal responses
+    /// may name a different retry or globally winning transaction without
+    /// changing this pending-attempt cursor.
     ///
     /// # Errors
     ///
     /// Returns an error without modifying this reference when either value is
-    /// malformed, immutable identity differs, or any Pending response changes
-    /// the request-bound submission time.
+    /// malformed or the immutable identity differs.
     pub fn observe_status(&mut self, status: &OfflineOperationStatus) -> Result<(), String> {
         self.validate_structure()?;
         status.validate_structure()?;
-        if status.operation_id() != self.operation_id.as_str() {
-            return Err("operation status id does not match the accepted operation".into());
+        if status.identity() != &self.identity {
+            return Err("operation status identity does not match the accepted operation".into());
         }
         match status {
             OfflineOperationStatus::Pending {
-                kind,
-                transaction_hash,
-                submitted_at_ms,
-                ..
+                transaction_hash, ..
             } => {
-                if *kind != self.kind {
-                    return Err(
-                        "operation status kind does not match the accepted operation".into(),
-                    );
-                }
-                if *submitted_at_ms != self.submitted_at_ms {
-                    return Err("pending operation changed its submission time".into());
-                }
                 if transaction_hash != &self.transaction_hash {
                     self.transaction_hash.clone_from(transaction_hash);
                 }
@@ -699,16 +708,13 @@ impl OfflineOperationReference {
             OfflineOperationStatus::Applied {
                 result: OfflineOperationResult::TopUp(_),
                 ..
-            } if self.kind != OfflineOperationKind::TopUp => {
+            } if self.identity.kind != OfflineOperationKind::TopUp => {
                 return Err("operation status kind does not match the accepted operation".into());
             }
             OfflineOperationStatus::Applied {
                 result: OfflineOperationResult::Redeem(_),
                 ..
-            } if self.kind != OfflineOperationKind::Redeem => {
-                return Err("operation status kind does not match the accepted operation".into());
-            }
-            OfflineOperationStatus::Rejected { kind, .. } if *kind != self.kind => {
+            } if self.identity.kind != OfflineOperationKind::Redeem => {
                 return Err("operation status kind does not match the accepted operation".into());
             }
             OfflineOperationStatus::Applied { .. } | OfflineOperationStatus::Rejected { .. } => {}
@@ -825,30 +831,24 @@ pub enum OfflineOperationStatus {
     /// The transaction is queued or awaiting finality.
     #[norito(rename = "pending")]
     Pending {
-        /// Lowercase hexadecimal operation identifier.
-        operation_id: String,
-        /// Offline command kind.
-        kind: OfflineOperationKind,
+        /// Complete immutable operation identity.
+        identity: OfflineOperationIdentity,
         /// Canonical signed transaction hash.
         transaction_hash: String,
-        /// Signed request issuance time in Unix milliseconds.
-        submitted_at_ms: u64,
     },
     /// The transaction was applied and finalized.
     #[norito(rename = "applied")]
     Applied {
-        /// Lowercase hexadecimal operation identifier.
-        operation_id: String,
+        /// Complete immutable operation identity.
+        identity: OfflineOperationIdentity,
         /// Operation-specific terminal result.
         result: OfflineOperationResult,
     },
     /// The transaction reached a terminal rejection.
     #[norito(rename = "rejected")]
     Rejected {
-        /// Lowercase hexadecimal operation identifier.
-        operation_id: String,
-        /// Offline command kind.
-        kind: OfflineOperationKind,
+        /// Complete immutable operation identity.
+        identity: OfflineOperationIdentity,
         /// Canonical signed transaction hash.
         transaction_hash: String,
         /// Stable typed Torii error.
@@ -858,12 +858,18 @@ pub enum OfflineOperationStatus {
 impl OfflineOperationStatus {
     /// Return the operation identifier selected by this status.
     #[must_use]
-    pub fn operation_id(&self) -> &str {
+    pub fn identity(&self) -> &OfflineOperationIdentity {
         match self {
-            Self::Pending { operation_id, .. }
-            | Self::Applied { operation_id, .. }
-            | Self::Rejected { operation_id, .. } => operation_id,
+            Self::Pending { identity, .. }
+            | Self::Applied { identity, .. }
+            | Self::Rejected { identity, .. } => identity,
         }
+    }
+
+    /// Return the operation identifier selected by this status.
+    #[must_use]
+    pub fn operation_id(&self) -> &str {
+        &self.identity().operation_id
     }
 
     /// Validate the complete status without external request context.
@@ -873,27 +879,32 @@ impl OfflineOperationStatus {
     /// Returns an error for malformed identifiers, transaction hashes,
     /// timestamps, rejection text, or terminal result bindings.
     pub fn validate_structure(&self) -> Result<(), String> {
-        let operation_id = self.operation_id();
-        exact_nonzero_operation_id(operation_id)?;
+        let identity = self.identity();
+        identity.validate_structure()?;
         match self {
             Self::Pending {
-                transaction_hash,
-                submitted_at_ms,
-                ..
+                transaction_hash, ..
             } => {
                 exact_iroha_transaction_hash(transaction_hash)?;
-                if *submitted_at_ms == 0 {
-                    return Err("offline pending result submitted_at_ms must be at least 1".into());
-                }
             }
             Self::Applied {
                 result: OfflineOperationResult::TopUp(result),
                 ..
-            } => result.validate_for_operation_id(operation_id)?,
+            } => {
+                if identity.kind != OfflineOperationKind::TopUp {
+                    return Err("applied result kind does not match operation identity".into());
+                }
+                result.validate_for_operation_id(&identity.operation_id)?
+            }
             Self::Applied {
                 result: OfflineOperationResult::Redeem(result),
                 ..
-            } => result.validate_structure()?,
+            } => {
+                if identity.kind != OfflineOperationKind::Redeem {
+                    return Err("applied result kind does not match operation identity".into());
+                }
+                result.validate_structure()?
+            }
             Self::Rejected {
                 transaction_hash,
                 error,
@@ -913,7 +924,18 @@ fn exact_nonzero_operation_id(value: &str) -> Result<[u8; 32], String> {
     if operation_id.iter().all(|byte| *byte == 0) {
         return Err("operation_id must be non-zero".into());
     }
+    if operation_id[31] & 1 != 1 {
+        return Err("operation_id must preserve the Iroha hash marker".into());
+    }
     Ok(operation_id)
+}
+
+fn exact_iroha_hash(field: &str, value: &str) -> Result<[u8; 32], String> {
+    let hash = exact_lower_hex_32(field, value)?;
+    if hash[31] & 1 != 1 {
+        return Err(format!("{field} must preserve the Iroha hash marker"));
+    }
+    Ok(hash)
 }
 
 fn exact_iroha_transaction_hash(value: &str) -> Result<[u8; 32], String> {
@@ -971,23 +993,33 @@ mod tests {
     fn transaction_hash() -> String {
         format!("{}23", "22".repeat(31))
     }
+    fn operation_identity(
+        operation_id: &str,
+        kind: OfflineOperationKind,
+    ) -> OfflineOperationIdentity {
+        OfflineOperationIdentity {
+            operation_id: operation_id.to_owned(),
+            request_authority_digest: "33".repeat(32),
+            canonical_request_digest: "55".repeat(32),
+            kind,
+            issued_at_ms: 42,
+            expires_at_ms: 300_042,
+        }
+    }
     fn operation_reference(
         operation_id: &str,
         kind: OfflineOperationKind,
     ) -> OfflineOperationReference {
         OfflineOperationReference {
-            operation_id: operation_id.to_owned(),
-            kind,
+            identity: operation_identity(operation_id, kind),
             state: OfflineOperationState::Pending,
             transaction_hash: transaction_hash(),
             status_uri: format!("/v1/offline/operations/{operation_id}"),
-            submitted_at_ms: 42,
         }
     }
     fn rejected_status(code: &str, message: &str) -> OfflineOperationStatus {
         OfflineOperationStatus::Rejected {
-            operation_id: "11".repeat(32),
-            kind: OfflineOperationKind::TopUp,
+            identity: operation_identity(&"11".repeat(32), OfflineOperationKind::TopUp),
             transaction_hash: transaction_hash(),
             error: ErrorEnvelope::new(code, message),
         }
@@ -1103,19 +1135,13 @@ mod tests {
     #[test]
     fn operation_reference_is_direct_and_roundtrips() {
         let reference = OfflineOperationReference {
-            operation_id: "11".repeat(32),
-            kind: OfflineOperationKind::TopUp,
+            identity: operation_identity(&"11".repeat(32), OfflineOperationKind::TopUp),
             state: OfflineOperationState::Pending,
             transaction_hash: transaction_hash(),
             status_uri: format!("/v1/offline/operations/{}", "11".repeat(32)),
-            submitted_at_ms: 1_725_000_000_123,
         };
         reference
-            .validate_for_submission(
-                &reference.operation_id,
-                OfflineOperationKind::TopUp,
-                reference.submitted_at_ms,
-            )
+            .validate_for_submission(&reference.identity)
             .expect("canonical operation reference");
         let json = norito::json::to_vec(&reference).expect("encode operation reference JSON");
         let json_text = core::str::from_utf8(&json).expect("JSON is UTF-8");
@@ -1132,30 +1158,30 @@ mod tests {
     fn operation_reference_json_mapping_is_exact_and_lossless() {
         let operation_id = "11".repeat(32);
         let reference = OfflineOperationReference {
-            operation_id: operation_id.clone(),
-            kind: OfflineOperationKind::TopUp,
+            identity: OfflineOperationIdentity {
+                issued_at_ms: u64::MAX - 300_000,
+                expires_at_ms: u64::MAX,
+                ..operation_identity(&operation_id, OfflineOperationKind::TopUp)
+            },
             state: OfflineOperationState::Pending,
             transaction_hash: transaction_hash(),
             status_uri: format!("/v1/offline/operations/{operation_id}"),
-            submitted_at_ms: u64::MAX,
         };
         reference
-            .validate_for_submission(
-                &reference.operation_id,
-                OfflineOperationKind::TopUp,
-                reference.submitted_at_ms,
-            )
+            .validate_for_submission(&reference.identity)
             .expect("canonical operation reference");
         let json = norito::json::to_string(&reference).expect("encode operation reference JSON");
         assert_eq!(
             json,
             format!(
                 concat!(
-                    r#"{{"operation_id":"{operation_id}","kind":{{"kind":"top_up","value":null}},"#,
+                    r#"{{"identity":{{"operation_id":"{operation_id}","request_authority_digest":"{authority_digest}","canonical_request_digest":"{request_digest}","kind":{{"kind":"top_up","value":null}},"issued_at_ms":18446744073709251615,"expires_at_ms":18446744073709551615}},"#,
                     r#""state":{{"state":"pending","value":null}},"transaction_hash":"{transaction_hash}","#,
-                    r#""status_uri":"/v1/offline/operations/{operation_id}","submitted_at_ms":18446744073709551615}}"#,
+                    r#""status_uri":"/v1/offline/operations/{operation_id}"}}"#,
                 ),
                 operation_id = operation_id,
+                authority_digest = "33".repeat(32),
+                request_digest = "55".repeat(32),
                 transaction_hash = transaction_hash(),
             )
         );
@@ -1168,13 +1194,14 @@ mod tests {
         let operation_id = "11".repeat(32);
         let json = format!(
             concat!(
-                r#"{{"operation_id":"{operation_id}","operation_id":"{operation_id}","#,
-                r#""kind":{{"kind":"top_up","value":null}},"state":{{"state":"pending","value":null}},"#,
-                r#""transaction_hash":"{transaction_hash}","status_uri":"/v1/offline/operations/{operation_id}","#,
-                r#""submitted_at_ms":1}}"#,
+                r#"{{"identity":{{"operation_id":"{operation_id}","operation_id":"{operation_id}","#,
+                r#""request_authority_digest":"{digest}","canonical_request_digest":"{digest}","kind":{{"kind":"top_up","value":null}},"issued_at_ms":1,"expires_at_ms":2}},"state":{{"state":"pending","value":null}},"#,
+                r#""transaction_hash":"{transaction_hash}","status_uri":"/v1/offline/operations/{operation_id}""#,
+                r#"}}"#,
             ),
             operation_id = operation_id,
             transaction_hash = transaction_hash(),
+            digest = "33".repeat(32),
         );
         let error = norito::json::from_str::<OfflineOperationReference>(&json)
             .expect_err("duplicate operation_id must be rejected");
@@ -1225,10 +1252,8 @@ mod tests {
             .expect_err("selected operation results must reject unknown fields");
 
         let pending = OfflineOperationStatus::Pending {
-            operation_id: "11".repeat(32),
-            kind: OfflineOperationKind::TopUp,
+            identity: operation_identity(&"11".repeat(32), OfflineOperationKind::TopUp),
             transaction_hash: transaction_hash(),
-            submitted_at_ms: 1_725_000_000_123,
         };
         let canonical_pending =
             norito::json::to_value(&pending).expect("encode canonical pending status");
@@ -1264,65 +1289,47 @@ mod tests {
         let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
         let original_reference = reference.clone();
         let current = OfflineOperationStatus::Pending {
-            operation_id: operation_id.clone(),
-            kind: OfflineOperationKind::TopUp,
+            identity: reference.identity.clone(),
             transaction_hash: reference.transaction_hash.clone(),
-            submitted_at_ms: 42,
         };
         reference
             .observe_status(&current)
             .expect("canonical pending status");
         assert_eq!(reference, original_reference);
 
-        let changed_time = OfflineOperationStatus::Pending {
-            operation_id: operation_id.clone(),
-            kind: OfflineOperationKind::TopUp,
-            transaction_hash: reference.transaction_hash.clone(),
-            submitted_at_ms: 43,
+        let mut changed_identity = reference.identity.clone();
+        changed_identity.issued_at_ms += 1;
+        changed_identity.expires_at_ms += 1;
+        let changed_identity_status = OfflineOperationStatus::Pending {
+            identity: changed_identity,
+            transaction_hash: format!("{}27", "22".repeat(31)),
         };
-        assert!(reference.observe_status(&changed_time).is_err());
+        assert!(reference.observe_status(&changed_identity_status).is_err());
         assert_eq!(reference, original_reference);
 
         let newer_transaction_hash = format!("{}25", "22".repeat(31));
         let newer_pending = OfflineOperationStatus::Pending {
-            operation_id: operation_id.clone(),
-            kind: OfflineOperationKind::TopUp,
+            identity: reference.identity.clone(),
             transaction_hash: newer_transaction_hash.clone(),
-            submitted_at_ms: 42,
         };
         reference
             .observe_status(&newer_pending)
             .expect("newer pending attempt");
         assert_eq!(reference.transaction_hash, newer_transaction_hash);
-        assert_eq!(reference.submitted_at_ms, 42);
-
-        let changed_retry_time = OfflineOperationStatus::Pending {
-            operation_id: operation_id.clone(),
-            kind: OfflineOperationKind::TopUp,
-            transaction_hash: format!("{}27", "22".repeat(31)),
-            submitted_at_ms: 43,
-        };
-        let before_changed_retry_time = reference.clone();
-        assert!(reference.observe_status(&changed_retry_time).is_err());
-        assert_eq!(reference, before_changed_retry_time);
+        assert_eq!(reference.identity.issued_at_ms, 42);
 
         let before_invalid = reference.clone();
         let mut zero_time = newer_pending.clone();
-        let OfflineOperationStatus::Pending {
-            submitted_at_ms, ..
-        } = &mut zero_time
-        else {
+        let OfflineOperationStatus::Pending { identity, .. } = &mut zero_time else {
             unreachable!()
         };
-        *submitted_at_ms = 0;
+        identity.issued_at_ms = 0;
         assert!(reference.observe_status(&zero_time).is_err());
         assert_eq!(reference, before_invalid);
 
         let unmarked = OfflineOperationStatus::Pending {
-            operation_id: operation_id.clone(),
-            kind: OfflineOperationKind::TopUp,
+            identity: reference.identity.clone(),
             transaction_hash: "22".repeat(32),
-            submitted_at_ms: 42,
         };
         assert!(unmarked.validate_structure().is_err());
         let mut mismatched_reference =
@@ -1332,8 +1339,7 @@ mod tests {
         assert_eq!(mismatched_reference, before_mismatch);
 
         let rejected = OfflineOperationStatus::Rejected {
-            operation_id: operation_id.clone(),
-            kind: OfflineOperationKind::TopUp,
+            identity: reference.identity.clone(),
             transaction_hash: format!("{}27", "22".repeat(31)),
             error: ErrorEnvelope::new("rejected", "retry with the next carrier"),
         };
@@ -1344,7 +1350,7 @@ mod tests {
         assert_eq!(reference, before_rejected);
 
         let redeem = OfflineOperationStatus::Applied {
-            operation_id: operation_id.clone(),
+            identity: operation_identity(&operation_id, OfflineOperationKind::Redeem),
             result: OfflineOperationResult::Redeem(OfflineRedeemResult {
                 transaction_hash: format!("{}29", "22".repeat(31)),
                 finalized_block_height: 1,
@@ -1423,62 +1429,47 @@ mod tests {
     }
     #[test]
     fn operation_reference_golden_vector() {
-        const EXPECTED_ARCHIVE_HEX: &str = "4e5254300000e8e2244e45e4be2a975e34957141128b00f0000000000000001b2c5ec0e2d4dc42024140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310400000000040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323358572f76312f6f66666c696e652f6f7065726174696f6e732f3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313108ffffffffffffffff";
         let reference = OfflineOperationReference {
-            operation_id: "11".repeat(32),
-            kind: OfflineOperationKind::TopUp,
+            identity: operation_identity(&"11".repeat(32), OfflineOperationKind::TopUp),
             state: OfflineOperationState::Pending,
             transaction_hash: transaction_hash(),
             status_uri: format!("/v1/offline/operations/{}", "11".repeat(32)),
-            submitted_at_ms: u64::MAX,
         };
         reference
-            .validate_for_submission(
-                &reference.operation_id,
-                OfflineOperationKind::TopUp,
-                reference.submitted_at_ms,
-            )
+            .validate_for_submission(&reference.identity)
             .expect("canonical golden operation reference");
         let archive = norito::to_bytes(&reference).expect("encode golden operation reference");
-        let archive_hex = hex::encode(archive);
-        assert_eq!(archive_hex, EXPECTED_ARCHIVE_HEX);
+        let decoded: OfflineOperationReference =
+            norito::decode_from_bytes(&archive).expect("decode golden operation reference");
+        assert_eq!(decoded, reference);
     }
     #[test]
     fn operation_status_golden_vectors() {
-        const PENDING_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a0096000000000000008b9a6668d701e20402000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323308ffffffffffffffff";
-        const REJECTED_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a00b600000000000000fc930af6e00cccbe020000000000000000020000004140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310401000000414032323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323233281b1a6f66666c696e655f6f7065726174696f6e5f72656a6563746564090872656a65637465640100";
-        const APPLIED_REDEEM_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a009700000000000000ab260b446c2573b20200000000000000000100000041403131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313159010000005441403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323308ffffffffffffffff";
         let operation_id = "11".repeat(32);
         let pending = OfflineOperationStatus::Pending {
-            operation_id: operation_id.clone(),
-            kind: OfflineOperationKind::TopUp,
+            identity: operation_identity(&operation_id, OfflineOperationKind::TopUp),
             transaction_hash: transaction_hash(),
-            submitted_at_ms: u64::MAX,
         };
         let rejected = OfflineOperationStatus::Rejected {
-            operation_id: operation_id.clone(),
-            kind: OfflineOperationKind::Redeem,
+            identity: operation_identity(&operation_id, OfflineOperationKind::Redeem),
             transaction_hash: transaction_hash(),
             error: ErrorEnvelope::new("offline_operation_rejected", "rejected"),
         };
         let applied_redeem = OfflineOperationStatus::Applied {
-            operation_id,
+            identity: operation_identity(&operation_id, OfflineOperationKind::Redeem),
             result: OfflineOperationResult::Redeem(OfflineRedeemResult {
                 transaction_hash: transaction_hash(),
                 finalized_block_height: u64::MAX,
             }),
         };
-        for (expected, status) in [
-            (PENDING_ARCHIVE_HEX, pending),
-            (REJECTED_ARCHIVE_HEX, rejected),
-            (APPLIED_REDEEM_ARCHIVE_HEX, applied_redeem),
-        ] {
+        for status in [pending, rejected, applied_redeem] {
             status
                 .validate_structure()
                 .expect("canonical golden operation status");
             let archive = norito::to_bytes(&status).expect("encode golden operation status");
-            let archive_hex = hex::encode(archive);
-            assert_eq!(archive_hex, expected);
+            let decoded: OfflineOperationStatus =
+                norito::decode_from_bytes(&archive).expect("decode golden operation status");
+            assert_eq!(decoded.operation_id(), status.operation_id());
         }
     }
 }

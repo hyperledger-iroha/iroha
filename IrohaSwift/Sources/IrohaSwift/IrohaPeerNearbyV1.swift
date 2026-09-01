@@ -57,6 +57,7 @@ public enum IrohaPeerNearbyErrorV1: Error, Equatable, Sendable {
     case authenticationFailed
     case verificationRequired
     case notAuthenticated
+    case sessionDestroyed
     case replayOrReordering
     case messageTooLarge
     case cryptographicFailure
@@ -336,11 +337,13 @@ public struct IrohaPeerNearbyHelloV1: Equatable, Sendable {
     }
 
     public static func decode(_ data: Data) throws -> Self {
-        let bytes = [UInt8](data)
         let fixedLength = 4 + 1 + 1 + 2 + 1 + 1 + 16 + 32 + 32 + 2
-        guard bytes.count >= fixedLength + 65 + 4 + 1 else {
+        guard data.count >= fixedLength + 65 + 4 + 1,
+              data.count <= fixedLength + 65 + 4
+                + IrohaPeerNearbyV1.maximumCertificateBytes else {
             throw IrohaPeerNearbyErrorV1.invalidLength
         }
+        let bytes = [UInt8](data)
         guard Data(bytes[0..<4]) == IrohaPeerNearbyV1.magic else {
             throw IrohaPeerNearbyErrorV1.invalidMagic
         }
@@ -442,9 +445,13 @@ public struct IrohaPeerNearbyAuthenticationV1: Equatable, Sendable {
     }
 
     public static func decode(_ data: Data) throws -> Self {
-        let bytes = [UInt8](data)
         let fixedLength = 4 + 1 + 1 + 2 + 1 + 1 + 16 + 32 + 2
-        guard bytes.count >= fixedLength + 1 else { throw IrohaPeerNearbyErrorV1.invalidLength }
+        guard data.count >= fixedLength + 1,
+              data.count <= fixedLength
+                + IrohaPeerNearbyV1.maximumAuthenticationSignatureBytes else {
+            throw IrohaPeerNearbyErrorV1.invalidLength
+        }
+        let bytes = [UInt8](data)
         guard Data(bytes[0..<4]) == IrohaPeerNearbyV1.magic else {
             throw IrohaPeerNearbyErrorV1.invalidMagic
         }
@@ -524,9 +531,12 @@ public struct IrohaPeerNearbyEncryptedRecordV1: Equatable, Sendable {
     }
 
     public static func decode(_ data: Data) throws -> Self {
-        let bytes = [UInt8](data)
         let headerLength = 4 + 1 + 1 + 2 + 1 + 1 + 16 + 8 + 4
-        guard bytes.count >= headerLength + 16 else { throw IrohaPeerNearbyErrorV1.invalidLength }
+        guard data.count >= headerLength + 16,
+              data.count <= headerLength + IrohaPeerNearbyV1.maximumMessageBytes + 16 else {
+            throw IrohaPeerNearbyErrorV1.invalidLength
+        }
+        let bytes = [UInt8](data)
         guard Data(bytes[0..<4]) == IrohaPeerNearbyV1.magic else {
             throw IrohaPeerNearbyErrorV1.invalidMagic
         }
@@ -560,10 +570,10 @@ public struct IrohaPeerNearbyEncryptedRecordV1: Equatable, Sendable {
     }
 }
 
-/// Stateful, radio-independent handshake. Construct a fresh value for each
+/// Stateful, radio-independent handshake. Construct a fresh instance for each
 /// operation; reconnecting a durable transfer must use a newly authenticated
 /// session while reusing the exact durable peer message.
-public struct IrohaPeerNearbySessionV1 {
+public final class IrohaPeerNearbySessionV1: @unchecked Sendable {
     public typealias SignatureVerifier = (
         _ role: IrohaPeerNearbyRoleV1,
         _ certificate: Data,
@@ -571,19 +581,31 @@ public struct IrohaPeerNearbySessionV1 {
         _ signature: Data
     ) throws -> Bool
 
+    private struct VerificationMaterial {
+        let role: IrohaPeerNearbyRoleV1
+        let certificate: Data
+        let signedBytes: Data
+        let signature: Data
+        let peerPublicKey: Data
+        let transcriptHash: Data
+    }
+
     public let profile: IrohaPeerPayloadProfile
     public let localRole: IrohaPeerNearbyRoleV1
     public let sessionID: Data
     public let requestCanonicalHash: Data
-    public let localHello: IrohaPeerNearbyHelloV1
 
-    private let ephemeralPrivateKey: P256.KeyAgreement.PrivateKey
+    private let stateLock = NSRecursiveLock()
+    private var localHelloState: IrohaPeerNearbyHelloV1?
+    private var ephemeralPrivateKey: P256.KeyAgreement.PrivateKey?
     private var peerHello: IrohaPeerNearbyHelloV1?
     private var acceptedTranscriptHash: Data?
     private var outboundKey: SymmetricKey?
     private var inboundKey: SymmetricKey?
     private var outboundSequence: UInt64 = 0
     private var inboundSequence: UInt64 = 0
+    private var authenticationInProgress = false
+    private var destroyed = false
 
     public init(
         profile: IrohaPeerPayloadProfile,
@@ -595,12 +617,29 @@ public struct IrohaPeerNearbySessionV1 {
         ephemeralPrivateKey: P256.KeyAgreement.PrivateKey = P256.KeyAgreement.PrivateKey()
     ) throws {
         let nonce = nonce ?? Self.randomBytes(count: 32)
+        guard profile.rawValue != 0 else { throw IrohaPeerNearbyErrorV1.invalidProfile }
+        guard sessionID.count == 16,
+              sessionID.contains(where: { $0 != 0 }) else {
+            throw IrohaPeerNearbyErrorV1.invalidSession
+        }
+        guard requestCanonicalHash.count == 32,
+              requestCanonicalHash.contains(where: { $0 != 0 }) else {
+            throw IrohaPeerNearbyErrorV1.invalidRequest
+        }
+        guard nonce.count == 32,
+              nonce.contains(where: { $0 != 0 }) else {
+            throw IrohaPeerNearbyErrorV1.invalidLength
+        }
+        guard !deviceCertificate.isEmpty,
+              deviceCertificate.count <= IrohaPeerNearbyV1.maximumCertificateBytes else {
+            throw IrohaPeerNearbyErrorV1.invalidCertificate
+        }
         self.profile = profile
         self.localRole = localRole
         self.sessionID = Data(sessionID)
         self.requestCanonicalHash = Data(requestCanonicalHash)
         self.ephemeralPrivateKey = ephemeralPrivateKey
-        self.localHello = try IrohaPeerNearbyHelloV1(
+        self.localHelloState = try IrohaPeerNearbyHelloV1(
             profile: profile,
             role: localRole,
             sessionID: sessionID,
@@ -611,11 +650,68 @@ public struct IrohaPeerNearbySessionV1 {
         )
     }
 
-    public var isAuthenticated: Bool {
-        outboundKey != nil && inboundKey != nil && acceptedTranscriptHash != nil
+    /// The local handshake record while this session remains active.
+    public var localHello: IrohaPeerNearbyHelloV1 {
+        get throws {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            try requireActive()
+            guard let localHelloState else {
+                throw IrohaPeerNearbyErrorV1.sessionDestroyed
+            }
+            return localHelloState
+        }
     }
 
-    public mutating func acceptPeerHello(_ hello: IrohaPeerNearbyHelloV1) throws {
+    public var isAuthenticated: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return !destroyed
+            && outboundKey != nil
+            && inboundKey != nil
+            && acceptedTranscriptHash != nil
+    }
+
+    /// Whether `destroy()` has permanently closed this session.
+    public var isDestroyed: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return destroyed
+    }
+
+    /// Permanently closes the session and releases its retained key objects.
+    ///
+    /// CryptoKit owns the private and symmetric key storage opaquely, so Swift
+    /// cannot guarantee a physical overwrite of those internals. Destruction
+    /// drops every retained key reference promptly and all later operations
+    /// fail closed with `sessionDestroyed`.
+    public func destroy() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !destroyed else { return }
+        destroyed = true
+        ephemeralPrivateKey = nil
+        outboundKey = nil
+        inboundKey = nil
+        acceptedTranscriptHash = nil
+        peerHello = nil
+        localHelloState = nil
+        outboundSequence = 0
+        inboundSequence = 0
+        authenticationInProgress = false
+    }
+
+    deinit {
+        destroy()
+    }
+
+    public func acceptPeerHello(_ hello: IrohaPeerNearbyHelloV1) throws {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        try requireActive()
+        guard let localHelloState else {
+            throw IrohaPeerNearbyErrorV1.sessionDestroyed
+        }
         guard peerHello == nil else {
             throw IrohaPeerNearbyErrorV1.replayOrReordering
         }
@@ -625,14 +721,17 @@ public struct IrohaPeerNearbySessionV1 {
         guard hello.requestCanonicalHash == requestCanonicalHash else {
             throw IrohaPeerNearbyErrorV1.invalidRequest
         }
-        guard hello.ephemeralPublicKey != localHello.ephemeralPublicKey,
-              hello.nonce != localHello.nonce else {
+        guard hello.ephemeralPublicKey != localHelloState.ephemeralPublicKey,
+              hello.nonce != localHelloState.nonce else {
             throw IrohaPeerNearbyErrorV1.authenticationFailed
         }
         peerHello = hello
     }
 
     public func authenticationPreimage() throws -> Data {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        try requireActive()
         let hash = try transcriptHash()
         var preimage = IrohaPeerNearbyV1.authenticationDomain
         preimage.append(localRole.rawValue)
@@ -641,7 +740,10 @@ public struct IrohaPeerNearbySessionV1 {
     }
 
     public func makeAuthentication(signature: Data) throws -> IrohaPeerNearbyAuthenticationV1 {
-        try IrohaPeerNearbyAuthenticationV1(
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        try requireActive()
+        return try IrohaPeerNearbyAuthenticationV1(
             profile: profile,
             role: localRole,
             sessionID: sessionID,
@@ -650,56 +752,65 @@ public struct IrohaPeerNearbySessionV1 {
         )
     }
 
-    public mutating func acceptPeerAuthentication(
+    public func acceptPeerAuthentication(
         _ authentication: IrohaPeerNearbyAuthenticationV1,
         verifier: SignatureVerifier
     ) throws {
-        guard !isAuthenticated, acceptedTranscriptHash == nil else {
-            throw IrohaPeerNearbyErrorV1.replayOrReordering
+        stateLock.lock()
+        let verification: VerificationMaterial
+        do {
+            verification = try prepareVerification(authentication)
+        } catch {
+            stateLock.unlock()
+            throw error
         }
-        guard let peerHello else { throw IrohaPeerNearbyErrorV1.verificationRequired }
-        guard authentication.profile == profile else { throw IrohaPeerNearbyErrorV1.invalidProfile }
-        guard authentication.role == localRole.peer else { throw IrohaPeerNearbyErrorV1.invalidRole }
-        guard authentication.sessionID == sessionID else { throw IrohaPeerNearbyErrorV1.invalidSession }
-        let expectedHash = try transcriptHash()
-        guard authentication.transcriptHash == expectedHash else {
-            throw IrohaPeerNearbyErrorV1.transcriptMismatch
+        stateLock.unlock()
+
+        let verified: Bool
+        do {
+            verified = try verifier(
+                verification.role,
+                verification.certificate,
+                verification.signedBytes,
+                verification.signature
+            )
+        } catch {
+            stateLock.lock()
+            authenticationInProgress = false
+            let wasDestroyed = destroyed
+            stateLock.unlock()
+            if wasDestroyed {
+                throw IrohaPeerNearbyErrorV1.sessionDestroyed
+            }
+            throw error
         }
-        var signedBytes = IrohaPeerNearbyV1.authenticationDomain
-        signedBytes.append(authentication.role.rawValue)
-        signedBytes.append(expectedHash)
-        guard try verifier(
-            authentication.role,
-            peerHello.deviceCertificate,
-            signedBytes,
-            authentication.signature
-        ) else {
+
+        stateLock.lock()
+        defer {
+            authenticationInProgress = false
+            stateLock.unlock()
+        }
+        try requireActive()
+        guard verified else {
             throw IrohaPeerNearbyErrorV1.authenticationFailed
         }
         let peerPublicKey: P256.KeyAgreement.PublicKey
         do {
             peerPublicKey = try P256.KeyAgreement.PublicKey(
-                x963Representation: peerHello.ephemeralPublicKey
+                x963Representation: verification.peerPublicKey
             )
         } catch {
             throw IrohaPeerNearbyErrorV1.invalidPublicKey
         }
-        let secret: SharedSecret
-        do {
-            secret = try ephemeralPrivateKey.sharedSecretFromKeyAgreement(with: peerPublicKey)
-        } catch {
-            throw IrohaPeerNearbyErrorV1.cryptographicFailure
+        guard let ephemeralPrivateKey else {
+            throw IrohaPeerNearbyErrorV1.sessionDestroyed
         }
-        let senderToReceiver = Self.deriveKey(
-            secret: secret,
-            transcriptHash: expectedHash,
-            direction: Data("sender-to-receiver".utf8)
+        let (senderToReceiver, receiverToSender) = try Self.deriveDirectionalKeys(
+            privateKey: ephemeralPrivateKey,
+            peerPublicKey: peerPublicKey,
+            transcriptHash: verification.transcriptHash
         )
-        let receiverToSender = Self.deriveKey(
-            secret: secret,
-            transcriptHash: expectedHash,
-            direction: Data("receiver-to-sender".utf8)
-        )
+        self.ephemeralPrivateKey = nil
         if localRole == .sender {
             outboundKey = senderToReceiver
             inboundKey = receiverToSender
@@ -707,12 +818,15 @@ public struct IrohaPeerNearbySessionV1 {
             outboundKey = receiverToSender
             inboundKey = senderToReceiver
         }
-        acceptedTranscriptHash = expectedHash
+        acceptedTranscriptHash = verification.transcriptHash
         outboundSequence = 0
         inboundSequence = 0
     }
 
-    public mutating func seal(_ message: Data) throws -> IrohaPeerNearbyEncryptedRecordV1 {
+    public func seal(_ message: Data) throws -> IrohaPeerNearbyEncryptedRecordV1 {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        try requireActive()
         guard let outboundKey else { throw IrohaPeerNearbyErrorV1.notAuthenticated }
         guard !message.isEmpty, message.count <= IrohaPeerNearbyV1.maximumMessageBytes else {
             throw IrohaPeerNearbyErrorV1.messageTooLarge
@@ -750,7 +864,10 @@ public struct IrohaPeerNearbySessionV1 {
         )
     }
 
-    public mutating func open(_ record: IrohaPeerNearbyEncryptedRecordV1) throws -> Data {
+    public func open(_ record: IrohaPeerNearbyEncryptedRecordV1) throws -> Data {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        try requireActive()
         guard let inboundKey else { throw IrohaPeerNearbyErrorV1.notAuthenticated }
         guard record.profile == profile else { throw IrohaPeerNearbyErrorV1.invalidProfile }
         guard record.senderRole == localRole.peer else { throw IrohaPeerNearbyErrorV1.invalidRole }
@@ -784,10 +901,49 @@ public struct IrohaPeerNearbySessionV1 {
         }
     }
 
-    private func transcriptHash() throws -> Data {
+    /// Captures verifier input and marks authentication in flight. The caller
+    /// holds `stateLock` and releases it before invoking external verifier code.
+    private func prepareVerification(
+        _ authentication: IrohaPeerNearbyAuthenticationV1
+    ) throws -> VerificationMaterial {
+        try requireActive()
+        guard !authenticationInProgress,
+              outboundKey == nil,
+              inboundKey == nil,
+              acceptedTranscriptHash == nil else {
+            throw IrohaPeerNearbyErrorV1.replayOrReordering
+        }
         guard let peerHello else { throw IrohaPeerNearbyErrorV1.verificationRequired }
-        let senderHello = localRole == .sender ? localHello : peerHello
-        let receiverHello = localRole == .receiver ? localHello : peerHello
+        guard authentication.profile == profile else { throw IrohaPeerNearbyErrorV1.invalidProfile }
+        guard authentication.role == localRole.peer else { throw IrohaPeerNearbyErrorV1.invalidRole }
+        guard authentication.sessionID == sessionID else { throw IrohaPeerNearbyErrorV1.invalidSession }
+        let expectedHash = try transcriptHash()
+        guard authentication.transcriptHash == expectedHash else {
+            throw IrohaPeerNearbyErrorV1.transcriptMismatch
+        }
+        var signedBytes = IrohaPeerNearbyV1.authenticationDomain
+        signedBytes.append(authentication.role.rawValue)
+        signedBytes.append(expectedHash)
+        let verification = VerificationMaterial(
+            role: authentication.role,
+            certificate: peerHello.deviceCertificate,
+            signedBytes: signedBytes,
+            signature: authentication.signature,
+            peerPublicKey: peerHello.ephemeralPublicKey,
+            transcriptHash: expectedHash
+        )
+        authenticationInProgress = true
+        return verification
+    }
+
+    private func transcriptHash() throws -> Data {
+        try requireActive()
+        guard let peerHello else { throw IrohaPeerNearbyErrorV1.verificationRequired }
+        guard let localHelloState else {
+            throw IrohaPeerNearbyErrorV1.sessionDestroyed
+        }
+        let senderHello = localRole == .sender ? localHelloState : peerHello
+        let receiverHello = localRole == .receiver ? localHelloState : peerHello
         var transcript = IrohaPeerNearbyV1.transcriptDomain
         let service = Data(IrohaPeerNearbyV1.serviceID.utf8)
         transcript.appendUInt16BE(UInt16(service.count))
@@ -803,6 +959,37 @@ public struct IrohaPeerNearbySessionV1 {
         transcript.appendUInt32BE(UInt32(receiverBytes.count))
         transcript.append(receiverBytes)
         return Data(SHA256.hash(data: transcript))
+    }
+
+    private func requireActive() throws {
+        guard !destroyed else {
+            throw IrohaPeerNearbyErrorV1.sessionDestroyed
+        }
+    }
+
+    private static func deriveDirectionalKeys(
+        privateKey: P256.KeyAgreement.PrivateKey,
+        peerPublicKey: P256.KeyAgreement.PublicKey,
+        transcriptHash: Data
+    ) throws -> (SymmetricKey, SymmetricKey) {
+        let secret: SharedSecret
+        do {
+            secret = try privateKey.sharedSecretFromKeyAgreement(with: peerPublicKey)
+        } catch {
+            throw IrohaPeerNearbyErrorV1.cryptographicFailure
+        }
+        return (
+            deriveKey(
+                secret: secret,
+                transcriptHash: transcriptHash,
+                direction: Data("sender-to-receiver".utf8)
+            ),
+            deriveKey(
+                secret: secret,
+                transcriptHash: transcriptHash,
+                direction: Data("receiver-to-sender".utf8)
+            )
+        )
     }
 
     private static func deriveKey(

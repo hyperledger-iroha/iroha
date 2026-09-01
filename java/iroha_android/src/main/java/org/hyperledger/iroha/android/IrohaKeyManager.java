@@ -140,9 +140,7 @@ public final class IrohaKeyManager {
         signingAlgorithm);
   }
 
-  /**
-   * Creates a manager with the detected hardware-backed keystore provider.
-   */
+  /** Creates a manager with an optional keystore provider and a software fallback. */
   public static IrohaKeyManager withDefaultProviders() {
     return withDefaultProviders(KeyGenParameters.builder().build());
   }
@@ -153,21 +151,18 @@ public final class IrohaKeyManager {
         KeyGenParameters.builder().setSigningAlgorithm(signingAlgorithm).build());
   }
 
-  /**
-   * Creates a manager with the detected hardware-backed keystore provider.
-   */
+  /** Creates a manager with an optional keystore provider and a software fallback. */
   public static IrohaKeyManager withDefaultProviders(final KeyGenParameters keyGenParameters) {
     final SigningAlgorithm signingAlgorithm = keyGenParameters.signingAlgorithm();
     final List<KeyProvider> providers = new ArrayList<>();
     if (signingAlgorithm.supportsHardwareBackedKeys()) {
       KeystoreKeyProvider.maybeCreate(keyGenParameters).ifPresent(providers::add);
     }
+    providers.add(new SoftwareKeyProvider(signingAlgorithm));
     return new IrohaKeyManager(providers, KeystoreTelemetryEmitter.noop(), signingAlgorithm);
   }
 
-  /**
-   * Creates a manager with the detected hardware-backed keystore provider and telemetry.
-   */
+  /** Creates a manager with an optional keystore provider, software fallback, and telemetry. */
   public static IrohaKeyManager withDefaultProviders(
       final KeyGenParameters keyGenParameters, final KeystoreTelemetryEmitter telemetry) {
     final SigningAlgorithm signingAlgorithm = keyGenParameters.signingAlgorithm();
@@ -175,6 +170,7 @@ public final class IrohaKeyManager {
     if (signingAlgorithm.supportsHardwareBackedKeys()) {
       KeystoreKeyProvider.maybeCreate(keyGenParameters).ifPresent(providers::add);
     }
+    providers.add(new SoftwareKeyProvider(signingAlgorithm));
     return new IrohaKeyManager(providers, telemetry, signingAlgorithm);
   }
 

@@ -10,7 +10,7 @@ struct TestGovernanceDagSigner {
 impl TestGovernanceDagSigner {
     fn new() -> Self {
         Self {
-            handle: "pkcs11:governance-dag:node-primary".to_owned(),
+            handle: "provider:governance-dag:node-primary".to_owned(),
             publisher_peer_id: b"12D3KooWNodeTestGovernancePublisher".to_vec(),
             key_pair: KeyPair::try_from_seed(vec![0x39; 32], Algorithm::Ed25519)
                 .expect("derive test Governance DAG key"),

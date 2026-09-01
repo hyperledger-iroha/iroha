@@ -43,7 +43,7 @@ fn offline_operation_polling_preserves_redeem_identity_and_finality_integrity() 
         "ensure_unproven_pending_window_is_live",
         "OfflineOperationStatus::Applied",
         "OfflineOperationResult::Redeem",
-        "operation_id: operation_id_hex.clone()",
+        "identity: record.binding().identity()",
         "known_pending_in_queue",
         "offline_operation_evidence_inconsistent",
     ] {

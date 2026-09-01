@@ -67,18 +67,19 @@ the same exact spelling, as do contract entrypoint hashes, multisig transaction
 hashes, and offline-operation status transaction hashes.
 
 `KagemushaTopUpRequestV4` and `KagemushaRedeemRequestV4` decode the exact
-embedded authorization archive and expose its signed `issued_at_ms` alongside
-the derived operation id. Submission rejects a 202 reference unless its
-`submitted_at_ms` equals that signed request timestamp. Pending reconciliation
-then keeps the accepted timestamp immutable even when an exact retry advances
-the active transaction hash. Callers supply only the canonical Norito request
-archive; neither identity nor timestamp has a caller-provided override.
+embedded authorization archive and derive one immutable six-field operation
+identity: operation id, authority digest, canonical request digest, kind,
+issuance time, and expiry time. Submission and every status response must match
+that complete identity; an exact retry may advance only the active transaction
+hash. Callers supply only the canonical Norito request archive and cannot
+override any identity field.
 
 ## Kagemusha native validation
 
 Applied Kagemusha top-up status validation requires the ABI-23
-`connect_norito_bridge` shared library and its
-`connect_norito_kagemusha_offline_operation_status_json_validate_v1` export.
+`connect_norito_bridge` shared library, Kagemusha native contract revision 1,
+and its `connect_norito_kagemusha_offline_operation_status_json_validate_v2`
+export.
 Install the platform bridge artifact where the operating-system dynamic loader
 can discover it before starting the Python process. A missing library, a
 different ABI, a missing validator symbol, or a non-zero validation result

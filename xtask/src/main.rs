@@ -13628,10 +13628,12 @@ async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Erro
         None,
         MaybeTelemetry::disabled(),
     )?;
-    let router = torii
+    let router_runtime = torii
         .api_router_for_tests()
         .map_err(|error| eyre!("failed to initialize Torii router: {error}"))?;
-    let spec = fetch_openapi_from_router(router, OPENAPI_ENDPOINT_CANDIDATES).await;
+    let spec =
+        fetch_openapi_from_router(router_runtime.router(), OPENAPI_ENDPOINT_CANDIDATES).await;
+    router_runtime.shutdown().await;
     Ok(spec)
 }
 fn openapi_router_state(

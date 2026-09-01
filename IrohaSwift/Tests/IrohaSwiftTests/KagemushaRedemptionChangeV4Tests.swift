@@ -7,13 +7,17 @@ final class KagemushaRedemptionChangeV4Tests: XCTestCase {
         let bundle = try opaqueBundle()
         let opening = try noteOpening(seed: 0x20)
         let amount = try KagemushaScaledAmount(atomicUnits: "25", scale: 2)
-        let operationID = fixed32(0x61)
+        let recipient = try canonicalRecipient()
+        let recipientPayload = try AccountAddress.fromI105(recipient)
+            .compactNoritoAccountControllerPayload()
+        let nonce = fixed32(0x61)
         let entropy = fixed32(0x62)
-        let request = try KagemushaRecursiveSpendRedemptionChangePrepareRequestV4(
+        let request = try KagemushaRecursiveSpendRedemptionChangePrepareRequestV5(
             bundle: bundle,
             inputOpening: opening,
             changeAmount: amount,
-            operationID: operationID,
+            recipient: recipient,
+            nonce: nonce,
             entropy: entropy
         )
 
@@ -24,20 +28,20 @@ final class KagemushaRedemptionChangeV4Tests: XCTestCase {
             frame.header.schema,
             noritoSchemaHash(
                 forTypeName: KagemushaRecursiveSpend
-                    .redemptionChangePrepareRequestWireNameV4
+                    .redemptionChangePrepareRequestWireNameV5
             )
         )
         XCTAssertEqual(
             KagemushaRecursiveSpend.archivedPayloadAlignment(
                 forWireName: KagemushaRecursiveSpend
-                    .redemptionChangePrepareRequestWireNameV4
+                    .redemptionChangePrepareRequestWireNameV5
             ),
             16
         )
         XCTAssertEqual(frame.paddingLength, 8)
 
         var reader = CanonicalNoritoReader(data: frame.payload)
-        XCTAssertEqual(try reader.readCompactField(), uint16(4))
+        XCTAssertEqual(try reader.readCompactField(), uint16(5))
         XCTAssertEqual(
             try reader.readCompactField(),
             try XCTUnwrap(noritoDecodeFrame(bundle.noritoArchive)).payload
@@ -52,7 +56,8 @@ final class KagemushaRedemptionChangeV4Tests: XCTestCase {
             try reader.readCompactField(),
             fields([expectedAtomicUnits, uint32(2)])
         )
-        XCTAssertEqual(try reader.readCompactField(), operationID)
+        XCTAssertEqual(try reader.readCompactField(), recipientPayload)
+        XCTAssertEqual(try reader.readCompactField(), nonce)
         XCTAssertEqual(try reader.readCompactField(), entropy)
         XCTAssertEqual(reader.remaining(), 0)
     }
@@ -61,21 +66,32 @@ final class KagemushaRedemptionChangeV4Tests: XCTestCase {
         let bundle = try opaqueBundle()
         let opening = try noteOpening(seed: 0x20)
         let amount = try KagemushaScaledAmount(atomicUnits: "25", scale: 2)
-        let operationID = fixed32(0x61)
+        let recipient = try canonicalRecipient()
+        let nonce = fixed32(0x61)
 
-        XCTAssertThrowsError(try KagemushaRecursiveSpendRedemptionChangePrepareRequestV4(
+        XCTAssertThrowsError(try KagemushaRecursiveSpendRedemptionChangePrepareRequestV5(
             bundle: bundle,
             inputOpening: opening,
             changeAmount: amount,
-            operationID: Data(repeating: 0, count: 32),
+            recipient: recipient,
+            nonce: Data(repeating: 0, count: 32),
             entropy: fixed32(0x62)
         ))
-        XCTAssertThrowsError(try KagemushaRecursiveSpendRedemptionChangePrepareRequestV4(
+        XCTAssertThrowsError(try KagemushaRecursiveSpendRedemptionChangePrepareRequestV5(
             bundle: bundle,
             inputOpening: opening,
             changeAmount: amount,
-            operationID: operationID,
-            entropy: operationID
+            recipient: recipient,
+            nonce: nonce,
+            entropy: nonce
+        ))
+        XCTAssertThrowsError(try KagemushaRecursiveSpendRedemptionChangePrepareRequestV5(
+            bundle: bundle,
+            inputOpening: opening,
+            changeAmount: amount,
+            recipient: "alice@wonderland",
+            nonce: nonce,
+            entropy: fixed32(0x62)
         ))
     }
 
@@ -189,53 +205,66 @@ final class KagemushaRedemptionChangeV4Tests: XCTestCase {
             ))
     }
 
-    func testWorkflowValidationRequiresSmallerSameScaleChangeAndFreshIDs() throws {
+    func testWorkflowValidationRequiresSmallerSameScaleChangeAndFreshNonce() throws {
         let summary = try inputSummary(amount: "100")
-        let operationID = fixed32(0x61)
+        let recipient = try canonicalRecipient()
+        let nonce = fixed32(0x61)
         let entropy = fixed32(0x62)
-        XCTAssertNoThrow(try KagemushaRecursiveSpend.validateRedemptionChangeV4(
+        XCTAssertNoThrow(try KagemushaRecursiveSpend.validateRedemptionChangeV5(
             inputSummary: summary,
             changeAmount: KagemushaScaledAmount(atomicUnits: "99", scale: 2),
-            operationID: operationID,
+            recipient: recipient,
+            nonce: nonce,
             entropy: entropy
         ))
         for amount in ["100", "101"] {
-            XCTAssertThrowsError(try KagemushaRecursiveSpend.validateRedemptionChangeV4(
+            XCTAssertThrowsError(try KagemushaRecursiveSpend.validateRedemptionChangeV5(
                 inputSummary: summary,
                 changeAmount: KagemushaScaledAmount(atomicUnits: amount, scale: 2),
-                operationID: operationID,
+                recipient: recipient,
+                nonce: nonce,
                 entropy: entropy
             ))
         }
-        XCTAssertThrowsError(try KagemushaRecursiveSpend.validateRedemptionChangeV4(
+        XCTAssertThrowsError(try KagemushaRecursiveSpend.validateRedemptionChangeV5(
             inputSummary: summary,
             changeAmount: KagemushaScaledAmount(atomicUnits: "99", scale: 3),
-            operationID: operationID,
+            recipient: recipient,
+            nonce: nonce,
             entropy: entropy
         ))
-        XCTAssertThrowsError(try KagemushaRecursiveSpend.validateRedemptionChangeV4(
+        XCTAssertThrowsError(try KagemushaRecursiveSpend.validateRedemptionChangeV5(
             inputSummary: summary,
             changeAmount: KagemushaScaledAmount(atomicUnits: "99", scale: 2),
-            operationID: operationID,
-            entropy: operationID
+            recipient: recipient,
+            nonce: nonce,
+            entropy: nonce
         ))
-        XCTAssertThrowsError(try KagemushaRecursiveSpend.validateRedemptionChangeV4(
+        XCTAssertThrowsError(try KagemushaRecursiveSpend.validateRedemptionChangeV5(
             inputSummary: summary,
             changeAmount: KagemushaScaledAmount(atomicUnits: "99", scale: 2),
-            operationID: Data(repeating: 0, count: 32),
+            recipient: recipient,
+            nonce: Data(repeating: 0, count: 32),
+            entropy: entropy
+        ))
+        XCTAssertThrowsError(try KagemushaRecursiveSpend.validateRedemptionChangeV5(
+            inputSummary: summary,
+            changeAmount: KagemushaScaledAmount(atomicUnits: "99", scale: 2),
+            recipient: "alice@wonderland",
+            nonce: nonce,
             entropy: entropy
         ))
     }
 
     func testRequiredNativeInventoryIncludesPrepareAndSecretFree() {
         XCTAssertEqual(KagemushaRecursiveSpend.requiredProofSymbols.count, 4)
-        XCTAssertEqual(KagemushaRecursiveSpend.requiredProtocolSymbols.count, 45)
-        XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeSymbols.count, 49)
+        XCTAssertEqual(KagemushaRecursiveSpend.requiredProtocolSymbols.count, 46)
+        XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeSymbols.count, 50)
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
-            "connect_norito_kagemusha_offline_operation_status_validate_v1"
+            "connect_norito_kagemusha_offline_operation_status_validate_v2"
         ))
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
-            "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4"
+            "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5"
         ))
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
             "connect_norito_kagemusha_secret_free_buffer"
@@ -376,6 +405,13 @@ final class KagemushaRedemptionChangeV4Tests: XCTestCase {
         bytes[6] = (bytes[6] & 0x0f) | 0x40
         bytes[8] = (bytes[8] & 0x3f) | 0x80
         return AssetDefinitionAddress.encode(uuidBytes: bytes)!
+    }
+
+    private func canonicalRecipient() throws -> String {
+        let publicKey = try Keypair(privateKeyBytes: fixed32(0x63)).publicKey
+        return try AccountAddress.fromAccount(publicKey: publicKey).toI105(
+            networkPrefix: SccpV1.tairaI105DiscriminantV1
+        )
     }
 
     private func fields(_ values: [Data]) -> Data {

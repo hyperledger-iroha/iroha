@@ -2883,9 +2883,33 @@ pub mod account {
     use iroha_executor_data_model::permission::account::{
         CanModifyAccountMetadata, CanReplaceAccountController, CanUnregisterAccount,
     };
-    declare_execute_visitors! {
-        /// Registers a canonical account.
-        visit_register_account(Register<Account>);
+    fn has_native_transfer_control_metadata(metadata: &Metadata) -> bool {
+        metadata
+            .get(iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY)
+            .is_some()
+    }
+    fn reserved_native_registration_metadata(account: &NewAccount) -> Option<&'static str> {
+        [
+            iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY,
+            iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+        ]
+        .into_iter()
+        .find(|key| account.metadata.get(*key).is_some())
+    }
+    /// Registers a canonical account without allowing public instructions to seed native state.
+    pub fn visit_register_account<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &Register<Account>,
+    ) {
+        if let Some(key) = reserved_native_registration_metadata(isi.object()) {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(format!(
+                    "account metadata key `{key}` is reserved for native state"
+                ))
+            );
+        }
+        execute!(executor, isi);
     }
     /// Unregisters an account when the caller owns it or has the unregister permission.
     pub fn visit_unregister_account<V: Execute + Visit + ?Sized>(
@@ -2893,6 +2917,22 @@ pub mod account {
         isi: &Unregister<Account>,
     ) {
         let account_id = isi.object();
+        let account = match executor
+            .host()
+            .query_single(FindAccountById::new(account_id.clone()))
+        {
+            Ok(account) => account,
+            Err(error) => deny!(executor, error),
+        };
+        if has_native_transfer_control_metadata(account.metadata()) {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(
+                    "account with native asset transfer-control state must clear it through dedicated instructions before removal"
+                        .to_owned()
+                )
+            );
+        }
         if executor.context().curr_block.is_genesis()
             || is_account_owner(account_id, &executor.context().authority, executor.host())
             || {
@@ -3089,6 +3129,42 @@ pub mod account {
                 matches!(remove_executor.verdict(), Err(ValidationFail::NotPermitted(message))
                     if message.contains("reserved for native asset transfer controls")),
                 "default executor must deny the reserved RemoveKeyValue path"
+            );
+        }
+
+        #[test]
+        fn default_executor_rejects_reserved_native_metadata_during_registration() {
+            for key in [
+                iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY,
+                iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+            ] {
+                let authority = account_id();
+                let mut metadata = Metadata::default();
+                metadata.insert(
+                    key.parse().expect("reserved native metadata key"),
+                    Json::new(7_u64),
+                );
+                let register =
+                    Register::account(NewAccount::new(authority.clone()).with_metadata(metadata));
+                let mut executor = TestExecutor::new(authority);
+                visit_register_account(&mut executor, &register);
+                assert!(
+                    matches!(executor.verdict(), Err(ValidationFail::NotPermitted(message))
+                        if message.contains("reserved for native state")),
+                    "default executor must deny public native-state seeding"
+                );
+            }
+
+            let authority = account_id();
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                "ordinary_metadata".parse().expect("ordinary metadata key"),
+                Json::new("ordinary value"),
+            );
+            let account = NewAccount::new(authority).with_metadata(metadata);
+            assert!(
+                reserved_native_registration_metadata(&account).is_none(),
+                "ordinary account metadata must remain registrable"
             );
         }
     }

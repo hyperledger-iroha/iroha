@@ -23,7 +23,6 @@ const fn account_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_private_no_store()
-    .with_implicit_head(true)
     .with_cors_options(true)
 }
 
@@ -58,7 +57,6 @@ const fn auditor_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_private_no_store()
-    .with_implicit_head(true)
 }
 
 const fn validator_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -75,7 +73,6 @@ const fn validator_get(id: &'static str, path: &'static str) -> RouteDescriptor 
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_private_no_store()
-    .with_implicit_head(true)
 }
 
 const fn auditor_post(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -106,7 +103,6 @@ const fn public_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true)
 }
 
@@ -126,7 +122,6 @@ const fn test_network_diagnostic_get(id: &'static str, path: &'static str) -> Ro
     ))
     .with_projections(RouteProjections::NONE)
     .with_private_no_store()
-    .with_implicit_head(true)
 }
 
 /// Upload one complete encrypted leg through restricted confidential DA.

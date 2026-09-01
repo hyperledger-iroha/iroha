@@ -1,4 +1,4 @@
-//! Plain ballots opened in the same block should emit `ReferendumOpened` with the correct window.
+//! A scheduled plain referendum emits `ReferendumOpened` with the correct window.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use core::num::NonZeroU64;
 use iroha_core::{
@@ -6,7 +6,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{
-        GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus, State,
+        GovernanceReferendumRecord, GovernanceReferendumStatus, State,
         World,
     },
 };
@@ -37,30 +37,41 @@ fn plain_ballot_emits_open_event_with_window() {
     state.set_gov(cfg);
     let rid = "plain-open-event".to_string();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    {
+        let mut sblock = state.block(header);
+        let mut stx = sblock.transaction();
+        let ballot_perm: Permission = CanSubmitGovernanceBallot {
+            referendum_id: "any".into(),
+        }
+        .into();
+        Grant::account_permission(ballot_perm, ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("grant ballot permission");
+        stx.world.put_governance_referendum_for_testing(
+            rid.clone(),
+            GovernanceReferendumRecord {
+                h_start: 2,
+                h_end: 6,
+                status: GovernanceReferendumStatus::Proposed,
+                final_tally: None,
+            },
+        );
+        stx.apply();
+        sblock
+            .commit_empty_block_for_testing()
+            .expect("commit proposed referendum setup at H=1");
+    }
+
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-    let ballot_perm: Permission = CanSubmitGovernanceBallot {
-        referendum_id: "any".into(),
-    }
-    .into();
-    Grant::account_permission(ballot_perm, ALICE_ID.clone())
-        .execute(&ALICE_ID, &mut stx)
-        .expect("grant ballot permission");
-    stx.world.governance_referenda_mut().insert(
-        rid.clone(),
-        GovernanceReferendumRecord {
-            h_start: 1,
-            h_end: 5,
-            status: GovernanceReferendumStatus::Proposed,
-            mode: GovernanceReferendumMode::Plain,
-        },
-    );
     CastPlainBallot {
         referendum_id: rid.clone(),
-        owner: ALICE_ID.clone(),
-        amount: 1_u64.into(),
-        duration_blocks: 4,
-        direction: 0,
+        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
+            amount: 1_u64.into(),
+            duration_blocks: core::num::NonZeroU64::new(4).expect("non-zero lock duration"),
+        },
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("ballot ok");
@@ -73,6 +84,6 @@ fn plain_ballot_emits_open_event_with_window() {
         _ => None,
     });
     let opened = opened.expect("expected ReferendumOpened event");
-    assert_eq!(opened.h_start, 1);
-    assert_eq!(opened.h_end, 5);
+    assert_eq!(opened.h_start, 2);
+    assert_eq!(opened.h_end, 6);
 }

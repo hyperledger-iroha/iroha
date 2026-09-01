@@ -56,9 +56,10 @@ async fn rwas_endpoints_exist() {
         iroha_torii::MaybeTelemetry::disabled(),
     )
     .expect("valid Torii RWA fixture");
-    let app = torii
+    let runtime = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
+    let app = runtime.router();
     let resp = call_app(
         &app,
         Request::builder()
@@ -85,4 +86,5 @@ async fn rwas_endpoints_exist() {
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
+    runtime.shutdown().await;
 }

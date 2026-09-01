@@ -60,32 +60,39 @@ duplicate commitments fail closed.
 
 ## Direct Torii API
 
-The lifecycle operator and payment submission surfaces use these five Torii routes:
+The lifecycle operator, proof query, and payment submission surfaces use these six Torii routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/v1/offline/readiness` | Discover the universal ABI-21/V4 offline protocol capability |
+| `POST` | `/v1/offline/receiver-lineage` | Resolve the authenticated recipient's proof-bearing registration lineage |
 | `POST` | `/v1/offline/top-up` | Submit `OfflineTopUpRequest` |
 | `POST` | `/v1/offline/redeem` | Submit `OfflineRedeemRequest` |
 | `GET` | `/v1/offline/operations/{operation_id}` | Observe durable operation state and finality |
 | `POST` | `/v1/offline/kagemusha/lifecycle-v4/transactions` | Submit one exact governed V4 release-lifecycle transaction archive |
+
+Receiver-lineage lookup accepts only the canonical
+`OfflineRecipientLineageRequest` with `Content-Type: application/x-norito`
+and canonical account-signature authentication. Its successful response is an
+`application/x-norito` `OfflineRecipientRegistrationLineage` archive bounded
+to 4 MiB. The query is read-only proof resolution, not an operation command,
+and does not create or advance an operation resource.
 
 Top-up and redemption accept only the canonical typed value with
 `Content-Type: application/x-norito`. They do not accept JSON request bodies or
 an encoded-byte wrapper. The lowercase 64-hex `Idempotency-Key` is the signed
 operation id. An exact retry returns the same logical operation; reuse with any
 different request conflicts. A client retains its local operation until Torii
-reports globally final Applied state. Maintained clients keep the operation id,
-kind, canonical status URI, and signed request time immutable. The initial 202
-must repeat `authorization.issued_at_ms` as `submitted_at_ms`; maintained SDKs
-derive that value from the exact compact request archive rather than trusting a
-caller or response. The active marker-preserving
-transaction hash may advance when the configured authority retries an exact
-Rejected attempt or when another authorized authority wins global Applied
-finality. Every Pending response must repeat the request-bound
-`submitted_at_ms`, including when an exact retry advances the active transaction
-hash. Clients retain that immutable timestamp and promote only the replacement
-hash into the reference used for the next poll. Maintained SDKs issue each
+reports globally final Applied state. Maintained clients keep the complete
+nested request identity—operation id, request-authority digest, canonical
+request digest, kind, signed issue time, and signed expiry—plus the canonical
+status URI immutable. The initial 202 and every status response must repeat that
+exact identity, which maintained SDKs derive from the canonical request archive
+rather than trusting response fields. The active marker-preserving transaction
+hash may advance when the configured authority retries an exact Rejected
+attempt or when another authorized authority wins global Applied finality;
+clients promote only that replacement hash into the reference used for the next
+poll. Maintained SDKs issue each
 command POST as exactly one transport dispatch,
 regardless of any ambient POST-retry policy. An ambiguous response is reconciled
 through the canonical status resource; a further POST is authorized only after
@@ -144,9 +151,12 @@ Canonical request and native-bridge decoding rejects compression and alternate
 Norito layouts from the fixed header before reconstruction. Each route applies
 its exact framed-body ceiling. Public request extractors start with a fourfold
 frame-derived allocation base. Lineage selectors add 64 KiB; top-up adds six
-maximum 192 KiB shield proofs plus 64 KiB; and redeem budgets its bounded
-384 KiB recursive proof pairs plus three fixed copies of the 192 KiB unshield
-proof. Before owned reconstruction, a schema-aware canonical wire preflight
+maximum 192 KiB shield proofs plus 64 KiB; and redeem budgets its recursive
+proof pairs up to the defensive 384 KiB raw-archive ceiling plus three fixed
+copies of the 192 KiB unshield proof. Release capability and artifact admission
+require the sole exact 186,852-byte initialization pair and 191,862-byte
+released recursive-pair maximum. Before owned reconstruction, a schema-aware
+canonical wire preflight
 walks the redemption field path without allocating and rejects an unshield
 proof whose encoded `Vec<u8>` count exceeds that limit. Native fixed-depth
 schemas use the same fourfold base with a depth-derived fixed allowance; a
@@ -186,6 +196,10 @@ registry backend `halo2/ipa` and exact roles
 `kagemusha-recursive-spend-step-eq-compact-layout-v5` and
 `kagemusha_recursive_step_ep_v4_verifier_record` with circuit
 `kagemusha-recursive-spend-step-ep-compact-lineage-v5`.
+The typed recursive proof envelope has exact version `5`, and its opaque
+canonical Eq/Ep proof-pair archive also has exact version `5`. These are
+internal encoding and layout versions within the current ABI-21/V4 protocol;
+they do not define a new release, API, lifecycle, or compatibility path.
 
 ## Online to offline
 
@@ -402,10 +416,9 @@ superseded precompact diagnostic reached an externally guarded peak of
 4,998,922,240 bytes, but that measurement does not validate the final V2/V6
 commitment graph. A fresh guarded final-source k17 probe must establish its
 physical peak and shape. A 93,120-byte transcript
-per role, a 186,852-byte initialization pair, and a 191,862-byte maximum pair
-remain expected values until authentic generation confirms them. Candidate
-promotion must bind the exact generated bounds rather than the larger
-defensive wire ceilings.
+per role, the exact 186,852-byte initialization pair, and the 191,862-byte
+released recursive-pair maximum define the current profile. Candidate promotion
+must bind those exact values rather than the larger defensive wire ceilings.
 
 The former non-shipping serialized-advice V7 lab has been removed from the
 source tree and is not a candidate or release-review path. The sole retained

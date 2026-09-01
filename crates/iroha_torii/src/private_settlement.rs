@@ -506,8 +506,12 @@ async fn run_private_settlement_finality_reconciliation_v1(
     let mut cursor = None;
     loop {
         tokio::select! {
+            biased;
             _ = shutdown_signal.receive() => return Ok(()),
             _ = ticker.tick() => {
+                if shutdown_signal.is_sent() {
+                    return Ok(());
+                }
                 cursor = reconcile_private_settlement_finality_tick_v1(
                     Arc::clone(&store),
                     Arc::clone(&state),
@@ -523,17 +527,17 @@ pub(crate) fn spawn_private_settlement_finality_reconciliation_v1(
     runtime: PrivateSettlementToriiRuntimeV1,
     state: Arc<iroha_core::state::State>,
     shutdown_signal: ShutdownSignal,
-) {
-    let Some(store) = runtime.reconciliation_store() else {
-        return;
-    };
+) -> Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
+    let store = runtime.reconciliation_store()?;
     let worker_shutdown = shutdown_signal.clone();
-    let worker = crate::panic_recovery::spawn_joined_recoverable(
-        run_private_settlement_finality_reconciliation_v1(store, state, worker_shutdown),
-    );
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
+        let worker = crate::panic_recovery::spawn_joined_recoverable(
+            run_private_settlement_finality_reconciliation_v1(store, state, worker_shutdown),
+        );
         let failure = match crate::panic_recovery::join_recoverable(worker).await {
-            Ok(Ok(())) if shutdown_signal.is_sent() => return,
+            Ok(Ok(())) if shutdown_signal.is_sent() => {
+                return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+            }
             Ok(Ok(())) => PrivateSettlementReconciliationFailureV1::WorkerExitedUnexpectedly,
             Ok(Err(failure)) => failure,
             Err(crate::panic_recovery::RecoverableTaskError::Panicked) => {
@@ -547,10 +551,8 @@ pub(crate) fn spawn_private_settlement_finality_reconciliation_v1(
             code = failure.code(),
             "private-settlement finality reconciliation failed closed"
         );
-        if !shutdown_signal.is_sent() {
-            shutdown_signal.send();
-        }
-    });
+        crate::ToriiCriticalWorkerExit::UnexpectedExit
+    }))
 }
 
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize)]

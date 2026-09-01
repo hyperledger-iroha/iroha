@@ -17,9 +17,11 @@
 //!   not cause completed attachments to be verified again. Retryable policy or
 //!   registry failures use bounded exponential backoff.
 //!   Registry-backed verifying-key files use the data model's 8 MiB V1 payload
-//!   ceiling and a stable direct-file read, so a corrupt key file cannot race
-//!   metadata admission and make the worker allocate an unbounded buffer;
-//!   inline registry keys are verified by reference instead of being cloned.
+//!   ceiling and a stable direct-file read. Their filenames are derived from a
+//!   domain-separated hash of the exact verifying-key ID, so distinct registry
+//!   IDs cannot alias through lossy filesystem sanitization. A corrupt key file
+//!   cannot race metadata admission and make the worker allocate an unbounded
+//!   buffer; inline registry keys are verified by reference instead of being cloned.
 //! - This module is strictly app-facing and non-forking. It must not affect consensus.
 //! - Enabled and paced via `iroha_config` (torii.zk_prover_enabled, torii.zk_prover_scan_period_secs).
 //!
@@ -513,24 +515,8 @@ fn try_read_report_summary_locked(id: &str) -> std::io::Result<Option<ProverRepo
     }
     Ok(Some(bound_persisted_report_summary(summary)))
 }
-fn report_id_from_entry(entry: &fs::DirEntry) -> std::io::Result<Option<String>> {
-    let name = entry.file_name();
-    let name = name.to_str().ok_or_else(|| {
-        IoError::new(
-            IoErrorKind::InvalidData,
-            "ZK prover persistence directory contains a non-UTF-8 entry",
-        )
-    })?;
+fn report_id_from_name(name: &str) -> std::io::Result<Option<String>> {
     if is_prover_persistence_temp_name(name) {
-        if !entry.file_type()?.is_file() {
-            return Err(IoError::new(
-                IoErrorKind::InvalidData,
-                format!(
-                    "ZK prover temporary path is not a direct regular file: {}",
-                    entry.path().display()
-                ),
-            ));
-        }
         return Ok(None);
     }
     let raw_id = name.strip_suffix(".json").ok_or_else(|| {
@@ -551,16 +537,33 @@ fn report_id_from_entry(entry: &fs::DirEntry) -> std::io::Result<Option<String>>
             format!("ZK prover persistence directory has a non-canonical report id: {name}"),
         ));
     };
-    if !entry.file_type()?.is_file() {
+    Ok(Some(clean))
+}
+fn verify_tracked_prover_directory(
+    path: &Path,
+    tracked: &crate::secure_file_metadata::SecureMetadata,
+    pinned: &fs::File,
+) -> std::io::Result<()> {
+    use crate::secure_file_metadata::{from_file, from_path, is_direct_directory, same_file};
+
+    let opened = from_file(pinned)?;
+    let named = from_path(path)?;
+    if !is_direct_directory(tracked)
+        || !is_direct_directory(&opened)
+        || !is_direct_directory(&named)
+        || !same_file(tracked, &opened)
+        || !same_file(&opened, &named)
+    {
         return Err(IoError::new(
             IoErrorKind::InvalidData,
-            format!(
-                "ZK prover report path is not a direct regular file: {}",
-                entry.path().display()
-            ),
+            "ZK prover persistence directory changed during its scan",
         ));
     }
-    Ok(Some(clean))
+    Ok(())
+}
+fn verify_pinned_prover_directory(path: &Path, pinned: &fs::File) -> std::io::Result<()> {
+    let tracked = crate::secure_file_metadata::from_file(pinned)?;
+    verify_tracked_prover_directory(path, &tracked, pinned)
 }
 fn visit_report_ids(
     mut visitor: impl FnMut(String) -> std::io::Result<bool>,
@@ -568,23 +571,60 @@ fn visit_report_ids(
     let max_entries = cfg_reports_max_count()
         .max(iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT)
         .saturating_add(1_024);
-    let mut scanned = 0_u64;
-    for entry in fs::read_dir(reports_dir())? {
-        let entry = entry?;
-        scanned = scanned.saturating_add(1);
-        if scanned > max_entries {
-            return Err(IoError::new(
-                IoErrorKind::InvalidData,
-                format!("ZK prover report scan exceeds {max_entries} entries"),
-            ));
-        }
-        let Some(id) = report_id_from_entry(&entry)? else {
-            continue;
-        };
-        if !visitor(id)? {
-            break;
+    let root = reports_dir();
+    let pinned = crate::zk_attachments::open_pinned_direct_directory(&root)?.ok_or_else(|| {
+        IoError::new(
+            IoErrorKind::NotFound,
+            "ZK prover report directory is missing",
+        )
+    })?;
+    verify_pinned_prover_directory(&root, &pinned)?;
+    #[cfg(unix)]
+    {
+        for name in crate::zk_attachments::pinned_directory_names(&pinned, max_entries)? {
+            if crate::zk_attachments::open_pinned_direct_regular_file(&pinned, &name)?.is_none() {
+                return Err(IoError::new(
+                    IoErrorKind::InvalidData,
+                    "ZK prover report entry disappeared during its scan",
+                ));
+            }
+            let Some(id) = report_id_from_name(&name)? else {
+                continue;
+            };
+            if !visitor(id)? {
+                break;
+            }
+            verify_pinned_prover_directory(&root, &pinned)?;
         }
     }
+    #[cfg(windows)]
+    {
+        for name in crate::zk_attachments::pinned_directory_names_at(&root, &pinned, max_entries)? {
+            let child = crate::zk_attachments::open_direct_regular_file_in_pinned_directory(
+                &root, &pinned, &name,
+            )?
+            .ok_or_else(|| {
+                IoError::new(
+                    IoErrorKind::InvalidData,
+                    "ZK prover report entry disappeared during its scan",
+                )
+            })?;
+            drop(child);
+            let Some(id) = report_id_from_name(&name)? else {
+                continue;
+            };
+            if !visitor(id)? {
+                break;
+            }
+            verify_pinned_prover_directory(&root, &pinned)?;
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    return Err(IoError::new(
+        IoErrorKind::Unsupported,
+        "secure ZK prover report scanning is unsupported on this platform",
+    ));
+    verify_pinned_prover_directory(&root, &pinned)?;
     Ok(())
 }
 fn load_or_repair_report_summary_locked(id: &str) -> std::io::Result<Option<ProverReportSummary>> {
@@ -614,28 +654,78 @@ fn visit_report_summaries_locked(
     })
 }
 fn prune_stale_report_summaries_locked() -> std::io::Result<usize> {
+    let index = report_index_dir();
+    let pinned = crate::zk_attachments::open_pinned_direct_directory(&index)?.ok_or_else(|| {
+        IoError::new(
+            IoErrorKind::NotFound,
+            "ZK prover report-index directory is missing",
+        )
+    })?;
+    verify_pinned_prover_directory(&index, &pinned)?;
     let mut pruned = 0usize;
-    for entry in fs::read_dir(report_index_dir())? {
-        let entry = entry?;
-        let Some(id) = report_id_from_entry(&entry)? else {
-            continue;
-        };
-        match fs::symlink_metadata(report_path_from_sanitized(&id)) {
-            Ok(metadata) if metadata.file_type().is_file() => {}
-            Ok(_) => {
+    let max_entries = cfg_reports_max_count()
+        .max(iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT)
+        .saturating_add(1_024);
+    #[cfg(unix)]
+    {
+        for name in crate::zk_attachments::pinned_directory_names(&pinned, max_entries)? {
+            if crate::zk_attachments::open_pinned_direct_regular_file(&pinned, &name)?.is_none() {
                 return Err(IoError::new(
                     IoErrorKind::InvalidData,
-                    format!("ZK prover report path is not a direct regular file: {id}"),
+                    "ZK prover report-summary entry disappeared during its scan",
                 ));
             }
-            Err(error) if error.kind() == IoErrorKind::NotFound => {
-                if remove_file_if_present(&entry.path())? {
-                    pruned = pruned.saturating_add(1);
+            let Some(id) = report_id_from_name(&name)? else {
+                continue;
+            };
+            match open_attachment_regular_file(&report_path_from_sanitized(&id)) {
+                Ok(opened) => drop(opened),
+                Err(error) if error.kind() == IoErrorKind::NotFound => {
+                    if crate::zk_attachments::unlink_pinned_regular_file_if_present(&pinned, &name)?
+                    {
+                        pruned = pruned.saturating_add(1);
+                    }
                 }
+                Err(error) => return Err(error),
             }
-            Err(error) => return Err(error),
+            verify_pinned_prover_directory(&index, &pinned)?;
         }
     }
+    #[cfg(windows)]
+    {
+        for name in crate::zk_attachments::pinned_directory_names_at(&index, &pinned, max_entries)?
+        {
+            let child = crate::zk_attachments::open_direct_regular_file_in_pinned_directory(
+                &index, &pinned, &name,
+            )?
+            .ok_or_else(|| {
+                IoError::new(
+                    IoErrorKind::InvalidData,
+                    "ZK prover report-summary entry disappeared during its scan",
+                )
+            })?;
+            drop(child);
+            let Some(id) = report_id_from_name(&name)? else {
+                continue;
+            };
+            match open_attachment_regular_file(&report_path_from_sanitized(&id)) {
+                Ok(opened) => drop(opened),
+                Err(error) if error.kind() == IoErrorKind::NotFound => {
+                    if remove_file_if_present(&index.join(&name))? {
+                        pruned = pruned.saturating_add(1);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+            verify_pinned_prover_directory(&index, &pinned)?;
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    return Err(IoError::new(
+        IoErrorKind::Unsupported,
+        "secure ZK prover report-index scanning is unsupported on this platform",
+    ));
+    verify_pinned_prover_directory(&index, &pinned)?;
     Ok(pruned)
 }
 #[cfg(test)]
@@ -854,13 +944,19 @@ fn discover_pending_attachment_locations(
             .saturating_sub(discovery.locations.len()),
         max_work_items: geometry.max_work_items.saturating_sub(discovery.work_items),
     };
-    let streamed = discover_attachment_window(
+    let streamed = match discover_attachment_window(
         state.stream.as_mut().expect("initialized above"),
         remaining_geometry,
         start,
         max_millis,
         attachment_needs_processing,
-    )?;
+    ) {
+        Ok(streamed) => streamed,
+        Err(error) => {
+            state.stream = None;
+            return Err(error);
+        }
+    };
     discovery.locations.extend(streamed.locations);
     discovery.work_items = discovery.work_items.saturating_add(streamed.work_items);
     discovery.sweep_complete = streamed.sweep_complete;
@@ -1102,38 +1198,24 @@ fn scan_report_store_locked(exclude_id: &str) -> std::io::Result<ReportStoreScan
             return Ok(true);
         }
         let report_path = report_path_from_sanitized(&id);
-        let report_metadata = match fs::symlink_metadata(&report_path) {
-            Ok(metadata) => metadata,
+        let (report_file, report_metadata) = match open_attachment_regular_file(&report_path) {
+            Ok(opened) => opened,
             Err(error) if error.kind() == IoErrorKind::NotFound => return Ok(true),
             Err(error) => return Err(error),
         };
-        if !report_metadata.file_type().is_file() {
-            return Err(IoError::new(
-                IoErrorKind::InvalidData,
-                format!(
-                    "ZK prover report path is not a direct regular file: {}",
-                    report_path.display()
-                ),
-            ));
-        }
         let processed_ms =
             load_or_repair_report_summary_locked(&id)?.map_or(0, |summary| summary.processed_ms);
         let summary_path = report_summary_path_from_sanitized(&id);
-        let summary_bytes = match fs::symlink_metadata(&summary_path) {
-            Ok(metadata) if metadata.file_type().is_file() => metadata.len(),
-            Ok(_) => {
-                return Err(IoError::new(
-                    IoErrorKind::InvalidData,
-                    format!(
-                        "ZK prover report summary path is not a direct regular file: {}",
-                        summary_path.display()
-                    ),
-                ));
+        let summary_bytes = match open_attachment_regular_file(&summary_path) {
+            Ok((file, metadata)) => {
+                drop(file);
+                metadata.len()
             }
             Err(error) if error.kind() == IoErrorKind::NotFound => 0,
             Err(error) => return Err(error),
         };
         let retained_bytes = report_metadata.len().saturating_add(summary_bytes);
+        drop(report_file);
         scan.count = scan.count.saturating_add(1);
         scan.retained_bytes = scan.retained_bytes.saturating_add(retained_bytes);
         let candidate = ReportRetentionCandidate {
@@ -1158,47 +1240,49 @@ fn scan_report_store_locked(exclude_id: &str) -> std::io::Result<ReportStoreScan
 fn report_store_fits(count: u64, retained_bytes: u64, max_count: u64, max_bytes: u64) -> bool {
     count <= max_count && retained_bytes <= max_bytes
 }
+#[cfg(unix)]
 fn remove_file_if_present(path: &Path) -> std::io::Result<bool> {
-    match fs::remove_file(path) {
-        Ok(()) => {
-            let parent = path.parent().ok_or_else(|| {
-                IoError::new(
-                    IoErrorKind::InvalidInput,
-                    "ZK prover persistence path has no parent directory",
-                )
-            })?;
-            crate::durable_fs::sync_direct_directory(parent)?;
-            Ok(true)
-        }
-        Err(error) if error.kind() == IoErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
+    let parent_path = path.parent().ok_or_else(|| {
+        IoError::new(
+            IoErrorKind::InvalidInput,
+            "ZK prover persistence path has no parent directory",
+        )
+    })?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            IoError::new(
+                IoErrorKind::InvalidInput,
+                "ZK prover persistence path has no canonical UTF-8 file name",
+            )
+        })?;
+    let Some(parent) = crate::zk_attachments::open_pinned_direct_directory(parent_path)? else {
+        return Ok(false);
+    };
+    crate::zk_attachments::unlink_pinned_regular_file_if_present(&parent, name)
+}
+#[cfg(windows)]
+fn remove_file_if_present(path: &Path) -> std::io::Result<bool> {
+    crate::zk_attachments::remove_direct_regular_file_if_present(path)
+}
+#[cfg(not(any(unix, windows)))]
+fn remove_file_if_present(_path: &Path) -> std::io::Result<bool> {
+    Err(IoError::new(
+        IoErrorKind::Unsupported,
+        "secure ZK prover removal is unsupported on this platform",
+    ))
 }
 fn delete_report_files_locked(id: &str) -> std::io::Result<bool> {
     let clean = sanitize_report_id(id)
         .filter(|clean| clean == id)
         .ok_or_else(|| IoError::new(IoErrorKind::InvalidInput, "invalid prover report id"))?;
     let report_path = report_path_from_sanitized(&clean);
-    match fs::symlink_metadata(&report_path) {
-        Ok(metadata) if metadata.file_type().is_file() => {
-            if let Some(committed) = try_load_report(&clean)?
-                .as_ref()
-                .and_then(processing_receipt_from_report)
-            {
-                let _ = reconcile_prover_processing_receipt_if_referenced(&committed)?;
-            }
-        }
-        Ok(_) => {
-            return Err(IoError::new(
-                IoErrorKind::InvalidData,
-                format!(
-                    "ZK prover report path is not a direct regular file: {}",
-                    report_path.display()
-                ),
-            ));
-        }
-        Err(error) if error.kind() == IoErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+    if let Some(committed) = try_load_report(&clean)?
+        .as_ref()
+        .and_then(processing_receipt_from_report)
+    {
+        let _ = reconcile_prover_processing_receipt_if_referenced(&committed)?;
     }
     let removed_report = remove_file_if_present(&report_path)?;
     let removed_summary = remove_file_if_present(&report_summary_path_from_sanitized(&clean))?;
@@ -1408,24 +1492,8 @@ fn circuit_allowed(circuit_id: &str, allowlist: &[String]) -> bool {
             .iter()
             .any(|allowed| circuit_id.starts_with(allowed))
 }
-fn sanitize_vk_component(component: &str) -> String {
-    let mut out = String::with_capacity(component.len());
-    for ch in component.chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-            out.push(ch);
-        } else {
-            out.push('_');
-        }
-    }
-    if out.is_empty() { "_".to_string() } else { out }
-}
-fn vk_store_path(keys_dir: &Path, id: &VerifyingKeyId) -> PathBuf {
-    let backend = sanitize_vk_component(id.backend.as_ref());
-    let name = sanitize_vk_component(&id.name);
-    keys_dir.join(format!("{backend}__{name}.vk"))
-}
 fn load_vk_bytes(keys_dir: &Path, id: &VerifyingKeyId) -> Result<Vec<u8>, String> {
-    let path = vk_store_path(keys_dir, id);
+    let path = crate::zk_vk_store_path(keys_dir, id);
     read_bounded_attachment_regular_file(
         &path,
         u64::try_from(VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1)
@@ -2302,16 +2370,23 @@ fn scan_shutdown_requested(shutdown: Option<&ShutdownSignal>) -> bool {
     shutdown.is_some_and(ShutdownSignal::is_sent)
 }
 fn record_prover_join_result(
-    result: Result<std::io::Result<bool>, tokio::task::JoinError>,
+    result: Result<std::thread::Result<std::io::Result<bool>>, tokio::task::JoinError>,
     processed_reports: &mut usize,
     first_error: &mut Option<IoError>,
 ) {
     match result {
-        Ok(Ok(true)) => *processed_reports = (*processed_reports).saturating_add(1),
-        Ok(Ok(false)) => {}
-        Ok(Err(error)) => {
+        Ok(Ok(Ok(true))) => *processed_reports = (*processed_reports).saturating_add(1),
+        Ok(Ok(Ok(false))) => {}
+        Ok(Ok(Err(error))) => {
             if first_error.is_none() {
                 *first_error = Some(error);
+            }
+        }
+        Ok(Err(_)) => {
+            if first_error.is_none() {
+                *first_error = Some(IoError::other(
+                    "background prover task panicked inside its recovery boundary",
+                ));
             }
         }
         Err(error) => {
@@ -2483,7 +2558,7 @@ async fn run_budgeted_scan_with_shutdown(
         let inflight = inflight.clone();
         let telemetry_clone = telemetry.clone();
         let loc_owned = loc;
-        join_set.spawn(async move {
+        join_set.spawn(crate::panic_recovery::catch_async_recoverable(async move {
             let prev = inflight.fetch_add(1, Ordering::SeqCst) + 1;
             telemetry_clone.with_metrics(|tel| tel.set_torii_zk_prover_inflight(prev));
             #[cfg(test)]
@@ -2503,7 +2578,7 @@ async fn run_budgeted_scan_with_shutdown(
                 IoError::other(format!("background prover processing panicked: {error}"))
             })??;
             Ok::<_, IoError>(report.is_some())
-        });
+        }));
         if scan_shutdown_requested(shutdown) {
             stopped_by_shutdown = true;
             retry_locations.extend(pending);
@@ -2666,12 +2741,108 @@ mod tests {
     use iroha_core::zk::test_utils::{FixtureEnvelope, halo2_ivm_execution_envelope};
     use iroha_data_model::proof::{ProofAttachment, ProofBox};
     const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
+
+    #[test]
+    fn zk_key_store_paths_are_canonical_fixed_length_and_collision_resistant() {
+        let slash = VerifyingKeyId::new("halo2/ipa", "a/b");
+        let underscore = VerifyingKeyId::new("halo2/ipa", "a_b");
+        let colon = VerifyingKeyId::new("halo2/ipa", "a:b");
+        assert_ne!(
+            crate::zk_key_store_stem(&slash),
+            crate::zk_key_store_stem(&underscore)
+        );
+        assert_ne!(
+            crate::zk_key_store_stem(&colon),
+            crate::zk_key_store_stem(&underscore)
+        );
+
+        let left_boundary = VerifyingKeyId::new("ab", "c");
+        let right_boundary = VerifyingKeyId::new("a", "bc");
+        assert_ne!(
+            crate::zk_key_store_stem(&left_boundary),
+            crate::zk_key_store_stem(&right_boundary)
+        );
+
+        let golden = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1");
+        let expected = "zkid-v1-319239c9cb2dadb7426bc1a4d33b8e9fb133220e6cd25b2ee38dbd7f75506aa0";
+        assert_eq!(crate::zk_key_store_stem(&golden), expected);
+        let keys_dir = Path::new("keys");
+        let vk_path = crate::zk_vk_store_path(keys_dir, &golden);
+        let pk_path = crate::zk_pk_store_path(keys_dir, &golden);
+        assert_eq!(vk_path, keys_dir.join(format!("{expected}.vk")));
+        assert_eq!(pk_path, keys_dir.join(format!("{expected}.pk")));
+        assert_eq!(vk_path.parent(), Some(keys_dir));
+        assert_eq!(pk_path.parent(), Some(keys_dir));
+        assert_eq!(vk_path.file_stem(), pk_path.file_stem());
+        assert_eq!(
+            vk_path
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .map(str::len),
+            Some(expected.len() + ".vk".len())
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn legacy_colliding_key_ids_load_independent_files() {
+        let directory = tempfile::tempdir().expect("temporary verifying-key directory");
+        let slash = VerifyingKeyId::new("halo2/ipa", "a/b");
+        let underscore = VerifyingKeyId::new("halo2/ipa", "a_b");
+        let slash_path = crate::zk_vk_store_path(directory.path(), &slash);
+        let underscore_path = crate::zk_vk_store_path(directory.path(), &underscore);
+        assert_ne!(slash_path, underscore_path);
+        fs::write(&slash_path, b"slash-key").expect("write slash key");
+        fs::write(&underscore_path, b"underscore-key").expect("write underscore key");
+        assert_eq!(
+            load_vk_bytes(directory.path(), &slash).expect("load slash key"),
+            b"slash-key"
+        );
+        assert_eq!(
+            load_vk_bytes(directory.path(), &underscore).expect("load underscore key"),
+            b"underscore-key"
+        );
+    }
+
+    #[tokio::test]
+    async fn join_set_wrapper_panic_is_recovered_before_join_mapping() {
+        let mut tasks = JoinSet::new();
+        tasks.spawn(crate::panic_recovery::catch_async_recoverable(async {
+            assert!(
+                iroha_core::panic_hook::is_suppressed(),
+                "the entire JoinSet wrapper must run inside the recoverable scope"
+            );
+            panic!("injected prover wrapper panic outside blocking verification");
+            #[allow(unreachable_code)]
+            Ok::<bool, IoError>(true)
+        }));
+        let result = tasks
+            .join_next()
+            .await
+            .expect("wrapper task must produce one join result");
+        let mut processed = 0;
+        let mut first_error = None;
+        record_prover_join_result(result, &mut processed, &mut first_error);
+
+        assert_eq!(processed, 0);
+        assert!(
+            first_error
+                .expect("wrapper panic must become a controlled scan error")
+                .to_string()
+                .contains("inside its recovery boundary")
+        );
+        assert!(
+            !iroha_core::panic_hook::is_suppressed(),
+            "task-local suppression must not leak after the joined wrapper exits"
+        );
+    }
+
     #[cfg(any(unix, windows))]
     #[test]
     fn verifying_key_file_read_accepts_v1_limit_and_rejects_first_overflow_byte() {
         let directory = tempfile::tempdir().expect("temporary verifying-key directory");
         let id = VerifyingKeyId::new("halo2/ipa", "bounded-vk-read");
-        let path = vk_store_path(directory.path(), &id);
+        let path = crate::zk_vk_store_path(directory.path(), &id);
         let limit = u64::try_from(VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1)
             .expect("V1 verifying-key byte ceiling fits u64");
         let file = fs::File::create(&path).expect("create exact-bound sparse verifying key");

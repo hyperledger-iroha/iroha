@@ -3966,12 +3966,6 @@ export function buildProposeDeployContractTransaction(input) {
     privateKeyAlgorithm,
   } = input;
   const instruction = buildProposeDeployContractInstruction(proposal);
-  const normalizedAuthority = normalizeAuthority(authority);
-  if (instruction.ProposeDeployContract.proposal_operator !== normalizedAuthority) {
-    throw new TypeError(
-      "proposal.proposalOperator must equal the exact transaction authority",
-    );
-  }
   return buildTransaction.call(this, {
     networkId,
     authority,

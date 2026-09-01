@@ -205,6 +205,52 @@ impl AssetTransferControlRecord {
             && self.holding_limit.is_none()
             && self.limits.iter().all(|limit| limit.cap_amount.is_none())
     }
+
+    /// Validate the canonical persisted representation of this record.
+    ///
+    /// # Errors
+    /// Returns [`crate::error::ParseError`] when the record contains an empty
+    /// policy, a non-canonical reason, duplicate or unordered windows, a
+    /// cleared limit, or usage for a window without an active limit.
+    pub fn validate_canonical(&self) -> Result<(), crate::error::ParseError> {
+        if self.is_empty() {
+            return Err(crate::error::ParseError::new(
+                "asset-transfer control stores must not persist empty records",
+            ));
+        }
+        validate_asset_transfer_availability_reason(self.availability_reason.as_deref())?;
+
+        let mut previous_limit = None;
+        for limit in &self.limits {
+            if previous_limit.is_some_and(|previous| previous >= limit.window) {
+                return Err(crate::error::ParseError::new(
+                    "asset-transfer limit windows must be unique and strictly ordered",
+                ));
+            }
+            if limit.cap_amount.is_none() {
+                return Err(crate::error::ParseError::new(
+                    "asset-transfer control stores must not persist cleared limits",
+                ));
+            }
+            previous_limit = Some(limit.window);
+        }
+
+        let mut previous_usage = None;
+        for usage in &self.usages {
+            if previous_usage.is_some_and(|previous| previous >= usage.window) {
+                return Err(crate::error::ParseError::new(
+                    "asset-transfer usage windows must be unique and strictly ordered",
+                ));
+            }
+            if !self.limits.iter().any(|limit| limit.window == usage.window) {
+                return Err(crate::error::ParseError::new(
+                    "asset-transfer usage must belong to an active limit window",
+                ));
+            }
+            previous_usage = Some(usage.window);
+        }
+        Ok(())
+    }
 }
 #[cfg(test)]
 mod availability_tests {
@@ -266,6 +312,37 @@ pub struct AssetTransferControlStoreV1 {
     pub controls: Vec<AssetTransferControlRecord>,
 }
 impl AssetTransferControlStoreV1 {
+    /// Validate the canonical persisted representation of this store.
+    ///
+    /// The first-release format requires one non-empty record per asset
+    /// definition, strictly ordered by asset definition identifier. Malformed
+    /// or ambiguous legacy state must be rejected rather than normalized.
+    ///
+    /// # Errors
+    /// Returns [`crate::error::ParseError`] when records are duplicated,
+    /// unordered, empty, or individually non-canonical.
+    pub fn validate_canonical(&self) -> Result<(), crate::error::ParseError> {
+        if self.controls.is_empty() {
+            return Err(crate::error::ParseError::new(
+                "persisted asset-transfer control stores must not be empty",
+            ));
+        }
+        let mut previous_asset = None;
+        for record in &self.controls {
+            if previous_asset
+                .as_ref()
+                .is_some_and(|previous| *previous >= &record.asset_definition_id)
+            {
+                return Err(crate::error::ParseError::new(
+                    "asset-transfer control records must have unique, strictly ordered asset definitions",
+                ));
+            }
+            record.validate_canonical()?;
+            previous_asset = Some(&record.asset_definition_id);
+        }
+        Ok(())
+    }
+
     /// Fetch the control entry for the asset definition when present.
     pub fn find(
         &self,
@@ -286,9 +363,10 @@ impl AssetTransferControlStoreV1 {
     }
     /// Insert or replace a record, dropping empty records from the store.
     pub fn upsert(&mut self, record: AssetTransferControlRecord) {
-        if let Some(existing) = self.find_mut(&record.asset_definition_id) {
-            *existing = record;
-        } else {
+        let asset_definition_id = record.asset_definition_id.clone();
+        self.controls
+            .retain(|entry| entry.asset_definition_id != asset_definition_id);
+        if !record.is_empty() {
             self.controls.push(record);
         }
         self.prune_empty();
@@ -303,16 +381,14 @@ impl AssetTransferControlStoreV1 {
         self.controls.retain(|entry| !entry.is_empty());
     }
     fn sort_canonical(&mut self) {
-        self.controls.sort_by(|left, right| {
-            left.asset_definition_id
-                .cmp(&right.asset_definition_id)
-                .then_with(|| left.updated_at_ms.cmp(&right.updated_at_ms))
-        });
+        self.controls
+            .sort_by(|left, right| left.asset_definition_id.cmp(&right.asset_definition_id));
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     #[derive(Encode)]
     struct ForgedAssetTransferLimit {
@@ -346,5 +422,140 @@ mod tests {
             AssetTransferUsageBucket::decode(&mut encoded.as_slice()).is_err(),
             "a signed negative payload must not cross the transfer-usage quantity boundary"
         );
+    }
+
+    fn asset_definition(name: &str) -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("transfer", "controls").expect("domain id"),
+            name.parse().expect("asset name"),
+        )
+    }
+
+    fn canonical_record(name: &str) -> AssetTransferControlRecord {
+        AssetTransferControlRecord {
+            asset_definition_id: asset_definition(name),
+            availability_revision: 0,
+            incoming_availability: AssetTransferAvailability::Enabled,
+            outgoing_availability: AssetTransferAvailability::Enabled,
+            availability_reason: None,
+            blacklisted: true,
+            holding_limit: None,
+            limits: vec![
+                AssetTransferLimit {
+                    window: AssetTransferControlWindow::Day,
+                    cap_amount: Some(Quantity::from(10_u32)),
+                },
+                AssetTransferLimit {
+                    window: AssetTransferControlWindow::Week,
+                    cap_amount: Some(Quantity::from(20_u32)),
+                },
+            ],
+            usages: vec![
+                AssetTransferUsageBucket {
+                    window: AssetTransferControlWindow::Day,
+                    bucket_start_ms: 1,
+                    spent_amount: Quantity::from(1_u32),
+                },
+                AssetTransferUsageBucket {
+                    window: AssetTransferControlWindow::Week,
+                    bucket_start_ms: 2,
+                    spent_amount: Quantity::from(2_u32),
+                },
+            ],
+            updated_at_ms: Some(3),
+        }
+    }
+
+    #[test]
+    fn canonical_transfer_control_store_is_accepted() {
+        let mut controls = vec![canonical_record("rose"), canonical_record("tulip")];
+        controls.sort_by(|left, right| left.asset_definition_id.cmp(&right.asset_definition_id));
+        assert!(
+            AssetTransferControlStoreV1 { controls }
+                .validate_canonical()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn duplicate_and_unordered_asset_records_are_rejected() {
+        let record = canonical_record("rose");
+        let duplicate = AssetTransferControlStoreV1 {
+            controls: vec![record.clone(), record],
+        };
+        assert!(duplicate.validate_canonical().is_err());
+
+        let mut controls = vec![canonical_record("rose"), canonical_record("tulip")];
+        controls.sort_by(|left, right| right.asset_definition_id.cmp(&left.asset_definition_id));
+        assert!(
+            AssetTransferControlStoreV1 { controls }
+                .validate_canonical()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn malformed_record_internals_are_rejected() {
+        let canonical = canonical_record("rose");
+
+        let mut duplicate_limits = canonical.clone();
+        duplicate_limits.limits[1].window = AssetTransferControlWindow::Day;
+        assert!(duplicate_limits.validate_canonical().is_err());
+
+        let mut unordered_limits = canonical.clone();
+        unordered_limits.limits.reverse();
+        assert!(unordered_limits.validate_canonical().is_err());
+
+        let mut cleared_limit = canonical.clone();
+        cleared_limit.limits[0].cap_amount = None;
+        assert!(cleared_limit.validate_canonical().is_err());
+
+        let mut duplicate_usages = canonical.clone();
+        duplicate_usages.usages[1].window = AssetTransferControlWindow::Day;
+        assert!(duplicate_usages.validate_canonical().is_err());
+
+        let mut unordered_usages = canonical.clone();
+        unordered_usages.usages.reverse();
+        assert!(unordered_usages.validate_canonical().is_err());
+
+        let mut orphan_usage = canonical.clone();
+        orphan_usage.usages[1].window = AssetTransferControlWindow::Month;
+        assert!(orphan_usage.validate_canonical().is_err());
+
+        let mut invalid_reason = canonical;
+        invalid_reason.availability_reason = Some(" padded".to_owned());
+        assert!(invalid_reason.validate_canonical().is_err());
+
+        assert!(
+            AssetTransferControlRecord::new(asset_definition("empty"))
+                .validate_canonical()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn upsert_removes_shadow_duplicates_and_preserves_canonical_order() {
+        let original = canonical_record("rose");
+        let mut replacement = original.clone();
+        replacement.blacklisted = false;
+        replacement.holding_limit = Some(Quantity::from(50_u32));
+        let other = canonical_record("tulip");
+        let mut store = AssetTransferControlStoreV1 {
+            controls: vec![original.clone(), other, original],
+        };
+        store.upsert(replacement.clone());
+        assert_eq!(
+            store
+                .controls
+                .iter()
+                .filter(|record| record.asset_definition_id == replacement.asset_definition_id)
+                .count(),
+            1
+        );
+        assert_eq!(
+            store.find(&replacement.asset_definition_id),
+            Some(&replacement)
+        );
+        assert!(store.validate_canonical().is_ok());
     }
 }

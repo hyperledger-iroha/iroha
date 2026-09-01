@@ -119,8 +119,8 @@ pub const MERGE_CARRIER_COMMITMENT_VERSION_V1: u16 = 1;
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    227, 185, 109, 139, 5, 226, 144, 128, 127, 248, 158, 128, 128, 197, 220, 195, 180, 113, 16,
-    141, 61, 94, 144, 205, 65, 235, 216, 159, 48, 162, 211, 1,
+    252, 238, 165, 67, 6, 187, 192, 204, 100, 65, 162, 170, 111, 109, 245, 238, 230, 164, 4, 4, 1,
+    15, 225, 229, 13, 73, 186, 219, 203, 11, 169, 39,
 ];
 /// Canonical V1 boot execution-policy identity emitted by the recommended genesis template.
 ///
@@ -471,8 +471,10 @@ pub struct HeightContext {
     /// Last height governed by this epoch's frozen election snapshot.
     pub epoch_end_height: Height,
     /// Complete transition selected from the committed pre-state when this is
-    /// the last height of an epoch. The `CommitQC` authenticates these bytes
-    /// through [`Self::id`]; non-boundary contexts must carry `None`.
+    /// the last height of an epoch and a successor height is representable. The
+    /// `CommitQC` authenticates these bytes through [`Self::id`]; non-boundary
+    /// contexts and the terminal `u64::MAX` height, which has no representable
+    /// successor, must carry `None`.
     #[norito(required)]
     pub next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     /// Consensus mode that selected the equal-vote committee.
@@ -562,11 +564,15 @@ impl HeightContext {
         if self.execution_policy_hash == Hash::prehashed([0; Hash::LENGTH]) {
             return Err(ValidationError::InvalidExecutionPolicyHash);
         }
+        let is_terminal_context = self.height == u64::MAX
+            && self.epoch_end_height == u64::MAX
+            && self.next_epoch_snapshot.is_none();
         match (
             self.height == self.epoch_end_height,
             self.next_epoch_snapshot.as_ref(),
         ) {
             (true, Some(snapshot)) => snapshot.validate_against(self)?,
+            (true, None) if is_terminal_context => {}
             (true, None) => return Err(ValidationError::MissingNextEpochSnapshot),
             (false, Some(_)) => return Err(ValidationError::UnexpectedNextEpochSnapshot),
             (false, None) => {}
@@ -3794,7 +3800,7 @@ pub enum ValidationError {
     VotingPowerNotOne,
     /// The frozen epoch end precedes the height governed by this context.
     EpochEndsBeforeHeight,
-    /// An epoch-ending context omitted its old-roster-authenticated transition.
+    /// A representable epoch-ending context omitted its old-roster-authenticated transition.
     MissingNextEpochSnapshot,
     /// A non-boundary context attempted to install an epoch transition.
     UnexpectedNextEpochSnapshot,
@@ -4294,3 +4300,101 @@ fn signature_preimage(domain: &[u8], encoded_payload: &[u8]) -> Vec<u8> {
     preimage
 }
 include!("consensus_v2_tests.rs");
+
+#[cfg(test)]
+mod terminal_height_context_tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    fn terminal_context() -> HeightContext {
+        let mut roster = (1_u8..=4)
+            .map(|seed| {
+                let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("derive deterministic terminal-height fixture keypair");
+                ValidatorPower {
+                    validator: PeerId::new(key_pair.public_key().clone()),
+                    power: 1,
+                }
+            })
+            .collect::<Vec<_>>();
+        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let parent_round = ConsensusRound {
+            context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"terminal-height parent context",
+            ))),
+            height: u64::MAX - 1,
+            view: 0,
+        };
+        let parent_commit_qc = QuorumCertificate {
+            round: parent_round,
+            proposal_round: parent_round,
+            phase: GlobalPhase::Commit,
+            subject: BlockSubject {
+                parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
+                    b"terminal-height grandparent block",
+                ))),
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"terminal-height parent block",
+                )),
+                payload_hash: Hash::new(b"terminal-height parent payload"),
+            },
+            execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"terminal-height parent state"),
+                Hash::new(b"terminal-height post state"),
+                Hash::new(b"terminal-height ordinary writes"),
+                1,
+                Hash::new(b"terminal-height executed block wire"),
+            ),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xA5; 48],
+        };
+        HeightContext {
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"terminal-height genesis",
+                )),
+            ),
+            protocol_version: PROTOCOL_VERSION,
+            height: u64::MAX,
+            epoch: u64::MAX,
+            epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: Some(parent_commit_qc),
+            snapshot_bootstrap: None,
+            quorum: DualQuorum::from_roster(&roster).expect("valid terminal-height quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"terminal-height nexus AMX context"),
+            execution_policy_hash: Hash::new(b"terminal-height execution policy"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 1024,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 8,
+            },
+            leader_seed: [0x7A; 32],
+        }
+    }
+
+    #[test]
+    fn only_terminal_epoch_boundary_may_omit_the_successor_snapshot() {
+        let terminal = terminal_context();
+        assert_eq!(terminal.validate(), Ok(()));
+
+        let mut nonterminal_boundary = terminal;
+        nonterminal_boundary.height = u64::MAX - 1;
+        nonterminal_boundary.epoch_end_height = u64::MAX - 1;
+        let parent = nonterminal_boundary
+            .parent_commit_qc
+            .as_mut()
+            .expect("terminal fixture has a parent CommitQC");
+        parent.round.height = u64::MAX - 2;
+        parent.proposal_round = parent.round;
+        assert_eq!(
+            nonterminal_boundary.validate(),
+            Err(ValidationError::MissingNextEpochSnapshot)
+        );
+    }
+}

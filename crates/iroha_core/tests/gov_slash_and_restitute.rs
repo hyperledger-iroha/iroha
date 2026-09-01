@@ -85,6 +85,15 @@ fn seed_slash_snapshot(
 ) {
     let mut seed_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
     let mut seed_tx = seed_block.transaction();
+    seed_tx.world.put_governance_referendum_for_testing(
+        rid.to_owned(),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: 1,
+            h_end: 100,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
+            final_tally: None,
+        },
+    );
     let mut locks = iroha_core::state::GovernanceLocksForReferendum::default();
     locks.locks.insert(
         ALICE_ID.clone(),
@@ -93,8 +102,8 @@ fn seed_slash_snapshot(
             amount: 60_u64.into(),
             slashed: 40_u64.into(),
             expiry_height: 100,
-            direction: 0,
-            duration_blocks: 100,
+            direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+            duration_blocks: 99,
             custody: iroha_core::state::GovernanceLockCustody {
                 escrowed: true,
                 asset_definition_id: escrow_asset_id.definition().clone(),
@@ -162,13 +171,13 @@ fn double_vote_slashes_plain_lock() {
         let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut sblock1 = state.block(header1);
         let mut stx1 = sblock1.transaction();
-        stx1.world.governance_referenda_mut().insert(
+        stx1.world.put_governance_referendum_for_testing(
             rid.clone(),
             iroha_core::state::GovernanceReferendumRecord {
                 h_start: 1,
                 h_end: 50,
-                status: iroha_core::state::GovernanceReferendumStatus::Proposed,
-                mode: iroha_core::state::GovernanceReferendumMode::Plain,
+                status: iroha_core::state::GovernanceReferendumStatus::Open,
+                final_tally: None,
             },
         );
         let perm: Permission = CanSubmitGovernanceBallot {
@@ -180,10 +189,11 @@ fn double_vote_slashes_plain_lock() {
             .expect("grant ballot permission");
         let ballot_ok = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: rid.clone(),
-            owner: ALICE_ID.clone(),
-            amount: 20_u64.into(),
-            duration_blocks: 200,
-            direction: 0,
+            direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+            lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
+                amount: 20_u64.into(),
+                duration_blocks: core::num::NonZeroU64::new(200).expect("non-zero lock duration"),
+            },
         };
         ballot_ok
             .execute(&ALICE_ID, &mut stx1)
@@ -194,10 +204,11 @@ fn double_vote_slashes_plain_lock() {
     // Block 2: commit the sealed carrier for the conflicting ballot.
     let ballot_conflict = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: rid.clone(),
-        owner: ALICE_ID.clone(),
-        amount: 30_u64.into(),
-        duration_blocks: 200,
-        direction: 1, // switch direction to force double-vote slash
+        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Nay,
+        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
+            amount: 30_u64.into(),
+            duration_blocks: core::num::NonZeroU64::new(200).expect("non-zero lock duration"),
+        },
     };
     let transaction = TransactionBuilder::new(
         *state.network_id_ref(),
@@ -334,10 +345,11 @@ fn double_vote_slashes_plain_lock() {
     let mut stx3 = sblock3.transaction();
     let unresolved_revote = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: rid.clone(),
-        owner: ALICE_ID.clone(),
-        amount: 20_u64.into(),
-        duration_blocks: 200,
-        direction: 0,
+        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
+            amount: 20_u64.into(),
+            duration_blocks: core::num::NonZeroU64::new(200).expect("non-zero lock duration"),
+        },
     }
     .execute(&ALICE_ID, &mut stx3)
     .expect_err("a re-vote must not overwrite unresolved slash accounting");
@@ -397,15 +409,6 @@ fn restitution_restores_slashed_balance() {
         let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
         let mut sblock = state.block(header);
         let mut stx = sblock.transaction();
-        stx.world.governance_referenda_mut().insert(
-            rid.clone(),
-            iroha_core::state::GovernanceReferendumRecord {
-                h_start: 1,
-                h_end: 200,
-                status: iroha_core::state::GovernanceReferendumStatus::Open,
-                mode: iroha_core::state::GovernanceReferendumMode::Plain,
-            },
-        );
         // Grant restitution permission to ALICE.
         let perm: Permission = CanRestituteGovernanceLock {
             referendum_id: rid.clone(),
@@ -608,6 +611,15 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
+    tx.world.put_governance_referendum_for_testing(
+        referendum_id.to_owned(),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: 0,
+            h_end: 99,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
+            final_tally: None,
+        },
+    );
     for permission in [
         Permission::from(CanSlashGovernanceLock {
             referendum_id: referendum_id.to_owned(),
@@ -628,7 +640,7 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
             amount: Quantity::from(10_u64),
             slashed: Quantity::zero(),
             expiry_height: 100,
-            direction: 0,
+            direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
             duration_blocks: 100,
             custody: stored_custody.clone(),
         },

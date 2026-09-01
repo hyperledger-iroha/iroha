@@ -231,17 +231,21 @@ public final class ExplicitChainContextTests {
     assertMethodHasIntParameter(
         KagemushaRecursiveSpendProver.class, "createRecipientLineageQueryV2", 1);
     assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "buildRedeemRequestV4", 2);
+        KagemushaRecursiveSpendProver.class, "buildRedeemRequestV5", 2);
     assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativePrepareAuthorizationV2", 1);
+        KagemushaRecursiveSpendProver.class, "prepareRedemptionChangeV5", 3);
     assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativePrepareTopUpV4", 1);
+        KagemushaRecursiveSpendProver.class, "nativePrepareAuthorizationV3", 1);
+    assertMethodHasIntParameter(
+        KagemushaRecursiveSpendProver.class, "nativePrepareTopUpV5", 1);
     assertMethodHasIntParameter(
         KagemushaRecursiveSpendProver.class, "nativePrepareRecipientRequestV2", 1);
     assertMethodHasIntParameter(
         KagemushaRecursiveSpendProver.class, "nativeCreateRecipientLineageQueryV2", 1);
     assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativeBuildRedeemRequestV4", 5);
+        KagemushaRecursiveSpendProver.class, "nativeBuildRedeemRequestV5", 5);
+    assertMethodHasIntParameter(
+        KagemushaRecursiveSpendProver.class, "nativePrepareRedemptionChangeV5", 5);
   }
 
   @Test

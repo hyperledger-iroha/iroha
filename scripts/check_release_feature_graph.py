@@ -4,17 +4,105 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import itertools
+import json
+import os
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 CI
+    import tomli as tomllib
 
 
-DEFAULT_PACKAGES = (
-    "irohad",
-    "iroha_cli",
+BASELINE_PACKAGES = (
     "iroha_genesis",
-    "iroha_kagami",
     "ivm",
+)
+DOCKERFILE = Path("Dockerfile")
+SORAFS_RELEASE_WORKFLOW = Path(".github/workflows/sorafs-cli-release.yml")
+SORAFS_CLI_VERBATIM_PAYLOADS = (
+    Path("release/version-map.toml"),
+    Path("specs/sorafs/runbooks/release_rollback_yank.md"),
+    Path("CHANGELOG.md"),
+    Path("LICENSE"),
+)
+SORAFS_REFERENCE_VALIDATOR_VERBATIM_PAYLOADS = (
+    Path("crates/sorafs_manifest/include/sorafs_reference.h"),
+)
+RELEASE_PIPELINE_SEMANTIC_INPUTS = (Path("cliff.toml"),)
+OPTIONAL_SIGNED_RELEASE_EVIDENCE_INPUTS = (
+    Path("dashboards/alerts/fastpq_acceleration_rules.yml"),
+    Path("dashboards/alerts/tests/fastpq_acceleration_rules.test.yml"),
+)
+DOCKER_PUBLISH_WORKFLOWS = (
+    Path(".github/workflows/publish.yml"),
+    Path(".github/workflows/publish_custom.yml"),
+    Path(".github/workflows/publish_dev.yml"),
+    Path(".github/workflows/publish_xx.yml"),
+)
+NONSHIPPING_DOCKER_PUBLISH_WORKFLOWS = {
+    Path(".github/workflows/ci_image.yml"): (
+        "CI builder image only; it does not compile or package Iroha runtime artifacts"
+    ),
+}
+NATIVE_ARTIFACT_WORKFLOWS = (
+    SORAFS_RELEASE_WORKFLOW,
+    Path(".github/workflows/pr_csharp.yml"),
+    Path(".github/workflows/mobile_sdk_artifacts.yml"),
+    Path(".github/workflows/sorafs-orchestrator-sdk.yml"),
+)
+NATIVE_BRIDGE_BUILD_SCRIPT = Path("scripts/build_norito_xcframework.sh")
+NATIVE_BRIDGE_CALLER_WORKFLOWS = (
+    Path(".github/workflows/mobile_sdk_artifacts.yml"),
+    Path(".github/workflows/sorafs-orchestrator-sdk.yml"),
+)
+ANDROID_NATIVE_BUILD_OWNER = Path("kotlin/client-android/build.gradle.kts")
+ANDROID_HERMETIC_RUNNER = Path("scripts/run_mobile_hermetic_command.py")
+APPLE_DEVELOPMENT_BRIDGE_LINK = Path("IrohaSwift/NoritoBridge.xcframework")
+APPLE_DEVELOPMENT_BRIDGE_TARGET = "../dist/NoritoBridge.xcframework"
+RELEASE_BUNDLE_SCRIPT = Path("scripts/build_release_bundle.sh")
+CANONICAL_RELEASE_PIPELINE = Path("scripts/run_release_pipeline.py")
+NIX_RELEASE_OWNER = Path("flake.nix")
+NIX_RELEASE_OWNER_PATHS = (NIX_RELEASE_OWNER, Path("flake.lock"))
+NIX_APPIMAGE_OWNER_ROOT = Path("nix-appimage")
+DOTNET_REPOSITORY_ANCESTOR_OWNER_PATHS = tuple(
+    Path(name)
+    for name in (
+        "Directory.Build.props",
+        "Directory.Build.targets",
+        "Directory.Build.rsp",
+        "Directory.Packages.props",
+        "Directory.Solution.props",
+        "Directory.Solution.targets",
+        "global.json",
+    )
+)
+DOTNET_NUGET_CONFIG_PATHSPEC = ":(top,icase)NuGet.Config"
+# Git's ordinary untracked-file inventory intentionally honors ignore rules.
+# Build tools do not: these names are auto-loaded even when they are ignored.
+# Enumerate them separately without excludes so a local override cannot sit
+# outside the reviewed release-source seal.
+AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
+    ":(top,literal).cargo/config",
+    ":(top,literal).cargo/config.toml",
+    ":(top,glob,icase)csharp/**/Directory.Build.props",
+    ":(top,glob,icase)csharp/**/Directory.Build.targets",
+    ":(top,glob,icase)csharp/**/Directory.Build.rsp",
+    ":(top,glob,icase)csharp/**/Directory.Packages.props",
+    *(f":(top,literal){path.as_posix()}" for path in DOTNET_REPOSITORY_ANCESTOR_OWNER_PATHS),
+    *(f":(top,icase)csharp/{path.as_posix()}" for path in DOTNET_REPOSITORY_ANCESTOR_OWNER_PATHS),
+    DOTNET_NUGET_CONFIG_PATHSPEC,
+    ":(top,icase)csharp/NuGet.Config",
+)
+TRUSTED_RELEASE_SURFACE_SHA256 = (
+    "0000000000000000000000000000000000000000000000000000000000000000"
 )
 FORBIDDEN_FEATURES = (
     'iroha feature "test-fixtures"',
@@ -23,6 +111,85 @@ FORBIDDEN_FEATURES = (
     'iroha_p2p feature "test-fixtures"',
     'iroha_sccp feature "test-fixtures"',
 )
+# Positive policy for every package that an official shipping declaration may
+# select. Values include the complete, reviewed root-package feature closure
+# visible in `cargo tree --edges features`; any new package or root feature
+# therefore requires an explicit policy review instead of relying on its name
+# matching a short fixture denylist.
+SHIPPING_ROOT_FEATURE_ALLOWLIST = {
+    "connect_norito_bridge": frozenset({"privacy-production-enabled"}),
+    "iroha_cli": frozenset(
+        {"bridge", "cli", "default", "offline-visual-codecs"}
+    ),
+    "iroha_core": frozenset(
+        {
+            "app_api",
+            "bls",
+            "circuit-params",
+            "default",
+            "gost",
+            "json",
+            "node",
+            "profiling",
+            "proofs-halo2",
+            "proofs-stark",
+            "runtime",
+            "simd",
+            "sm",
+            "telemetry",
+            "zk-halo2",
+            "zk-halo2-ipa",
+            "zk-ipa-native",
+            "zk-preverify",
+            "zk-stark",
+        }
+    ),
+    "iroha_genesis": frozenset({"default", "sm"}),
+    "iroha_kagami": frozenset({"default", "gost", "sm"}),
+    "iroha_torii": frozenset(
+        {
+            "app_api",
+            "app_api_https",
+            "app_api_wss",
+            "circuit-params",
+            "connect",
+            "default",
+            "gost",
+            "ipa-commitment",
+            "node-api",
+            "profiling",
+            "proofs-full",
+            "proofs-halo2",
+            "proofs-stark",
+            "push",
+            "schema",
+            "sm",
+            "telemetry",
+            "transparent_api",
+            "zk-halo2",
+            "zk-halo2-ipa",
+            "zk-stark",
+            "zk-verify-batch",
+        }
+    ),
+    "irohad": frozenset(
+        {
+            "daemon",
+            "dag-recovery-verify",
+            "default",
+            "expensive-telemetry",
+            "external-software-signer-bin",
+            "gost",
+            "schema-endpoint",
+            "sm",
+            "telemetry",
+        }
+    ),
+    "ivm": frozenset(),
+    "sorafs_car": frozenset({"cli", "default", "manifest"}),
+    "sorafs_manifest": frozenset({"default", "pqc"}),
+    "sorafs_orchestrator": frozenset({"cli-orchestrator", "default"}),
+}
 REQUIRED_FEATURES = {
     "irohad": (
         'iroha_zkp_halo2 feature "full"',
@@ -33,23 +200,2196 @@ REQUIRED_FEATURES = {
         'iroha_zkp_halo2 feature "parallel"',
     ),
 }
+FORBIDDEN_DOCKER_CARGO_SCOPE_FLAGS = frozenset(
+    {
+        "--workspace",
+        "--all",
+        "--exclude",
+        "--package",
+        "-p",
+        "--bin",
+        "--bins",
+        "--all-targets",
+        "--features",
+        "-F",
+        "--all-features",
+        "--no-default-features",
+    }
+)
+FORBIDDEN_DOCKER_CARGO_SCOPE_PREFIXES = (
+    "--workspace=",
+    "--exclude=",
+    "--package=",
+    "--bin=",
+    "--features=",
+)
 
 
-def feature_graph(repo: Path, package: str) -> str:
-    """Return Cargo's normal/build feature graph for one shipping package."""
+class CargoBinary(NamedTuple):
+    """Workspace binary ownership and its Cargo-required features."""
+
+    package: str
+    name: str
+    required_features: tuple[str, ...]
+
+
+class WorkspaceCatalog(NamedTuple):
+    """Cargo package features and binary targets used by release discovery."""
+
+    package_features: dict[str, frozenset[str]]
+    binaries: dict[str, tuple[CargoBinary, ...]]
+    native_libraries: dict[str, tuple[str, ...]]
+    workspace_docker_bins: tuple[str, ...]
+
+
+class DockerInvocation(NamedTuple):
+    """One Docker publication step and its build-time Cargo feature override."""
+
+    workflow: str
+    dockerfile: str
+    features: tuple[str, ...] | None
+    cargo_flags: tuple[str, ...]
+
+
+class ShippingTarget(NamedTuple):
+    """One binary named by a repository shipping declaration."""
+
+    package: str
+    binary: str
+    features: tuple[str, ...]
+    default_features: bool
+    source: str
+
+
+class ShippingProfile(NamedTuple):
+    """One distinct Cargo package/feature profile shipped by the repository."""
+
+    package: str
+    features: tuple[str, ...] = ()
+    default_features: bool = True
+
+    def label(self) -> str:
+        """Return a concise diagnostic label for this profile."""
+
+        feature_label = ",".join(self.features) or "defaults-only"
+        defaults = "defaults" if self.default_features else "no-defaults"
+        return f"{self.package}[{defaults};{feature_label}]"
+
+
+def _git_release_paths(
+    repo: Path, pathspecs: tuple[str, ...], *, include_ignored: bool = False
+) -> set[Path]:
+    """Return cached and untracked paths matching ``pathspecs``.
+
+    Ordinary release inputs honor repository ignore rules. Exact auto-loaded
+    build controls opt into ``include_ignored`` because Cargo, MSBuild, and
+    NuGet still consume those files when Git ignores them.
+    """
+
+    command = ["git", "ls-files", "--cached", "--others"]
+    if not include_ignored:
+        command.append("--exclude-standard")
+    command.extend(("-z", "--", *pathspecs))
+    completed = subprocess.run(
+        command,
+        cwd=repo,
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"unable to enumerate trusted release sources: {detail}")
+    return {
+        Path(raw.decode("utf-8")) for raw in completed.stdout.split(b"\0") if raw
+    }
+
+
+def _custom_build_package_paths(repo: Path, manifests: set[Path]) -> set[Path]:
+    """Close every repository Cargo custom-build target over its package tree."""
+
+    repo_root = repo.resolve()
+    paths: set[Path] = set()
+    for manifest in sorted(manifests):
+        manifest_path = repo / manifest
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise RuntimeError(
+                "trusted release source surface drifted: Cargo manifest is not a "
+                f"regular file: {manifest}"
+            )
+        try:
+            document = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
+            raise RuntimeError(f"unable to parse Cargo manifest {manifest}: {error}") from error
+        package = document.get("package")
+        if not isinstance(package, dict):
+            continue
+        configured = package.get("build")
+        if configured is False:
+            continue
+        if configured is None:
+            source_lexical = manifest.parent / "build.rs"
+            if not (repo / source_lexical).exists():
+                continue
+        elif isinstance(configured, str) and configured:
+            source_lexical = manifest.parent / configured
+        else:
+            raise RuntimeError(
+                f"{manifest}: package.build must be false or a non-empty path"
+            )
+
+        source_path = repo / source_lexical
+        if source_path.is_symlink() or not source_path.is_file():
+            raise RuntimeError(
+                f"{manifest}: custom build target is not a regular file: {source_lexical}"
+            )
+        try:
+            source = source_path.resolve(strict=True).relative_to(repo_root)
+        except (OSError, ValueError) as error:
+            raise RuntimeError(
+                f"{manifest}: custom build target escapes the repository: {source_lexical}"
+            ) from error
+        indexed_source = _git_release_paths(
+            repo, (f":(top,literal){source.as_posix()}",)
+        )
+        if source not in indexed_source:
+            raise RuntimeError(
+                f"{manifest}: custom build target is ignored or absent from the source inventory: "
+                f"{source}"
+            )
+
+        package_paths = _git_release_paths(
+            repo, (f":(top,literal){manifest.parent.as_posix()}",)
+        )
+        source_parent_paths = _git_release_paths(
+            repo, (f":(top,literal){source.parent.as_posix()}",)
+        )
+        paths.update(package_paths)
+        paths.update(source_parent_paths)
+    return paths
+
+
+def trusted_release_surface_paths(repo: Path) -> tuple[Path, ...]:
+    """Return every repository source that can define or support release jobs.
+
+    Cargo project configuration, manifests, custom-build package trees, and
+    Gradle launch/settings/buildSrc inputs are included because those tools
+    load or execute them before the reviewed build task runs.
+    """
+
+    paths = _git_release_paths(
+        repo,
+        (
+            ":(top,glob)**/.cargo/**",
+            ":(top,glob)**/Cargo.lock",
+            ":(top,glob)**/Cargo.toml",
+            ":(top,glob)**/rust-toolchain",
+            ":(top,glob)**/rust-toolchain.toml",
+            ":(top).dockerignore",
+            ":(top,glob)Dockerfile*",
+            ":(top,glob).github/actions/**",
+            ":(top,glob).github/workflows/**",
+            ":(top,glob)IrohaSwift/**",
+            ":(top,glob)ci/**",
+            ":(top,glob)codec/rans/tables/**",
+            ":(top,glob)configs/soranexus/taira/**",
+            ":(top,glob)configs/sorafs/external_software_signer/**",
+            ":(top,glob)configs/sorafs/runtime_provider_broker/**",
+            ":(top,glob)csharp/**",
+            ":(top,glob)defaults/**",
+            ":(top,glob)gradle/**",
+            ":(top,glob)java/**",
+            ":(top,glob)kotlin/**",
+            f":(top,glob){NIX_APPIMAGE_OWNER_ROOT.as_posix()}/**",
+            ":(top,glob)scripts/**",
+            ":(top,glob)**/*.podspec*",
+            *(f":(top,literal){path.as_posix()}" for path in SORAFS_CLI_VERBATIM_PAYLOADS),
+            *(
+                f":(top,literal){path.as_posix()}"
+                for path in SORAFS_REFERENCE_VALIDATOR_VERBATIM_PAYLOADS
+            ),
+            *(f":(top,literal){path.as_posix()}" for path in RELEASE_PIPELINE_SEMANTIC_INPUTS),
+            *(
+                f":(top,literal){path.as_posix()}"
+                for path in OPTIONAL_SIGNED_RELEASE_EVIDENCE_INPUTS
+            ),
+            *(
+                f":(top,literal){path.as_posix()}"
+                for path in NIX_RELEASE_OWNER_PATHS
+            ),
+            *(
+                f":(top,literal){path.as_posix()}"
+                for path in DOTNET_REPOSITORY_ANCESTOR_OWNER_PATHS
+            ),
+            DOTNET_NUGET_CONFIG_PATHSPEC,
+            f":(top){ANDROID_NATIVE_BUILD_OWNER}",
+        ),
+    )
+    paths.update(
+        _git_release_paths(
+            repo, AUTOLOADED_BUILD_CONTROL_PATHSPECS, include_ignored=True
+        )
+    )
+    cargo_control_root = repo / ".cargo"
+    if cargo_control_root.is_symlink():
+        raise RuntimeError(
+            "trusted release source surface drifted: .cargo may not be a symbolic link"
+        )
+    manifests = {path for path in paths if path.name == "Cargo.toml"}
+    paths.update(_custom_build_package_paths(repo, manifests))
+    ordered = tuple(sorted(paths))
+    if not ordered:
+        raise RuntimeError("trusted release source inventory is empty")
+    return ordered
+
+
+def _release_surface_contents(relative: Path, contents: bytes) -> bytes:
+    """Normalize the seal value embedded in this guard before hashing it."""
+
+    if relative != Path("scripts/check_release_feature_graph.py"):
+        return contents
+    pattern = re.compile(
+        rb'(?P<prefix>TRUSTED_RELEASE_SURFACE_SHA256\s*=\s*\(\s*")'
+        rb"[0-9a-f]{64}"
+        rb'(?P<suffix>"\s*\))'
+    )
+    normalized, count = pattern.subn(
+        lambda match: match.group("prefix") + (b"0" * 64) + match.group("suffix"),
+        contents,
+    )
+    if count != 1:
+        raise RuntimeError(
+            "trusted release source surface drifted: embedded seal declaration "
+            "must occur exactly once"
+        )
+    return normalized
+
+
+def trusted_release_surface_digest(repo: Path) -> str:
+    """Hash paths and bytes for the closed release-analysis source surface."""
+
+    digest = hashlib.sha256()
+    for relative in trusted_release_surface_paths(repo):
+        path = repo / relative
+        if path.is_symlink():
+            if relative != APPLE_DEVELOPMENT_BRIDGE_LINK:
+                raise RuntimeError(
+                    "trusted release source surface drifted: tracked path is a "
+                    f"symbolic link: {relative}"
+                )
+            target = os.readlink(path)
+            if target != APPLE_DEVELOPMENT_BRIDGE_TARGET:
+                raise RuntimeError(
+                    "trusted release source surface drifted: Apple development "
+                    f"bridge link must target {APPLE_DEVELOPMENT_BRIDGE_TARGET}: {target}"
+                )
+            contents = b"symbolic-link\0" + os.fsencode(target)
+        elif not path.is_file():
+            raise RuntimeError(
+                "trusted release source surface drifted: tracked path is not a "
+                f"regular file: {relative}"
+            )
+        else:
+            contents = path.read_bytes()
+        relative_bytes = relative.as_posix().encode("utf-8")
+        contents = _release_surface_contents(relative, contents)
+        digest.update(len(relative_bytes).to_bytes(8, "big"))
+        digest.update(relative_bytes)
+        digest.update(len(contents).to_bytes(8, "big"))
+        digest.update(contents)
+    return digest.hexdigest()
+
+
+def validate_trusted_release_surface(
+    repo: Path, expected_digest: str = TRUSTED_RELEASE_SURFACE_SHA256
+) -> None:
+    """Reject unreviewed workflow, Dockerfile, or release-support drift."""
+
+    observed = trusted_release_surface_digest(repo)
+    if observed != expected_digest:
+        raise RuntimeError(
+            "trusted release source surface drifted; review the semantic changes and "
+            "update TRUSTED_RELEASE_SURFACE_SHA256 "
+            f"(expected {expected_digest}, observed {observed})"
+        )
+
+
+def workspace_catalog(repo: Path) -> WorkspaceCatalog:
+    """Return workspace package and binary metadata from the locked graph."""
 
     completed = subprocess.run(
         [
             "cargo",
-            "tree",
+            "metadata",
             "--locked",
-            "--package",
-            package,
-            "--edges",
-            "normal,build,features",
-            "--prefix",
-            "none",
+            "--no-deps",
+            "--format-version",
+            "1",
         ],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"cargo metadata failed:\n{completed.stdout}{completed.stderr}"
+        )
+
+    metadata = json.loads(completed.stdout)
+    package_features: dict[str, frozenset[str]] = {}
+    binaries: dict[str, list[CargoBinary]] = {}
+    native_libraries: dict[str, tuple[str, ...]] = {}
+    for package in metadata["packages"]:
+        package_name = package["name"]
+        if package_name in package_features:
+            raise RuntimeError(f"duplicate workspace package name: {package_name}")
+        package_features[package_name] = frozenset(package.get("features", {}))
+        for target in package.get("targets", ()):
+            crate_types = tuple(sorted(target.get("crate_types", ())))
+            if {"cdylib", "staticlib"}.intersection(crate_types):
+                native_libraries[package_name] = crate_types
+            if "bin" not in target.get("kind", ()):
+                continue
+            binary = CargoBinary(
+                package=package_name,
+                name=target["name"],
+                required_features=tuple(sorted(target.get("required-features", ()))),
+            )
+            binaries.setdefault(binary.name, []).append(binary)
+
+    return WorkspaceCatalog(
+        package_features=package_features,
+        binaries={name: tuple(sorted(targets)) for name, targets in binaries.items()},
+        native_libraries=native_libraries,
+        workspace_docker_bins=tuple(
+            sorted(metadata.get("metadata", {}).get("docker_bins", ()))
+        ),
+    )
+
+
+def _resolve_binary(
+    catalog: WorkspaceCatalog, binary: str, package: str | None = None
+) -> CargoBinary:
+    candidates = catalog.binaries.get(binary, ())
+    if package is not None:
+        candidates = tuple(target for target in candidates if target.package == package)
+    if len(candidates) != 1:
+        owner = f" in package {package}" if package is not None else ""
+        packages = ", ".join(target.package for target in candidates) or "none"
+        raise RuntimeError(
+            f"shipping binary {binary!r}{owner} must resolve uniquely; owners: {packages}"
+        )
+    return candidates[0]
+
+
+def _quoted_arg_words(
+    source: str, name: str, path: Path, *, required: bool = True
+) -> tuple[str, ...] | None:
+    declarations = re.findall(
+        rf"(?im)^\s*ARG\s+{re.escape(name)}(?:\s*=.*)?\s*$", source
+    )
+    if len(declarations) > 1:
+        raise RuntimeError(f"{path}: ARG {name} must be declared exactly once")
+    match = re.search(
+        rf'^\s*ARG\s+{re.escape(name)}="([^"]*)"\s*$',
+        source,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if match is None:
+        if declarations:
+            raise RuntimeError(
+                f"{path}: ARG {name} must use a static quoted default for review"
+            )
+        if required:
+            raise RuntimeError(f"{path}: missing quoted ARG {name}")
+        return None
+    return tuple(word for word in match.group(1).split() if word)
+
+
+def _dockerfile_binary_names(
+    source: str, path: Path, catalog: WorkspaceCatalog
+) -> tuple[str, ...]:
+    declared = _quoted_arg_words(source, "BINARIES", path, required=False)
+    if declared:
+        return declared
+    if declared == () and "workspace_metadata.docker_bins" in source:
+        if not catalog.workspace_docker_bins:
+            raise RuntimeError(f"{path}: workspace docker_bins metadata is empty")
+        return catalog.workspace_docker_bins
+    binaries = tuple(
+        dict.fromkeys(
+            re.findall(r"--bin\s+(?:\"|')?([A-Za-z0-9_.-]+)", source)
+        )
+    )
+    if not binaries:
+        raise RuntimeError(f"{path}: no shipping binaries could be derived")
+    return binaries
+
+
+def _dockerfile_arg_names(source: str) -> frozenset[str]:
+    """Return build arguments declared by one Dockerfile."""
+
+    return frozenset(
+        re.findall(
+            r"(?im)^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)(?:=|\s|$)", source
+        )
+    )
+
+
+def _cargo_scope_flags_are_forbidden(flags: tuple[str, ...]) -> bool:
+    return bool(FORBIDDEN_DOCKER_CARGO_SCOPE_FLAGS.intersection(flags)) or any(
+        token.startswith(FORBIDDEN_DOCKER_CARGO_SCOPE_PREFIXES)
+        or (token.startswith("-p") and token != "-p")
+        or (token.startswith("-F") and token != "-F")
+        for token in flags
+    )
+
+
+def _dockerfile_cargo_build_commands(source: str, path: Path) -> tuple[str, ...]:
+    """Extract literal Cargo build clauses from a Dockerfile shell surface."""
+
+    uncommented = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+    logical = re.sub(r"\\\s*\n", " ", uncommented)
+    commands: list[str] = []
+    for line in logical.splitlines():
+        for clause in re.split(r"\s*(?:;|&&|\|\|)\s*", line):
+            match = re.search(
+                r"(?<![A-Za-z0-9_-])(?:xx-)?cargo\s+.*?\bbuild\b.*$", clause
+            )
+            if match is not None:
+                commands.append(match.group(0).strip())
+    if not commands:
+        raise RuntimeError(f"{path}: no literal Cargo build invocation was derived")
+    return tuple(commands)
+
+
+def _dockerfile_run_instructions(source: str) -> tuple[str, ...]:
+    """Return Dockerfile RUN instruction bodies, including continuation lines."""
+
+    lines = source.splitlines()
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(r"(?i)^\s*RUN(?:\s|$)", line)
+    ]
+    instruction = re.compile(
+        r"(?i)^\s*(?:ADD|ARG|CMD|COPY|ENTRYPOINT|ENV|EXPOSE|FROM|HEALTHCHECK|"
+        r"LABEL|ONBUILD|RUN|SHELL|STOPSIGNAL|USER|VOLUME|WORKDIR)\s"
+    )
+    instructions: list[str] = []
+    for start in starts:
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            if instruction.match(lines[index]):
+                end = index
+                break
+        instructions.append("\n".join(lines[start:end]))
+    return tuple(instructions)
+
+
+def _validate_dockerfile_output_provenance(source: str, path: Path) -> None:
+    """Bind runtime executable copies to reviewed Cargo output stages."""
+
+    logical = re.sub(r"\\\s*\n", " ", source)
+    binary_names = set(
+        re.findall(r"--bin\s+(?:\"|')?([A-Za-z0-9_.-]+)", logical)
+    )
+    allowed_copies = {
+        ("COPY", "--from=builder", "/outbin/", "$BIN_PATH"),
+        (
+            "COPY",
+            "--from=builder",
+            "/app/scripts/docker_entrypoint.sh",
+            "$BIN_PATH",
+        ),
+        ("COPY", "--from=xx-build", "/app/bins/*", "/usr/local/bin/"),
+    }
+    if "TARGET_DIR" in _dockerfile_arg_names(source):
+        allowed_copies.update(
+            ("COPY", "--from=builder", f"$TARGET_DIR/{binary}", "$BIN_PATH")
+            for binary in binary_names
+        )
+
+    protected_destinations = ("/outbin", "/app/bins", "./bins")
+    for line in logical.splitlines():
+        if not re.match(r"(?i)^\s*(?:COPY|ADD)\s", line):
+            continue
+        try:
+            parsed = tuple(shlex.split(line))
+            tokens = (parsed[0].upper(), *parsed[1:])
+        except ValueError as error:
+            raise RuntimeError(f"{path}: unreviewable Docker copy: {line}") from error
+        destination = tokens[-1] if len(tokens) >= 3 else ""
+        runtime_destination = destination in {"$BIN_PATH", "${BIN_PATH}"} or any(
+            destination == root or destination.startswith(f"{root}/")
+            for root in ("/usr/local/bin", "/usr/local/sbin")
+        )
+        protected_builder_destination = any(
+            destination == root or destination.startswith(f"{root}/")
+            for root in protected_destinations
+        )
+        if runtime_destination and tokens not in allowed_copies:
+            raise RuntimeError(
+                f"{path}: runtime executable COPY is not bound to reviewed Cargo "
+                f"output: {line}"
+            )
+        if protected_builder_destination:
+            raise RuntimeError(
+                f"{path}: Docker COPY may not overwrite the reviewed builder output: "
+                f"{line}"
+            )
+
+    allowed_outbin_operations = {
+        ("mkdir", "-p", "/outbin"),
+        ("cp", "/app/dist/docker-bin/${bin}", "/outbin/${bin}"),
+        (
+            "cp",
+            "/cargo-target/${cargo_target_profile_dir}/${bin}",
+            "/outbin/${bin}",
+        ),
+        (
+            "cp",
+            "/cargo-target/${cargo_target_profile_dir}/kagami",
+            "/outbin/kagami",
+        ),
+        ("chmod", "755", "/outbin/*"),
+    }
+    allowed_cross_bin_operations = {
+        ("mkdir", "-p", "./bins"),
+        ("mv", "${bin_path}", "./bins/"),
+    }
+    seen_builder_operations: set[tuple[str, ...]] = set()
+
+    def runtime_bin_path(value: str) -> bool:
+        value = value.strip('"\'')
+        return value.startswith(("$BIN_PATH", "${BIN_PATH}", "/usr/local/bin"))
+
+    write_commands = {"cp", "mv", "install", "ln", "rm", "truncate", "tee"}
+    for instruction in _dockerfile_run_instructions(source):
+        logical_instruction = re.sub(r"\\\s*\n", " ", instruction)
+        if re.search(
+            r">+\s*[\"']?(?:\$\{?BIN_PATH\}?|/usr/local/bin|/outbin|\./bins)"
+            r"(?:/|\s|$)",
+            logical_instruction,
+        ):
+            raise RuntimeError(
+                f"{path}: RUN redirection may not overwrite runtime executables"
+            )
+        for clause in re.split(r"\s*(?:;|&&|\|\||\n)\s*", logical_instruction):
+            try:
+                tokens = tuple(shlex.split(clause))
+            except ValueError as error:
+                raise RuntimeError(
+                    f"{path}: unreviewable runtime output command: {clause}"
+                ) from error
+            if "/outbin" in clause or "./bins" in clause:
+                operation_index = next(
+                    (
+                        index
+                        for index, token in enumerate(tokens)
+                        if token in {"mkdir", "cp", "mv", "chmod"}
+                    ),
+                    None,
+                )
+                operation = tokens[operation_index:] if operation_index is not None else ()
+                allowed = (
+                    operation in allowed_outbin_operations
+                    or operation in allowed_cross_bin_operations
+                )
+                if not allowed or operation in seen_builder_operations:
+                    raise RuntimeError(
+                        f"{path}: builder output write is not bound to reviewed "
+                        f"Cargo output: {clause.strip()}"
+                    )
+                seen_builder_operations.add(operation)
+            command_index = next(
+                (index for index, token in enumerate(tokens) if token in write_commands),
+                None,
+            )
+            if command_index is None:
+                continue
+            command = tokens[command_index]
+            arguments = tokens[command_index + 1 :]
+            destinations = arguments if command in {"rm", "truncate", "tee"} else arguments[-1:]
+            if any(
+                value.strip('"\'').startswith(("./target/", "target/", "/cargo-target/"))
+                for value in destinations
+            ):
+                raise RuntimeError(
+                    f"{path}: RUN may not overwrite Cargo's authenticated target output: "
+                    f"{clause.strip()}"
+                )
+            if any(runtime_bin_path(value) for value in destinations):
+                raise RuntimeError(
+                    f"{path}: RUN may not overwrite the final runtime executable "
+                    f"directory: {clause.strip()}"
+                )
+
+    prebuilt_copy = 'cp "/app/dist/docker-bin/${bin}" "/outbin/${bin}"'
+    if prebuilt_copy in logical:
+        prebuilt_gate = re.search(
+            r'if\s+\[\s+"\$\{USE_PREBUILT\}"\s+=\s+"1"\s+\];\s+then',
+            logical,
+        )
+        copy_index = logical.index(prebuilt_copy)
+        following_else = re.search(r"\belse\b", logical[copy_index:])
+        if (
+            prebuilt_gate is None
+            or prebuilt_gate.start() >= copy_index
+            or following_else is None
+        ):
+            raise RuntimeError(
+                f"{path}: prebuilt output copy is not confined to the disabled gate"
+            )
+
+
+def _validate_dockerfile_cargo_scope(source: str, path: Path) -> None:
+    """Authenticate Docker Cargo feature selection and controlling arguments."""
+
+    default_cargo_flags = _quoted_arg_words(
+        source, "CARGOFLAGS", path, required=False
+    )
+    if default_cargo_flags and _cargo_scope_flags_are_forbidden(default_cargo_flags):
+        raise RuntimeError(f"{path}: default CARGOFLAGS expands Cargo target scope")
+    reassigned_scope = tuple(
+        line
+        for line in source.splitlines()
+        if not re.match(r"(?i)^\s*ARG\s+", line)
+        and re.search(r"\b(?:CARGOFLAGS|FEATURES|USE_PREBUILT)\s*=", line)
+    )
+    if reassigned_scope:
+        raise RuntimeError(
+            f"{path}: Cargo/output scope arguments may not be reassigned"
+        )
+    if "USE_PREBUILT" in _dockerfile_arg_names(source):
+        prebuilt_default = _quoted_arg_words(
+            source, "USE_PREBUILT", path, required=True
+        )
+        if prebuilt_default != ("0",):
+            raise RuntimeError(f"{path}: USE_PREBUILT must default to disabled")
+
+    for instruction in _dockerfile_run_instructions(source):
+        indirect_builders = {
+            match.group(1) or match.group(2)
+            for match in re.finditer(
+                r"(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*))"
+                r"\s+build(?:\s|$)",
+                instruction,
+            )
+        }.difference({"CARGOFLAGS"})
+        if indirect_builders:
+            raise RuntimeError(
+                f"{path}: unreviewed ARG controls Cargo scope: "
+                f"{', '.join(sorted(indirect_builders))}"
+            )
+        relative_scripts = re.findall(
+            r"(?<![A-Za-z0-9_./-])(?:\./|/app/|scripts/)"
+            r"[^\s;\"']+\.(?:sh|py)\b",
+            instruction,
+        )
+        interpreter_scripts = set(
+            re.findall(
+            r"\b(?:bash|sh|python3?)\s+[^\s;\"']+\.(?:sh|py)\b",
+            instruction,
+            )
+        ).difference(
+            {"python3 /usr/local/libexec/package_inrou_runtime_v1.py"}
+        )
+        if relative_scripts or interpreter_scripts:
+            raise RuntimeError(
+                f"{path}: indirect build or output script is not reviewable"
+            )
+
+    uncommented = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+    logical = re.sub(r"\\\s*\n", " ", uncommented)
+    if re.search(r"(?<![A-Za-z0-9_-])--all-features(?![A-Za-z0-9_-])", logical):
+        raise RuntimeError(f"{path}: hardcoded --all-features is not reviewable")
+    for line in logical.splitlines():
+        for clause in re.split(r"\s*(?:;|&&|\|\|)\s*", line):
+            if not re.search(r"\bset\s+--(?:\s|$)", clause) or "$@" not in clause:
+                continue
+            try:
+                mutation = tuple(shlex.split(clause))
+            except ValueError as error:
+                raise RuntimeError(
+                    f"{path}: unreviewable Cargo command mutation: {clause}"
+                ) from error
+            try:
+                set_index = mutation.index("set")
+            except ValueError as error:
+                raise RuntimeError(
+                    f"{path}: unreviewable Cargo command mutation: {clause}"
+                ) from error
+            mutation = mutation[set_index:]
+            if mutation not in {
+                ("set", "--", "$@", "--bin", "$bin"),
+                ("set", "--", "$@", "--bin", "${bin}"),
+            }:
+                raise RuntimeError(
+                    f"{path}: unreviewed mutation of the Cargo invocation: {clause}"
+                )
+
+    for command in _dockerfile_cargo_build_commands(source, path):
+        try:
+            tokens = tuple(shlex.split(command))
+        except ValueError as error:
+            raise RuntimeError(f"{path}: unreviewable Cargo invocation: {command}") from error
+        build_index = tokens.index("build")
+        prefix = tokens[1:build_index]
+        arguments = tokens[build_index + 1 :]
+        variables = {
+            match.group(1) or match.group(2)
+            for token in (*prefix, *arguments)
+            for match in re.finditer(
+                r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)",
+                token,
+            )
+        }
+        unexpected_variables = variables.difference({"CARGOFLAGS", "FEATURES", "PROFILE"})
+        if unexpected_variables:
+            raise RuntimeError(
+                f"{path}: unreviewed ARG controls Cargo scope: "
+                f"{', '.join(sorted(unexpected_variables))}"
+            )
+        if prefix not in {(), ("${CARGOFLAGS}",), ("$CARGOFLAGS",)}:
+            raise RuntimeError(
+                f"{path}: unreviewed arguments precede Cargo build: {' '.join(prefix)}"
+            )
+        index = 0
+        while index < len(arguments):
+            token = arguments[index]
+            if token in {"--features", "-F"}:
+                if index + 1 >= len(arguments):
+                    raise RuntimeError(f"{path}: {token} is missing its feature value")
+                value = arguments[index + 1]
+                if value not in {"${FEATURES}", "$FEATURES"}:
+                    raise RuntimeError(
+                        f"{path}: hardcoded or indirect Cargo features are not reviewable: "
+                        f"{value}"
+                    )
+                index += 2
+                continue
+            if token.startswith("--features=") or (
+                token.startswith("-F") and token != "-F"
+            ):
+                value = token.split("=", 1)[1] if "=" in token else token[2:]
+                if value not in {"${FEATURES}", "$FEATURES"}:
+                    raise RuntimeError(
+                        f"{path}: hardcoded or indirect Cargo features are not reviewable: "
+                        f"{value}"
+                    )
+            index += 1
+    _validate_dockerfile_output_provenance(source, path)
+
+
+def _workflow_steps(source: str) -> tuple[str, ...]:
+    """Return GitHub workflow step blocks without requiring a YAML dependency."""
+
+    lines = source.splitlines(keepends=True)
+    starts: list[tuple[int, int]] = []
+    for index, line in enumerate(lines):
+        match = re.match(
+            r"^(?P<indent> *)-\s+[A-Za-z_][A-Za-z0-9_-]*\s*:\s*", line
+        )
+        if match is not None:
+            starts.append((index, len(match.group("indent"))))
+
+    blocks: list[str] = []
+    for start, indentation in starts:
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            line = lines[index]
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            current = len(line) - len(line.lstrip(" "))
+            if current < indentation or (
+                current == indentation and re.match(r"^ *-\s+", line)
+            ):
+                end = index
+                break
+        blocks.append("".join(lines[start:end]))
+    return tuple(blocks)
+
+
+def _docker_action_steps(source: str, path: Path) -> tuple[str, ...]:
+    """Return every Docker build action step or reject unparsed YAML syntax."""
+
+    uncommented = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+    if "docker/bake-action@" in uncommented:
+        raise RuntimeError(
+            f"{path}: Docker bake action publication requires explicit guard support"
+        )
+    occurrences = len(re.findall(r"docker/build-push-action@", uncommented))
+    if not occurrences:
+        return ()
+    if re.search(
+        r"(?m)^[^#\n]*:\s*[&*][A-Za-z_][A-Za-z0-9_-]*(?:\s|$|[\[{])",
+        uncommented,
+    ) or re.search(r"(?m)^\s*-\s*\*[A-Za-z_][A-Za-z0-9_-]*(?:\s|$)", uncommented):
+        raise RuntimeError(
+            f"{path}: YAML anchors and aliases are not reviewable for Docker actions"
+        )
+    steps = tuple(
+        step
+        for step in _workflow_steps(uncommented)
+        if "docker/build-push-action@" in step
+    )
+    if len(steps) != occurrences:
+        raise RuntimeError(
+            f"{path}: Docker build action uses unsupported or ambiguous YAML syntax"
+        )
+    return steps
+
+
+def _docker_action_push_value(step: str, path: Path) -> str | None:
+    matches = re.findall(r"(?m)^\s+push:\s*([^#\n]+?)\s*$", step)
+    if len(matches) > 1:
+        raise RuntimeError(f"{path}: Docker action declares push more than once")
+    if not matches:
+        if re.search(r"\bpush\s*:", step):
+            raise RuntimeError(f"{path}: Docker action push uses unsupported YAML syntax")
+        return None
+    return matches[0].strip().strip('"\'').lower()
+
+
+def _docker_action_has_registry_output(step: str, path: Path) -> bool:
+    """Return whether a Docker action exports an image to a registry."""
+
+    lines = step.splitlines()
+    entries: list[str] = []
+    found = False
+    for index, line in enumerate(lines):
+        match = re.match(r"^(?P<indent>\s*)outputs:\s*(?P<value>.*?)\s*$", line)
+        if match is None:
+            continue
+        if found:
+            raise RuntimeError(f"{path}: Docker action declares outputs more than once")
+        found = True
+        inline = match.group("value").strip()
+        if inline and inline not in {"|", "|-"}:
+            entries.append(inline.strip('"\''))
+            continue
+        field_indent = len(match.group("indent"))
+        for candidate in lines[index + 1 :]:
+            if not candidate.strip():
+                continue
+            indentation = len(candidate) - len(candidate.lstrip(" "))
+            if indentation <= field_indent:
+                break
+            entry = candidate.strip()
+            if not entry.startswith("#"):
+                entries.append(entry.removeprefix("- ").strip().strip('"\''))
+
+    if any("${{" in entry or "$" in entry for entry in entries):
+        raise RuntimeError(f"{path}: dynamic Docker action outputs are not reviewable")
+    return any(
+        re.search(r"(?:^|,)\s*type\s*=\s*registry(?:,|$)", entry)
+        or re.search(r"(?:^|,)\s*push\s*=\s*true(?:,|$)", entry)
+        for entry in entries
+    )
+
+
+def _workflow_has_direct_docker_publish(source: str) -> bool:
+    """Detect direct Docker CLI publication paths unsupported by this guard."""
+
+    uncommented = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+    logical = re.sub(r"\\\s*\n", " ", uncommented)
+    if re.search(
+        r"(?m)(?<![A-Za-z0-9_-])docker\s+(?:(?:image|compose)\s+)?push(?:\s|$)",
+        logical,
+    ):
+        return True
+    registry_output = (
+        r"(?:--output(?:=|\s+)|-o(?:=|\s+))[\"']?[^\s\"']*"
+        r"(?:type\s*=\s*registry|push\s*=\s*true)"
+    )
+    bake_registry_output = r"\.output\s*=\s*type\s*=\s*registry"
+    return bool(
+        re.search(
+            r"(?m)(?<![A-Za-z0-9_-])docker\s+(?:buildx\s+)?(?:build|bake)\b"
+            rf"[^\n]*(?:(?<![A-Za-z0-9_-])--push(?:[=\s]|$)|"
+            rf"{registry_output}|{bake_registry_output})",
+            logical,
+        )
+    )
+
+
+def docker_image_publish_workflows(repo: Path) -> tuple[Path, ...]:
+    """Discover workflows whose Docker build step can push an image."""
+
+    workflow_dir = repo / ".github" / "workflows"
+    paths = sorted({*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")})
+    published: list[Path] = []
+    for path in paths:
+        source = path.read_text(encoding="utf-8")
+        if _workflow_has_direct_docker_publish(source):
+            published.append(path.relative_to(repo))
+            continue
+        for step in _docker_action_steps(source, path.relative_to(repo)):
+            value = _docker_action_push_value(step, path.relative_to(repo))
+            registry_output = _docker_action_has_registry_output(
+                step, path.relative_to(repo)
+            )
+            if (value is not None and value != "false") or registry_output:
+                published.append(path.relative_to(repo))
+                break
+    return tuple(sorted(set(published)))
+
+
+def validate_docker_publish_workflow_classification(repo: Path) -> None:
+    """Fail closed when an image-publishing workflow lacks review coverage."""
+
+    runtime = set(DOCKER_PUBLISH_WORKFLOWS)
+    nonshipping = set(NONSHIPPING_DOCKER_PUBLISH_WORKFLOWS)
+    overlap = runtime.intersection(nonshipping)
+    if overlap:
+        raise RuntimeError(
+            "Docker publish workflows have conflicting classifications: "
+            f"{', '.join(map(str, sorted(overlap)))}"
+        )
+
+    discovered = set(docker_image_publish_workflows(repo))
+    unclassified = discovered.difference(runtime, nonshipping)
+    if unclassified:
+        raise RuntimeError(
+            "unclassified Docker image-publishing workflows: "
+            f"{', '.join(map(str, sorted(unclassified)))}"
+        )
+    stale_exceptions = nonshipping.difference(discovered)
+    if stale_exceptions:
+        raise RuntimeError(
+            "nonshipping Docker publish exceptions no longer push images: "
+            f"{', '.join(map(str, sorted(stale_exceptions)))}"
+        )
+
+    direct_publishers = tuple(
+        relative
+        for relative in sorted(discovered)
+        if _workflow_has_direct_docker_publish(
+            (repo / relative).read_text(encoding="utf-8")
+        )
+    )
+    if direct_publishers:
+        raise RuntimeError(
+            "direct Docker CLI publication requires explicit release-graph support: "
+            f"{', '.join(map(str, direct_publishers))}"
+        )
+
+
+def _workflow_top_level_env(source: str) -> dict[str, str]:
+    match = re.search(r"(?ms)^env:\s*\n(?P<body>(?:^  [^\n]+\n?)*)", source)
+    if match is None:
+        return {}
+    values: dict[str, str] = {}
+    for key, value in re.findall(
+        r"(?m)^  ([A-Z][A-Z0-9_]*)\s*:\s*([^#\n]+?)\s*$", match.group("body")
+    ):
+        values[key] = value.strip().strip('"\'')
+    return values
+
+
+def _resolve_workflow_value(value: str, env: dict[str, str], path: Path) -> str:
+    value = value.strip().strip('"\'')
+    match = re.fullmatch(r"\$\{\{\s*env\.([A-Z][A-Z0-9_]*)\s*\}\}", value)
+    if match is not None:
+        key = match.group(1)
+        if key not in env:
+            raise RuntimeError(f"{path}: unresolved workflow environment value {key}")
+        value = env[key]
+    if "${{" in value or "$" in value:
+        raise RuntimeError(f"{path}: dynamic workflow value is not reviewable: {value}")
+    return value
+
+
+def _split_features(value: str) -> tuple[str, ...]:
+    return tuple(sorted({part for part in re.split(r"[,\s]+", value) if part}))
+
+
+def _docker_build_arguments(
+    step: str, env: dict[str, str], path: Path
+) -> dict[str, str]:
+    """Parse a Docker action's build-args field, rejecting opaque expansion."""
+
+    lines = step.splitlines()
+    entries: list[str] = []
+    found = False
+    for index, line in enumerate(lines):
+        match = re.match(r"^(?P<indent>\s*)build-args:\s*(?P<value>.*?)\s*$", line)
+        if match is None:
+            continue
+        if found:
+            raise RuntimeError(f"{path}: Docker step declares build-args more than once")
+        found = True
+        inline = match.group("value").strip()
+        if inline and inline not in {"|", "|-"}:
+            entries.append(inline)
+            continue
+        field_indent = len(match.group("indent"))
+        for candidate in lines[index + 1 :]:
+            if not candidate.strip():
+                continue
+            indentation = len(candidate) - len(candidate.lstrip(" "))
+            if indentation <= field_indent:
+                break
+            entry = candidate.strip()
+            if entry.startswith("#"):
+                continue
+            entries.append(entry)
+
+    arguments: dict[str, str] = {}
+    for entry in entries:
+        entry = entry.removeprefix("- ").strip().strip('"\'')
+        match = re.fullmatch(r"([A-Z][A-Z0-9_]*)=(.*)", entry)
+        if match is None:
+            raise RuntimeError(
+                f"{path}: Docker build-args must declare one reviewable KEY=value "
+                f"per entry: {entry}"
+            )
+        key, value = match.groups()
+        if key in arguments:
+            raise RuntimeError(f"{path}: duplicate Docker build argument {key}")
+        arguments[key] = (
+            _resolve_workflow_value(value, env, path)
+            if key in {"FEATURES", "CARGOFLAGS", "BINARIES"}
+            else value
+        )
+    return arguments
+
+
+def docker_publish_invocations(repo: Path) -> tuple[DockerInvocation, ...]:
+    """Derive published Dockerfiles and their Cargo feature overrides."""
+
+    validate_docker_publish_workflow_classification(repo)
+    invocations: list[DockerInvocation] = []
+    for relative in DOCKER_PUBLISH_WORKFLOWS:
+        path = repo / relative
+        source = path.read_text(encoding="utf-8")
+        env = _workflow_top_level_env(source)
+        for step in _docker_action_steps(source, relative):
+            context_matches = re.findall(
+                r"(?m)^\s+context:\s*([^#\n]+?)\s*$", step
+            )
+            if len(context_matches) != 1:
+                raise RuntimeError(
+                    f"{relative}: Docker publication must declare exactly one context"
+                )
+            context = _resolve_workflow_value(context_matches[0], env, relative)
+            if context != ".":
+                raise RuntimeError(
+                    f"{relative}: Docker publication context must be the repository root '.'"
+                )
+            file_match = re.search(r"(?m)^\s+file:\s*([^#\n]+?)\s*$", step)
+            dockerfile = (
+                _resolve_workflow_value(file_match.group(1), env, relative)
+                if file_match is not None
+                else str(DOCKERFILE)
+            )
+            dockerfile_relative = Path(dockerfile)
+            if dockerfile_relative.is_absolute() or ".." in dockerfile_relative.parts:
+                raise RuntimeError(
+                    f"{relative}: Dockerfile must be inside the repository context"
+                )
+            dockerfile_path = repo / dockerfile_relative
+            if not dockerfile_path.resolve().is_relative_to(repo.resolve()):
+                raise RuntimeError(
+                    f"{relative}: Dockerfile must resolve inside the repository context"
+                )
+            dockerfile_source = dockerfile_path.read_text(encoding="utf-8")
+            _validate_dockerfile_cargo_scope(dockerfile_source, dockerfile_relative)
+            args = _docker_build_arguments(step, env, relative)
+            undeclared_args = set(args).difference(
+                _dockerfile_arg_names(dockerfile_source)
+            )
+            if undeclared_args:
+                raise RuntimeError(
+                    f"{relative}: Docker build arguments are not declared by "
+                    f"{dockerfile_relative}: {', '.join(sorted(undeclared_args))}"
+                )
+            if "USE_PREBUILT" in args:
+                raise RuntimeError(
+                    f"{relative}: official workflow may not override USE_PREBUILT"
+                )
+            features = (
+                _split_features(args["FEATURES"]) if "FEATURES" in args else None
+            )
+            cargo_flags = tuple(shlex.split(args.get("CARGOFLAGS", "")))
+            if _cargo_scope_flags_are_forbidden(cargo_flags):
+                raise RuntimeError(
+                    f"{relative}: CARGOFLAGS may not expand the reviewed Docker target scope"
+                )
+            if "BINARIES" in args:
+                raise RuntimeError(
+                    f"{relative}: workflow BINARIES overrides require explicit guard support"
+                )
+            invocations.append(
+                DockerInvocation(
+                    workflow=str(relative),
+                    dockerfile=dockerfile,
+                    features=features,
+                    cargo_flags=cargo_flags,
+                )
+            )
+    if not invocations:
+        raise RuntimeError("no published Docker invocations were derived")
+    return tuple(
+        sorted(
+            set(invocations),
+            key=lambda item: (
+                item.workflow,
+                item.dockerfile,
+                item.features or (),
+                item.features is None,
+                item.cargo_flags,
+            ),
+        )
+    )
+
+
+def docker_shipping_targets(
+    repo: Path,
+    catalog: WorkspaceCatalog | None = None,
+    dockerfile: Path = DOCKERFILE,
+    features: tuple[str, ...] | None = None,
+    source_label: str | None = None,
+) -> tuple[ShippingTarget, ...]:
+    """Resolve one Docker publication profile to Cargo binary roots."""
+
+    catalog = catalog or workspace_catalog(repo)
+    path = repo / dockerfile
+    source = path.read_text(encoding="utf-8")
+    _validate_dockerfile_cargo_scope(source, dockerfile)
+    binary_names = _dockerfile_binary_names(source, dockerfile, catalog)
+    default_features = _quoted_arg_words(
+        source, "FEATURES", dockerfile, required=False
+    )
+    global_features = frozenset(
+        features if features is not None else default_features or ()
+    )
+    resolved = tuple(_resolve_binary(catalog, binary) for binary in binary_names)
+
+    for feature in global_features:
+        if not any(
+            feature in package_features
+            for package_features in catalog.package_features.values()
+        ):
+            raise RuntimeError(
+                f"{dockerfile}: shipping feature {feature!r} belongs to no workspace package"
+            )
+
+    targets: list[ShippingTarget] = []
+    for target in resolved:
+        features = set(target.required_features)
+        features.update(
+            feature
+            for feature in global_features
+            if feature in catalog.package_features[target.package]
+        )
+        targets.append(
+            ShippingTarget(
+                package=target.package,
+                binary=target.name,
+                features=tuple(sorted(features)),
+                default_features=True,
+                source=source_label or str(dockerfile),
+            )
+        )
+    return tuple(sorted(targets))
+
+
+def _workflow_build_commands(source: str) -> tuple[tuple[str, ...], ...]:
+    """Return logical Cargo build/rustc commands from workflow or shell text."""
+
+    logical_lines: list[str] = []
+    pending = ""
+    for raw_line in source.splitlines():
+        stripped = raw_line.strip()
+        if pending:
+            stripped = f"{pending}{stripped}"
+        if stripped.endswith("\\"):
+            pending = f"{stripped[:-1].rstrip()} "
+            continue
+        pending = ""
+        if re.search(r"\bcargo(?:\s+\+\S+)?\s+(?:build|b|rustc)\b", stripped):
+            logical_lines.append(stripped.removeprefix("run: "))
+    if pending:
+        raise RuntimeError("unterminated shell continuation in release workflow")
+
+    commands: list[tuple[str, ...]] = []
+    for line in logical_lines:
+        tokens = shlex.split(line)
+        try:
+            cargo_index = next(
+                index
+                for index in range(len(tokens) - 1)
+                if tokens[index] == "cargo"
+                and (
+                    tokens[index + 1] in {"build", "b", "rustc"}
+                    or (
+                        tokens[index + 1].startswith("+")
+                        and index + 2 < len(tokens)
+                        and tokens[index + 2] in {"build", "b", "rustc"}
+                    )
+                )
+            )
+        except StopIteration as error:
+            raise RuntimeError(f"unable to parse Cargo build command: {line}") from error
+        commands.append(tuple(tokens[cargo_index:]))
+    return tuple(commands)
+
+
+def _option_values(tokens: tuple[str, ...], *names: str) -> tuple[str, ...]:
+    values: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in names:
+            if index + 1 >= len(tokens):
+                raise RuntimeError(f"missing value after {token}")
+            values.append(tokens[index + 1])
+            index += 2
+            continue
+        matched = next((name for name in names if token.startswith(f"{name}=")), None)
+        if matched is not None:
+            values.append(token.split("=", 1)[1])
+        index += 1
+    return tuple(values)
+
+
+def _package_features(
+    catalog: WorkspaceCatalog, package: str, values: tuple[str, ...], source: Path
+) -> set[str]:
+    features: set[str] = set()
+    for value in values:
+        for feature in _split_features(value):
+            if "/" in feature:
+                feature_package, feature_name = feature.split("/", 1)
+                if feature_package != package:
+                    continue
+                feature = feature_name
+            if feature not in catalog.package_features[package]:
+                raise RuntimeError(f"{source}: {package} has no feature {feature!r}")
+            features.add(feature)
+    return features
+
+
+def _nix_balanced_body(
+    source: str,
+    opening_index: int,
+    opener: str,
+    closer: str,
+    relative: Path,
+    label: str,
+) -> tuple[str, int]:
+    """Return one balanced Nix block while ignoring strings and comments."""
+
+    if opening_index >= len(source) or source[opening_index] != opener:
+        raise RuntimeError(f"{relative}: malformed Nix {label} block")
+    depth = 0
+    index = opening_index
+    while index < len(source):
+        if source.startswith("/*", index):
+            comment_end = source.find("*/", index + 2)
+            if comment_end < 0:
+                raise RuntimeError(f"{relative}: unterminated comment in Nix {label}")
+            index = comment_end + 2
+            continue
+        if source.startswith("''", index):
+            string_end = source.find("''", index + 2)
+            if string_end < 0:
+                raise RuntimeError(
+                    f"{relative}: unterminated indented string in Nix {label}"
+                )
+            index = string_end + 2
+            continue
+        character = source[index]
+        if character == "#":
+            newline = source.find("\n", index + 1)
+            index = len(source) if newline < 0 else newline + 1
+            continue
+        if character == '"':
+            index += 1
+            while index < len(source):
+                if source[index] == "\\":
+                    index += 2
+                    continue
+                if source[index] == '"':
+                    index += 1
+                    break
+                index += 1
+            else:
+                raise RuntimeError(f"{relative}: unterminated string in Nix {label}")
+            continue
+        if character == opener:
+            depth += 1
+        elif character == closer:
+            depth -= 1
+            if depth == 0:
+                return source[opening_index + 1 : index], index + 1
+            if depth < 0:
+                break
+        index += 1
+    raise RuntimeError(f"{relative}: unterminated Nix {label} block")
+
+
+def _nix_unique_balanced_assignment(
+    source: str,
+    pattern: str,
+    opener: str,
+    closer: str,
+    relative: Path,
+    label: str,
+) -> str:
+    """Return a uniquely named, semicolon-terminated Nix block."""
+
+    matches = tuple(re.finditer(pattern, source, re.MULTILINE))
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"{relative}: Nix {label} must occur exactly once, found {len(matches)}"
+        )
+    opening_index = matches[0].end() - 1
+    body, end = _nix_balanced_body(
+        source, opening_index, opener, closer, relative, label
+    )
+    if re.match(r"\s*;", source[end:]) is None:
+        raise RuntimeError(f"{relative}: Nix {label} must end with a semicolon")
+    return body
+
+
+def _nix_literal_feature_list(
+    source: str, field: str, relative: Path, label: str
+) -> tuple[str, ...]:
+    """Parse a literal Nix string list used as a Cargo feature profile."""
+
+    body = _nix_unique_balanced_assignment(
+        source,
+        rf"^\s*{re.escape(field)}\s*=\s*\[",
+        "[",
+        "]",
+        relative,
+        label,
+    )
+    literal = re.compile(r'"(?P<value>[^"\\]*)"')
+    values: list[str] = []
+    cursor = 0
+    for match in literal.finditer(body):
+        if body[cursor : match.start()].strip():
+            raise RuntimeError(f"{relative}: Nix {label} must be a literal string list")
+        value = match.group("value")
+        split = _split_features(value)
+        if not split:
+            raise RuntimeError(f"{relative}: Nix {label} contains an empty feature")
+        for feature in split:
+            if re.fullmatch(
+                r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?", feature
+            ) is None:
+                raise RuntimeError(
+                    f"{relative}: Nix {label} contains invalid feature {feature!r}"
+                )
+            values.append(feature)
+        cursor = match.end()
+    if body[cursor:].strip():
+        raise RuntimeError(f"{relative}: Nix {label} must be a literal string list")
+    if len(values) != len(set(values)):
+        raise RuntimeError(f"{relative}: Nix {label} contains duplicate features")
+    return tuple(values)
+
+
+def _nix_literal_target_list(
+    source: str, pattern: str, relative: Path, label: str
+) -> tuple[tuple[str, str], ...]:
+    """Parse literal ``package``/``binary`` attrsets from one Nix list."""
+
+    body = _nix_unique_balanced_assignment(
+        source, pattern, "[", "]", relative, label
+    )
+    assignment = re.compile(
+        r'\b(?P<key>package|binary)\s*=\s*"(?P<value>[A-Za-z0-9_.-]+)"\s*;'
+    )
+    targets: list[tuple[str, str]] = []
+    cursor = 0
+    while cursor < len(body):
+        whitespace = re.match(r"\s*", body[cursor:])
+        assert whitespace is not None
+        cursor += whitespace.end()
+        if cursor == len(body):
+            break
+        if body[cursor] != "{":
+            raise RuntimeError(
+                f"{relative}: Nix {label} must contain only literal attrsets"
+            )
+        target_body, cursor = _nix_balanced_body(
+            body, cursor, "{", "}", relative, label
+        )
+        fields: dict[str, str] = {}
+        for match in assignment.finditer(target_body):
+            key = match.group("key")
+            if key in fields:
+                raise RuntimeError(
+                    f"{relative}: Nix {label} repeats target field {key}"
+                )
+            fields[key] = match.group("value")
+        if assignment.sub("", target_body).strip():
+            raise RuntimeError(
+                f"{relative}: Nix {label} target must contain only package and binary"
+            )
+        if set(fields) != {"package", "binary"}:
+            raise RuntimeError(
+                f"{relative}: Nix {label} target needs package and binary"
+            )
+        targets.append((fields["package"], fields["binary"]))
+    if not targets:
+        raise RuntimeError(f"{relative}: Nix {label} may not be empty")
+    if len(targets) != len(set(targets)):
+        raise RuntimeError(f"{relative}: Nix {label} contains duplicate targets")
+    return tuple(targets)
+
+
+def _nix_mk_targets_region(source: str, relative: Path) -> str:
+    """Return the bounded ``mkTargets`` definition before named outputs."""
+
+    starts = tuple(re.finditer(r"^\s*mkTargets\s*=", source, re.MULTILINE))
+    if len(starts) != 1:
+        raise RuntimeError(
+            f"{relative}: Nix mkTargets must occur exactly once, found {len(starts)}"
+        )
+    end = re.search(r"^\s*in\s+rec\s*\{", source[starts[0].end() :], re.MULTILINE)
+    if end is None:
+        raise RuntimeError(f"{relative}: Nix mkTargets has no bounded output region")
+    return source[starts[0].start() : starts[0].end() + end.start()]
+
+
+def _nix_output_body(source: str, relative: Path) -> str:
+    """Return the complete unmerged top-level output attrset."""
+
+    matches = tuple(re.finditer(r"^\s*in\s+rec\s*\{", source, re.MULTILINE))
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"{relative}: Nix output attrset must occur exactly once, found {len(matches)}"
+        )
+    opening_index = matches[0].end() - 1
+    body, end = _nix_balanced_body(
+        source, opening_index, "{", "}", relative, "release outputs"
+    )
+    if re.fullmatch(r"\s*\)\s*;\s*\}\s*", source[end:]) is None:
+        raise RuntimeError(
+            f"{relative}: Nix release outputs may not be merged or replaced"
+        )
+    return body
+
+
+def _nix_named_package_outputs(source: str, relative: Path) -> tuple[str, ...]:
+    """Return exact literal package-output names and reject opaque attributes."""
+
+    body = _nix_output_body(source, relative)
+    if re.search(r"(?m)^\s*inherit\b[^;\n]*\bpackages\b", body):
+        raise RuntimeError(
+            f"{relative}: inherited Nix package outputs require explicit guard support"
+        )
+
+    outputs: list[str] = []
+    assignment = re.compile(r"(?m)^\s*(?P<lhs>[^#\n=]+?)\s*=")
+    for match in assignment.finditer(body):
+        lhs = match.group("lhs").strip()
+        literal = re.fullmatch(r"packages\.([A-Za-z0-9_.-]+)", lhs)
+        if literal is not None:
+            outputs.append(literal.group(1))
+            continue
+        if (
+            re.search(r"(?:^|[^A-Za-z0-9_-])packages(?:[^A-Za-z0-9_-]|$)", lhs)
+            or lhs.startswith(('"', "''", "${"))
+        ):
+            raise RuntimeError(
+                f"{relative}: quoted or dynamic Nix package output is not reviewable: "
+                f"{lhs}"
+            )
+    return tuple(outputs)
+
+
+def _validate_nix_cargo_envelope(source: str, relative: Path) -> None:
+    """Authenticate the only Cargo option construction used by ``mkIroha``."""
+
+    matches = tuple(
+        re.finditer(
+            r"(?ms)^\s*cargoBuildOptions\s*=\s*default:\s*(?P<body>.*?);\s*$",
+            source,
+        )
+    )
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"{relative}: Nix cargoBuildOptions must occur exactly once, found "
+            f"{len(matches)}"
+        )
+    observed = re.sub(r"\s+", " ", matches[0].group("body")).strip()
+    expected = (
+        'default ++ ["--target" targetTriple] '
+        '++ builtins.concatMap (target: ["-p" target.package "--bin" '
+        'target.binary]) binaries ++ (if features == [] then [] else '
+        '["--features" (builtins.concatStringsSep "," features)])'
+    )
+    if observed != expected:
+        raise RuntimeError(
+            f"{relative}: Nix cargoBuildOptions is not the reviewed target/feature envelope"
+        )
+
+    rustflag_assignments = tuple(
+        re.findall(
+            r'(?m)^\s*((?:[A-Za-z_][A-Za-z0-9_]*)?RUSTFLAGS)\s*=\s*"([^"]*)"\s*;\s*$',
+            source,
+        )
+    )
+    if rustflag_assignments != (("RUSTFLAGS", "-C linker=${CC}"),):
+        raise RuntimeError(
+            f"{relative}: Nix Rust feature/cfg flags are not the reviewed linker-only value"
+        )
+
+
+def _validate_nix_appimage_helper(repo: Path) -> None:
+    """Bind the AppImage payload to the derivation supplied as ``drv``."""
+
+    relative = NIX_APPIMAGE_OWNER_ROOT / "flake.nix"
+    source = (repo / relative).read_text(encoding="utf-8")
+    required = (
+        r"^\s*mkappimage\s*=\s*\{\s*drv\s*,\s*name\s*\}\s*:\s*$",
+        r"^\s*closure\s*=\s*pkgs\.writeReferencesToFile\s+drv\s*;\s*$",
+        r'^\s*entrypoint\s*=\s*"\$\{drv\}/bin/\$\{name\}"\s*;\s*$',
+        r"^\s*mksquashfs\s+\$\(cat\s+\$\{closure\}\)\s+\$out\s+\\\s*$",
+    )
+    for pattern in required:
+        if len(re.findall(pattern, source, re.MULTILINE)) != 1:
+            raise RuntimeError(
+                f"{relative}: AppImage derivation provenance contract changed"
+            )
+    if re.search(
+        r"(?<![A-Za-z0-9_-])(?:cargo|rustc)(?:\s|$)|"
+        r"(?<![A-Za-z0-9_-])(?:--features|-F|--all-features)(?:[=\s]|$)",
+        source,
+        re.MULTILINE,
+    ):
+        raise RuntimeError(
+            f"{relative}: AppImage helper may not compile or select Cargo features"
+        )
+
+
+def _nix_shipping_feature_sets(
+    catalog: WorkspaceCatalog,
+    selected_packages: tuple[str, ...],
+    values: tuple[str, ...],
+    relative: Path,
+    label: str,
+) -> dict[str, tuple[str, ...]]:
+    """Resolve one Nix Cargo feature list without discarding foreign owners."""
+
+    selected = set(selected_packages)
+    unknown = selected.difference(catalog.package_features)
+    if unknown:
+        raise RuntimeError(f"{relative}: unknown Nix shipping packages: {sorted(unknown)}")
+    features: dict[str, set[str]] = {package: set() for package in selected}
+    for value in values:
+        if "/" in value:
+            owner, feature = value.split("/", 1)
+            if owner not in selected:
+                raise RuntimeError(
+                    f"{relative}: Nix {label} feature owner {owner!r} is not a "
+                    "selected shipping package"
+                )
+            if feature not in catalog.package_features[owner]:
+                raise RuntimeError(
+                    f"{relative}: Nix {label} package {owner} has no feature {feature!r}"
+                )
+            features[owner].add(feature)
+            continue
+        owners = tuple(
+            package
+            for package in sorted(selected)
+            if value in catalog.package_features[package]
+        )
+        if len(owners) != 1:
+            raise RuntimeError(
+                f"{relative}: Nix {label} feature {value!r} must have exactly one "
+                f"selected owner, found {len(owners)}"
+            )
+        features[owners[0]].add(value)
+    return {package: tuple(sorted(active)) for package, active in features.items()}
+
+
+def nix_shipping_targets(
+    repo: Path, catalog: WorkspaceCatalog | None = None
+) -> tuple[ShippingTarget, ...]:
+    """Resolve Cargo profiles behind the repository's named Nix outputs."""
+
+    catalog = catalog or workspace_catalog(repo)
+    relative = NIX_RELEASE_OWNER
+    source = (repo / relative).read_text(encoding="utf-8")
+    _validate_nix_cargo_envelope(source, relative)
+    _validate_nix_appimage_helper(repo)
+    named_outputs = _nix_named_package_outputs(source, relative)
+    if len(named_outputs) != 4 or set(named_outputs) != {
+        "iroha3",
+        "default",
+        "appimage",
+        "targets",
+    }:
+        raise RuntimeError(
+            f"{relative}: Nix named package outputs require explicit guard support"
+        )
+    required_exact_lines = (
+        r'^\s*nix-appimage\.url\s*=\s*"path:nix-appimage"\s*;\s*$',
+        r"^\s*packages\.default\s*=\s*packages\.iroha3\s*;\s*$",
+    )
+    for pattern in required_exact_lines:
+        if len(re.findall(pattern, source, re.MULTILINE)) != 1:
+            raise RuntimeError(f"{relative}: Nix named release aliases changed")
+
+    all_binaries = _nix_literal_target_list(
+        source,
+        r"^\s*allBinaries\s*=\s*\[",
+        relative,
+        "allBinaries",
+    )
+    if len(re.findall(r"\bbinaries\s*\?\s*allBinaries\b", source)) != 1:
+        raise RuntimeError(f"{relative}: mkIroha must default to allBinaries")
+
+    iroha3 = _nix_unique_balanced_assignment(
+        source,
+        r"^\s*packages\.iroha3\s*=\s*mkIroha\s*\{",
+        "{",
+        "}",
+        relative,
+        "packages.iroha3",
+    )
+    if re.search(r"^\s*binaries\s*=", iroha3, re.MULTILINE):
+        raise RuntimeError(f"{relative}: packages.iroha3 may not override allBinaries")
+    iroha3_features = _nix_literal_feature_list(
+        iroha3, "features", relative, "packages.iroha3 features"
+    )
+
+    appimage = _nix_unique_balanced_assignment(
+        source,
+        r"^\s*packages\.appimage\s*=\s*nix-appimage\.mkappimage\.\$\{system\}\s*\{",
+        "{",
+        "}",
+        relative,
+        "packages.appimage",
+    )
+    canonical_appimage = re.sub(r"\s+", " ", appimage).strip()
+    if canonical_appimage != 'drv = packages.iroha3; name = "iroha3";':
+        raise RuntimeError(
+            f"{relative}: packages.appimage must wrap packages.iroha3 exactly "
+            "with the reviewed entrypoint"
+        )
+
+    mk_targets = _nix_mk_targets_region(source, relative)
+    if len(
+        re.findall(r"^\s*features\s*=\s*features\s*;\s*$", mk_targets, re.MULTILINE)
+    ) != 1:
+        raise RuntimeError(f"{relative}: mkTargets must forward its feature profile")
+    target_binaries = _nix_literal_target_list(
+        mk_targets,
+        r"^\s*binaries\s*=\s*\[",
+        relative,
+        "mkTargets binaries",
+    )
+    targets_output = _nix_unique_balanced_assignment(
+        source,
+        r"^\s*packages\.targets\s*=\s*mkTargets\s*\{",
+        "{",
+        "}",
+        relative,
+        "packages.targets",
+    )
+    target_features = _nix_literal_feature_list(
+        targets_output, "features", relative, "packages.targets features"
+    )
+
+    targets: list[ShippingTarget] = []
+    for pairs, values, label in (
+        (all_binaries, iroha3_features, "packages.iroha3"),
+        (target_binaries, target_features, "packages.targets"),
+    ):
+        feature_sets = _nix_shipping_feature_sets(
+            catalog,
+            tuple(package for package, _ in pairs),
+            values,
+            relative,
+            label,
+        )
+        for package, binary in pairs:
+            resolved = _resolve_binary(catalog, binary, package)
+            features = set(feature_sets[package])
+            features.update(resolved.required_features)
+            targets.append(
+                ShippingTarget(
+                    package=package,
+                    binary=binary,
+                    features=tuple(sorted(features)),
+                    default_features=True,
+                    source=f"{relative}:{label}",
+                )
+            )
+    return tuple(sorted(set(targets)))
+
+
+def cargo_shipping_targets(
+    repo: Path, relative: Path, catalog: WorkspaceCatalog | None = None
+) -> tuple[ShippingTarget, ...]:
+    """Resolve explicit Cargo binary/native-library roots in one declaration."""
+
+    catalog = catalog or workspace_catalog(repo)
+    source = (repo / relative).read_text(encoding="utf-8")
+    targets: list[ShippingTarget] = []
+    for command in _workflow_build_commands(source):
+        packages = _option_values(command, "-p", "--package")
+        binaries = _option_values(command, "--bin")
+        if len(packages) != 1:
+            raise RuntimeError(
+                f"{relative}: shipping Cargo commands must select exactly one package"
+            )
+        package = packages[0]
+        if package not in catalog.package_features:
+            raise RuntimeError(f"{relative}: unknown shipping package {package!r}")
+        feature_values = _option_values(command, "-F", "--features")
+        foreign_features = tuple(
+            feature
+            for value in feature_values
+            for feature in _split_features(value)
+            if "/" in feature and feature.split("/", 1)[0] != package
+        )
+        if foreign_features:
+            raise RuntimeError(
+                f"{relative}: cross-package shipping features require explicit "
+                f"profiles: {', '.join(foreign_features)}"
+            )
+        if "--bins" in command or "--all-targets" in command:
+            raise RuntimeError(
+                f"{relative}: broad Cargo target selectors require explicit guard support"
+            )
+        features = _package_features(
+            catalog,
+            package,
+            feature_values,
+            relative,
+        )
+        if "--all-features" in command:
+            features.update(catalog.package_features[package])
+        default_features = "--no-default-features" not in command
+        if not binaries and package in catalog.native_libraries:
+            targets.append(
+                ShippingTarget(
+                    package=package,
+                    binary="<native-library>",
+                    features=tuple(sorted(features)),
+                    default_features=default_features,
+                    source=str(relative),
+                )
+            )
+        elif not binaries:
+            raise RuntimeError(
+                f"{relative}: shipping package {package!r} must name its binary target"
+            )
+        for binary in binaries:
+            target = _resolve_binary(catalog, binary, package)
+            target_features = features.union(target.required_features)
+            targets.append(
+                ShippingTarget(
+                    package=package,
+                    binary=binary,
+                    features=tuple(sorted(target_features)),
+                    default_features=default_features,
+                    source=str(relative),
+                )
+            )
+    return tuple(sorted(set(targets)))
+
+
+def workflow_shipping_targets(
+    repo: Path, catalog: WorkspaceCatalog | None = None
+) -> tuple[ShippingTarget, ...]:
+    """Resolve SoraFS CLI release workflow Cargo builds."""
+
+    return cargo_shipping_targets(repo, SORAFS_RELEASE_WORKFLOW, catalog)
+
+
+def native_artifact_targets(
+    repo: Path, catalog: WorkspaceCatalog | None = None
+) -> tuple[ShippingTarget, ...]:
+    """Resolve published native libraries and their declared feature profiles."""
+
+    catalog = catalog or workspace_catalog(repo)
+    targets = list(
+        itertools.chain.from_iterable(
+            cargo_shipping_targets(repo, relative, catalog)
+            for relative in NATIVE_ARTIFACT_WORKFLOWS
+        )
+    )
+    script = (repo / NATIVE_BRIDGE_BUILD_SCRIPT).read_text(encoding="utf-8")
+    package_match = re.search(r'^LIB_CRATE_NAME="([^"]+)"$', script, re.MULTILINE)
+    if package_match is None:
+        raise RuntimeError(f"{NATIVE_BRIDGE_BUILD_SCRIPT}: missing library package")
+    package = package_match.group(1)
+    if package not in catalog.native_libraries:
+        raise RuntimeError(
+            f"{NATIVE_BRIDGE_BUILD_SCRIPT}: {package} is not a native library package"
+        )
+    optional_features = tuple(
+        sorted(
+            set(
+                re.findall(
+                    r"CARGO_FEATURE_ARGS\+=\(--features\s+([A-Za-z0-9_.-]+)\)",
+                    script,
+                )
+            )
+        )
+    )
+    for feature in optional_features:
+        if feature not in catalog.package_features[package]:
+            raise RuntimeError(
+                f"{NATIVE_BRIDGE_BUILD_SCRIPT}: unknown {package} feature {feature}"
+            )
+    for caller in NATIVE_BRIDGE_CALLER_WORKFLOWS:
+        caller_source = (repo / caller).read_text(encoding="utf-8")
+        if str(NATIVE_BRIDGE_BUILD_SCRIPT) not in caller_source:
+            raise RuntimeError(f"{caller}: native bridge build script is not invoked")
+    for feature_set in ((), *((feature,) for feature in optional_features)):
+        targets.append(
+            ShippingTarget(
+                package=package,
+                binary="<native-library>",
+                features=feature_set,
+                default_features=True,
+                source=str(NATIVE_BRIDGE_BUILD_SCRIPT),
+            )
+        )
+    targets.extend(android_native_artifact_targets(repo, catalog))
+    return tuple(sorted(set(targets)))
+
+
+def android_native_artifact_targets(
+    repo: Path, catalog: WorkspaceCatalog | None = None
+) -> tuple[ShippingTarget, ...]:
+    """Authenticate the Gradle-owned Cargo graph shipped in Android artifacts."""
+
+    catalog = catalog or workspace_catalog(repo)
+    workflow = (repo / Path(".github/workflows/mobile_sdk_artifacts.yml")).read_text(
+        encoding="utf-8"
+    )
+    if workflow.count(":client-android:buildNativeLibs") != 1:
+        raise RuntimeError(
+            "mobile SDK workflow must invoke :client-android:buildNativeLibs once"
+        )
+    if '-PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED"' not in workflow:
+        raise RuntimeError("mobile SDK workflow must bind the Android privacy profile")
+
+    source = (repo / ANDROID_NATIVE_BUILD_OWNER).read_text(encoding="utf-8")
+    command_marker = "val command = buildList {"
+    if source.count(command_marker) != 1:
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: Android Cargo command owner is ambiguous"
+        )
+    command_start = source.index(command_marker)
+    command_end = source.index("execOperations.exec {", command_start)
+    command = source[command_start:command_end]
+    packages = tuple(re.findall(r'"-p",\s*"([A-Za-z0-9_.-]+)"', command))
+    if packages != ("connect_norito_bridge",):
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: Android Cargo package must be exactly "
+            "connect_norito_bridge"
+        )
+    feature_values = tuple(
+        re.findall(
+            r'addAll\(listOf\("--features",\s*"([A-Za-z0-9_.-]+)"\)\)',
+            command,
+        )
+    )
+    if feature_values != ("privacy-production-enabled",):
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: Android Cargo feature profile changed"
+        )
+    if command.count('"--features"') != 1 or "--all-features" in command:
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: Android Cargo feature scope is not exact"
+        )
+    required_markers = (
+        'tools.hermeticRunner.toString()',
+        '"--profile",\n                        "android-cargo"',
+        '"--locked",\n                        "--offline"',
+        '"--lockfile-path",\n                        tools.cargoLock.toString()',
+        'if (privacyProductionEnabled.get()) {',
+    )
+    if any(marker not in command for marker in required_markers):
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: Android Cargo envelope is incomplete"
+        )
+    packaging_markers = (
+        "inputDirectory.set(compileNativeLibs.flatMap { it.outputDirectory })",
+        'tasks.register("buildNativeLibs")',
+        "dependsOn(stripNativeLibs)",
+    )
+    if any(marker not in source for marker in packaging_markers):
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: Android native packaging chain changed"
+        )
+
+    runner = (repo / ANDROID_HERMETIC_RUNNER).read_text(encoding="utf-8")
+    runner_markers = (
+        'if args.profile == "android-cargo":',
+        'authenticate_android_cargo_arguments(\n            args.command',
+        'resolved != authenticated_tools["CARGO"][0]',
+    )
+    if any(marker not in runner for marker in runner_markers):
+        raise RuntimeError(
+            f"{ANDROID_HERMETIC_RUNNER}: Android Cargo authentication changed"
+        )
+
+    package = packages[0]
+    if package not in catalog.native_libraries:
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: {package} is not a native library"
+        )
+    feature = feature_values[0]
+    if feature not in catalog.package_features[package]:
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: unknown {package} feature {feature}"
+        )
+    return tuple(
+        ShippingTarget(
+            package=package,
+            binary="<native-library>",
+            features=features,
+            default_features=True,
+            source=str(ANDROID_NATIVE_BUILD_OWNER),
+        )
+        for features in ((), (feature,))
+    )
+
+
+def canonical_release_bundle_policy(repo: Path) -> str:
+    """Require the official bundle/image corridor to build reviewed sources.
+
+    Arbitrary prebuilt directories are not feature provenance. They remain
+    rejected until the corridor authenticates a manifest binding every binary
+    digest to the exact source commit, Cargo.lock, target, package, default
+    feature mode, and selected feature set.
+    """
+
+    bundle_source = (repo / RELEASE_BUNDLE_SCRIPT).read_text(encoding="utf-8")
+    if 'case "$1" in' not in bundle_source or "--features)" not in bundle_source:
+        raise RuntimeError(
+            f"{RELEASE_BUNDLE_SCRIPT}: standalone feature input contract changed"
+        )
+    pipeline = (repo / CANONICAL_RELEASE_PIPELINE).read_text(encoding="utf-8")
+    marker = 'REPO_ROOT / "scripts" / "build_release_bundle.sh"'
+    if pipeline.count(marker) != 1:
+        raise RuntimeError(
+            f"{CANONICAL_RELEASE_PIPELINE}: canonical bundle invocation is ambiguous"
+        )
+    unauthenticated_prebuilt_controls = tuple(
+        option
+        for option in (
+            "--bundle-prebuilt-bin-dir",
+            "--image-prebuilt-bin-dir",
+            "--prebuilt-bin-dir",
+        )
+        if option in pipeline
+    )
+    if unauthenticated_prebuilt_controls:
+        raise RuntimeError(
+            f"{CANONICAL_RELEASE_PIPELINE}: arbitrary prebuilt release inputs are "
+            "unauthenticated and forbidden; require a provenance manifest binding "
+            "source commit, Cargo.lock, target, package, default-feature mode, "
+            "selected features, and binary SHA-256 (found "
+            f"{', '.join(unauthenticated_prebuilt_controls)})"
+        )
+    start = pipeline.index(marker)
+    invocation_tail = pipeline[start:]
+    invocation_end = invocation_tail.find("\n                ]")
+    if invocation_end < 0:
+        raise RuntimeError(
+            f"{CANONICAL_RELEASE_PIPELINE}: canonical bundle invocation is unbounded"
+        )
+    invocation = invocation_tail[:invocation_end]
+    if '"--features"' in invocation:
+        raise RuntimeError(
+            f"{CANONICAL_RELEASE_PIPELINE}: official bundle may not accept a dynamic "
+            "feature override"
+        )
+    return "source-built-reviewed-profile"
+
+
+def release_bundle_targets(
+    repo: Path, catalog: WorkspaceCatalog | None = None
+) -> tuple[ShippingTarget, ...]:
+    """Resolve the standalone bundle script's default direct-build roots."""
+
+    catalog = catalog or workspace_catalog(repo)
+    source = (repo / RELEASE_BUNDLE_SCRIPT).read_text(encoding="utf-8")
+    output_binaries = tuple(
+        dict.fromkeys(
+            re.findall(
+                r'(?m)^(?:daemon|governance_dag|cli|utility|sanitizer|signer)_bin="([^"]+)"$',
+                source,
+            )
+        )
+    )
+    if not output_binaries:
+        raise RuntimeError(f"{RELEASE_BUNDLE_SCRIPT}: no bundle binaries derived")
+    fixed_features = tuple(
+        re.findall(r"--features\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", source)
+    )
+    targets: list[ShippingTarget] = []
+    for binary in output_binaries:
+        target = _resolve_binary(catalog, binary)
+        features = _package_features(
+            catalog, target.package, fixed_features, RELEASE_BUNDLE_SCRIPT
+        )
+        features.update(target.required_features)
+        targets.append(
+            ShippingTarget(
+                package=target.package,
+                binary=binary,
+                features=tuple(sorted(features)),
+                default_features=True,
+                source=str(RELEASE_BUNDLE_SCRIPT),
+            )
+        )
+
+    canonical_release_bundle_policy(repo)
+    return tuple(sorted(set(targets)))
+
+
+def declared_shipping_targets(repo: Path) -> tuple[ShippingTarget, ...]:
+    """Return targets derived from every repository shipping declaration."""
+
+    validate_trusted_release_surface(repo)
+    catalog = workspace_catalog(repo)
+    docker_targets: list[ShippingTarget] = []
+    for invocation in docker_publish_invocations(repo):
+        relative = Path(invocation.dockerfile)
+        docker_targets.extend(
+            docker_shipping_targets(
+                repo,
+                catalog,
+                relative,
+                invocation.features,
+                f"{invocation.workflow}->{invocation.dockerfile}",
+            )
+        )
+    return tuple(
+        sorted(
+            set(
+                (
+                    *docker_targets,
+                    *workflow_shipping_targets(repo, catalog),
+                    *native_artifact_targets(repo, catalog),
+                    *nix_shipping_targets(repo, catalog),
+                    *release_bundle_targets(repo, catalog),
+                )
+            )
+        )
+    )
+
+
+def shipping_profiles(repo: Path) -> tuple[ShippingProfile, ...]:
+    """Return distinct baseline and declaration-derived shipping profiles."""
+
+    catalog = workspace_catalog(repo)
+    missing = set(BASELINE_PACKAGES).difference(catalog.package_features)
+    if missing:
+        raise RuntimeError(f"missing baseline shipping packages: {sorted(missing)}")
+    targets = declared_shipping_targets(repo)
+    profiles = {
+        ShippingProfile(package=package) for package in BASELINE_PACKAGES
+    }
+    profiles.update(
+        ShippingProfile(
+            package=target.package,
+            features=target.features,
+            default_features=target.default_features,
+        )
+        for target in targets
+    )
+    for invocation in docker_publish_invocations(repo):
+        source = (repo / invocation.dockerfile).read_text(encoding="utf-8")
+        declared_features = invocation.features
+        if declared_features is None:
+            declared_features = _quoted_arg_words(
+                source, "FEATURES", Path(invocation.dockerfile), required=False
+            ) or ()
+        for feature in declared_features:
+            owners = tuple(
+                package
+                for package, package_features in catalog.package_features.items()
+                if feature in package_features
+            )
+            if not owners:
+                raise RuntimeError(
+                    f"{invocation.workflow}: no workspace package declares feature {feature!r}"
+                )
+            profiles.update(
+                ShippingProfile(package=package, features=(feature,))
+                for package in owners
+            )
+    ordered = tuple(sorted(profiles))
+    validate_shipping_profile_policy(ordered)
+    return ordered
+
+
+def validate_shipping_profile_policy(
+    profiles: tuple[ShippingProfile, ...],
+) -> None:
+    """Reject unknown shipping packages and non-reviewed root features."""
+
+    failures: list[str] = []
+    for profile in profiles:
+        allowed = SHIPPING_ROOT_FEATURE_ALLOWLIST.get(profile.package)
+        if allowed is None:
+            failures.append(f"{profile.label()}: package has no shipping feature policy")
+            continue
+        unexpected = sorted(set(profile.features).difference(allowed))
+        if unexpected:
+            failures.append(
+                f"{profile.label()}: unreviewed root features "
+                f"{', '.join(unexpected)}"
+            )
+    if failures:
+        raise RuntimeError("shipping feature policy violations:\n- " + "\n- ".join(failures))
+
+
+def feature_graph(
+    repo: Path,
+    package: str,
+    features: tuple[str, ...] = (),
+    default_features: bool = True,
+) -> str:
+    """Return Cargo's normal/build feature graph for one shipping profile."""
+
+    command = [
+        "cargo",
+        "tree",
+        "--locked",
+        "--target",
+        "all",
+        "--package",
+        package,
+        "--edges",
+        "normal,build,features",
+        "--prefix",
+        "none",
+    ]
+    if not default_features:
+        command.append("--no-default-features")
+    if features:
+        command.extend(("--features", ",".join(features)))
+
+    completed = subprocess.run(
+        command,
         cwd=repo,
         check=False,
         capture_output=True,
@@ -68,6 +2408,24 @@ def forbidden_features_in_graph(graph: str) -> tuple[str, ...]:
     return tuple(feature for feature in FORBIDDEN_FEATURES if feature in graph)
 
 
+def unauthorized_root_features_in_graph(
+    graph: str, package: str
+) -> tuple[str, ...]:
+    """Return active root-package features outside the positive shipping policy."""
+
+    allowed = SHIPPING_ROOT_FEATURE_ALLOWLIST.get(package)
+    if allowed is None:
+        return (f"{package} has no shipping feature policy",)
+    active = {
+        match.group("feature")
+        for match in re.finditer(
+            rf'(?m)^{re.escape(package)} feature "(?P<feature>[^"]+)"(?: \(\*\))?$',
+            graph,
+        )
+    }
+    return tuple(sorted(active.difference(allowed)))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -78,21 +2436,40 @@ def main() -> int:
     )
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
-    packages = tuple(args.packages or DEFAULT_PACKAGES)
+    profiles = shipping_profiles(repo)
+    if args.packages:
+        selected: list[ShippingProfile] = []
+        for package in args.packages:
+            matches = tuple(profile for profile in profiles if profile.package == package)
+            selected.extend(matches or (ShippingProfile(package=package),))
+        profiles = tuple(sorted(set(selected)))
     failures: list[str] = []
-    for package in packages:
-        graph = feature_graph(repo, package)
+    for profile in profiles:
+        graph = feature_graph(
+            repo,
+            profile.package,
+            profile.features,
+            profile.default_features,
+        )
         for forbidden in forbidden_features_in_graph(graph):
-            failures.append(f"{package}: enabled {forbidden}")
-        for required in REQUIRED_FEATURES.get(package, ()):
+            failures.append(f"{profile.label()}: enabled {forbidden}")
+        for unauthorized in unauthorized_root_features_in_graph(
+            graph, profile.package
+        ):
+            failures.append(
+                f"{profile.label()}: enabled unreviewed root feature {unauthorized}"
+            )
+        for required in REQUIRED_FEATURES.get(profile.package, ()):
             if required not in graph:
-                failures.append(f"{package}: missing {required}")
+                failures.append(f"{profile.label()}: missing {required}")
     if failures:
         print("shipping feature graph violations:", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
-    print("shipping feature graphs preserve proof engines and exclude test fixtures")
+    print(
+        "declared shipping feature graphs preserve proof engines and exclude test fixtures"
+    )
     return 0
 
 

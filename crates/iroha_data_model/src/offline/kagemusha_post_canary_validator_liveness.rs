@@ -1488,15 +1488,115 @@ pub(super) mod post_canary_validator_liveness_tests {
         }
     }
 
-    pub fn signed_liveness_evidence_fixture() -> KagemushaV4PostCanaryValidatorLivenessEvidenceV1 {
-        let fixture = Fixture::new();
-        let body = fixture.evidence_body();
-        KagemushaV4PostCanaryValidatorLivenessEvidenceV1::try_sign_with_trust(
-            body,
-            &fixture.issuer,
-            &fixture.trust(),
+    #[cfg(feature = "transparent_api")]
+    /// Build fully verified liveness evidence for another coherent test fixture.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the coherent external fixture builds and verifies all four challenge-bound observations"
+    )]
+    pub fn signed_liveness_evidence_for_fixture(
+        expectations: &KagemushaV4ActivationReceiptExpectationsV1,
+        verified_canary: &KagemushaV4VerifiedTairaCanaryEvidenceV1,
+        canary_anchor: &KagemushaV4PostCanaryValidatorLivenessCanaryAnchorV1,
+        canary_finality_proof: &BridgeFinalityProof,
+        issuer: &KeyPair,
+        validator_keys: &[KeyPair],
+    ) -> KagemushaV4PostCanaryValidatorLivenessEvidenceV1 {
+        let trust = LivenessTrust::from_expectations(
+            expectations,
+            verified_canary,
+            canary_anchor,
+            canary_finality_proof,
         )
-        .expect("signed liveness wire fixture")
+        .expect("coherent external liveness trust");
+        assert_eq!(issuer.public_key(), trust.issuer);
+        assert_eq!(
+            validator_keys.len(),
+            KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT
+        );
+        assert!(
+            validator_keys
+                .iter()
+                .zip(&trust.validator_ids)
+                .all(|(key, validator)| {
+                    PeerId::new(key.public_key().clone()) == validator.clone()
+                })
+        );
+        let genesis_finality_proof = expectations.trusted_finality_anchor();
+        assert_eq!(
+            genesis_finality_proof.block_header.hash(),
+            trust.runtime.genesis_expected_hash,
+        );
+
+        let issued_at_unix_ms = canary_anchor.canary_finalized_block_time_unix_ms + 1;
+        let challenge = KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
+            KagemushaV4PostCanaryValidatorLivenessChallengeBodyV1 {
+                schema: KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_CHALLENGE_BODY_SCHEMA
+                    .to_owned(),
+                version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+                binding: trust.binding.clone(),
+                canary_anchor: canary_anchor.clone(),
+                targets: std::array::from_fn(|index| {
+                    KagemushaV4PostCanaryValidatorLivenessTargetV1 {
+                        validator_id: trust.validator_ids[index].clone(),
+                        canonical_torii_origin: format!("https://validator-{index}.example.test"),
+                    }
+                }),
+                issuer: issuer.public_key().clone(),
+                nonce: [0xA5; 32],
+                issued_at_unix_ms,
+                expires_at_unix_ms: issued_at_unix_ms
+                    + KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_MAX_INTERVAL_MS,
+            },
+            issuer,
+        )
+        .expect("sign coherent external liveness challenge");
+        let endpoint_challenge = challenge
+            .endpoint_challenge()
+            .expect("derive coherent external endpoint challenge");
+        let observations = std::array::from_fn(|index| {
+            let attestation = make_attestation(
+                &validator_keys[index],
+                endpoint_challenge,
+                genesis_finality_proof,
+                canary_finality_proof,
+                trust.runtime,
+            );
+            let attestation_bytes = norito::encode_canonical(&attestation)
+                .expect("canonical coherent external attestation");
+            KagemushaV4PostCanaryValidatorLivenessObservationV1 {
+                schema: KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_OBSERVATION_SCHEMA.to_owned(),
+                version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+                target: challenge.body.targets[index].clone(),
+                request_started_at_unix_ms: issued_at_unix_ms
+                    + 10
+                    + u64::try_from(index).expect("small fixture index"),
+                response_completed_at_unix_ms: issued_at_unix_ms
+                    + 20
+                    + u64::try_from(index).expect("small fixture index"),
+                attestation_response_norito: exact_digest(&attestation_bytes),
+                attestation,
+            }
+        });
+        let evidence = KagemushaV4PostCanaryValidatorLivenessEvidenceV1::try_sign_with_trust(
+            KagemushaV4PostCanaryValidatorLivenessEvidenceBodyV1 {
+                schema: KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_EVIDENCE_BODY_SCHEMA.to_owned(),
+                version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+                challenge,
+                endpoint_challenge,
+                observations,
+                post_canary_finality_proof_chain: Vec::new(),
+            },
+            issuer,
+            &trust,
+        )
+        .expect("sign fully verified external liveness evidence");
+        let evidence_bytes =
+            norito::encode_canonical(&evidence).expect("canonical external liveness evidence");
+        evidence
+            .verify_exact_with_trust(&evidence_bytes, &trust)
+            .expect("external liveness evidence remains fully verifiable");
+        evidence
     }
 
     fn exact_digest(bytes: &[u8]) -> KagemushaExactBytesDigestV1 {

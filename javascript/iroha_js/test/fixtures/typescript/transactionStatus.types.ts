@@ -26,6 +26,7 @@ const rawBrowserStatus: ToriiBrowserTransactionStatusOptions = {
   scope: "global",
 };
 const genericBrowserHttpRequest: ToriiBrowserRequestOptions = {
+  // @ts-expect-error request success status policy is fixed by each route.
   successStatuses: [200, 202],
 };
 const nodePoll: TransactionStatusPollOptions = {

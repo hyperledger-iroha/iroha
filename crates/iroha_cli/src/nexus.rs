@@ -690,7 +690,7 @@ fn format_validator_summary(payload: &Value) -> Result<String> {
     writeln!(
         &mut output,
         "{:<36}  {:<24}  {:<18}  {:<22}  {:<20}  {:<11}",
-        "VALIDATOR", "PEER_ID", "STATUS", "ACTIVATION", "STAKE", "LAST_REWARD"
+        "VALIDATOR", "PEER_ID", "STATUS", "TENURE", "STAKE", "LAST_REWARD"
     )?;
     for entry in entries {
         let row = build_validator_row(entry);
@@ -700,7 +700,7 @@ fn format_validator_summary(payload: &Value) -> Result<String> {
             truncate_field(&row.validator, 36),
             truncate_field(&row.peer_id, 24),
             truncate_field(&row.status, 18),
-            truncate_field(&row.activation, 22),
+            truncate_field(&row.tenure, 22),
             truncate_field(&row.stake, 20),
             truncate_field(&row.last_reward, 11),
         )?;
@@ -759,7 +759,7 @@ struct ValidatorRow {
     validator: String,
     peer_id: String,
     status: String,
-    activation: String,
+    tenure: String,
     stake: String,
     last_reward: String,
 }
@@ -775,7 +775,7 @@ fn build_validator_row(entry: &Map) -> ValidatorRow {
         .unwrap_or("-")
         .to_string();
     let status = validator_status_label(entry.get("status"));
-    let activation = activation_label(entry);
+    let tenure = tenure_label(entry);
     let total_stake = entry
         .get("total_stake")
         .map_or_else(|| "-".to_string(), stringify_value);
@@ -791,7 +791,7 @@ fn build_validator_row(entry: &Map) -> ValidatorRow {
         validator,
         peer_id,
         status,
-        activation,
+        tenure,
         stake,
         last_reward,
     }
@@ -805,21 +805,17 @@ fn validator_status_label(status: Option<&Value>) -> String {
     };
     match kind {
         "PendingActivation" => {
-            let epoch = map
-                .get("activates_at_epoch")
+            let height = map
+                .get("activates_at_height")
                 .and_then(Value::as_u64)
-                .map_or_else(String::new, |v| format!("epoch {v}"));
-            if epoch.is_empty() {
+                .map_or_else(String::new, |v| format!("height {v}"));
+            if height.is_empty() {
                 "Pending".to_string()
             } else {
-                format!("Pending({epoch})")
+                format!("Pending({height})")
             }
         }
         "Active" => "Active".to_string(),
-        "Jailed" => map.get("reason").and_then(Value::as_str).map_or_else(
-            || "Jailed".to_string(),
-            |reason| format!("Jailed({})", truncate_field(reason, 14)),
-        ),
         "Exiting" => map
             .get("releases_at_ms")
             .and_then(Value::as_u64)
@@ -832,19 +828,12 @@ fn validator_status_label(status: Option<&Value>) -> String {
         other => other.to_string(),
     }
 }
-fn activation_label(entry: &Map) -> String {
-    let epoch = entry
-        .get("activation_epoch")
-        .and_then(Value::as_u64)
-        .map(|v| v.to_string());
-    let height = entry
-        .get("activation_height")
-        .and_then(Value::as_u64)
-        .map(|v| v.to_string());
-    match (epoch, height) {
-        (Some(e), Some(h)) => format!("epoch {e} @ {h}"),
-        (Some(e), None) => format!("epoch {e}"),
-        (None, Some(h)) => format!("height {h}"),
+fn tenure_label(entry: &Map) -> String {
+    let activation = entry.get("activation_height").and_then(Value::as_u64);
+    let deactivation = entry.get("deactivation_height").and_then(Value::as_u64);
+    match (activation, deactivation) {
+        (Some(start), Some(end)) => format!("heights [{start}, {end})"),
+        (Some(start), None) => format!("height {start}+"),
         _ => "-".to_string(),
     }
 }
@@ -1088,11 +1077,11 @@ mod tests {
                 "status".into(),
                 Value::Object(Map::from_iter([
                     ("type".into(), Value::from("PendingActivation")),
-                    ("activates_at_epoch".into(), Value::from(2u64)),
+                    ("activates_at_height".into(), Value::from(3601u64)),
                 ])),
             ),
-            ("activation_epoch".into(), Value::from(1u64)),
             ("activation_height".into(), Value::from(3601u64)),
+            ("deactivation_height".into(), Value::from(7201u64)),
             ("last_reward_epoch".into(), Value::Null),
         ]);
         let payload = Value::Object(Map::from_iter([
@@ -1102,8 +1091,8 @@ mod tests {
         ]));
         let summary = format_validator_summary(&payload).expect("format summary");
         assert!(summary.contains(&truncate_field(&validator, 36)));
-        assert!(summary.contains("Pending(epoch 2)"));
-        assert!(summary.contains("epoch 1 @ 3601"));
+        assert!(summary.contains("Pending(height 3601)"));
+        assert!(summary.contains("heights [3601, 7201)"));
         assert!(summary.contains("1000 (self 800)"));
     }
     #[test]

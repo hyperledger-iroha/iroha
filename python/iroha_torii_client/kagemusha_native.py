@@ -8,9 +8,11 @@ from functools import lru_cache
 from typing import Callable
 
 _REQUIRED_BRIDGE_ABI_VERSION = 23
+_REQUIRED_KAGEMUSHA_NATIVE_CONTRACT_REVISION = 1
 _MAX_OPERATION_STATUS_JSON_BYTES = 16 * 1024 * 1024
 _ABI_VERSION_SYMBOL = "connect_norito_bridge_abi_version"
-_STATUS_VALIDATOR_SYMBOL = "connect_norito_kagemusha_offline_operation_status_json_validate_v1"
+_CONTRACT_REVISION_SYMBOL = "connect_norito_kagemusha_native_contract_revision"
+_STATUS_VALIDATOR_SYMBOL = "connect_norito_kagemusha_offline_operation_status_json_validate_v2"
 
 
 @lru_cache(maxsize=1)
@@ -35,13 +37,20 @@ def _native_status_validator() -> Callable[..., int]:
             abi_version = getattr(library, _ABI_VERSION_SYMBOL)
             abi_version.argtypes = ()
             abi_version.restype = ctypes.c_uint32
+            contract_revision = getattr(library, _CONTRACT_REVISION_SYMBOL)
+            contract_revision.argtypes = ()
+            contract_revision.restype = ctypes.c_uint32
             validator = getattr(library, _STATUS_VALIDATOR_SYMBOL)
             validator.argtypes = (
                 ctypes.POINTER(ctypes.c_ubyte),
                 ctypes.c_ulong,
             )
             validator.restype = ctypes.c_int32
-            if abi_version() != _REQUIRED_BRIDGE_ABI_VERSION:
+            if (
+                abi_version() != _REQUIRED_BRIDGE_ABI_VERSION
+                or contract_revision()
+                != _REQUIRED_KAGEMUSHA_NATIVE_CONTRACT_REVISION
+            ):
                 continue
         except (AttributeError, OSError, TypeError):
             continue
@@ -55,7 +64,7 @@ def _native_status_validator() -> Callable[..., int]:
     )
 
 
-def validate_offline_operation_status_json_v1(status_json: bytes) -> None:
+def validate_offline_operation_status_json_v2(status_json: bytes) -> None:
     """Require Rust's exact structural and anchor-digest validation."""
 
     if type(status_json) is not bytes:
@@ -72,4 +81,4 @@ def validate_offline_operation_status_json_v1(status_json: bytes) -> None:
         )
 
 
-__all__ = ["validate_offline_operation_status_json_v1"]
+__all__ = ["validate_offline_operation_status_json_v2"]

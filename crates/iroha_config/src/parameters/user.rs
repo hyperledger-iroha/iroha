@@ -10214,12 +10214,15 @@ pub struct NexusStaking {
     /// Maximum number of validators allowed per lane.
     #[config(default = "defaults::nexus::staking::MAX_VALIDATORS")]
     pub max_validators: NonZeroU32,
+    /// Maximum number of stake-share rows retained for one validator.
+    #[config(default = "defaults::nexus::staking::MAX_STAKE_SHARES_PER_VALIDATOR")]
+    pub max_stake_shares_per_validator: NonZeroU32,
+    /// Maximum number of pending unbond requests retained in one stake share.
+    #[config(default = "defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE")]
+    pub max_pending_unbonds_per_share: NonZeroU32,
     /// Minimum delay between scheduling and finalising an unbond (milliseconds).
     #[config(default = "defaults::nexus::staking::UNBONDING_DELAY.into()")]
     pub unbonding_delay_ms: DurationMs,
-    /// Grace window after `release_at_ms` during which withdrawals must be finalised (milliseconds).
-    #[config(default = "defaults::nexus::staking::WITHDRAW_GRACE.into()")]
-    pub withdraw_grace_ms: DurationMs,
     /// Maximum slash ratio allowed (basis points, 10_000 = 100%).
     #[config(default = "defaults::nexus::staking::MAX_SLASH_BPS")]
     pub max_slash_bps: u16,
@@ -10241,8 +10244,9 @@ impl_default!(NexusStaking {
     restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
     min_validator_stake: defaults::nexus::staking::min_validator_stake(),
     max_validators: defaults::nexus::staking::MAX_VALIDATORS,
+    max_stake_shares_per_validator: defaults::nexus::staking::MAX_STAKE_SHARES_PER_VALIDATOR,
+    max_pending_unbonds_per_share: defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE,
     unbonding_delay_ms: defaults::nexus::staking::UNBONDING_DELAY.into(),
-    withdraw_grace_ms: defaults::nexus::staking::WITHDRAW_GRACE.into(),
     max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
     reward_dust_threshold: defaults::nexus::staking::reward_dust_threshold(),
     stake_asset_id: defaults::nexus::staking::stake_asset_id(),
@@ -10284,8 +10288,9 @@ impl NexusStaking {
             restricted_validator_mode: self.restricted_validator_mode.into(),
             min_validator_stake: self.min_validator_stake,
             max_validators: self.max_validators,
+            max_stake_shares_per_validator: self.max_stake_shares_per_validator,
+            max_pending_unbonds_per_share: self.max_pending_unbonds_per_share,
             unbonding_delay: self.unbonding_delay_ms.get(),
-            withdraw_grace: self.withdraw_grace_ms.get(),
             max_slash_bps: self.max_slash_bps,
             reward_dust_threshold: self.reward_dust_threshold,
             stake_asset_id,
@@ -35776,7 +35781,7 @@ policy_digest_hex = "{policy_digest_hex}"
                 ),
                 (
                     "operation_registry_max_bytes".into(),
-                    Value::Integer(524_288),
+                    Value::Integer(593_920),
                 ),
             ])),
         );
@@ -35853,7 +35858,7 @@ policy_digest_hex = "{policy_digest_hex}"
                 ),
                 (
                     "operation_registry_max_bytes".into(),
-                    Value::Integer(524_288),
+                    Value::Integer(593_920),
                 ),
                 ("enabled".into(), Value::Boolean(false)),
             ])),

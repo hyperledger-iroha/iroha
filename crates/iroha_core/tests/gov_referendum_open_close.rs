@@ -9,7 +9,8 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{
-        GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus, State,
+        GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
+        GovernanceReferendumRecord, GovernanceReferendumStatus, State,
         World, WorldReadOnly,
     },
 };
@@ -18,6 +19,7 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     events::data::governance::GovernanceEvent,
+    isi::governance::GovernancePlainBallotDirectionV1,
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
@@ -39,13 +41,13 @@ fn referendum_open_and_close_by_height() {
     {
         let mut sblock1 = state.block(header1);
         let mut stx1 = sblock1.transaction();
-        stx1.world.governance_referenda_mut().insert(
+        stx1.world.put_governance_referendum_for_testing(
             rid.clone(),
             GovernanceReferendumRecord {
                 h_start: 2,
                 h_end: 3,
                 status: GovernanceReferendumStatus::Proposed,
-                mode: GovernanceReferendumMode::Plain,
+                final_tally: None,
             },
         );
         stx1.apply();
@@ -78,6 +80,12 @@ fn referendum_open_and_close_by_height() {
     }
     // Block H=2: opens.
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let custody = GovernanceLockCustody {
+        escrowed: false,
+        asset_definition_id: state.gov.voting_asset_id.clone(),
+        bond_escrow_account: state.gov.bond_escrow_account.clone(),
+        slash_receiver_account: state.gov.slash_receiver_account.clone(),
+    };
     {
         let mut sblock2 = state.block(header2);
         let has_opened_event_at_h2 = sblock2.world.take_external_events().iter().any(|event| {
@@ -89,9 +97,28 @@ fn referendum_open_and_close_by_height() {
                         iroha_data_model::events::data::DataEvent::Governance(
                             GovernanceEvent::ReferendumOpened(_)
                         )
-                    )
+                )
             )
         });
+        let mut transaction = sblock2.transaction();
+        let mut locks = GovernanceLocksForReferendum::default();
+        locks.locks.insert(
+            iroha_test_samples::ALICE_ID.clone(),
+            GovernanceLockRecord {
+                owner: iroha_test_samples::ALICE_ID.clone(),
+                amount: 0_u64.into(),
+                slashed: 0_u64.into(),
+                expiry_height: 100,
+                direction: GovernancePlainBallotDirectionV1::Aye,
+                duration_blocks: 98,
+                custody,
+            },
+        );
+        transaction
+            .world
+            .governance_locks_mut()
+            .insert(rid.clone(), locks);
+        transaction.apply();
         sblock2
             .commit_empty_block_for_testing()
             .expect("commit block at H=2");
@@ -176,12 +203,20 @@ fn referendum_open_and_close_by_height() {
     sblock4
         .commit_empty_block_for_testing()
         .expect("commit block at H=4");
-    let status_closed_at_h4 = state
-        .view()
+    assert!(has_closed_event_at_h4);
+    let view = state.view();
+    let closed = view
         .world()
         .governance_referenda()
         .get(&rid)
-        .is_some_and(|record| record.status == GovernanceReferendumStatus::Closed);
-    assert!(status_closed_at_h4);
-    assert!(has_closed_event_at_h4 || status_closed_at_h4);
+        .copied()
+        .expect("the outstanding lock must retain the closed referendum");
+    assert_eq!(closed.status, GovernanceReferendumStatus::Closed);
+    assert_eq!(
+        closed
+            .final_tally
+            .expect("PLAIN closure must persist its immutable tally")
+            .counters(),
+        [0, 0, 0]
+    );
 }

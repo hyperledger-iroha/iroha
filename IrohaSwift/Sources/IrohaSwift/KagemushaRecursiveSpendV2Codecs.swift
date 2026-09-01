@@ -439,11 +439,10 @@ public enum KagemushaRecursiveSpendCodecs {
         _ fields: KagemushaRequestAuthorizationFields
     ) throws -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeField(uint16(KagemushaRecursiveSpend.authorizationPreparationVersionV2))
+        writer.writeField(uint16(KagemushaRecursiveSpend.authorizationPreparationVersionV3))
         writer.writeField(try accountID(fields.authority))
         writer.writeField(string(fields.deviceID))
         writer.writeField(try assetDefinitionID(fields.assetDefinitionID))
-        writer.writeField(fields.operationID)
         writer.writeField(uint64(fields.issuedAtMilliseconds))
         writer.writeField(uint64(fields.expiresAtMilliseconds))
         writer.writeField(fields.nonce)
@@ -451,13 +450,13 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(fields.registrationHash)
         writer.writeField(uint32(fields.platform.rawValue))
         return frame(
-            KagemushaRecursiveSpend.authorizationPreparationWireName,
+            KagemushaRecursiveSpend.authorizationPreparationWireNameV3,
             payload: writer.data
         )
     }
 
-    public static func encodeTopUpShieldBuildRequestV4(
-        _ request: KagemushaTopUpShieldBuildRequestV4
+    public static func encodeTopUpShieldBuildRequestV5(
+        _ request: KagemushaTopUpShieldBuildRequestV5
     ) throws -> Data {
         var zeroPath = CompactNoritoWriter()
         zeroPath.writeField(try sequence(request.zeroPath.siblings))
@@ -470,11 +469,11 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(try assetID(request.assetID))
         writer.writeField(try scaledAmount(request.amount))
         writer.writeField(try accountID(request.payer))
-        writer.writeField(request.operationID)
+        writer.writeField(request.nonce)
         writer.writeField(try nestedPayload(
             request.opening.noritoEncoded(),
             schema: KagemushaRecursiveSpend.noteOpeningWireName,
-            field: "topUpShieldBuildRequestV4.opening"
+            field: "topUpShieldBuildRequestV5.opening"
         ))
         writer.writeField(uint32(request.leafIndex))
         writer.writeField(zeroPath.data)
@@ -482,7 +481,7 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(request.shieldVerifierCommitment)
         writer.writeField(artifactBindingV4(request.artifactBinding))
         return frame(
-            KagemushaRecursiveSpend.topUpShieldBuildRequestWireNameV4,
+            KagemushaRecursiveSpend.topUpShieldBuildRequestWireNameV5,
             payload: writer.data
         )
     }

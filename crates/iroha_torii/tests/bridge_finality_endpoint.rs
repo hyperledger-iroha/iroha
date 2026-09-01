@@ -40,11 +40,16 @@ use std::{
 };
 use tower::ServiceExt as _;
 struct EndpointFixture {
-    app: Router,
+    app: iroha_torii::TestApiRouterRuntime,
     network_id: NetworkId,
     block: Arc<SignedBlock>,
     artifact: V2FinalityArtifact,
     kura: Arc<Kura>,
+}
+impl EndpointFixture {
+    async fn shutdown(self) {
+        self.app.shutdown().await;
+    }
 }
 fn checked_bls_validator_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -292,6 +297,7 @@ async fn proof_and_bundle_endpoints_return_the_exact_durable_v2_artifact() {
     bundle_verifier
         .verify_bundle(&bundle)
         .expect("trusted verifier accepts exact endpoint bundle");
+    fixture.shutdown().await;
 }
 #[tokio::test]
 async fn proof_endpoint_survives_body_eviction_via_retained_header_record() {
@@ -319,6 +325,7 @@ async fn proof_endpoint_survives_body_eviction_via_retained_header_record() {
             String::from_utf8_lossy(&bytes)
         );
     }
+    fixture.shutdown().await;
 }
 #[tokio::test]
 async fn proof_and_bundle_endpoints_fail_closed_when_the_sidecar_is_missing() {
@@ -327,6 +334,7 @@ async fn proof_and_bundle_endpoints_fail_closed_when_the_sidecar_is_missing() {
         let (status, _) = get_norito(&fixture.app, uri).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "unexpected status for {uri}");
     }
+    fixture.shutdown().await;
 }
 #[tokio::test]
 async fn proof_and_bundle_endpoints_fail_closed_for_a_malformed_durable_envelope() {
@@ -352,4 +360,5 @@ async fn proof_and_bundle_endpoints_fail_closed_for_a_malformed_durable_envelope
             "malformed durable envelope must fail closed for {uri}"
         );
     }
+    fixture.shutdown().await;
 }

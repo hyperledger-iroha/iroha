@@ -12,6 +12,15 @@ pub mod specialized;
 pub(crate) const TRIGGER_ENABLED_METADATA_KEY: &str = "__enabled";
 /// Internal registration-height metadata used to defer new trigger incarnations.
 pub(crate) const TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY: &str = "__registered_block_height";
+/// Internal authorization mode captured when a data trigger is registered.
+pub(crate) const DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY: &str =
+    "__data_scope_authorization_v1";
+/// Account whose exact global-data-trigger capability authorized registration.
+pub(crate) const DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY: &str =
+    "__data_scope_authorization_grantee_v1";
+const DATA_TRIGGER_SCOPE_AUTHORIZATION_OWNED: u64 = 0;
+const DATA_TRIGGER_SCOPE_AUTHORIZATION_GLOBAL: u64 = 1;
+const DATA_TRIGGER_SCOPE_AUTHORIZATION_GENESIS_GLOBAL: u64 = 2;
 fn trigger_enabled_metadata_key() -> &'static Name {
     static KEY: OnceLock<Name> = OnceLock::new();
     KEY.get_or_init(|| {
@@ -56,6 +65,82 @@ pub(crate) fn trigger_was_registered_before_block(
         .and_then(|json| json.try_into_any_norito::<u64>().ok())
         .is_some_and(|height| height < current_block_height)
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DataTriggerScopeAuthorization {
+    Owned,
+    GlobalPermission(AccountId),
+    GenesisGlobal,
+}
+
+fn data_trigger_scope_authorization_key() -> &'static Name {
+    static KEY: OnceLock<Name> = OnceLock::new();
+    KEY.get_or_init(|| {
+        DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY
+            .parse()
+            .expect("data-trigger scope authorization key must be valid")
+    })
+}
+
+fn data_trigger_scope_authorization_grantee_key() -> &'static Name {
+    static KEY: OnceLock<Name> = OnceLock::new();
+    KEY.get_or_init(|| {
+        DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY
+            .parse()
+            .expect("data-trigger scope authorization grantee key must be valid")
+    })
+}
+
+fn decode_data_trigger_scope_authorization(
+    metadata: &Metadata,
+) -> Option<DataTriggerScopeAuthorization> {
+    let mode = metadata
+        .get(data_trigger_scope_authorization_key())?
+        .clone()
+        .try_into_any_norito::<u64>()
+        .ok()?;
+    let grantee = metadata.get(data_trigger_scope_authorization_grantee_key());
+    match mode {
+        DATA_TRIGGER_SCOPE_AUTHORIZATION_OWNED if grantee.is_none() => {
+            Some(DataTriggerScopeAuthorization::Owned)
+        }
+        DATA_TRIGGER_SCOPE_AUTHORIZATION_GLOBAL => {
+            let grantee = grantee?
+                .clone()
+                .try_into_any_norito::<String>()
+                .ok()?
+                .parse()
+                .ok()?;
+            Some(DataTriggerScopeAuthorization::GlobalPermission(grantee))
+        }
+        DATA_TRIGGER_SCOPE_AUTHORIZATION_GENESIS_GLOBAL if grantee.is_none() => {
+            Some(DataTriggerScopeAuthorization::GenesisGlobal)
+        }
+        _ => None,
+    }
+}
+
+/// Return whether stored data-trigger authorization metadata has the canonical v1 shape.
+pub(crate) fn data_trigger_scope_authorization_is_well_formed(metadata: &Metadata) -> bool {
+    decode_data_trigger_scope_authorization(metadata).is_some()
+}
+
+#[cfg(test)]
+pub(crate) fn data_trigger_scope_metadata_for_testing(genesis_global: bool) -> Metadata {
+    use iroha_primitives::json::Json;
+
+    let mut metadata = Metadata::default();
+    let mode = if genesis_global {
+        DATA_TRIGGER_SCOPE_AUTHORIZATION_GENESIS_GLOBAL
+    } else {
+        DATA_TRIGGER_SCOPE_AUTHORIZATION_OWNED
+    };
+    metadata.insert(
+        data_trigger_scope_authorization_key().clone(),
+        Json::new(mode),
+    );
+    metadata
+}
 /// All instructions related to triggers.
 /// - registering a trigger and validating the declared authority against
 ///   `CanRegisterTrigger{authority: ...}` permissions
@@ -68,9 +153,11 @@ pub mod isi {
         isi::error::{InvalidParameterError, RepetitionError},
         name::Name,
     };
-    const RESERVED_TRIGGER_METADATA_KEYS: [&str; 2] = [
+    const RESERVED_TRIGGER_METADATA_KEYS: [&str; 4] = [
         TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY,
         "__registered_at_ms",
+        DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY,
+        DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY,
     ];
     pub(super) const MAX_DATA_TRIGGERS_PER_AUTHORITY: usize = 64;
     pub(super) const MAX_DATA_TRIGGERS_TOTAL: usize = 4_096;
@@ -177,27 +264,34 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         submitting_authority: &AccountId,
         trigger: &Trigger,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<DataTriggerScopeAuthorization>, Error> {
         let EventFilterBox::Data(filter) = trigger.action().filter() else {
-            return Ok(());
+            return Ok(None);
         };
         let trigger_authority = trigger.action().authority();
         let is_genesis = state_transaction._curr_block.is_genesis();
-        if !is_genesis
-            && !account_owns_data_trigger_scope(state_transaction, trigger_authority, filter)
-            && !has_exact_global_data_trigger_permission(
-                state_transaction,
-                submitting_authority,
-                trigger_authority,
-            )
-        {
+        let authorization = if account_owns_data_trigger_scope(
+            state_transaction,
+            trigger_authority,
+            filter,
+        ) {
+            DataTriggerScopeAuthorization::Owned
+        } else if has_exact_global_data_trigger_permission(
+            state_transaction,
+            submitting_authority,
+            trigger_authority,
+        ) {
+            DataTriggerScopeAuthorization::GlobalPermission(submitting_authority.clone())
+        } else if is_genesis {
+            DataTriggerScopeAuthorization::GenesisGlobal
+        } else {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "data trigger filter exceeds the trigger authority's exact owned scope; CanRegisterGlobalDataTrigger is required"
                         .into(),
                 ),
             ));
-        }
+        };
         let triggers = state_transaction.world.triggers.data_triggers();
         if triggers.len() >= MAX_DATA_TRIGGERS_TOTAL {
             return Err(Error::InvalidParameter(
@@ -217,7 +311,34 @@ pub mod isi {
                 )),
             ));
         }
-        Ok(())
+        Ok(Some(authorization))
+    }
+
+    /// Revalidate the immutable authorization corridor captured at registration.
+    ///
+    /// Missing or malformed metadata fails closed. Owned scopes follow current
+    /// ownership; global scopes follow the exact capability holder recorded at
+    /// registration; only genesis may create the immutable global override.
+    pub(crate) fn data_trigger_scope_is_currently_authorized(
+        state_transaction: &StateTransaction<'_, '_>,
+        action: &super::specialized::LoadedAction<DataEventFilter>,
+    ) -> bool {
+        match decode_data_trigger_scope_authorization(action.metadata()) {
+            Some(DataTriggerScopeAuthorization::Owned) => account_owns_data_trigger_scope(
+                state_transaction,
+                action.authority(),
+                &action.filter,
+            ),
+            Some(DataTriggerScopeAuthorization::GlobalPermission(grantee)) => {
+                has_exact_global_data_trigger_permission(
+                    state_transaction,
+                    &grantee,
+                    action.authority(),
+                )
+            }
+            Some(DataTriggerScopeAuthorization::GenesisGlobal) => true,
+            None => false,
+        }
     }
     pub(super) fn ensure_metadata_key_is_not_reserved(key: &Name) -> Result<(), Error> {
         if RESERVED_TRIGGER_METADATA_KEYS
@@ -438,7 +559,8 @@ pub mod isi {
                 .smart_contract()
                 .fuel(),
         )?;
-        enforce_data_trigger_scope_and_capacity(state_transaction, authority, &new_trigger)?;
+        let data_scope_authorization =
+            enforce_data_trigger_scope_and_capacity(state_transaction, authority, &new_trigger)?;
         {
             // Enforce minimal permission: only genesis block, the trigger owner,
             // an account with CanRegisterTrigger{authority: <owner>}, or the
@@ -580,6 +702,29 @@ pub mod isi {
             let mut metadata = new_trigger.action().clone().metadata;
             metadata.insert(key_height, Json::from(height));
             metadata.insert(key_time, Json::from(created_ms));
+            if let Some(authorization) = data_scope_authorization {
+                let (mode, grantee) = match authorization {
+                    DataTriggerScopeAuthorization::Owned => {
+                        (DATA_TRIGGER_SCOPE_AUTHORIZATION_OWNED, None)
+                    }
+                    DataTriggerScopeAuthorization::GlobalPermission(grantee) => {
+                        (DATA_TRIGGER_SCOPE_AUTHORIZATION_GLOBAL, Some(grantee))
+                    }
+                    DataTriggerScopeAuthorization::GenesisGlobal => {
+                        (DATA_TRIGGER_SCOPE_AUTHORIZATION_GENESIS_GLOBAL, None)
+                    }
+                };
+                metadata.insert(
+                    data_trigger_scope_authorization_key().clone(),
+                    Json::new(mode),
+                );
+                if let Some(grantee) = grantee {
+                    metadata.insert(
+                        data_trigger_scope_authorization_grantee_key().clone(),
+                        Json::new(grantee.to_string()),
+                    );
+                }
+            }
             let action = new_trigger.action().clone().with_metadata(metadata);
             new_trigger = Trigger::new(new_trigger.id().clone(), action);
         }
@@ -1377,6 +1522,20 @@ mod tests {
             .expect("valid data-trigger action"),
         )
     }
+    fn by_call_trigger(id: TriggerId, authority: AccountId) -> Trigger {
+        Trigger::new(
+            id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Indefinitely,
+                authority.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(id)
+                    .under_authority(authority),
+            )
+            .expect("valid by-call trigger action"),
+        )
+    }
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -1494,6 +1653,171 @@ mod tests {
         ))
         .execute(&ALICE_ID, &mut next)
         .expect("the exact global capability authorizes global scope");
+    }
+    #[test]
+    fn data_trigger_scope_recheck_blocks_reused_trigger_id() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let block = new_dummy_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        for account in [ALICE_ID.clone(), BOB_ID.clone()] {
+            Register::account(Account::new(account))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account");
+        }
+        stx._curr_block
+            .set_height(NonZeroU64::new(2).expect("nonzero height"));
+        let target_id: TriggerId = "scope_reuse_target".parse().expect("valid trigger id");
+        Register::trigger(by_call_trigger(target_id.clone(), ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register Alice-owned target");
+        let watcher = data_trigger(
+            "scope_reuse_watcher",
+            ALICE_ID.clone(),
+            TriggerEventFilter::new()
+                .for_trigger(target_id.clone())
+                .for_events(TriggerEventSet::MetadataInserted),
+        );
+        Register::trigger(watcher)
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register exact owned watcher");
+        Unregister::trigger(target_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("remove Alice-owned target");
+        Register::trigger(by_call_trigger(target_id.clone(), BOB_ID.clone()))
+            .execute(&BOB_ID, &mut stx)
+            .expect("reuse target id under Bob");
+        stx.world.internal_event_buf.clear();
+        let key: Name = "safe_after_reuse".parse().expect("valid metadata key");
+        SetKeyValue::trigger(target_id.clone(), key.clone(), Json::new(true))
+            .execute(&BOB_ID, &mut stx)
+            .expect("update Bob-owned replacement");
+        let steps = stx
+            .execute_data_triggers_dfs(&BOB_ID)
+            .expect("stale watcher must be skipped, not fail the transaction");
+        assert!(steps.is_empty(), "stale owner watcher must not fire");
+        let stored = stx
+            .world
+            .triggers
+            .inspect_by_id(&target_id, |action| action.metadata().get(&key).cloned())
+            .flatten();
+        assert_eq!(stored, Some(Json::new(true)));
+    }
+    #[test]
+    fn data_trigger_scope_recheck_follows_domain_ownership() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let block = new_dummy_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        for account in [ALICE_ID.clone(), BOB_ID.clone()] {
+            Register::account(Account::new(account))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account");
+        }
+        let domain_id = DomainId::try_new("scope_transfer", "universal").expect("valid domain");
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register Alice-owned domain");
+        stx._curr_block
+            .set_height(NonZeroU64::new(2).expect("nonzero height"));
+        Register::trigger(data_trigger(
+            "scope_transfer_watcher",
+            ALICE_ID.clone(),
+            DomainEventFilter::new()
+                .for_domain(domain_id.clone())
+                .for_events(DomainEventSet::MetadataInserted),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register exact owned domain watcher");
+        Transfer::domain(ALICE_ID.clone(), domain_id.clone(), BOB_ID.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("transfer domain to Bob");
+        stx.world.internal_event_buf.clear();
+        let key: Name = "safe_after_transfer".parse().expect("valid metadata key");
+        SetKeyValue::domain(domain_id.clone(), key.clone(), Json::new(true))
+            .execute(&BOB_ID, &mut stx)
+            .expect("update transferred domain");
+        let steps = stx
+            .execute_data_triggers_dfs(&BOB_ID)
+            .expect("former owner's watcher must be skipped");
+        assert!(steps.is_empty(), "former owner's watcher must not fire");
+        assert_eq!(
+            stx.world
+                .domain(&domain_id)
+                .expect("domain remains registered")
+                .metadata()
+                .get(&key),
+            Some(&Json::new(true))
+        );
+    }
+    #[test]
+    fn global_data_trigger_stops_immediately_when_exact_capability_is_revoked() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let block = new_dummy_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register Alice");
+        let capability: Permission =
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: ALICE_ID.clone(),
+            }
+            .into();
+        Grant::account_permission(capability.clone(), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("seed exact global capability");
+        stx._curr_block
+            .set_height(NonZeroU64::new(2).expect("nonzero height"));
+        Register::trigger(data_trigger(
+            "revocable_global_watcher",
+            ALICE_ID.clone(),
+            DataEventFilter::Any,
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register capability-backed global watcher");
+        Revoke::account_permission(capability.clone(), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("revoke exact global capability");
+        stx.world.internal_event_buf.clear();
+        Register::domain(Domain::new(
+            DomainId::try_new("revoked_scope", "universal").expect("valid domain"),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("emit data event after revocation");
+        assert!(
+            stx.execute_data_triggers_dfs(&ALICE_ID)
+                .expect("revoked watcher must be skipped")
+                .is_empty(),
+            "revoked global watcher must not fire"
+        );
+        Grant::account_permission(capability, ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("restore exact global capability");
+        stx.world.internal_event_buf.clear();
+        Register::domain(Domain::new(
+            DomainId::try_new("restored_scope", "universal").expect("valid domain"),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("emit data event after restoration");
+        assert_eq!(
+            stx.execute_data_triggers_dfs(&ALICE_ID)
+                .expect("restored watcher may fire")
+                .len(),
+            1
+        );
     }
     #[test]
     fn data_trigger_authority_capacity_rejects_the_sixty_fifth_registration() {
@@ -2889,15 +3213,22 @@ mod tests {
     }
     #[test]
     fn reserved_trigger_metadata_key_is_rejected() {
-        let key: Name = "__registered_block_height".parse().expect("valid name");
-        let err = isi::ensure_metadata_key_is_not_reserved(&key).expect_err("key must be rejected");
-        assert!(
-            matches!(
-                err,
-                Error::InvalidParameter(InvalidParameterError::SmartContract(_))
-            ),
-            "unexpected error variant: {err:?}"
-        );
+        for raw in [
+            "__registered_block_height",
+            DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY,
+            DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY,
+        ] {
+            let key: Name = raw.parse().expect("valid name");
+            let err =
+                isi::ensure_metadata_key_is_not_reserved(&key).expect_err("key must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(_))
+                ),
+                "unexpected error variant for {raw}: {err:?}"
+            );
+        }
     }
     #[test]
     fn custom_trigger_metadata_key_is_allowed() {

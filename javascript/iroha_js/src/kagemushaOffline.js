@@ -6,10 +6,12 @@
  */
 
 import { blake2b256 } from "./blake2b.js";
+import { crc64Xz } from "./crc64Xz.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import { validateNoritoFrame } from "./norito.js";
 
 export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 23;
+export const KAGEMUSHA_REQUIRED_NATIVE_CONTRACT_REVISION = 1;
 export const KAGEMUSHA_MANIFEST_VERSION = 4;
 export const KAGEMUSHA_MAX_HOPS = 8;
 export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1";
@@ -17,7 +19,7 @@ export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 512 * 1024;
 export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES = 48 * 1024 * 1024;
 
 const HASH_32 = /^[0-9a-f]{63}[13579bdf]$/u;
-const OPERATION_ID = /^(?!0{64}$)[0-9a-f]{64}$/u;
+const OPERATION_ID = HASH_32;
 const ERROR_CODE = /^[a-z0-9][a-z0-9_]{0,63}$/u;
 const POSITIVE_DECIMAL = /^[0-9]+$/u;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
@@ -33,6 +35,23 @@ const REDEEM_AUTHORIZATION_FIELD_INDEX = 9;
 const REQUEST_AUTHORIZATION_FIELD_COUNT = 10;
 const REQUEST_AUTHORIZATION_OPERATION_ID_FIELD_INDEX = 3;
 const REQUEST_AUTHORIZATION_ISSUED_AT_FIELD_INDEX = 4;
+const REQUEST_AUTHORIZATION_EXPIRES_AT_FIELD_INDEX = 5;
+const REQUEST_AUTHORIZATION_NONCE_FIELD_INDEX = 6;
+const KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS = 5n * 60n * 1000n;
+const KAGEMUSHA_OPERATION_REQUEST_DIGEST_DOMAIN_V4 = new TextEncoder().encode(
+  "iroha:offline:kagemusha:operation-request:v4\0",
+);
+const KAGEMUSHA_OPERATION_ID_DOMAIN_V4 = new TextEncoder().encode(
+  "iroha:offline:kagemusha:operation-id:v4\0",
+);
+const KAGEMUSHA_OPERATION_AUTHORITY_DOMAIN_V4 = new TextEncoder().encode(
+  "iroha:offline:kagemusha:operation-outcome-authority:v4\0",
+);
+const ACCOUNT_ID_SCHEMA_NAME = "iroha_data_model::account::model::AccountId";
+const ACCOUNT_ID_SCHEMA_HASH = Uint8Array.from([
+  0x60, 0xe8, 0x14, 0x73, 0xae, 0xd0, 0xa1, 0x27,
+  0x6f, 0x1c, 0x57, 0x76, 0xd0, 0xf6, 0x9c, 0x38,
+]);
 const KAGEMUSHA_TOP_UP_ANCHOR_WITNESS_KEY_TAG = 0xd2;
 const KAGEMUSHA_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16;
 const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES = 16 * 1024 * 1024;
@@ -171,11 +190,60 @@ function hexBytes(value) {
   return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function u64Le(value) {
+  const result = new Uint8Array(8);
+  new DataView(result.buffer).setBigUint64(0, BigInt(value), true);
+  return result;
+}
+
+function concatBytes(...chunks) {
+  const length = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+function irohaHashHex(...chunks) {
+  const digest = blake2b256(concatBytes(...chunks));
+  digest[digest.length - 1] |= 1;
+  return hexBytes(digest);
+}
+
+function canonicalAccountIdArchive(payload, context) {
+  if (payload.byteLength === 0) {
+    throw new TypeError(`${context} must contain a canonical AccountId payload`);
+  }
+  const archive = new Uint8Array(40 + payload.byteLength);
+  archive.set([0x4e, 0x52, 0x54, 0x30], 0);
+  archive.set(ACCOUNT_ID_SCHEMA_HASH, 6);
+  const view = new DataView(archive.buffer);
+  view.setBigUint64(23, BigInt(payload.byteLength), true);
+  view.setBigUint64(31, crc64Xz(payload), true);
+  archive[39] = 0x02;
+  archive.set(payload, 40);
+  const frame = validateNoritoFrame(archive, {
+    context,
+    expectedTypeName: ACCOUNT_ID_SCHEMA_NAME,
+    expectedPaddingLength: 0,
+    requireNonEmptyPayload: true,
+  });
+  if (frame.flags !== 0x02 || hexBytes(frame.payload) !== hexBytes(payload)) {
+    throw new TypeError(`${context} was not a self-consistent canonical AccountId frame`);
+  }
+  return archive;
+}
+
 function requestIdentityFromCompactRequest(
   payload,
   fieldCount,
   operationIdFieldIndex,
   authorizationFieldIndex,
+  requestArchive,
+  kind,
   context,
 ) {
   const fields = compactFields(payload, fieldCount, context);
@@ -189,7 +257,6 @@ function requestIdentityFromCompactRequest(
       `${context}.field[${operationIdFieldIndex}] must contain one non-zero 32-byte operation id`,
     );
   }
-  const operationId = hexBytes(operationIdField);
   const authorizationFields = compactFields(
     fields[authorizationFieldIndex],
     REQUEST_AUTHORIZATION_FIELD_COUNT,
@@ -198,11 +265,28 @@ function requestIdentityFromCompactRequest(
   const authorizationOperationId = authorizationFields[
     REQUEST_AUTHORIZATION_OPERATION_ID_FIELD_INDEX
   ];
+  const authorityArchive = canonicalAccountIdArchive(
+    authorizationFields[0],
+    `${context}.authorization.authority`,
+  );
+  const nonce = authorizationFields[REQUEST_AUTHORIZATION_NONCE_FIELD_INDEX];
+  if (nonce.length !== 32 || nonce.every((byte) => byte === 0)) {
+    throw new TypeError(`${context}.authorization nonce must be exactly 32 non-zero bytes`);
+  }
+  const operationId = irohaHashHex(
+    KAGEMUSHA_OPERATION_ID_DOMAIN_V4,
+    u64Le(authorityArchive.byteLength),
+    authorityArchive,
+    nonce,
+  );
   if (
     authorizationOperationId.length !== 32 ||
-    hexBytes(authorizationOperationId) !== operationId
+    hexBytes(authorizationOperationId) !== operationId ||
+    hexBytes(operationIdField) !== operationId
   ) {
-    throw new TypeError(`${context}.authorization operation id must match the request operation id`);
+    throw new TypeError(
+      `${context} operation ids must equal the canonical authority-and-nonce derivation`,
+    );
   }
   const issuedAtField = authorizationFields[REQUEST_AUTHORIZATION_ISSUED_AT_FIELD_INDEX];
   if (issuedAtField.length !== 8) {
@@ -217,7 +301,37 @@ function requestIdentityFromCompactRequest(
     `${context}.authorization issued_at_ms`,
     { positive: true },
   );
-  return { operationId, issuedAtMs };
+  const expiresAtField = authorizationFields[REQUEST_AUTHORIZATION_EXPIRES_AT_FIELD_INDEX];
+  if (expiresAtField.length !== 8) {
+    throw new TypeError(`${context}.authorization expires_at_ms must be one canonical u64`);
+  }
+  let expiresAtInteger = 0n;
+  for (let index = 0; index < expiresAtField.length; index += 1) {
+    expiresAtInteger |= BigInt(expiresAtField[index]) << (8n * BigInt(index));
+  }
+  const expiresAtMs = losslessU64(
+    expiresAtInteger,
+    `${context}.authorization expires_at_ms`,
+    { positive: true },
+  );
+  const identity = normalizeKagemushaOperationIdentity({
+    operation_id: operationId,
+    request_authority_digest: irohaHashHex(
+      KAGEMUSHA_OPERATION_AUTHORITY_DOMAIN_V4,
+      u64Le(authorityArchive.byteLength),
+      authorityArchive,
+    ),
+    canonical_request_digest: irohaHashHex(
+      KAGEMUSHA_OPERATION_REQUEST_DIGEST_DOMAIN_V4,
+      new TextEncoder().encode(kind),
+      u64Le(requestArchive.byteLength),
+      requestArchive,
+    ),
+    kind: { kind, value: null },
+    issued_at_ms: issuedAtMs,
+    expires_at_ms: expiresAtMs,
+  }, `${context}.identity`);
+  return identity;
 }
 
 function hash32(value, context, { nonzero = false } = {}) {
@@ -232,6 +346,64 @@ function jsonSnapshot(value) {
     return structuredClone(value);
   }
   return JSON.parse(JSON.stringify(value));
+}
+
+function deepFreeze(value) {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function normalizeKagemushaOperationIdentity(value, context) {
+  const item = exactFields(value, context, [
+    "operation_id",
+    "request_authority_digest",
+    "canonical_request_digest",
+    "kind",
+    "issued_at_ms",
+    "expires_at_ms",
+  ]);
+  const issuedAtMs = losslessU64(item.issued_at_ms, `${context}.issued_at_ms`, {
+    positive: true,
+  });
+  const expiresAtMs = losslessU64(item.expires_at_ms, `${context}.expires_at_ms`, {
+    positive: true,
+  });
+  const issued = BigInt(issuedAtMs);
+  const expires = BigInt(expiresAtMs);
+  if (expires <= issued || expires - issued > KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS) {
+    throw new TypeError(
+      `${context}.expires_at_ms must be after issued_at_ms with a maximum 300000ms lifetime`,
+    );
+  }
+  return deepFreeze({
+    operation_id: normalizeKagemushaOperationId(
+      item.operation_id,
+      `${context}.operation_id`,
+    ),
+    request_authority_digest: hash32(
+      item.request_authority_digest,
+      `${context}.request_authority_digest`,
+    ),
+    canonical_request_digest: hash32(
+      item.canonical_request_digest,
+      `${context}.canonical_request_digest`,
+    ),
+    kind: { kind: taggedKind(item.kind, `${context}.kind`), value: null },
+    issued_at_ms: issuedAtMs,
+    expires_at_ms: expiresAtMs,
+  });
+}
+
+function operationIdentityEqual(left, right) {
+  return left.operation_id === right.operation_id &&
+    left.request_authority_digest === right.request_authority_digest &&
+    left.canonical_request_digest === right.canonical_request_digest &&
+    left.kind.kind === right.kind.kind &&
+    left.issued_at_ms === right.issued_at_ms &&
+    left.expires_at_ms === right.expires_at_ms;
 }
 
 export function normalizeKagemushaOperationId(value, context = "operationId") {
@@ -295,6 +467,7 @@ function normalizeKagemushaNoritoRequestV4(
   fieldCount,
   operationIdFieldIndex,
   authorizationFieldIndex,
+  kind,
   context,
 ) {
   const item = exactFields(value, context, ["version", "norito"]);
@@ -315,8 +488,7 @@ function normalizeKagemushaNoritoRequestV4(
   ) {
     throw new TypeError(`${context}.norito must be a bounded canonical Norito archive`);
   }
-  let operationId;
-  let issuedAtMs;
+  let identity;
   try {
     const frame = validateNoritoFrame(archive, {
       context: `${context}.norito`,
@@ -329,13 +501,15 @@ function normalizeKagemushaNoritoRequestV4(
         `${context}.norito must use canonical compact-length layout flags`,
       );
     }
-    ({ operationId, issuedAtMs } = requestIdentityFromCompactRequest(
+    identity = requestIdentityFromCompactRequest(
       frame.payload,
       fieldCount,
       operationIdFieldIndex,
       authorizationFieldIndex,
+      archive,
+      kind,
       `${context}.norito payload`,
-    ));
+    );
   } catch (error) {
     throw new TypeError(
       `${context}.norito must be a schema-bound canonical Norito archive: ${error.message}`,
@@ -344,8 +518,7 @@ function normalizeKagemushaNoritoRequestV4(
   }
   return Object.freeze({
     version: KAGEMUSHA_MANIFEST_VERSION,
-    operationId,
-    issuedAtMs,
+    identity,
     norito: new Uint8Array(archive),
   });
 }
@@ -361,6 +534,7 @@ export function normalizeKagemushaTopUpRequestV4(
     TOP_UP_REQUEST_FIELD_COUNT,
     TOP_UP_OPERATION_ID_FIELD_INDEX,
     TOP_UP_AUTHORIZATION_FIELD_INDEX,
+    "top_up",
     context,
   );
 }
@@ -376,6 +550,7 @@ export function normalizeKagemushaRedeemRequestV4(
     REDEEM_REQUEST_FIELD_COUNT,
     REDEEM_OPERATION_ID_FIELD_INDEX,
     REDEEM_AUTHORIZATION_FIELD_INDEX,
+    "redeem",
     context,
   );
 }
@@ -401,32 +576,25 @@ function normalizeAcceptedKagemushaOperationReference(
   context = "Accepted Kagemusha operation reference",
 ) {
   const item = exactFields(payload, context, [
-    "operation_id",
-    "kind",
+    "identity",
     "state",
     "transaction_hash",
     "status_uri",
-    "submitted_at_ms",
   ]);
-  const operationId = normalizeKagemushaOperationId(
-    item.operation_id,
-    `${context}.operation_id`,
+  const identity = normalizeKagemushaOperationIdentity(
+    item.identity,
+    `${context}.identity`,
   );
-  const kind = taggedKind(item.kind, `${context}.kind`);
   taggedPending(item.state, `${context}.state`);
-  const statusUri = `/v1/offline/operations/${operationId}`;
+  const statusUri = `/v1/offline/operations/${identity.operation_id}`;
   if (item.status_uri !== statusUri) {
     throw new TypeError(`${context}.status_uri does not match its operation_id`);
   }
-  return Object.freeze({
-    operation_id: operationId,
-    kind: Object.freeze({ kind, value: null }),
-    state: Object.freeze({ state: "pending", value: null }),
+  return deepFreeze({
+    identity,
+    state: { state: "pending", value: null },
     transaction_hash: hash32(item.transaction_hash, `${context}.transaction_hash`),
     status_uri: statusUri,
-    submitted_at_ms: losslessU64(item.submitted_at_ms, `${context}.submitted_at_ms`, {
-      positive: true,
-    }),
   });
 }
 
@@ -443,35 +611,25 @@ export function normalizeKagemushaOperationReference(
     jsonSnapshot(record(expected, expectedContext)),
     expectedContext,
     [
-      "expectedOperationId",
-      "expectedKind",
-      "expectedSubmittedAtMs",
+      "expectedIdentity",
       "location",
       "retryAfter",
     ],
   );
   const {
-    expectedOperationId,
-    expectedKind,
-    expectedSubmittedAtMs,
+    expectedIdentity,
     location,
     retryAfter,
   } = detachedExpected;
+  const normalizedExpectedIdentity = normalizeKagemushaOperationIdentity(
+    expectedIdentity,
+    `${expectedContext}.expectedIdentity`,
+  );
   if (
-    normalized.operation_id !== expectedOperationId ||
-    normalized.kind.kind !== expectedKind ||
+    !operationIdentityEqual(normalized.identity, normalizedExpectedIdentity) ||
     location !== normalized.status_uri
   ) {
     throw new TypeError(`${context} does not match the submitted V4 command`);
-  }
-  if (
-    normalized.submitted_at_ms !== losslessU64(
-      expectedSubmittedAtMs,
-      `${expectedContext}.expectedSubmittedAtMs`,
-      { positive: true },
-    )
-  ) {
-    throw new TypeError(`${context}.submitted_at_ms does not match the signed request`);
   }
   if (
     typeof retryAfter !== "string" ||
@@ -835,10 +993,9 @@ function normalizeAppliedResult(value, operationId, context) {
 
 /**
  * Normalize one status against the accepted operation identity.
- * The operation id, kind, and status URI remain fixed, while an exact retry or
- * a foreign-authority global Applied winner may advance the transaction hash.
- * Pending may advance only the active carrier hash; its submission timestamp
- * remains bound to the immutable signed request.
+ * The complete nested request identity and status URI remain fixed, while an
+ * exact retry or a foreign-authority global Applied winner may advance the
+ * transaction hash. Pending may advance only that active carrier hash.
  * Applied top-ups reach this projection only after the exact response bytes
  * pass the native ABI-23 structural validator. JavaScript then independently
  * checks the anchor path and execution post-state projection; Commit-QC
@@ -860,52 +1017,36 @@ function normalizeKagemushaOperationStatusCore(
   const expected = normalizeAcceptedKagemushaOperationReference(detachedReference);
   const item = exactFields(detachedPayload, context, ["state", "value"]);
   const value = record(item.value, `${context}.value`);
-  const operationId = normalizeKagemushaOperationId(
-    value.operation_id,
-    `${context}.value.operation_id`,
+  // Validate the complete immutable identity before reading any state-specific
+  // cursor, result, or error fields.
+  const identity = normalizeKagemushaOperationIdentity(
+    value.identity,
+    `${context}.value.identity`,
   );
-  if (operationId !== expected.operation_id) {
+  if (!operationIdentityEqual(identity, expected.identity)) {
     throw new TypeError(
-      `${context}.value.operation_id does not match the accepted operation reference`,
+      `${context}.value.identity does not match the accepted operation reference`,
     );
   }
   if (item.state === "pending") {
     exactFields(value, `${context}.value`, [
-      "operation_id",
-      "kind",
+      "identity",
       "transaction_hash",
-      "submitted_at_ms",
     ]);
-    const kind = taggedKind(value.kind, `${context}.value.kind`);
     const transactionHash = hash32(
       value.transaction_hash,
       `${context}.value.transaction_hash`,
     );
-    const submittedAtMs = losslessU64(
-      value.submitted_at_ms,
-      `${context}.value.submitted_at_ms`,
-      { positive: true },
-    );
-    if (
-      kind !== expected.kind.kind ||
-      submittedAtMs !== expected.submitted_at_ms
-    ) {
-      throw new TypeError(
-        `${context}.value does not match the accepted operation reference`,
-      );
-    }
-    return Object.freeze({
+    return deepFreeze({
       state: "pending",
-      value: Object.freeze({
-        operation_id: operationId,
-        kind: Object.freeze({ kind, value: null }),
+      value: {
+        identity,
         transaction_hash: transactionHash,
-        submitted_at_ms: submittedAtMs,
-      }),
+      },
     });
   }
   if (item.state === "applied") {
-    exactFields(value, `${context}.value`, ["operation_id", "result"]);
+    exactFields(value, `${context}.value`, ["identity", "result"]);
     const taggedResult = record(value.result, `${context}.value.result`);
     if (taggedResult.kind === "top_up" && !nativeValidatedAppliedTopUp) {
       throw new TypeError(
@@ -914,28 +1055,27 @@ function normalizeKagemushaOperationStatusCore(
     }
     const result = normalizeAppliedResult(
       value.result,
-      operationId,
+      identity.operation_id,
       `${context}.value.result`,
     );
-    if (result.kind !== expected.kind.kind) {
+    if (result.kind !== identity.kind.kind) {
       throw new TypeError(
         `${context}.value.result does not match the accepted operation reference`,
       );
     }
-    return Object.freeze({
+    return deepFreeze({
       state: "applied",
-      value: Object.freeze({
-        operation_id: operationId,
+      value: {
+        identity,
         result,
-      }),
+      },
     });
   }
   if (item.state !== "rejected") {
     throw new TypeError(`${context}.state must be pending, applied, or rejected`);
   }
   exactFields(value, `${context}.value`, [
-    "operation_id",
-    "kind",
+    "identity",
     "transaction_hash",
     "error",
   ]);
@@ -964,24 +1104,17 @@ function normalizeKagemushaOperationStatusCore(
   if (hasDetails) {
     normalizedError.details = record(error.details, `${context}.value.error.details`);
   }
-  const kind = taggedKind(value.kind, `${context}.value.kind`);
   const transactionHash = hash32(
     value.transaction_hash,
     `${context}.value.transaction_hash`,
   );
-  if (kind !== expected.kind.kind) {
-    throw new TypeError(
-      `${context}.value does not match the accepted operation reference`,
-    );
-  }
-  return Object.freeze({
+  return deepFreeze({
     state: "rejected",
-    value: Object.freeze({
-      operation_id: operationId,
-      kind: Object.freeze({ kind, value: null }),
+    value: {
+      identity,
       transaction_hash: transactionHash,
-      error: Object.freeze(normalizedError),
-    }),
+      error: normalizedError,
+    },
   });
 }
 
@@ -1025,11 +1158,11 @@ export function _normalizeKagemushaOperationStatusWithNativeValidation(
   }
   const validator = Object.getOwnPropertyDescriptor(
     nativeBinding ?? {},
-    "kagemushaOfflineOperationStatusJsonValidateV1",
+    "kagemushaOfflineOperationStatusJsonValidateV2",
   )?.value;
   if (typeof validator !== "function") {
     throw new TypeError(
-      "Native binding does not expose kagemushaOfflineOperationStatusJsonValidateV1",
+      "Native binding does not expose kagemushaOfflineOperationStatusJsonValidateV2",
     );
   }
   const abiVersion = Object.getOwnPropertyDescriptor(
@@ -1042,6 +1175,19 @@ export function _normalizeKagemushaOperationStatusWithNativeValidation(
   ) {
     throw new TypeError(
       `Native binding must expose connectNoritoBridgeAbiVersion() === ${KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION}`,
+    );
+  }
+  const contractRevision = Object.getOwnPropertyDescriptor(
+    nativeBinding ?? {},
+    "kagemushaNativeContractRevision",
+  )?.value;
+  if (
+    typeof contractRevision !== "function" ||
+    contractRevision.call(nativeBinding) !==
+      KAGEMUSHA_REQUIRED_NATIVE_CONTRACT_REVISION
+  ) {
+    throw new TypeError(
+      `Native binding must expose kagemushaNativeContractRevision() === ${KAGEMUSHA_REQUIRED_NATIVE_CONTRACT_REVISION}`,
     );
   }
   const exactBytes = new Uint8Array(

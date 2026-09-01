@@ -1599,6 +1599,7 @@ async fn da_ingest_admission_accepts_current_and_grace_epochs_for_exact_scope() 
 include!("tests/principal_binding_tests.rs");
 #[test]
 fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
+    let spool = tempdir().expect("assignment spool");
     let mut request = sample_request();
     request.blob_class = BlobClass::NexusLaneSidecar;
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
@@ -1615,6 +1616,8 @@ fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
         None,
         &replication_policy,
         &rent_policy,
+        spool.path(),
+        &keypair,
         None,
     )
     .expect("canonical DA compute pipeline");
@@ -1636,11 +1639,327 @@ fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
     assert!(computed.taikai_trm_payload.is_none());
     assert!(computed.queued_at_secs > 0);
 }
+
+fn governance_assignment_request() -> DaIngestRequest {
+    let mut request = sample_request();
+    request.blob_class = BlobClass::NexusLaneSidecar;
+    request.metadata.items.push(MetadataEntry::new(
+        "governance.retry-secret",
+        b"freeze-this-plaintext".to_vec(),
+        MetadataVisibility::GovernanceOnly,
+    ));
+    resign_sample_request(&mut request);
+    request
+}
+
+#[test]
+fn durable_server_assignment_survives_metadata_key_and_rent_policy_rotation() {
+    let spool = tempdir().expect("assignment spool");
+    let request = governance_assignment_request();
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
+    let replication_policy = DaReplicationPolicy::default();
+    let operator = checked_fixture_ed25519_keypair(0x52);
+    let key = [0xA5; 32];
+    let first = compute_da_manifest_artifacts(
+        &request,
+        &nexus,
+        1,
+        Some(&key),
+        Some("before-rotation"),
+        &replication_policy,
+        &DaRentPolicyV1::default(),
+        spool.path(),
+        &operator,
+        None,
+    )
+    .expect("compute initial server assignment");
+    let frozen = persistence::load_or_create_da_ingest_server_assignment(
+        spool.path(),
+        &request,
+        operator.public_key(),
+        &first.server_assignment,
+    )
+    .expect("publish initial server assignment");
+    let mut rotated_rent = DaRentPolicyV1::default();
+    rotated_rent.base_rate_per_gib_month = "0.75".parse().expect("rotated rent rate");
+    let recovered = compute_da_manifest_artifacts(
+        &request,
+        &nexus,
+        1,
+        None,
+        Some("after-rotation"),
+        &replication_policy,
+        &rotated_rent,
+        spool.path(),
+        &operator,
+        None,
+    )
+    .expect("recover frozen server assignment without the retired metadata key");
+    assert_eq!(recovered.server_assignment, frozen);
+    assert_eq!(recovered.manifest.encoded, first.manifest.encoded);
+    assert_eq!(recovered.queued_at_secs, first.queued_at_secs);
+    assert_eq!(recovered.proof_scheme, first.proof_scheme);
+    assert_eq!(
+        recovered.manifest.manifest.rent_quote,
+        first.manifest.manifest.rent_quote
+    );
+}
+
+#[test]
+fn concurrent_server_assignment_publishers_converge_on_one_replay_slot() {
+    let spool = tempdir().expect("assignment spool");
+    let request = governance_assignment_request();
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
+    let replication_policy = DaReplicationPolicy::default();
+    let rent_policy = DaRentPolicyV1::default();
+    let operator = checked_fixture_ed25519_keypair(0x53);
+    let key = [0xB6; 32];
+    let first = compute_da_manifest_artifacts(
+        &request,
+        &nexus,
+        1,
+        Some(&key),
+        Some("primary"),
+        &replication_policy,
+        &rent_policy,
+        spool.path(),
+        &operator,
+        None,
+    )
+    .expect("compute first candidate")
+    .server_assignment;
+    let second = compute_da_manifest_artifacts(
+        &request,
+        &nexus,
+        1,
+        Some(&key),
+        Some("primary"),
+        &replication_policy,
+        &rent_policy,
+        spool.path(),
+        &operator,
+        None,
+    )
+    .expect("compute second candidate")
+    .server_assignment;
+    assert_ne!(
+        first.transformed_metadata, second.transformed_metadata,
+        "fresh candidates should exercise independent encryption nonces"
+    );
+    let (first_result, second_result) = std::thread::scope(|scope| {
+        let first_thread = scope.spawn(|| {
+            persistence::load_or_create_da_ingest_server_assignment(
+                spool.path(),
+                &request,
+                operator.public_key(),
+                &first,
+            )
+        });
+        let second_thread = scope.spawn(|| {
+            persistence::load_or_create_da_ingest_server_assignment(
+                spool.path(),
+                &request,
+                operator.public_key(),
+                &second,
+            )
+        });
+        (
+            first_thread.join().expect("first publisher joins"),
+            second_thread.join().expect("second publisher joins"),
+        )
+    });
+    let first_result = first_result.expect("first publisher converges");
+    let second_result = second_result.expect("second publisher converges");
+    assert_eq!(first_result, second_result);
+    assert!(first_result == first || first_result == second);
+
+    let mut conflicting_request = request.clone();
+    conflicting_request.client_blob_id = BlobDigest::new([0xE4; 32]);
+    resign_sample_request(&mut conflicting_request);
+    let conflict = persistence::load_da_ingest_server_assignment(
+        spool.path(),
+        &conflicting_request,
+        operator.public_key(),
+    )
+    .expect_err("one replay slot must reject a different signed request digest");
+    assert_eq!(conflict.kind(), ErrorKind::AlreadyExists);
+
+    let untrusted_operator = checked_fixture_ed25519_keypair(0x54);
+    let untrusted = persistence::load_da_ingest_server_assignment(
+        spool.path(),
+        &request,
+        untrusted_operator.public_key(),
+    )
+    .expect_err("assignment attestation must be verified against the trusted receipt signer");
+    assert_eq!(untrusted.kind(), ErrorKind::InvalidData);
+}
+
+#[test]
+fn signed_receipt_assignment_freezes_randomized_mldsa_signature() {
+    let spool = tempdir().expect("assignment spool");
+    let mut request = sample_request();
+    request.blob_class = BlobClass::NexusLaneSidecar;
+    resign_sample_request(&mut request);
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
+    let operator = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
+    let computed = compute_da_manifest_artifacts(
+        &request,
+        &nexus,
+        1,
+        None,
+        None,
+        &DaReplicationPolicy::default(),
+        &DaRentPolicyV1::default(),
+        spool.path(),
+        &operator,
+        None,
+    )
+    .expect("compute ML-DSA assignment fixture");
+    persistence::load_or_create_da_ingest_server_assignment(
+        spool.path(),
+        &request,
+        operator.public_key(),
+        &computed.server_assignment,
+    )
+    .expect("persist ML-DSA server assignment");
+    let pdp = compute_pdp_commitment(
+        &computed.manifest.manifest_hash,
+        &computed.manifest.manifest,
+        &computed.chunk_store,
+        &computed.canonical_payload,
+        computed.queued_at_secs,
+    )
+    .expect("compute PDP commitment");
+    let pdp_bytes = encode_pdp_commitment_bytes(&pdp).expect("encode PDP commitment");
+    let build_candidate = || {
+        build_receipt(
+            &operator,
+            &request,
+            computed.queued_at_secs,
+            computed.manifest.blob_hash,
+            computed.manifest.chunk_root,
+            computed.manifest.manifest_hash,
+            computed.manifest.storage_ticket,
+            pdp_bytes.clone(),
+            computed.manifest.manifest.rent_quote.clone(),
+            stripe_layout_from_manifest(&computed.manifest.manifest),
+        )
+        .expect("sign ML-DSA receipt candidate")
+    };
+    let first = build_candidate();
+    let second = build_candidate();
+    assert_ne!(first.operator_signature, second.operator_signature);
+    let frozen = persistence::load_or_create_da_ingest_signed_receipt(
+        spool.path(),
+        &request,
+        operator.public_key(),
+        &first,
+    )
+    .expect("persist first signed receipt");
+    let retried = persistence::load_or_create_da_ingest_signed_receipt(
+        spool.path(),
+        &request,
+        operator.public_key(),
+        &second,
+    )
+    .expect("recover first signed receipt");
+    assert_eq!(frozen, first);
+    assert_eq!(retried, first);
+}
+
+#[test]
+fn pin_intent_retry_adopts_randomized_mldsa_witness_bytes() {
+    let spool = tempdir().expect("pin-intent spool");
+    let mut request = sample_request();
+    let primary = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
+    let pin_signer = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
+    request.signatures.clear();
+    let request_digest = request.signing_digest();
+    request.signatures.push(DaIngestSignatureV1 {
+        signer: primary.public_key().clone(),
+        signature: checked_signature(primary.private_key(), &request_digest),
+    });
+    let storage_ticket = StorageTicketId::new([0xD1; 32]);
+    let manifest_hash = ManifestDigest::new([0xD2; 32]);
+    let scope = DaPinScopeV1::new(
+        &request.authorization(),
+        storage_ticket,
+        manifest_hash,
+        None,
+    );
+    request
+        .try_add_pin_scope_signature(&scope, &pin_signer)
+        .expect("sign initial pin scope");
+    let first = build_da_pin_intent(&request, request.pin_scope_authorization(scope.clone()));
+    let mut retry = request.clone();
+    let retry_digest = retry.signing_digest();
+    retry.signatures[0].signature = checked_signature(primary.private_key(), &retry_digest);
+    retry.pin_scope_signatures.clear();
+    retry
+        .try_add_pin_scope_signature(&scope, &pin_signer)
+        .expect("re-sign retry pin scope");
+    let second = build_da_pin_intent(&retry, retry.pin_scope_authorization(scope.clone()));
+    assert_ne!(to_bytes(&first).unwrap(), to_bytes(&second).unwrap());
+    let fingerprint = ReplayFingerprint::from(*storage_ticket.as_bytes());
+    persistence::persist_da_pin_intent(
+        spool.path(),
+        &first,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &storage_ticket,
+        &fingerprint,
+    )
+    .expect("persist first pin intent");
+    persistence::persist_da_pin_intent(
+        spool.path(),
+        &second,
+        retry.lane_id,
+        retry.epoch,
+        retry.sequence,
+        &storage_ticket,
+        &fingerprint,
+    )
+    .expect("semantic retry adopts frozen pin intent");
+    let frozen = persistence::load_da_pin_intent(
+        spool.path(),
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &storage_ticket,
+        &fingerprint,
+    )
+    .expect("reload frozen pin intent");
+    assert_eq!(frozen, first);
+
+    let different_pin_signer = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
+    let mut conflicting_retry = request.clone();
+    conflicting_retry.pin_scope_signatures.clear();
+    conflicting_retry
+        .try_add_pin_scope_signature(&scope, &different_pin_signer)
+        .expect("sign conflicting retry pin scope");
+    let conflicting = build_da_pin_intent(
+        &conflicting_retry,
+        conflicting_retry.pin_scope_authorization(scope),
+    );
+    let error = persistence::select_da_pin_intent_for_persistence(
+        spool.path(),
+        &conflicting,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &storage_ticket,
+        &fingerprint,
+    )
+    .expect_err("a different pin-scope signer set must conflict with the frozen intent");
+    assert_eq!(error.kind(), ErrorKind::AlreadyExists);
+}
 #[test]
 fn compute_da_manifest_artifacts_authenticates_before_lane_lookup() {
     let nexus = nexus_with_scheme(LaneId::new(1), DaProofScheme::MerkleSha256);
     let replication_policy = DaReplicationPolicy::default();
     let rent_policy = DaRentPolicyV1::default();
+    let operator = checked_fixture_ed25519_keypair(0x51);
     let mut invalid_signature_valid_lane = sample_request();
     invalid_signature_valid_lane.sequence += 1;
     let mut invalid_signature_unknown_lane = invalid_signature_valid_lane.clone();
@@ -1654,6 +1973,8 @@ fn compute_da_manifest_artifacts_authenticates_before_lane_lookup() {
             None,
             &replication_policy,
             &rent_policy,
+            Path::new(""),
+            &operator,
             None,
         )
         .err()
@@ -1982,6 +2303,7 @@ fn supplied_taikai_manifest_rejects_zero_issued_at() {
 
 #[test]
 fn taikai_ssm_requires_caller_supplied_manifest_in_compute_path() {
+    let spool = tempdir().expect("assignment spool");
     let mut request = sample_request();
     request.metadata = taikai_metadata();
     request.metadata.items.push(MetadataEntry::new(
@@ -2002,6 +2324,8 @@ fn taikai_ssm_requires_caller_supplied_manifest_in_compute_path() {
         None,
         &DaReplicationPolicy::default(),
         &DaRentPolicyV1::default(),
+        spool.path(),
+        &keypair,
         None,
     )
     .err()
@@ -2037,6 +2361,8 @@ fn taikai_cache_hint_is_rejected_in_compute_path() {
         None,
         &DaReplicationPolicy::default(),
         &DaRentPolicyV1::default(),
+        Path::new(""),
+        &keypair,
         None,
     )
     .err()
@@ -7660,11 +7986,21 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
         Arc::new(ReplayCursorStore::empty(cursor_dir.path().to_path_buf()).expect("cursor store"));
     let signer = checked_fixture_ed25519_keypair(0x65);
     let log = open_receipt_log(receipt_dir.path(), &cursor_store, &signer).unwrap();
-    let main_path = replay_cursor_main_path(cursor_dir.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    fs::create_dir(&tmp_path).expect("block cursor temp path");
+    let replay_cache = Arc::new(ReplayCache::new(iroha_core::da::ReplayCacheConfig::new()));
+    let journal_path = cursor_dir.path().join("replay_cursors.journal");
+    let displaced_journal_path = cursor_dir.path().join("replay_cursors.journal.displaced");
+    fs::rename(&journal_path, &displaced_journal_path).expect("displace open cursor journal");
+    fs::write(&journal_path, b"replacement journal inode")
+        .expect("replace cursor journal pathname");
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xF1);
     let fingerprint = test_fingerprint(0xF1);
+    let (initial_outcome, initial_reservation) =
+        replay_cache.reserve(ReplayKey::new(lane_epoch, 0, fingerprint), Instant::now());
+    assert!(matches!(initial_outcome, ReplayInsertOutcome::Fresh { .. }));
+    let initial_reservation = FreshReplayReservation::new(
+        Arc::clone(&replay_cache),
+        initial_reservation.expect("fresh replay reservation"),
+    );
     let err = log
         .append(lane_epoch, 0, receipt.clone(), fingerprint)
         .expect_err("blocked cursor persistence should fail append after file write");
@@ -7682,13 +8018,14 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
         "failed append must not update the in-memory receipt index"
     );
     assert_replay_cursor_sequences(&cursor_store, &[]);
-    fs::remove_dir(&tmp_path).expect("unblock cursor temp path");
-    assert!(matches!(
-        log.append(lane_epoch, 0, receipt, fingerprint).unwrap(),
-        ReceiptInsertOutcome::Stored {
-            cursor_advanced: true
-        }
-    ));
+    drop(initial_reservation);
+    fs::remove_file(&journal_path).expect("remove replacement cursor journal");
+    fs::rename(&displaced_journal_path, &journal_path).expect("restore open cursor journal");
+    let (_, recovered) = log
+        .receipt_for_duplicate(lane_epoch, 0, fingerprint)
+        .expect("duplicate handler probe repairs receipt state")
+        .expect("durable receipt remains present");
+    assert_eq!(recovered, receipt);
     assert_eq!(
         receipt_file_count(receipt_dir.path()),
         1,
@@ -7696,7 +8033,65 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
     );
     assert_eq!(log.receipts_for(lane_epoch).len(), 1);
     assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 0)]);
+    adopt_recovered_da_receipt_in_replay_cache(replay_cache.as_ref(), lane_epoch, 0, fingerprint)
+        .expect("retry adopts the repaired receipt into the same-process replay cache");
+    let next = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xF2);
+    let next_fingerprint = test_fingerprint(0xF2);
+    let (next_outcome, next_reservation) = replay_cache.reserve(
+        ReplayKey::new(lane_epoch, 1, next_fingerprint),
+        Instant::now(),
+    );
+    assert!(matches!(next_outcome, ReplayInsertOutcome::Fresh { .. }));
+    let next_receipt_outcome = log
+        .append(lane_epoch, 1, next, next_fingerprint)
+        .expect("the next ingest succeeds after duplicate recovery");
+    assert!(matches!(
+        next_receipt_outcome,
+        ReceiptInsertOutcome::Stored {
+            cursor_advanced: true
+        }
+    ));
+    assert!(
+        replay_cache.commit_reservation(&next_reservation.expect("next fresh replay reservation"))
+    );
+    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 1)]);
 }
+
+#[test]
+fn recovered_receipt_adoption_never_clears_live_replay_reservations() {
+    let cache = ReplayCache::new(iroha_core::da::ReplayCacheConfig::new());
+    let recovered_lane = LaneEpoch::new(LaneId::new(4), 120);
+    cache
+        .prime_lane_epoch(recovered_lane, 0)
+        .expect("prime stale startup floor");
+    adopt_recovered_da_receipt_in_replay_cache(&cache, recovered_lane, 2, test_fingerprint(0xA2))
+        .expect("an empty lane can advance to its authoritative durable receipt");
+    let (next_outcome, next_reservation) = cache.reserve(
+        ReplayKey::new(recovered_lane, 3, test_fingerprint(0xA3)),
+        Instant::now(),
+    );
+    assert!(matches!(next_outcome, ReplayInsertOutcome::Fresh { .. }));
+    assert!(cache.rollback_reservation(
+        next_reservation.expect("next sequence reservation remains available")
+    ));
+
+    let live_lane = LaneEpoch::new(LaneId::new(4), 121);
+    let live_key = ReplayKey::new(live_lane, 0, test_fingerprint(0xB0));
+    let (live_outcome, live_reservation) = cache.reserve(live_key, Instant::now());
+    assert!(matches!(live_outcome, ReplayInsertOutcome::Fresh { .. }));
+    let error =
+        adopt_recovered_da_receipt_in_replay_cache(&cache, live_lane, 2, test_fingerprint(0xB2))
+            .expect_err("recovery must not prime over a live reservation");
+    assert!(error.contains("live replay entries or reservations"));
+    assert!(matches!(
+        cache.reserve(live_key, Instant::now()).0,
+        ReplayInsertOutcome::InFlight { .. }
+    ));
+    assert!(cache.rollback_reservation(
+        live_reservation.expect("live reservation survives rejected recovery")
+    ));
+}
+
 #[test]
 fn da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance() {
     let receipt_dir = tempdir().expect("receipt dir");

@@ -129,7 +129,7 @@ fn storage_config_with_por_archive(
     let temp_dir = tempfile::tempdir().expect("create replay-archive temp dir");
     let root = temp_dir.path().canonicalize().expect("canonical temp dir");
     let policy = config::PorReplayArchivePolicyV1::try_new(
-            "hsm://sorafs/por-replay-archive/primary",
+            "provider://sorafs/por-replay-archive/primary",
             binding,
             Duration::from_secs(1),
             16,
@@ -156,7 +156,7 @@ struct StartupPorReplayArchive {
 impl StartupPorReplayArchive {
     fn exact(binding: PorFinalizedReplayArchiveBindingV1) -> Self {
         Self {
-            handle: "hsm://sorafs/por-replay-archive/primary",
+            handle: "provider://sorafs/por-replay-archive/primary",
             first_binding: binding,
             later_binding: None,
             readiness_error: None,
@@ -461,7 +461,7 @@ fn node_archive_injection_rejects_missing_unrequested_substituted_and_stale_adap
     );
     let (substituted_config, _substituted_dir) = storage_config_with_por_archive(binding);
     let mut substituted = StartupPorReplayArchive::exact(binding);
-    substituted.handle = "hsm://sorafs/por-replay-archive/substituted";
+    substituted.handle = "provider://sorafs/por-replay-archive/substituted";
     assert_node_init_variant!(PorReplayArchive =>
         NodeHandle::try_new_with_policies_and_runtime_deps(
             substituted_config,
@@ -8236,7 +8236,7 @@ fn governance_signer_rejects_test_marked_binding_before_durable_state() {
         &root,
         true,
         &signer,
-        "pkcs11:governance-dag:test",
+        "provider:governance-dag:test",
         TestGovernanceDagSigner::expected_qualification(),
     );
     let error =
@@ -8251,28 +8251,28 @@ fn governance_signer_rejects_substituted_qualification_and_startup_drift_before_
     for (label, configured_handle, expected_qualification, drift_on_second_read, expected_error) in [
         (
             "substituted signer handle",
-            "pkcs11:governance-dag:other",
+            "provider:governance-dag:other",
             TestGovernanceDagSigner::expected_qualification(),
             false,
             "handle does not match",
         ),
         (
             "substituted revision",
-            "pkcs11:governance-dag:node-primary",
+            "provider:governance-dag:node-primary",
             GovernanceDagRuntimeProviderQualificationV1::new(2, [0x84; 32]),
             false,
             "policy qualification does not match",
         ),
         (
             "substituted policy digest",
-            "pkcs11:governance-dag:node-primary",
+            "provider:governance-dag:node-primary",
             GovernanceDagRuntimeProviderQualificationV1::new(1, [0x85; 32]),
             false,
             "policy qualification does not match",
         ),
         (
             "qualification drift",
-            "pkcs11:governance-dag:node-primary",
+            "provider:governance-dag:node-primary",
             TestGovernanceDagSigner::expected_qualification(),
             true,
             "policy changed during startup qualification",

@@ -956,7 +956,7 @@ public final class IrohaSDK: @unchecked Sendable {
         assetId: String,
         amount: KagemushaScaledAmount,
         payer: String,
-        operationId: Data,
+        nonce: Data,
         opening: KagemushaNoteOpening,
         artifactBinding: KagemushaRecursiveSpendArtifactBindingV4,
         productCapability: KagemushaTopUpShieldCapability,
@@ -1001,12 +1001,12 @@ public final class IrohaSDK: @unchecked Sendable {
               zeroPath.leafIndex == UInt64(snapshot.frontierLen) else {
             throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath")
         }
-        let unsigned = try KagemushaTopUpShieldBuildRequestV4(
+        let unsigned = try KagemushaTopUpShieldBuildRequestV5(
             networkID: networkId,
             assetID: canonicalAssetId,
             amount: amount,
             payer: payer,
-            operationID: operationId,
+            nonce: nonce,
             opening: opening,
             leafIndex: UInt32(zeroPath.leafIndex),
             zeroPath: PrivacyConfidentialMerklePathWitnessV2(path: zeroPath),

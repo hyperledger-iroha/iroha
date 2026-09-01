@@ -98,8 +98,7 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
             || self.activation_height == 0
             || self.withdrawal_height <= self.activation_height
-            || self.max_proof_bytes == 0
-            || self.max_proof_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+            || self.max_proof_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4
             || measured_step_bytes.is_none_or(|minimum| self.max_proof_bytes <= minimum)
             || self.profiles.len() != 2
             || self.profiles[0].parity != KagemushaPastaCycleParityV1::StepEq
@@ -403,7 +402,7 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
     ///
     /// # Errors
     ///
-    /// Returns [`KagemushaValidationError`] when the candidate or either bounded pair is invalid.
+    /// Returns [`KagemushaValidationError`] when the candidate or either exact release pair is invalid.
     pub fn new(
         candidate: &KagemushaRecursiveSpendCandidateV4,
         initialization_pair: Vec<u8>,
@@ -469,14 +468,14 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
         receipt.validate_against_candidate(candidate)?;
         Ok(receipt)
     }
-    /// Validate structural bounds and exact candidate, manifest, and role identities.
+    /// Validate exact release pair lengths and candidate, manifest, and role identities.
     ///
     /// Proof counters and parent semantics are intentionally not trusted here;
     /// the Core terminal verifier must derive them from both proof byte strings.
     ///
     /// # Errors
     ///
-    /// Returns [`KagemushaValidationError`] when any receipt identity or bound differs.
+    /// Returns [`KagemushaValidationError`] when any receipt identity or release pair length differs.
     pub fn validate_against_candidate(
         &self,
         candidate: &KagemushaRecursiveSpendCandidateV4,
@@ -484,12 +483,17 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
         let candidate_sha256 = candidate.sha256()?;
         let manifest_sha256: [u8; 32] =
             Sha256::digest(norito::encode_canonical(&candidate.manifest)?).into();
-        let maximum_pair_bytes =
-            usize::try_from(candidate.manifest.max_proof_bytes).map_err(|_| {
-                KagemushaValidationError::InvalidRecursiveSpendProof {
-                    field: "pasta_cycle.v4.qualification_receipt.pair_bound",
-                }
+        let initialization_pair_bytes =
+            usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4)
+                .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.qualification_receipt.pair_bound",
             })?;
+        let append_pair_bytes = usize::try_from(
+            KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4,
+        )
+        .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "pasta_cycle.v4.qualification_receipt.pair_bound",
+        })?;
         let encoded_size_is_bounded = norito::encode_canonical(self).is_ok_and(|bytes| {
             bytes.len() <= KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4
         });
@@ -511,11 +515,8 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
             || self.generation_memory_enforcement_profile
                 != candidate.manifest.generation_memory_enforcement_profile
             || self.artifact_role_digests != candidate.artifact_role_digests()?
-            || self.initialization_pair.is_empty()
-            || self.initialization_pair.len() > maximum_pair_bytes
-            || self.append_pair.is_empty()
-            || self.append_pair.len() > maximum_pair_bytes
-            || self.initialization_pair == self.append_pair
+            || self.initialization_pair.len() != initialization_pair_bytes
+            || self.append_pair.len() != append_pair_bytes
             || !encoded_size_is_bounded
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -1150,8 +1151,7 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
             || !self.artifact_inventory_verified
             || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
             || self.artifact_roles != expected_artifact_roles
-            || self.max_proof_bytes == 0
-            || self.max_proof_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+            || self.max_proof_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4
         {
             return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
         }
