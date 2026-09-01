@@ -142,7 +142,7 @@ use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{self, Read as _, Seek as _, Write as _},
+    io::{self, BufRead as _, Read as _, Seek as _, Write as _},
     net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     num::NonZeroUsize,
     ops::{Deref, DerefMut},

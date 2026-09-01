@@ -154,7 +154,7 @@ iroha_test_samples = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.4", features = ["fs", "net", "process"] }
+rustix = { version = "1.1.4", features = ["fs", "net", "process", "runtime"] }
 
 [build-dependencies]
 build-support = { path = "../build-support", default-features = false }
