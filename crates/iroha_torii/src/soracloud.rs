@@ -12188,30 +12188,19 @@ mod tests {
                 )),
             )
             .await;
-            assert_eq!(path_response.status(), StatusCode::OK);
-            assert_eq!(
-                path_response
-                    .headers()
-                    .get(axum::http::header::CONTENT_TYPE),
-                Some(&axum::http::HeaderValue::from_static("application/json"))
-            );
-            assert_eq!(
-                path_response
-                    .headers()
-                    .get(crate::sorafs::api::HEADER_SORA_CONTENT_CID),
-                Some(
-                    &axum::http::HeaderValue::from_str(&discovery.content_cid)
-                        .expect("canonical content CID response header")
-                )
-            );
+            assert_eq!(path_response.status(), StatusCode::NOT_FOUND);
             use http_body_util::BodyExt as _;
             let path_body = path_response
                 .into_body()
                 .collect()
                 .await
-                .expect("collect public discovery path response")
+                .expect("collect storage-disabled path response")
                 .to_bytes();
-            assert_eq!(path_body.as_ref(), discovery_document_bytes.as_slice());
+            assert!(
+                std::str::from_utf8(path_body.as_ref())
+                    .expect("storage-disabled response is UTF-8 JSON")
+                    .contains("sorafs storage API is not enabled on this node")
+            );
             let mut cid_host_headers = HeaderMap::new();
             cid_host_headers.insert(
                 axum::http::header::HOST,
@@ -12227,14 +12216,14 @@ mod tests {
                 Path(PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT.to_owned()),
             )
             .await;
-            assert_eq!(cid_host_response.status(), StatusCode::OK);
+            assert_eq!(cid_host_response.status(), StatusCode::NOT_FOUND);
             let cid_host_body = cid_host_response
                 .into_body()
                 .collect()
                 .await
-                .expect("collect public discovery CID-host response")
+                .expect("collect storage-disabled CID-host response")
                 .to_bytes();
-            assert_eq!(cid_host_body.as_ref(), discovery_document_bytes.as_slice());
+            assert_eq!(cid_host_body, path_body);
             let blocked_other_path = crate::sorafs::api::handle_get_sorafs_cid_path(
                 State(Arc::clone(&app)),
                 HeaderMap::new(),

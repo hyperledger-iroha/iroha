@@ -1,6 +1,6 @@
 # Torii Endpoints — Operator Aids (Quick Reference)
 
-This page lists non-consensus, operator-facing endpoints that help with visibility and troubleshooting. Responses are JSON unless noted.
+This page lists read-only, operator-facing endpoints that help with visibility and troubleshooting. Some routes project committed consensus state; responses are JSON unless noted.
 
 All finite Sumeragi reads below require a fresh exact-`NetworkId` operator
 request signature. The CLI examples therefore name an explicit runtime-only
@@ -21,7 +21,7 @@ Consensus (Sumeragi)
 - GET `/v1/sumeragi/params`
   - Compatibility snapshot of governed NPoS/V1 parameter records. It does not replace signed revision-4 height context or the shared configuration fingerprint.
 
-Evidence (audit; non-consensus)
+Evidence (read-only committed consensus audit)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
   - Includes the frozen context and exact signed-artifact summary for the sole `SumeragiV2Equivocation` evidence shape.
@@ -52,5 +52,5 @@ Operator authentication (exact request signature, optional WebAuthn/mTLS second 
   4. Send `x-iroha-operator-session` together with a fresh exact-network operator request signature on each operator endpoint. If `[torii.operator_auth]` is disabled, the exact request signature remains mandatory by itself.
 
 Notes
-- These endpoints are node-local views (in-memory where noted) and do not affect consensus or persistence.
+- Status, metrics, and other explicitly in-memory diagnostics are node-local views and do not mutate consensus or persistence. The evidence routes instead project the canonical evidence records already persisted in WSV; unadmitted node-local proofs are not exposed.
 - Operator routes always require an allow-listed exact-network request signature. After the first WebAuthn enrollment, they additionally require a valid operator session; API tokens never satisfy this boundary.

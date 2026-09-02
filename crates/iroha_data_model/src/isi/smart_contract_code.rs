@@ -102,9 +102,12 @@ isi! {
     /// `expected_deploy_nonce` and `expected_previous_contract_address` are compare-and-swap
     /// guards. The executor derives `contract_address` from the authority, nonce, exact
     /// genesis-derived `NetworkId`, and alias dataspace, then either creates the first binding or
-    /// replaces the exact active alias target. The authority must already exist and hold
-    /// `CanRegisterSmartContractCode`;
-    /// protected namespaces additionally require governance authority.
+    /// replaces the exact active alias target. The authority must already exist, the referenced
+    /// artifact and manifest must already have been registered by an artifact registrar, and the
+    /// authority must be allowed to manage the alias. `CanRegisterSmartContractCode` authorizes
+    /// artifact registration only; it is not a deployment capability. Raw deployment into a
+    /// protected namespace is rejected; those addresses can be created only by the certified
+    /// Parliament deployment corridor.
     pub struct CommitContractDeployment {
         /// Exact next deployment nonce expected in the authority's reserved metadata.
         pub expected_deploy_nonce: u64,

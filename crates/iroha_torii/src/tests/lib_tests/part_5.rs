@@ -665,6 +665,66 @@ async fn zk_attachment_route_authenticates_before_decode_and_rejects_replay() {
     assert_eq!(replayed_error.code(), "query_validation_failed");
 }
 #[tokio::test]
+async fn optional_canonical_body_auth_rejects_partial_headers_before_decode() {
+    use axum::{Extension, Router, routing::post};
+    use tower::ServiceExt as _;
+
+    async fn probe(
+        Extension(visibility): Extension<ToriiAccountReadVisibility>,
+        Extension(calls): Extension<Arc<std::sync::atomic::AtomicUsize>>,
+        crate::utils::extractors::JsonOnly(_body): crate::utils::extractors::JsonOnly<
+            norito::json::Value,
+        >,
+    ) -> StatusCode {
+        assert!(!visibility.is_signed());
+        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        StatusCode::NO_CONTENT
+    }
+
+    let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let router = Router::new()
+        .route("/v1/accounts/query", post(probe))
+        .layer(Extension(Arc::clone(&calls)))
+        .layer(axum::middleware::from_fn_with_state(
+            OptionalCanonicalAccountBodyAuthState {
+                app,
+                max_body_bytes: 1024,
+            },
+            enforce_optional_canonical_account_body_authentication,
+        ));
+
+    let anonymous = router
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/accounts/query")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .expect("anonymous query request"),
+        )
+        .await
+        .expect("anonymous query response");
+    assert_eq!(anonymous.status(), StatusCode::NO_CONTENT);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let partial = router
+        .oneshot(
+            axum::http::Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/accounts/query")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .header(HEADER_ACCOUNT, iroha_test_samples::ALICE_ID.to_string())
+                .body(Body::from("{"))
+                .expect("partial-auth malformed query request"),
+        )
+        .await
+        .expect("partial-auth query response");
+    assert_eq!(partial.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+#[tokio::test]
 async fn oversized_hijiri_quote_keeps_canonical_account_private_cache_headers() {
     use axum::{Router, routing::post};
     use tower::ServiceExt as _;

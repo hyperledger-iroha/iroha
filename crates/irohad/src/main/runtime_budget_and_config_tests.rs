@@ -27,8 +27,6 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
         genesis_manifest_json: None,
         startup: StartupArgs {
             check_config: false,
-            write_kagemusha_catalog_qualification_seal: None,
-            write_kagemusha_validator_qualification_seal: None,
             trace_config: false,
             config_blake3: None,
         },

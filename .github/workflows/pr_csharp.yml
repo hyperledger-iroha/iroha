@@ -5,7 +5,6 @@ on:
     paths:
       - ".github/workflows/pr_csharp.yml"
       - "ci/check_csharp_sdk_package_consumer.sh"
-      - "ci/check_kagemusha_recursive_spend_csharp_sdk.sh"
       - "csharp/**"
       - "crates/connect_norito_bridge/**"
       - "crates/iroha_core/src/smartcontracts/isi/mod.rs"
@@ -25,7 +24,6 @@ on:
       - "fixtures/sorafs_manifest/governance/**"
       - "fixtures/sorafs_manifest/reference_sdk/**"
       - "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json"
-      - "fixtures/kagemusha_recursive_spend_abi6/**"
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
       - "scripts/check_native_sdk_abi23_artifact.py"
@@ -646,25 +644,3 @@ jobs:
           CSHARP_SDK_PACKAGE_CONSUMER_PYTHON_BIN: python
           CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER: ${{ matrix.rid }}
         run: ci/check_csharp_sdk_package_consumer.sh
-
-  kagemusha-native-bridge-sdk:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          cache-on-failure: "true"
-
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Kagemusha recursive spend C# SDK tests
-        shell: bash
-        run: ci/check_kagemusha_recursive_spend_csharp_sdk.sh

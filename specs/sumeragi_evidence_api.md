@@ -7,11 +7,15 @@ bound to the node's exact runtime `NetworkId`, method, target, and empty body.
 The maintained CLI accepts that key only through the explicit absolute
 `--operator-private-key-file` runtime option; it never falls back to an account
 key, token, environment variable, or client TOML credential.
+Omitting `Accept` selects canonical Norito, while an explicit JSON-compatible
+range selects JSON; unacceptable or malformed negotiation returns a JSON `406`
+error. Every negotiated response declares `Vary: Accept`.
 
 - GET `/v1/sumeragi/evidence/count`
   - Returns the number of unique evidence entries admitted by committed blocks.
   - Response (Norito payload): `count: u64`.
   - Set `Accept: application/json` to receive `{ "count": <u64> }`.
+  - Both encodings have a 1 KiB response-body ceiling enforced before allocation.
   - Notes:
     - Backed by the per-node WSV store (`world.consensus_evidence`) persisted with Norito codecs.
     - Survives restarts and feeds `/v1/sumeragi/evidence`; entries are deduplicated by evidence hash.
@@ -19,10 +23,15 @@ key, token, environment variable, or client TOML credential.
       admitted by a committed block are replicated and penalty-eligible.
 
 - GET `/v1/sumeragi/evidence`
-  - Lists recent evidence entries persisted in the WSV audit snapshot.
+  - Lists recent evidence entries admitted by committed blocks and retained in
+    the WSV audit snapshot; node-local pending observations are excluded.
   - Query params: `limit` (default 50, range 1..=1000), `offset` (default 0, range 0..=10000), `kind` (optional; the sole accepted value is `SumeragiV2Equivocation`).
-  - Response (Norito payload): `(total, Vec<EvidenceRecord>)`.
+  - Response (Norito payload): the shared `SumeragiEvidenceListWireResponse { total: u64, items: Vec<EvidenceRecord> }` DTO.
   - Set `Accept: application/json` to receive a JSON object `{ "total": <u64>, "items": [ ... ] }`.
+  - The projected JSON body is limited to 1 MiB. The full-proof Norito body is
+    limited to 17 MiB: committed proof payloads consume at most 16 MiB and the
+    remaining budget covers the bounded record and frame envelope. Torii
+    measures first and allocates only an accepted exact-size body.
   - Every JSON audit item includes the non-null `consensus_admitted_height` and one closed `penalty_status` object. Its exact shape is `{ "status": "pending", "details": null }`, `{ "status": "applied", "details": { "height": <u64> } }`, or `{ "status": "cancelled", "details": { "height": <u64> } }`; the terminal height is the canonical block that applied or cancelled the penalty.
   - The persisted first-release Norito `EvidenceRecord` stores `recorded_at_height`, `recorded_at_view`, `recorded_at_ms`, and the same closed `EvidencePenaltyStatus` sum type. Shortened pre-release records and retired boolean/nullable penalty layouts are rejected rather than default-filled.
   - `EvidenceRecord` is not itself the JSON response DTO. Torii exposes a fixed, closed audit projection; full typed `SumeragiV2EquivocationEvidence` JSON, where embedded in signed data, is also a closed object.
@@ -46,7 +55,11 @@ bounds, and the durable deduplication key before admission. Torii and the SDKs
 
 Committed evidence is part of canonical WSV snapshot state. An at-tip restart
 must restore each pending or terminal record exactly; peer-local gossip is not
-a reconstruction authority for penalty liens or replay fences.
+a reconstruction authority for penalty liens or replay fences. The table holds
+at most four complete validator rosters (124 records) and at most 16 MiB of
+canonical proof payloads after stale terminal records are reclaimed. Candidate
+validation, post-execution insertion, snapshot recovery, and proposer selection
+all enforce the same checked byte accounting.
 
 The binary `Evidence` shape is also v2-only. Retired global-v1 kind/payload
 records fail decode and are never reconstructed from mutable topology state.

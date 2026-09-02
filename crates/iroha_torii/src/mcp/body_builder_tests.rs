@@ -93,15 +93,16 @@ fn sponsored_account_tools_reject_flat_and_dual_request_shapes() {
 }
 #[test]
 fn sponsored_signing_and_submit_tools_are_not_read_only() {
-    assert_eq!(iroha_accounts_onboard_plan_tool().effect, ToolEffect::Read);
-    assert_eq!(
-        iroha_accounts_onboard_prepare_tool().effect,
-        ToolEffect::Write
-    );
-    assert_eq!(
-        iroha_accounts_onboard_submit_tool().effect,
-        ToolEffect::Write
-    );
+    for (tool, expected_effect) in [
+        (iroha_accounts_onboard_plan_tool(), ToolEffect::Read),
+        (iroha_accounts_onboard_prepare_tool(), ToolEffect::Write),
+        (iroha_accounts_onboard_submit_tool(), ToolEffect::Write),
+    ] {
+        let (effect, _, _) = tool
+            .route_backing()
+            .expect("sponsored account tool must be route-backed");
+        assert_eq!(effect, expected_effect, "{} effect", tool.name);
+    }
 }
 #[test]
 fn sponsored_account_tool_descriptors_require_one_exact_body_shape() {

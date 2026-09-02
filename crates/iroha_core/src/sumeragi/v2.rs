@@ -2708,6 +2708,10 @@ impl VerifiedHeightContext {
                 || context.roster != snapshot.roster
                 || context.quorum != snapshot.quorum
                 || context.leader_seed != snapshot.leader_seed
+                || context.offline_cash_mint_finality_epoch_id
+                    != snapshot.offline_cash_mint_finality_epoch_id
+                || context.offline_cash_mint_finality_epoch_roster
+                    != snapshot.offline_cash_mint_finality_epoch_roster
                 || proofs_of_possession.as_slice() != snapshot.validator_set_pops.as_slice()
             {
                 return Err(AdapterError::EpochTransitionMismatch);
@@ -2717,6 +2721,14 @@ impl VerifiedHeightContext {
             || context.roster != parent_artifact.height_context.roster
             || context.quorum != parent_artifact.height_context.quorum
             || context.leader_seed != parent_artifact.height_context.leader_seed
+            || context.offline_cash_mint_finality_epoch_id
+                != parent_artifact
+                    .height_context
+                    .offline_cash_mint_finality_epoch_id
+            || context.offline_cash_mint_finality_epoch_roster
+                != parent_artifact
+                    .height_context
+                    .offline_cash_mint_finality_epoch_roster
             || proofs_of_possession.as_slice() != parent_artifact.validator_set_pops.as_slice()
         {
             return Err(AdapterError::EpochTransitionMismatch);
@@ -9059,14 +9071,92 @@ pub(crate) trait SignatureAggregator: Send + Sync {
     /// Aggregate the canonical signer-ordered BLS signature shares.
     fn aggregate(&self, signatures: &[&[u8]]) -> Result<Vec<u8>, String>;
 }
+/// Encode the canonical auxiliary payload placed beside one Commit vote's BLS signature.
+pub(in crate::sumeragi) fn encode_offline_cash_commit_vote_seal_share_v1(
+    message: iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalitySealMessageV1,
+    seal: iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalityValidatorSealV1,
+) -> Vec<u8> {
+    iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalitySealShareV1 {
+        version: iroha_data_model::isi::offline_cash_v1::OFFLINE_CASH_CHAIN_VERSION_V1,
+        message,
+        seal,
+    }
+    .encode()
+}
+
 #[derive(Debug, Default)]
 struct BlsNormalSignatureAggregator;
 impl SignatureAggregator for BlsNormalSignatureAggregator {
     fn aggregate(&self, signatures: &[&[u8]]) -> Result<Vec<u8>, String> {
         #[cfg(feature = "bls")]
         {
-            iroha_crypto::bls_normal_aggregate_signatures(signatures)
-                .map_err(|error| error.to_string())
+            let mut bls_signatures = Vec::with_capacity(signatures.len());
+            let mut offline_cash_shares = Vec::with_capacity(signatures.len());
+            let mut saw_raw = false;
+            let mut saw_offline_cash = false;
+            for signature in signatures {
+                match wire::decode_offline_cash_consensus_signature_envelope_v1(signature)
+                    .map_err(|error| error.to_string())?
+                {
+                    Some(parts) => {
+                        if parts.kind != wire::OFFLINE_CASH_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1 {
+                            return Err(
+                                "cannot aggregate an Offline Cash CommitQC envelope as a vote share"
+                                    .to_owned(),
+                            );
+                        }
+                        saw_offline_cash = true;
+                        bls_signatures.push(parts.bls_signature);
+                        offline_cash_shares.push(
+                            crate::zk::offline_cash_v1_recursion::decode_offline_cash_mint_finality_seal_share_v1(
+                                parts.auxiliary_payload,
+                            )
+                            .map_err(|error| error.to_string())?,
+                        );
+                    }
+                    None => {
+                        saw_raw = true;
+                        bls_signatures.push(*signature);
+                    }
+                }
+            }
+            if saw_raw && saw_offline_cash {
+                return Err(
+                    "cannot aggregate mixed raw and Offline Cash V1 Commit-vote signatures"
+                        .to_owned(),
+                );
+            }
+            let aggregate = iroha_crypto::bls_normal_aggregate_signatures(&bls_signatures)
+                .map_err(|error| error.to_string())?;
+            if !saw_offline_cash {
+                return Ok(aggregate);
+            }
+            let first = offline_cash_shares
+                .first()
+                .ok_or_else(|| "Offline Cash V1 seal aggregation received no shares".to_owned())?;
+            if offline_cash_shares
+                .iter()
+                .any(|share| share.message != first.message)
+            {
+                return Err(
+                    "Offline Cash V1 Commit-vote seal shares bind different messages".to_owned(),
+                );
+            }
+            let bundle =
+                iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalitySealBundleV1 {
+                    message: first.message,
+                    seals: offline_cash_shares
+                        .into_iter()
+                        .map(|share| share.seal)
+                        .collect(),
+                };
+            bundle.validate().map_err(|error| error.to_string())?;
+            wire::encode_offline_cash_consensus_signature_envelope_v1(
+                wire::OFFLINE_CASH_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
+                &aggregate,
+                &bundle.encode(),
+            )
+            .map_err(|error| error.to_string())
         }
         #[cfg(not(feature = "bls"))]
         {

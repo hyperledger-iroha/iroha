@@ -2207,7 +2207,7 @@ fn routing_vote(service: &ProductionV2Services, view: u64, phase: wire::GlobalPh
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"routing vote block")),
             payload_hash: Hash::new(b"routing vote payload"),
         },
-        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
             Hash::new(b"routing vote parent state"),
             Hash::new(b"routing vote post state"),
             Hash::new(b"routing vote ordinary writes"),
@@ -2945,7 +2945,7 @@ fn certified_fetch_task(
         proposal_round: round,
         phase: wire::GlobalPhase::Prepare,
         subject,
-        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
             Hash::new(b"fetch fixture parent state"),
             Hash::new(b"fetch fixture post state"),
             Hash::new(b"fetch fixture writes"),
@@ -4670,6 +4670,98 @@ fn replayed_proposal_signature_restores_exact_durable_payload() {
     assert_eq!(work_id, expected_work_id);
     assert!(!signature.is_empty());
     assert_eq!(restored, payload);
+}
+
+#[test]
+fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
+    let (service, keys) = fixture();
+    let mut context = service.context.clone();
+    context.epoch_end_height = context.height;
+    let next_mint_roster = fixture_offline_cash_mint_finality_roster(
+        context.network_id,
+        context.epoch + 1,
+        &context.roster,
+        0xC0,
+    );
+    let next_mint_id = next_mint_roster
+        .finality_epoch_id()
+        .expect("derive next mint-finality roster ID");
+    context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+        epoch: context.epoch + 1,
+        offline_cash_mint_finality_epoch_id: next_mint_id,
+        offline_cash_mint_finality_epoch_roster: next_mint_roster,
+        epoch_end_height: context.height + 8,
+        mode: context.mode,
+        roster: context.roster.clone(),
+        validator_set_pops: keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("derive fixture BLS proof of possession")
+            })
+            .collect(),
+        quorum: context.quorum,
+        leader_seed: [0xC7; 32],
+    });
+    context.validate().expect("valid boundary context");
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"boundary block")),
+        payload_hash: Hash::new(b"boundary payload"),
+    };
+    let ordinary_writes_root = Hash::new(b"boundary ordinary writes");
+    let execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        Hash::new(b"boundary parent state"),
+        ordinary_writes_root,
+        ordinary_writes_root,
+        1,
+        Hash::new(b"boundary executed block"),
+    );
+    let vote = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    };
+    let authority =
+        crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1::new(
+            std::sync::Arc::new(context.offline_cash_mint_finality_epoch_roster.clone()),
+            zeroize::Zeroizing::new([0xA0; 32]),
+            0,
+        )
+        .expect("bind fixture Pasta signing authority");
+    let signature = sign_consensus_request_with_offline_cash_authority(
+        &context,
+        &keys[0],
+        &super::super::v2::SignRequest::Vote(vote.clone()),
+        &vote.signature_preimage(),
+        Some(&authority),
+    )
+    .expect("sign boundary Commit vote");
+    let parts = wire::decode_offline_cash_consensus_signature_envelope_v1(&signature)
+        .expect("decode signature framing")
+        .expect("boundary vote carries an Offline Cash envelope");
+    let share = crate::zk::offline_cash_v1_recursion::decode_offline_cash_mint_finality_seal_share_v1(
+        parts.auxiliary_payload,
+    )
+    .expect("decode boundary seal share");
+    assert_eq!(share.message.offline_cash_top_up_count, 0);
+    assert_eq!(share.message.next_finality_epoch_id, Some(next_mint_id));
+    crate::zk::offline_cash_v1_recursion::verify_offline_cash_mint_finality_seal_share_v1(
+        &context.offline_cash_mint_finality_epoch_roster,
+        &context,
+        &vote,
+        &share,
+    )
+    .expect("old epoch authorizes the next Pasta roster");
 }
 include!("v2_worker_nonzero_view_restart.rs");
 #[test]

@@ -15,7 +15,7 @@ object IrohaPeerNfcV1 {
     const val HASH_BYTES = 32
     const val MAXIMUM_CHUNK_BYTES = 4_096
     const val MAXIMUM_MESSAGE_BYTES =
-        IrohaPeerWireMessageV1.HEADER_LENGTH + IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES
+        IrohaPeerWireMessageV1.HEADER_LENGTH + IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_CASH_ENCODED_BYTES
     const val INFO_BYTES = 98
     const val STATUS_BYTES = 174
     const val PAYMENT_ADMISSION_BYTES = 244

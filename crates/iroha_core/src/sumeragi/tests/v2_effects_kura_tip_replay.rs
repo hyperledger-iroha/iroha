@@ -1480,7 +1480,12 @@ fn published_store_marker_absorbs_detached_authenticated_genesis_store_completio
             .insert(key, (fixture.manifest.clone(), durable.clone()))
             .is_none()
     );
-    assert!(executor.durable_bodies.insert(key, durable.clone()).is_none());
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
     let published_fetch = AdapterEffect::FetchBody {
         tag: published_tag,
         round: prepare.proposal_round,
@@ -1657,8 +1662,7 @@ fn retained_exact_body_pipeline_prevents_reacquisition_at_every_stage() {
         certificate: None,
     };
     let fetch_ownership = authenticated_proposal_fetch_ownership(&fixture, &fetch, 9_054);
-    executor.runtime.exact_effect_ownership =
-        Some((fetch.clone(), fetch_ownership.clone()));
+    executor.runtime.exact_effect_ownership = Some((fetch.clone(), fetch_ownership.clone()));
     executor
         .consume_effects(vec![fetch.clone()], &mut services)
         .expect("start one exact acquisition");
@@ -1924,13 +1928,14 @@ fn apply_retransmissions_reuse_one_work_slot() {
     );
     assert!(!executor.status().fail_closed);
     let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-        Hash::new(b"conflicting terminal parent state"),
-        Hash::new(b"conflicting terminal post state"),
-        Hash::new(b"conflicting terminal ordinary writes"),
-        1,
-        Hash::new(b"conflicting terminal executed block"),
-    );
+    conflicting.execution_commitment =
+        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            Hash::new(b"conflicting terminal parent state"),
+            Hash::new(b"conflicting terminal post state"),
+            Hash::new(b"conflicting terminal ordinary writes"),
+            1,
+            Hash::new(b"conflicting terminal executed block"),
+        );
     executor.runtime.effect_owners.clear();
     assert!(matches!(
         executor.consume_effects(
@@ -2044,13 +2049,14 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
     assert_eq!(services.apply_tasks.len(), 1);
     assert!(!executor.status().fail_closed);
     let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-        Hash::new(b"conflicting terminal parent state"),
-        Hash::new(b"conflicting terminal post state"),
-        Hash::new(b"conflicting terminal ordinary writes"),
-        1,
-        Hash::new(b"conflicting terminal executed block"),
-    );
+    conflicting.execution_commitment =
+        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            Hash::new(b"conflicting terminal parent state"),
+            Hash::new(b"conflicting terminal post state"),
+            Hash::new(b"conflicting terminal ordinary writes"),
+            1,
+            Hash::new(b"conflicting terminal executed block"),
+        );
     executor.runtime.effect_owners.clear();
     assert!(matches!(
         executor.consume_effects(
@@ -2249,13 +2255,14 @@ fn enter_view_rejects_a_protected_lock_with_a_conflicting_execution_commitment()
     let mut timeout = timeout_at_view(&fixture, 0);
     timeout.groups[0].highest_prepare_qc = Some(highest.clone());
     let mut conflicting = highest;
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-        Hash::new(b"conflicting EnterView parent state"),
-        Hash::new(b"conflicting EnterView post state"),
-        Hash::new(b"conflicting EnterView ordinary writes"),
-        1,
-        Hash::new(b"conflicting EnterView executed block"),
-    );
+    conflicting.execution_commitment =
+        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            Hash::new(b"conflicting EnterView parent state"),
+            Hash::new(b"conflicting EnterView post state"),
+            Hash::new(b"conflicting EnterView ordinary writes"),
+            1,
+            Hash::new(b"conflicting EnterView executed block"),
+        );
     executor.runtime.round_tag = Some(tag(1));
 
     assert!(matches!(
@@ -2542,8 +2549,11 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
             power: 1,
         })
         .collect::<Vec<_>>();
+    let network_id = crate::sumeragi::synthetic_network_id("serialized-body-rebind-test");
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = wire::HeightContext {
-        network_id: crate::sumeragi::synthetic_network_id("serialized-body-rebind-test"),
+        network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
@@ -2554,6 +2564,8 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
         roster,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"serialized rebind nexus context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: wire::DataAvailabilityLayout {

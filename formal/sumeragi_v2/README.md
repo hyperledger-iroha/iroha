@@ -1518,7 +1518,7 @@ scheduled from the completion of the previous probe so scheduler latency cannot
 create a catch-up storm. This userspace guard is not an operating-system hard
 allocation limit. A separate lifeline session records supervisor loss while
 letting the body finish naturally, and inherited lock descriptors keep the
-per-user heavy-job lock shared with Kagemusha V4 candidate generation until
+per-user heavy-job lock shared with other proof-generation workloads until
 cleanup finishes. Release receipts bind the resulting JSONL samples and
 canonical resource summary. Receipt validation also requires the exact
 successful start/spawn/sample/terminal-summary event grammar, rejects JSON

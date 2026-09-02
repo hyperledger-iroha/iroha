@@ -127,11 +127,9 @@ const TRANSACTION_ARTIFACT_NAMES = new Set([
 export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
   "blockProofsVerifyAuthenticatedV1",
   "connectNoritoBridgeAbiVersion",
-  "kagemushaNativeContractRevision",
   "noritoEncodeInstruction",
   "noritoDecodeInstruction",
   "inspectSorafsOrderbookSubmissionForDiscriminantV1",
-  "kagemushaOfflineOperationStatusJsonValidateV2",
   "verifySorafsOrderbookSubmissionReceiptV1",
   "compileKotodama",
   "privacyCompiledProfileCatalogV1",
@@ -150,7 +148,6 @@ export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
 export const REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 23;
 export const REQUIRED_NATIVE_EXPORT_RESULTS = Object.freeze({
   connectNoritoBridgeAbiVersion: REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
-  kagemushaNativeContractRevision: 1,
   securePrivateFileAbiVersion: 1,
 });
 

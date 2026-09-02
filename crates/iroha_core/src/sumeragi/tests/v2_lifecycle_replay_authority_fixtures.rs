@@ -89,7 +89,7 @@ impl Fixture {
             signature: vec![subject_marker.wrapping_add(1)],
             ..proposal.clone()
         };
-        let commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        let commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
             Hash::new(b"replay parent state"),
             Hash::new(b"replay post state"),
             Hash::new(b"replay ordinary writes"),
@@ -808,10 +808,14 @@ impl CertifiedServeReplayFixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id =
+            crate::sumeragi::synthetic_network_id("certified-serve-replay-authority-test");
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id(
-                "certified-serve-replay-authority-test",
-            ),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -822,9 +826,11 @@ impl CertifiedServeReplayFixture {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"Certified-Serve replay AMX context"),
             execution_policy_hash: Hash::new(b"Certified-Serve replay execution policy"),
-            da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
+            da_layout: wire::recommended_data_availability_layout(),
             leader_seed: [0xA7; 32],
         };
         context
@@ -844,13 +850,14 @@ impl CertifiedServeReplayFixture {
                 proposal_round: round,
                 phase: wire::GlobalPhase::Prepare,
                 subject: request_subject,
-                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                    Hash::new(b"Certified-Serve replay parent state"),
-                    Hash::new(b"Certified-Serve replay post state"),
-                    Hash::new(b"Certified-Serve replay ordinary writes"),
-                    1,
-                    Hash::new(b"Certified-Serve replay executed block"),
-                ),
+                execution_commitment:
+                    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                        Hash::new(b"Certified-Serve replay parent state"),
+                        Hash::new(b"Certified-Serve replay post state"),
+                        Hash::new(b"Certified-Serve replay ordinary writes"),
+                        1,
+                        Hash::new(b"Certified-Serve replay executed block"),
+                    ),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xA5; 48],
             },
@@ -924,10 +931,14 @@ impl CertifiedServeRecoveredReplayFixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id =
+            crate::sumeragi::synthetic_network_id("recovered-certified-serve-replay-test");
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id(
-                "recovered-certified-serve-replay-test",
-            ),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -938,9 +949,11 @@ impl CertifiedServeRecoveredReplayFixture {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"recovered Serve replay AMX context"),
             execution_policy_hash: Hash::new(b"recovered Serve replay execution policy"),
-            da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
+            da_layout: wire::recommended_data_availability_layout(),
             leader_seed: [0xB7; 32],
         };
         let verified = VerifiedHeightContext::genesis(context, proofs)
@@ -985,13 +998,14 @@ impl CertifiedServeRecoveredReplayFixture {
             &chunks,
         )
         .expect("derive recovered Serve replay manifest");
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"recovered Serve replay parent state"),
-            Hash::new(b"recovered Serve replay post state"),
-            Hash::new(b"recovered Serve replay ordinary writes"),
-            1,
-            Hash::new(b"recovered Serve replay executed block"),
-        );
+        let execution_commitment =
+            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new(b"recovered Serve replay parent state"),
+                Hash::new(b"recovered Serve replay post state"),
+                Hash::new(b"recovered Serve replay ordinary writes"),
+                1,
+                Hash::new(b"recovered Serve replay executed block"),
+            );
         let signers = vec![0, 1, 2];
         let preimage = wire::Vote {
             round,

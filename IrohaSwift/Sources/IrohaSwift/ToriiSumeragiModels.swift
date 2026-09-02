@@ -207,8 +207,8 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
     public let parentStateRoot: String
     public let postStateRoot: String
     public let ordinaryWritesRoot: String
-    public let topUpAnchorRoot: String?
-    public let topUpAnchorCount: UInt32
+    public let offlineCashTopUpRoot: String?
+    public let offlineCashTopUpCount: UInt32
     public let nativeAmxApplicationManifestVersion: UInt16
     public let nativeAmxApplicationManifestRoot: String
     public let nativeAmxApplicationManifestCount: UInt32
@@ -221,8 +221,8 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
         case parentStateRoot = "parent_state_root"
         case postStateRoot = "post_state_root"
         case ordinaryWritesRoot = "ordinary_writes_root"
-        case topUpAnchorRoot = "topup_anchor_root"
-        case topUpAnchorCount = "topup_anchor_count"
+        case offlineCashTopUpRoot = "offline_cash_top_up_root"
+        case offlineCashTopUpCount = "offline_cash_top_up_count"
         case nativeAmxApplicationManifestVersion =
             "native_amx_application_manifest_version"
         case nativeAmxApplicationManifestRoot = "native_amx_application_manifest_root"
@@ -238,7 +238,7 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
             from: decoder,
             allowed: [
                 "parent_state_root", "post_state_root", "ordinary_writes_root",
-                "topup_anchor_root", "topup_anchor_count",
+                "offline_cash_top_up_root", "offline_cash_top_up_count",
                 "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root",
                 "native_amx_application_manifest_count",
@@ -268,22 +268,23 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
             container: container,
             field: "Sumeragi v2 ordinary_writes_root"
         )
-        if let raw = try container.decodeIfPresent(String.self, forKey: .topUpAnchorRoot) {
-            topUpAnchorRoot = try ToriiNativeAmxWire.canonicalHash(
+        if let raw = try container.decodeIfPresent(String.self, forKey: .offlineCashTopUpRoot) {
+            offlineCashTopUpRoot = try ToriiNativeAmxWire.canonicalHash(
                 raw,
-                key: .topUpAnchorRoot,
+                key: .offlineCashTopUpRoot,
                 container: container,
-                field: "Sumeragi v2 topup_anchor_root"
+                field: "Sumeragi v2 offline_cash_top_up_root"
             )
         } else {
-            topUpAnchorRoot = nil
+            offlineCashTopUpRoot = nil
         }
-        topUpAnchorCount = try container.decode(UInt32.self, forKey: .topUpAnchorCount)
-        guard (topUpAnchorCount == 0) == (topUpAnchorRoot == nil), topUpAnchorCount <= 16 else {
+        offlineCashTopUpCount = try container.decode(UInt32.self, forKey: .offlineCashTopUpCount)
+        guard (offlineCashTopUpCount == 0) == (offlineCashTopUpRoot == nil) else {
             throw DecodingError.dataCorruptedError(
-                forKey: .topUpAnchorCount,
+                forKey: .offlineCashTopUpCount,
                 in: container,
-                debugDescription: "Sumeragi v2 top-up count/root projection is not canonical"
+                debugDescription:
+                    "Sumeragi v2 offline-cash top-up count/root projection is not canonical"
             )
         }
         nativeAmxApplicationManifestVersion = try container.decode(

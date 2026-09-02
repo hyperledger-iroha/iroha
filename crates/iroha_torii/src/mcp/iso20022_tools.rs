@@ -58,13 +58,13 @@ fn iroha_iso20022_lifecycle_submit_tool(
     description: &str,
 ) -> ToolSpec {
     let body_description = format!("Base64/base64url encoded {message_type} XML payload bytes.");
-    ToolSpec {
-        name: name.to_owned(),
-        effect: manual_tool_effect_from_name(name),
-        description: description.to_owned(),
-        method: Method::POST,
-        path_template: path_template.to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        name.to_owned(),
+        description.to_owned(),
+        manual_tool_effect_from_name(name),
+        Method::POST,
+        path_template.to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["body_base64", "operator_auth"],
@@ -86,7 +86,7 @@ fn iroha_iso20022_lifecycle_submit_tool(
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 fn iroha_iso20022_pacs002_submit_tool() -> ToolSpec {
     iroha_iso20022_lifecycle_submit_tool(
@@ -145,14 +145,14 @@ fn iroha_iso20022_colr012_submit_tool() -> ToolSpec {
     )
 }
 fn iroha_iso20022_status_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.iso20022.status.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.iso20022.status.get"),
-        description: "Fetch ISO 20022 bridge status by canonical `path.msg_id`; access is limited to either original participant or a configured audit admin."
+    ToolSpec::route(
+        "iroha.iso20022.status.get".to_owned(),
+        "Fetch ISO 20022 bridge status by canonical `path.msg_id`; access is limited to either original participant or a configured audit admin."
             .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/iso20022/messages/{msg_id}".to_owned(),
-        input_schema: norito::json!({
+        manual_tool_effect_from_name("iroha.iso20022.status.get"),
+        Method::GET,
+        "/v1/iso20022/messages/{msg_id}".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["path", "operator_auth"],
@@ -169,5 +169,5 @@ fn iroha_iso20022_status_get_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }

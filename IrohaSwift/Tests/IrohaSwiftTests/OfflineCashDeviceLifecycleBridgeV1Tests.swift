@@ -10,7 +10,7 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
     XCTAssertNil(bridge.acceptedCapabilities)
     XCTAssertThrowsError(
       try bridge.execute(
-        operation: .commitIntentExactNext,
+        operation: .prepareExactNextTransition,
         requestID: fixed(0x11, count: 32),
         canonicalCommand: Data([1])
       )
@@ -32,6 +32,18 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
       bridge.acceptedCapabilities?.hardwarePolicyID,
       fixed(0x22, count: 32)
     )
+    XCTAssertEqual(
+      endpoint.capabilityFrame[12..<16],
+      Data([0xff, 0xff, 0x00, 0x00])
+    )
+    XCTAssertEqual(
+      OfflineCashDeviceLifecycleOperationV1.allCases.map(\.rawValue),
+      (1...24).map(UInt8.init)
+    )
+    XCTAssertEqual(
+      OfflineCashDeviceLifecycleCapabilityV1.allCases.map(\.rawValue),
+      (0..<16).map { UInt32(1) << UInt32($0) }
+    )
 
     for operation in OfflineCashDeviceLifecycleOperationV1.allCases {
       endpoint.operation = operation
@@ -48,7 +60,7 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
 
   func testCommandFramingIsCanonicalAndOldVersionsFailClosed() throws {
     let command = try OfflineCashDeviceLifecycleBridgeV1.Codec.encodeCommand(
-      operation: .cancelExpiredReceive,
+      operation: .stageInboundPayment,
       requestID: fixed(0x11, count: 32),
       payload: Data([1, 2, 3])
     )
@@ -64,7 +76,7 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
     for retiredVersion: UInt8 in [4, 5] {
       var response = OfflineCashDeviceLifecycleBridgeV1.Codec
         .encodeResponseForTests(
-          operation: .cancelExpiredReceive,
+          operation: .stageInboundPayment,
           status: .success,
           requestID: fixed(0x11, count: 32),
           payload: Data([4]),
@@ -74,7 +86,7 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
       XCTAssertThrowsError(
         try OfflineCashDeviceLifecycleBridgeV1.Codec.decodeResponse(
           response,
-          expectedOperation: .cancelExpiredReceive,
+          expectedOperation: .stageInboundPayment,
           expectedRequestID: fixed(0x11, count: 32)
         )
       )
@@ -82,7 +94,7 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
   }
 
   func testPartialCapabilityAndUnauthenticatedSuccessFailClosed() throws {
-    for featureBit in 0..<9 {
+    for featureBit in 0..<16 {
       let partial = FakeEndpoint()
       let byteIndex = 12 + featureBit / 8
       partial.capabilityFrame[byteIndex] &= ~UInt8(1 << (featureBit % 8))
@@ -99,7 +111,7 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
       .withEndpointForTests(endpoint)
     XCTAssertThrowsError(
       try bridge.execute(
-        operation: .recoverTerminal,
+        operation: .recoverTerminalCommitCertificate,
         requestID: fixed(0x11, count: 32),
         canonicalCommand: Data([1])
       ))
@@ -139,7 +151,7 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
 }
 
 private final class FakeEndpoint: OfflineCashDeviceLifecycleEndpointV1 {
-  var operation: OfflineCashDeviceLifecycleOperationV1 = .recoverTerminal
+  var operation: OfflineCashDeviceLifecycleOperationV1 = .recoverTerminalCommitCertificate
   var authenticator = Data(repeating: 0x44, count: 64)
   var capabilityFrame = try! OfflineCashDeviceLifecycleBridgeV1.Codec
     .encodeCapabilitiesForTests(

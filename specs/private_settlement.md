@@ -135,9 +135,9 @@ view data, note openings, and output-encryption openings required for audit. It
 does not contain spending authorities. Decryption returns a zeroizing buffer.
 The auditor recomputes every public binding, validates policy and height, then
 signs through `crates/iroha_core/src/private_settlement/auditor.rs`. A
-deployment-owned credential-provider boundary permits encryption and signing
-keys to remain in an HSM, KMS, enclave, or threshold service; Iroha independently
-checks the provider's governed public keys and returned approval signature.
+deployment-owned credential-provider boundary keeps encryption and signing keys
+outside Iroha; Iroha independently checks the provider's governed public keys
+and returned approval signature.
 The Rust production transport accepts a separately governed
 `PrivateSettlementCommitteeAuthorityV1` and contacts exactly four distinct
 endpoints in that authority's canonical validator order. Every auditor response

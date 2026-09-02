@@ -3595,9 +3595,8 @@ fn execution_policy_canonical_set<'a, T: Encode + 'a>(
 /// Compute the canonical first-release identity of process-local execution policy.
 ///
 /// The digest covers every boot-snapshot value which can change transaction admission,
-/// deterministic execution effects, trigger behavior, or block replay. Loaded policy bundles and
-/// the complete authenticated Kagemusha release catalog are supplied as canonical digests so
-/// filesystem placement never becomes consensus state.
+/// deterministic execution effects, trigger behavior, or block replay. Loaded policy bundles are
+/// supplied as canonical digests so filesystem placement never becomes consensus state.
 ///
 /// Deliberately excluded values are limited to operational implementations which must preserve
 /// identical results: worker and cache sizing, parallel/GPU selection, signature batch sizing,
@@ -3617,7 +3616,6 @@ pub fn execution_policy_digest_v1(
     settlement: &Settlement,
     nexus_policy_digest: [u8; 32],
     zk_policy_digest: [u8; 32],
-    kagemusha_release_catalog_digest: Option<[u8; 32]>,
 ) -> [u8; 32] {
     const DOMAIN: &[u8] = b"iroha:execution-policy:v1\0";
     const VERSION: u16 = 1;
@@ -4234,13 +4232,9 @@ pub fn execution_policy_digest_v1(
     policy.push("content.default_auth_mode", &content.default_auth_mode);
     policy.push("content.stripe_layout", &content.stripe_layout);
     // Offline-cash primitives are universal. Runtime escrow bindings are
-    // deterministically derived when an offline instruction executes, so no
-    // process-local enablement or asset catalog participates in consensus
-    // policy. Artifact paths are likewise local cache locations.
-    policy.push(
-        "settlement.offline.kagemusha_max_decoded_bytes",
-        &settlement.offline.kagemusha_max_decoded_bytes,
-    );
+    // Reserve custody accounts are deterministically derived when an offline
+    // instruction executes, so no process-local offline setting participates
+    // in consensus policy.
     policy.push(
         "settlement.router.twap_window",
         &execution_policy_duration(settlement.router.twap_window),
@@ -4272,10 +4266,6 @@ pub fn execution_policy_digest_v1(
     // These sections already have independently audited canonical digests.
     policy.push("nexus.policy_digest", &nexus_policy_digest);
     policy.push("zk.policy_digest", &zk_policy_digest);
-    policy.push(
-        "kagemusha.release_catalog_digest",
-        &kagemusha_release_catalog_digest,
-    );
     let encoded = ExecutionPolicyPreimageV1 {
         version: VERSION,
         fields: policy.fields,
@@ -8066,8 +8056,8 @@ pub struct Torii {
     pub account_onboarding: Option<AccountOnboarding>,
     /// Optional app-facing faucet configuration.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional Kagemusha command-submission authority.
-    pub kagemusha_commands: Option<ToriiKagemushaCommands>,
+    /// Optional Offline Cash V1 command-submission authority.
+    pub offline_cash_v1_commands: Option<ToriiOfflineCashV1Commands>,
     /// Optional RAM-LFE runtime configuration.
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration.
@@ -8116,8 +8106,8 @@ impl fmt::Debug for Torii {
             )
             .field("faucet_configured", &self.faucet.is_some())
             .field(
-                "kagemusha_commands",
-                &RedactedSecret::present(self.kagemusha_commands.is_some()),
+                "offline_cash_v1_commands",
+                &RedactedSecret::present(self.offline_cash_v1_commands.is_some()),
             )
             .field(
                 "ram_lfe_program_count",
@@ -8647,16 +8637,16 @@ pub struct ToriiFaucet {
     /// Whether finalized global threshold-beacon seeds are mixed into faucet challenges.
     pub pow_beacon_seed_enabled: bool,
 }
-/// Kagemusha command-submission configuration exposed to Torii.
+/// Offline Cash V1 command-submission configuration exposed to Torii.
 #[derive(Debug, Clone)]
-pub struct ToriiKagemushaCommands {
-    /// Account derived from the submission key; must hold `CanManageOfflineEscrow`.
+pub struct ToriiOfflineCashV1Commands {
+    /// Account derived from the submission key; must hold `CanManageOfflineReserve`.
     pub authority: AccountId,
-    /// Key pair used only to submit typed Kagemusha instructions.
+    /// Key pair used only to submit typed Offline Cash V1 instructions.
     pub key_pair: KeyPair,
     /// Minimum live XOR balance required for the self-funded command authority.
     pub minimum_xor_balance: Quantity,
-    /// Maximum value accepted for one Kagemusha command.
+    /// Maximum value accepted for one Offline Cash V1 command.
     pub max_tx_value: Quantity,
     /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
     pub operation_registry_max_entries: NonZeroUsize,

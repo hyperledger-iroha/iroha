@@ -478,6 +478,13 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     );
     let mut block_batch_guard = state_batch_guard.block(header);
     let mut batch_guard_tx = block_batch_guard.transaction();
+    batch_guard_tx.world.add_account_permission(
+        &ALICE_ID,
+        iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+            authority: ALICE_ID.clone(),
+        }
+        .into(),
+    );
     assert!(
         first_delta.supports_numeric_transfer_batch_merge(&batch_guard_tx),
         "preseeded receiver assets without matching data triggers should batch"
@@ -494,7 +501,9 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
         )
         .expect("test data-trigger action satisfies its authority invariant");
     nonmatching_action.metadata =
-        crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(true);
+        crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+            &ALICE_ID,
+        );
     batch_guard_tx
         .world
         .triggers
@@ -519,7 +528,9 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     )
     .expect("test data-trigger action satisfies its authority invariant");
     matching_action.metadata =
-        crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(true);
+        crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+            &ALICE_ID,
+        );
     batch_guard_tx
         .world
         .triggers

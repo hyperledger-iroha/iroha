@@ -61,7 +61,23 @@ object CommitContractDeploymentWirePayloadEncoder {
         require(normalized.length == 64 && normalized.all { it in '0'..'9' || it in 'a'..'f' }) {
             "codeHashHex must contain exactly 64 hexadecimal characters"
         }
-        return ByteArray(32) { normalized.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+        return ByteArray(32) {
+            normalized.substring(it * 2, it * 2 + 2).toInt(16).toByte()
+        }.also(::requireCanonicalHashBytes)
+    }
+
+    internal fun decodeCanonicalCodeHashBytes(value: ByteArray): ByteArray {
+        val decoder = NoritoDecoder(value, 0)
+        val decoded = HashAdapter.decode(decoder)
+        require(decoder.remaining() == 0) { "code_hash must contain exactly 32 bytes" }
+        return decoded
+    }
+
+    private fun requireCanonicalHashBytes(value: ByteArray) {
+        require(value.size == 32) { "code_hash must contain exactly 32 bytes" }
+        require((value.last().toInt() and 1) == 1) {
+            "code_hash must carry the canonical iroha_crypto::Hash marker bit"
+        }
     }
 
     private data class Payload(
@@ -80,8 +96,13 @@ object CommitContractDeploymentWirePayloadEncoder {
     }
 
     private object HashAdapter : TypeAdapter<ByteArray> {
-        override fun encode(encoder: NoritoEncoder, value: ByteArray) = encoder.writeBytes(value)
-        override fun decode(decoder: NoritoDecoder): ByteArray = decoder.readBytes(32)
+        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
+            requireCanonicalHashBytes(value)
+            encoder.writeBytes(value)
+        }
+
+        override fun decode(decoder: NoritoDecoder): ByteArray =
+            decoder.readBytes(32).also(::requireCanonicalHashBytes)
     }
 
     private object PayloadAdapter : TypeAdapter<Payload> {

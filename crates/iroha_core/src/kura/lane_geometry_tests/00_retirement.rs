@@ -1509,8 +1509,11 @@ fn native_amx_archive_finality(
         .collect::<Vec<_>>();
     let height = block.header().height().get();
     assert_eq!(height, 1, "Native archive fixture uses one global block");
+    let network_id = crate::sumeragi::synthetic_network_id("native-amx-lane-archive-test");
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = HeightContext {
-        network_id: crate::sumeragi::synthetic_network_id("native-amx-lane-archive-test"),
+        network_id,
         protocol_version: PROTOCOL_VERSION,
         height,
         epoch: 0,
@@ -1521,6 +1524,8 @@ fn native_amx_archive_finality(
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid Native archive quorum"),
         roster,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"Native archive AMX context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {

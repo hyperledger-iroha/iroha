@@ -62,6 +62,7 @@ tasks.test {
             .file("fixtures/sumeragi_v2/native_amx_v2_grouped.json"),
     )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/numeric_v1_golden.json"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/offline_cash_v1.json"))
     inputs.file(
         rootProject.layout.projectDirectory
             .dir("..")
@@ -72,11 +73,6 @@ tasks.test {
         rootProject.layout.projectDirectory
             .dir("..")
             .file("fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64"),
-    )
-    inputs.file(
-        rootProject.layout.projectDirectory
-            .dir("..")
-            .file("fixtures/offline/kagemusha_peer_transport_v2.json"),
     )
     inputs.dir(
         rootProject.layout.projectDirectory

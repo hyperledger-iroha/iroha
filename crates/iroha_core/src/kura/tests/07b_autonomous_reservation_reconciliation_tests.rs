@@ -1060,7 +1060,7 @@ fn historical_autonomous_recovery_record_for_kura(
         descriptor.validator_set[0].public_key(),
         signer.public_key()
     );
-    let roster = descriptor
+    let mut roster = descriptor
         .validator_set
         .iter()
         .cloned()
@@ -1069,8 +1069,30 @@ fn historical_autonomous_recovery_record_for_kura(
             power: 1,
         })
         .collect::<Vec<_>>();
+    for seed in 0xB1_u8..=0xB4 {
+        if roster.len() == 4 {
+            break;
+        }
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("derive deterministic historical recovery consensus validator");
+        let validator = PeerId::new(keypair.public_key().clone());
+        if roster.iter().all(|entry| entry.validator != validator) {
+            roster.push(ValidatorPower {
+                validator,
+                power: 1,
+            });
+        }
+    }
+    roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+    let network_id = crate::sumeragi::synthetic_network_id("kura-autonomous-chain");
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            network_id,
+            payload.epoch,
+            &roster,
+        );
     let historical_context = HeightContext {
-        network_id: crate::sumeragi::synthetic_network_id("kura-autonomous-chain"),
+        network_id,
         protocol_version: PROTOCOL_VERSION,
         height: descriptor.proposal_height,
         epoch: payload.epoch,
@@ -1096,6 +1118,8 @@ fn historical_autonomous_recovery_record_for_kura(
         ),
         quorum: DualQuorum::from_roster(&roster).expect("historical recovery fixture quorum"),
         roster,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new_from_chunks(&[
             b"kura:test:historical-recovery:nexus:v1\0",
             fixture_tag,
@@ -1126,7 +1150,7 @@ fn historical_autonomous_recovery_record_for_kura(
     let executed_block_wire_len =
         u64::try_from(executed_wire.len()).expect("fixture wire length fits u64");
     let executed_block_wire_hash = Hash::new(&executed_wire);
-    let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+    let execution_commitment = ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new_from_chunks(&[
             b"kura:test:historical-recovery:parent-state:v1\0",
             fixture_tag,

@@ -81,19 +81,20 @@ public final class IrohaPeerCanonicalPayload {
       final IrohaPeerPayloadProfile profile,
       final IrohaPeerPayloadKind kind,
       final byte[] bytes) {
-    if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND) return;
+    if (profile != IrohaPeerPayloadProfile.OFFLINE_CASH_V1) return;
     final String schema = switch (kind) {
       case RECEIVE_REQUEST ->
-          "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2";
+          "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentRequestV1";
+      case ACCEPTANCE_INTENT_AUTHORIZATION ->
+          "iroha_data_model::offline::offline_cash_v1::OfflineCashAcceptanceIntentAuthorizationV1";
+      case ACCEPTANCE_TICKET ->
+          "iroha_data_model::offline::offline_cash_v1::OfflineCashAcceptanceTicketV1";
       case PAYMENT ->
-          "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4";
+          "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentV1";
       case ACKNOWLEDGEMENT ->
-          "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2";
+          "iroha_data_model::offline::offline_cash_v1::OfflineCashAcknowledgementV1";
     };
-    final int requiredPadding = switch (kind) {
-      case RECEIVE_REQUEST, PAYMENT -> 8;
-      case ACKNOWLEDGEMENT -> 0;
-    };
+    final int requiredPadding = kind == IrohaPeerPayloadKind.ACKNOWLEDGEMENT ? 0 : 8;
     try {
       final NoritoHeader.DecodeResult decoded =
           NoritoHeader.decode(bytes, SchemaHash.hash16(schema));
@@ -106,11 +107,11 @@ public final class IrohaPeerCanonicalPayload {
                   == NoritoHeader.HEADER_LENGTH + requiredPadding + decoded.payload().length
               && Arrays.equals(
                   header.encode(), Arrays.copyOfRange(bytes, 0, NoritoHeader.HEADER_LENGTH)),
-          "Kagemusha canonical payload must use canonical compact Norito framing");
+          "Offline Cash V1 payload must use canonical compact Norito framing");
       header.validateChecksum(decoded.payload());
     } catch (RuntimeException failure) {
       throw new IllegalArgumentException(
-          "Invalid Kagemusha canonical payload for " + kind, failure);
+          "Invalid Offline Cash V1 payload for " + kind, failure);
     }
   }
 }

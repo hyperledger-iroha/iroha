@@ -82,13 +82,3 @@ pub(crate) fn instructions_allow_multisig_envelope_authority(
             )
         })
 }
-
-/// Return whether a direct carrier contains exactly one native Kagemusha lifecycle transition.
-pub(crate) fn instructions_allow_direct_kagemusha_lifecycle_authority(
-    instructions: &[InstructionBox],
-) -> bool {
-    let [instruction] = instructions else {
-        return false;
-    };
-    crate::smartcontracts::isi::offline::direct_lifecycle_entrypoint_kind(instruction).is_some()
-}

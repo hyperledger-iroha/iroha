@@ -243,10 +243,20 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
   `reject-unsupported` profiles. Regression tests
   consume the samples and the new header envelope fixture to guard the mappings.【crates/ivm/src/iso20022.rs:265】【crates/ivm/src/iso20022.rs:3301】【crates/ivm/src/iso20022.rs:3703】
 - Torii accepts lifecycle submissions at `/v1/iso20022/pacs002`, `pacs004`, `camt056`,
-  `sese023`, `sese024`, and `sese025`. These endpoints validate the selected rail profile,
-  store the lifecycle message in the durable ISO bridge record model, reject replayed
-  payload, business-message-id, or UETR evidence, and update referenced durable records only when
-  the original message is already known.
+  `sese023`, `sese024`, and `sese025`. Initial admission authenticates one configured
+  participant and requires that participant to own the message's `From` financial identity.
+  The resulting `IsoMessageRecordV2` pins the originator, counterparty, admitting operator,
+  rail profile, signature policy, and immutable replay identities.
+- Referenced lifecycle messages reuse the original pinned profile and signature policy; callers
+  cannot select a downgrade. `pacs.002`, `pacs.004`, `sese.024`, and `sese.025` are accepted only
+  from the original counterparty, while `camt.056` is accepted only from the originator. A
+  `pacs.002` settlement transition additionally carries exact evidence for a committed ledger
+  transaction. The bridge rejects replayed payload, business-message-id, or UETR evidence and
+  updates durable state only when the referenced original is known.
+- Both recorded parties may read their records, configured audit administrators have global
+  read-only access, and outbound ISO documents are signed. Durable replay tombstones retain the
+  message ID, payload hash, business message ID, and UETR for the complete dedupe TTL even after
+  prunable record details are removed.
 
 #### Regulatory and market-structure considerations
 

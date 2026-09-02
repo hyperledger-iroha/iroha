@@ -9640,18 +9640,18 @@ public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
 
 /// Asset-neutral offline protocol capability advertised by every app-api node.
 ///
-/// A conforming node always exposes the ABI-21 `cash_handoff_v1` application
-/// interface, independent of assets and dataspaces.
+/// A conforming node exposes the sole Offline Cash wire/lifecycle V1
+/// interface, independent of assets, dataspaces, and transaction history.
 public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
     public let cashHandoffCapability: String
-    public let requiredBridgeAbiVersion: UInt32
-    public let maxHops: UInt32
+    public let wireVersion: UInt32
+    public let deviceLifecycleVersion: UInt32
     public let ready: Bool
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case cashHandoffCapability = "cash_handoff_capability"
-        case requiredBridgeAbiVersion = "required_bridge_abi_version"
-        case maxHops = "max_hops"
+        case wireVersion = "wire_version"
+        case deviceLifecycleVersion = "device_lifecycle_version"
         case ready
     }
 
@@ -9665,32 +9665,35 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
             String.self,
             forKey: .cashHandoffCapability
         )
-        let decodedABI = try container.decode(
+        let decodedWireVersion = try container.decode(
             UInt32.self,
-            forKey: .requiredBridgeAbiVersion
+            forKey: .wireVersion
         )
-        let decodedMaxHops = try container.decode(UInt32.self, forKey: .maxHops)
+        let decodedDeviceLifecycleVersion = try container.decode(
+            UInt32.self,
+            forKey: .deviceLifecycleVersion
+        )
         let decodedReady = try container.decode(Bool.self, forKey: .ready)
 
-        guard decodedCapability == KagemushaRecursiveSpend.cashHandoffCapabilityV1 else {
+        guard decodedCapability == OfflineCashWireV1.handoffCapability else {
             throw DecodingError.dataCorruptedError(
                 forKey: .cashHandoffCapability,
                 in: container,
                 debugDescription: "cash_handoff_capability must be cash_handoff_v1"
             )
         }
-        guard decodedABI == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion else {
+        guard decodedWireVersion == 1 else {
             throw DecodingError.dataCorruptedError(
-                forKey: .requiredBridgeAbiVersion,
+                forKey: .wireVersion,
                 in: container,
-                debugDescription: "required_bridge_abi_version must be 23"
+                debugDescription: "wire_version must be 1"
             )
         }
-        guard decodedMaxHops == KagemushaRecursiveSpend.maximumPeerHops else {
+        guard decodedDeviceLifecycleVersion == 1 else {
             throw DecodingError.dataCorruptedError(
-                forKey: .maxHops,
+                forKey: .deviceLifecycleVersion,
                 in: container,
-                debugDescription: "max_hops does not match the cash_handoff_v1 bound"
+                debugDescription: "device_lifecycle_version must be 1"
             )
         }
         guard decodedReady else {
@@ -9702,8 +9705,8 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
         }
 
         cashHandoffCapability = decodedCapability
-        requiredBridgeAbiVersion = decodedABI
-        maxHops = decodedMaxHops
+        wireVersion = decodedWireVersion
+        deviceLifecycleVersion = decodedDeviceLifecycleVersion
         ready = decodedReady
     }
 }
@@ -22468,46 +22471,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getKagemushaRecipientRegistrationLineage(
-        query: KagemushaRecipientLineageQueryV2, canonicalAuth: ToriiCanonicalRequestAuth,
-        completion: @escaping (Result<Data, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.getKagemushaRecipientRegistrationLineage(
-            query: query, canonicalAuth: canonicalAuth
-        ) }
-    }
-
-    @discardableResult
-    public func submitKagemushaTopUp(
-        _ request: KagemushaTopUpRequest,
-        completion: @escaping (Result<KagemushaOperationReference, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitKagemushaTopUp(request) }
-    }
-
-    @discardableResult
-    public func submitKagemushaRedeem(
-        _ request: KagemushaRedeemRequest,
-        completion: @escaping (Result<KagemushaOperationReference, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitKagemushaRedeem(request) }
-    }
-
-    @discardableResult
-    public func getKagemushaOperationStatus(
-        _ reference: KagemushaOperationReference,
-        chainDiscriminant: UInt16,
-        completion: @escaping (Result<KagemushaOperationStatus, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.getKagemushaOperationStatus(
-                reference,
-                chainDiscriminant: chainDiscriminant
-            )
-        }
-    }
-
-    @discardableResult
     public func submitDetachedContractCall(
         _ draft: ToriiContractCallDraft,
         publicKeyHex: String,
@@ -25643,8 +25606,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     /// Fetch the complete authoritative path snapshot, including Torii's
-    /// padded next-zero path. Kagemusha uses this form so a one-input proof can
-    /// be built from two bounded paths without downloading the whole tree.
+    /// padded next-zero path.
     public func getZkAssetMerklePathSnapshot(
         asset: String,
         commitments: [Data],
@@ -26693,7 +26655,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getOfflineCapability() async throws -> ToriiOfflineStatus {
-        let request = try makeRequest(path: KagemushaToriiAPI.Endpoint.capability.path,
+        let request = try makeRequest(path: "/v1/offline/readiness",
                                       headers: ["Accept": "application/json"])
         let (data, response) = try await sendBoundedSccpResponse(
             request,
@@ -26713,182 +26675,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         return try decodeJSON(ToriiOfflineStatus.self, from: data)
-    }
-
-    public func getKagemushaRecipientRegistrationLineage(
-        query queryBody: KagemushaRecipientLineageQueryV2, canonicalAuth: ToriiCanonicalRequestAuth
-    ) async throws -> Data {
-        let request = try makeCanonicalAccountRequest(
-            path: KagemushaToriiAPI.Endpoint.receiverLineage.path,
-            method: .post,
-            body: queryBody.noritoArchive,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Accept": "application/x-norito",
-            ], canonicalAuth: canonicalAuth
-        )
-        let (responseData, response) = try await sendBoundedSccpResponse(
-            request,
-            context: "Kagemusha receiver registration lineage",
-            maximumBytes: KagemushaRecipientRegistrationLineage.maximumArchiveBytes
-        )
-        try ensureStatus(response, equals: 200, responseBody: responseData)
-        try ensureResponseMediaType(response, equals: "application/x-norito")
-        guard !responseData.isEmpty else { throw ToriiClientError.emptyBody }
-        return responseData
-    }
-
-    public func submitKagemushaTopUp(
-        _ requestBody: KagemushaTopUpRequest
-    ) async throws -> KagemushaOperationReference {
-        try await submitKagemushaOperation(
-            path: KagemushaToriiAPI.Endpoint.topUp.path,
-            expectedIdentity: requestBody.identity,
-            archive: requestBody.noritoArchive()
-        )
-    }
-
-    public func submitKagemushaRedeem(
-        _ requestBody: KagemushaRedeemRequest
-    ) async throws -> KagemushaOperationReference {
-        try await submitKagemushaOperation(
-            path: KagemushaToriiAPI.Endpoint.redeem.path,
-            expectedIdentity: requestBody.identity,
-            archive: requestBody.noritoArchive()
-        )
-    }
-
-    /// Poll an accepted Kagemusha operation while preserving its immutable
-    /// operation identity, kind, status URI, and signed request timestamp.
-    /// A Pending retry or terminal global winner may carry another transaction hash.
-    public func getKagemushaOperationStatus(
-        _ reference: KagemushaOperationReference,
-        chainDiscriminant: UInt16
-    ) async throws -> KagemushaOperationStatus {
-        let path = try KagemushaToriiAPI.operationPath(reference.identity.operationID)
-        guard reference.state == .pending,
-              reference.statusUri == path else {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha operation reference does not identify its canonical status resource"
-            )
-        }
-        return try await getKagemushaOperationStatus(
-            path: path,
-            expectedIdentity: reference.identity,
-            chainDiscriminant: chainDiscriminant
-        )
-    }
-
-    /// Coordinator transport entry point. Before Torii acknowledges the POST,
-    /// status lookup is bound to the signed request itself; afterwards it is
-    /// additionally bound to the exact accepted reference.
-    public func getKagemushaOperationStatus(
-        operation: KagemushaOperationSubmission,
-        acceptedReference: KagemushaOperationReference?,
-        chainDiscriminant: UInt16
-    ) async throws -> KagemushaOperationStatus {
-        if let acceptedReference {
-            guard acceptedReference.identity == operation.identity else {
-                throw ToriiClientError.invalidPayload(
-                    "Kagemusha operation reference does not match the signed request"
-                )
-            }
-            return try await getKagemushaOperationStatus(
-                acceptedReference,
-                chainDiscriminant: chainDiscriminant
-            )
-        }
-        let path = try KagemushaToriiAPI.operationPath(operation.identity.operationID)
-        return try await getKagemushaOperationStatus(
-            path: path,
-            expectedIdentity: operation.identity,
-            chainDiscriminant: chainDiscriminant
-        )
-    }
-
-    private func getKagemushaOperationStatus(
-        path: String,
-        expectedIdentity: KagemushaOperationIdentity,
-        chainDiscriminant: UInt16
-    ) async throws -> KagemushaOperationStatus {
-        let request = try makeRequest(
-            path: path,
-            headers: ["Accept": "application/x-norito"]
-        )
-        let (responseData, response) = try await sendBoundedSccpResponse(
-            request,
-            context: "Kagemusha operation status",
-            maximumBytes: KagemushaOperationCodec.statusMaximumArchiveBytes
-        )
-        try ensureStatus(response, equals: 200, responseBody: responseData)
-        try ensureResponseMediaType(response, equals: "application/x-norito")
-        guard !responseData.isEmpty else {
-            throw ToriiClientError.emptyBody
-        }
-        let status = try KagemushaOperationCodec.decodeStatus(
-            responseData,
-            chainDiscriminant: chainDiscriminant
-        )
-        guard status.identity == expectedIdentity else {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha operation status identity does not match the requested resource"
-            )
-        }
-        return status
-    }
-
-    private func submitKagemushaOperation(
-        path: String,
-        expectedIdentity: KagemushaOperationIdentity,
-        archive: Data
-    ) async throws -> KagemushaOperationReference {
-        let request = try makeRequest(
-            path: path,
-            method: .post,
-            body: archive,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Accept": "application/x-norito",
-                "Idempotency-Key": expectedIdentity.operationID,
-            ]
-        )
-        let (data, response) = try await sendBoundedSccpResponse(
-            request,
-            context: "Kagemusha operation reference",
-            maximumBytes: KagemushaOperationCodec.referenceMaximumArchiveBytes
-        )
-        try ensureStatus(response, equals: 202, responseBody: data)
-        try ensureResponseMediaType(response, equals: "application/x-norito")
-        guard !data.isEmpty else {
-            throw ToriiClientError.emptyBody
-        }
-        let reference = try KagemushaOperationCodec.decodeReference(data)
-        let expectedStatusUri = try KagemushaToriiAPI.operationPath(
-            expectedIdentity.operationID
-        )
-        guard reference.identity == expectedIdentity,
-              reference.state == .pending,
-              reference.statusUri == expectedStatusUri else {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha operation reference does not match the signed request"
-            )
-        }
-        guard response.value(forHTTPHeaderField: "Location") == expectedStatusUri else {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha operation Location must match the canonical status resource"
-            )
-        }
-        guard let retryAfter = response.value(forHTTPHeaderField: "Retry-After"),
-              !retryAfter.isEmpty,
-              retryAfter.utf8.count <= 20,
-              retryAfter.utf8.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }),
-              let retryAfterSeconds = UInt64(retryAfter),
-              retryAfterSeconds > 0 else {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha operation Retry-After must be a positive u64 delay in seconds"
-            )
-        }
-        return reference
     }
 
     public func getMetrics(asText: Bool = false) async throws -> ToriiMetricsResponse {

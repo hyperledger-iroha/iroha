@@ -269,36 +269,23 @@ fn gas_for_kaigi_proof_verification(
         .saturating_add(zk_gas_per_nullifier().saturating_mul(nullifiers))
         .saturating_add(zk_gas_per_commitment().saturating_mul(commitments))
 }
-fn gas_for_recursive_kagemusha_topup_v4(topup: &dm_isi::offline::TopUpKagemushaRecursiveV4) -> u64 {
-    gas_for_proof_attachment(&topup.request.shield_evidence.proof, 0, 1)
-}
-fn gas_for_recursive_kagemusha_redeem_v4(
-    redeem: &dm_isi::offline::RedeemKagemushaRecursiveV4,
+fn gas_for_offline_cash_v1_redemption(
+    redeem: &dm_isi::offline_cash_v1::RedeemOfflineCashV1,
 ) -> u64 {
-    let request = &redeem.request;
-    let mut gas = gas_for_proof_attachment(
-        &request.redeem_proof,
-        1,
-        usize::from(request.offline_change.is_some()),
-    );
-    let recursive_bundles = std::iter::once(&request.bundle)
-        .chain(request.offline_change.iter().map(|change| &change.bundle));
-    for bundle in recursive_bundles {
-        let recursive_proof_bytes =
-            u64::try_from(bundle.recursive_proof.proof_envelope.proof.bytes.len())
-                .unwrap_or(u64::MAX);
-        gas = gas.saturating_add(zk_gas_base_verify());
-        gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(recursive_proof_bytes));
-        gas = gas.saturating_add(
-            zk_gas_per_public_input().saturating_mul(
-                u64::try_from(
-                    crate::zk::kagemusha_step_transition::KAGEMUSHA_STEP_OPERATION_LIMBS_V4,
-                )
-                .unwrap_or(u64::MAX),
-            ),
-        );
-    }
-    gas
+    let proof = &redeem.request.voucher.proof;
+    let proof_bytes = proof
+        .eq_proof
+        .len()
+        .saturating_add(proof.ep_proof.len())
+        .saturating_add(proof.eq_history.len())
+        .saturating_add(proof.ep_history.len());
+    zk_gas_base_verify()
+        .saturating_mul(2)
+        .saturating_add(
+            zk_gas_per_proof_byte().saturating_mul(u64::try_from(proof_bytes).unwrap_or(u64::MAX)),
+        )
+        .saturating_add(zk_gas_per_nullifier())
+        .saturating_add(zk_gas_per_commitment())
 }
 fn gas_for_register_pin_manifest(manifest_bytes: usize) -> u64 {
     BASE_REGISTER_PIN_MANIFEST.saturating_add(
@@ -619,11 +606,8 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
     }
-    if let Some(topup) = any.downcast_ref::<dm_isi::offline::TopUpKagemushaRecursiveV4>() {
-        return gas_for_recursive_kagemusha_topup_v4(topup);
-    }
-    if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursiveV4>() {
-        return gas_for_recursive_kagemusha_redeem_v4(redeem);
+    if let Some(redeem) = any.downcast_ref::<dm_isi::offline_cash_v1::RedeemOfflineCashV1>() {
+        return gas_for_offline_cash_v1_redemption(redeem);
     }
     if let Some(ballot) = any.downcast_ref::<dm_isi::zk::SubmitBallot>() {
         return gas_for_proof_attachment(&ballot.ballot_proof, 1, 0);
@@ -695,11 +679,8 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
     }
-    if let Some(topup) = any.downcast_ref::<dm_isi::offline::TopUpKagemushaRecursiveV4>() {
-        return gas_for_recursive_kagemusha_topup_v4(topup);
-    }
-    if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursiveV4>() {
-        return gas_for_recursive_kagemusha_redeem_v4(redeem);
+    if let Some(redeem) = any.downcast_ref::<dm_isi::offline_cash_v1::RedeemOfflineCashV1>() {
+        return gas_for_offline_cash_v1_redemption(redeem);
     }
     if let Some(ballot) = any.downcast_ref::<dm_isi::zk::SubmitBallot>() {
         return gas_for_proof_attachment(&ballot.ballot_proof, 1, 0);

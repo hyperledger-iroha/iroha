@@ -1579,7 +1579,7 @@ Root {
         },
         account_onboarding: None,
         faucet: None,
-        kagemusha_commands: None,
+        offline_cash_v1_commands: None,
         ram_lfe: None,
         tx_history: None,
         recipient_lookup: ToriiRecipientLookup {
@@ -2905,16 +2905,8 @@ Root {
     },
     settlement: Settlement {
         offline: Offline {
-            escrow_accounts: {},
-            kagemusha_release_policy_path: None,
-            kagemusha_artifact_dir: None,
-            kagemusha_catalog_qualification_seal_path: None,
-            kagemusha_promotion_controller_public_key: None,
-            kagemusha_catalog_revalidation_authority_key_id: None,
-            kagemusha_catalog_revalidation_authority_public_key: None,
-            kagemusha_promotion_reservation_path: None,
-            kagemusha_validator_qualification_seal_path: None,
-            kagemusha_max_decoded_bytes: 268435456,
+            reserve_accounts: {},
+            proof_release: None,
         },
         router: Router {
             twap_window: 60s,

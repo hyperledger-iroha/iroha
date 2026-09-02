@@ -739,7 +739,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             cors: A::ToriiCors::default(),
             ram_lfe: None,
             faucet: None,
-            kagemusha_commands: None,
+            offline_cash_v1_commands: None,
             tx_history: None,
             recipient_lookup: Default::default(),
             public_dataspace_upstreams: Vec::new(),

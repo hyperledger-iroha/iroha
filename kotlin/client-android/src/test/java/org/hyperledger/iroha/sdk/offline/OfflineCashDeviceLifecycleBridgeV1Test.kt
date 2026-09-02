@@ -16,7 +16,7 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
         assertEquals(null, bridge.capabilities())
         assertFailsWith<IllegalStateException> {
             bridge.execute(
-                OfflineCashDeviceLifecycleBridgeV1.Operation.COMMIT_INTENT_EXACT_NEXT,
+                OfflineCashDeviceLifecycleBridgeV1.Operation.PREPARE_EXACT_NEXT_TRANSITION,
                 fixed(0x11, 32),
                 byteArrayOf(1),
             )
@@ -29,6 +29,18 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
         val bridge = OfflineCashDeviceLifecycleBridgeV1.withEndpointForTests(endpoint)
         assertEquals(OfflineCashDeviceLifecycleBridgeV1.Availability.AVAILABLE, bridge.availability)
         assertContentEquals(fixed(0x22, 32), bridge.capabilities()!!.hardwarePolicyId())
+        assertContentEquals(
+            byteArrayOf(0xff.toByte(), 0xff.toByte(), 0x00, 0x00),
+            endpoint.capabilityFrame.copyOfRange(12, 16),
+        )
+        assertEquals(
+            (1..16).toList(),
+            OfflineCashDeviceLifecycleBridgeV1.Operation.values().map { it.code },
+        )
+        assertEquals(
+            (0 until 16).map { 1 shl it },
+            OfflineCashDeviceLifecycleBridgeV1.Capability.values().map { it.mask },
+        )
 
         for (operation in OfflineCashDeviceLifecycleBridgeV1.Operation.values()) {
             endpoint.operation = operation
@@ -44,12 +56,12 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
     @Test
     fun `command framing is canonical and hard rejects old bridge versions`() {
         val encoded = OfflineCashDeviceLifecycleBridgeV1.Codec.encodeCommand(
-            OfflineCashDeviceLifecycleBridgeV1.Operation.CANCEL_EXPIRED_RECEIVE,
+            OfflineCashDeviceLifecycleBridgeV1.Operation.STAGE_INBOUND_PAYMENT,
             fixed(0x11, 32),
             byteArrayOf(1, 2, 3),
         )
         assertEquals(
-            "494f43464a434d3101000600" +
+            "494f43464a434d3101000400" +
                 "11".repeat(32) +
                 "03000000" +
                 "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81" +
@@ -59,7 +71,7 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
 
         for (retiredVersion in listOf(4, 5)) {
             val response = OfflineCashDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
-                OfflineCashDeviceLifecycleBridgeV1.Operation.CANCEL_EXPIRED_RECEIVE,
+                OfflineCashDeviceLifecycleBridgeV1.Operation.STAGE_INBOUND_PAYMENT,
                 OfflineCashDeviceLifecycleBridgeV1.Status.SUCCESS,
                 fixed(0x11, 32),
                 byteArrayOf(4),
@@ -69,7 +81,7 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
             assertFailsWith<IllegalArgumentException> {
                 OfflineCashDeviceLifecycleBridgeV1.Codec.decodeResponse(
                     response,
-                    OfflineCashDeviceLifecycleBridgeV1.Operation.CANCEL_EXPIRED_RECEIVE,
+                    OfflineCashDeviceLifecycleBridgeV1.Operation.STAGE_INBOUND_PAYMENT,
                     fixed(0x11, 32),
                 )
             }
@@ -78,7 +90,7 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
 
     @Test
     fun `partial capabilities and unauthenticated success fail closed`() {
-        for (featureBit in 0 until 9) {
+        for (featureBit in 0 until 16) {
             val partial = FakeEndpoint()
             val capabilities = partial.capabilities()
             val byteIndex = 12 + featureBit / 8
@@ -95,7 +107,7 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
         val bridge = OfflineCashDeviceLifecycleBridgeV1.withEndpointForTests(endpoint)
         assertFailsWith<IllegalArgumentException> {
             bridge.execute(
-                OfflineCashDeviceLifecycleBridgeV1.Operation.RECOVER_TERMINAL,
+                OfflineCashDeviceLifecycleBridgeV1.Operation.RECOVER_TERMINAL_COMMIT_CERTIFICATE,
                 fixed(0x11, 32),
                 byteArrayOf(1),
             )
@@ -133,7 +145,7 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
     }
 
     private class FakeEndpoint : OfflineCashDeviceLifecycleBridgeV1.Endpoint {
-        var operation = OfflineCashDeviceLifecycleBridgeV1.Operation.RECOVER_TERMINAL
+        var operation = OfflineCashDeviceLifecycleBridgeV1.Operation.RECOVER_TERMINAL_COMMIT_CERTIFICATE
         var authenticator = fixed(0x44, 64)
         var lastCommand: ByteArray? = null
         var lastResponse: ByteArray? = null

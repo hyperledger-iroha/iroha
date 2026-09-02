@@ -4519,8 +4519,14 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id =
+            crate::sumeragi::synthetic_network_id("certified-serve-payload-store-test");
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("certified-serve-payload-store-test"),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -4531,6 +4537,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"Serve payload store AMX context"),
             execution_policy_hash: Hash::new(b"Serve payload store execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -4669,10 +4677,14 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id =
+            crate::sumeragi::synthetic_network_id("certified-serve-payload-recovery-test");
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id(
-                "certified-serve-payload-recovery-test",
-            ),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -4683,9 +4695,11 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"Serve payload recovery AMX context"),
             execution_policy_hash: Hash::new(b"Serve payload recovery execution policy"),
-            da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
+            da_layout: wire::recommended_data_availability_layout(),
             leader_seed: [0xB7; 32],
         };
         let proofs_of_possession = keys
@@ -4729,13 +4743,14 @@ mod tests {
         subject: wire::BlockSubject,
     ) -> AuthenticatedCertifiedBodyRequest {
         let context = verified.context();
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"Serve recovery parent state"),
-            Hash::new(b"Serve recovery post state"),
-            Hash::new(b"Serve recovery ordinary writes"),
-            1,
-            Hash::new(b"Serve recovery executed block"),
-        );
+        let execution_commitment =
+            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new(b"Serve recovery parent state"),
+                Hash::new(b"Serve recovery post state"),
+                Hash::new(b"Serve recovery ordinary writes"),
+                1,
+                Hash::new(b"Serve recovery executed block"),
+            );
         let signers = vec![0, 1, 2];
         let preimage = wire::Vote {
             round,
@@ -4903,13 +4918,14 @@ mod tests {
                 proposal_round: round,
                 phase: wire::GlobalPhase::Prepare,
                 subject,
-                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                    Hash::new(b"Serve payload store parent state"),
-                    Hash::new(b"Serve payload store post state"),
-                    Hash::new(b"Serve payload store ordinary writes"),
-                    1,
-                    Hash::new(b"Serve payload store executed block"),
-                ),
+                execution_commitment:
+                    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                        Hash::new(b"Serve payload store parent state"),
+                        Hash::new(b"Serve payload store post state"),
+                        Hash::new(b"Serve payload store ordinary writes"),
+                        1,
+                        Hash::new(b"Serve payload store executed block"),
+                    ),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xA5; 48],
             },

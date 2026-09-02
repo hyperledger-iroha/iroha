@@ -2272,11 +2272,9 @@ marker must be classified here before release.
   evidence, autoscale, drain, or retirement and remains outside this multilane
   ledger.
 - **Unrelated source markers:** the TODOs in
-  `crates/iroha_core/src/privacy_profiles.rs`, the Kagemusha SHA-256 table
-  implementation, and `crates/ivm/build.rs` concern privacy-engine activation,
-  an optional spread-word representation, and reproducible CUDA PTX artifacts.
-  None consumes a multilane identity or evidence class. They account for the
-  three non-consensus source TODO comments in the audit and are outside this
+  `crates/iroha_core/src/privacy_profiles.rs` and `crates/ivm/build.rs` concern
+  privacy-engine activation and reproducible CUDA PTX artifacts. Neither
+  consumes a multilane identity or evidence class; both remain outside this
   ledger.
 - **Wallet query roadmap items:** the two active TODO bullets in `roadmap.md`
   request an authenticated account-activity feed and a timestamp-bounded

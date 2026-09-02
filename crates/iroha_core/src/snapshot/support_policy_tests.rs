@@ -101,6 +101,8 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
             power: 1,
         })
         .collect::<Vec<_>>();
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = wire_v2::HeightContext {
         network_id,
         protocol_version: wire_v2::PROTOCOL_VERSION,
@@ -114,6 +116,8 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
         quorum: wire_v2::DualQuorum::from_roster(&roster)
             .expect("equal-power snapshot evidence quorum"),
         roster,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"snapshot evidence context"),
         execution_policy_hash: Hash::new(b"snapshot evidence execution policy"),
         da_layout: wire_v2::DataAvailabilityLayout {
@@ -140,13 +144,14 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
         height: context.height,
         view: 0,
     };
-    let execution_commitment = wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
-        Hash::new(b"snapshot evidence parent state"),
-        Hash::new(b"snapshot evidence post state"),
-        Hash::new(b"snapshot evidence ordinary writes"),
-        1,
-        Hash::new(b"snapshot evidence executed block wire"),
-    );
+    let execution_commitment =
+        wire_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            Hash::new(b"snapshot evidence parent state"),
+            Hash::new(b"snapshot evidence post state"),
+            Hash::new(b"snapshot evidence ordinary writes"),
+            1,
+            Hash::new(b"snapshot evidence executed block wire"),
+        );
     let signer: wire_v2::ValidatorIndex = 1;
     let signer_index = usize::try_from(signer).expect("snapshot evidence signer index fits usize");
     let signed_vote = |seed: u8| {
@@ -285,13 +290,16 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
                 .expect("derive snapshot-eviction validator PoP")
         })
         .collect::<Vec<_>>();
-    let execution_commitment_template = ExecutionCommitment::without_topups_or_merge_carrier(
-        Hash::new(b"snapshot eviction parent state"),
-        Hash::new(b"snapshot eviction post state"),
-        Hash::new(b"snapshot eviction ordinary writes"),
-        1,
-        Hash::new(b"snapshot eviction executed block wire placeholder"),
-    );
+    let execution_commitment_template =
+        ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            Hash::new(b"snapshot eviction parent state"),
+            Hash::new(b"snapshot eviction post state"),
+            Hash::new(b"snapshot eviction ordinary writes"),
+            1,
+            Hash::new(b"snapshot eviction executed block wire placeholder"),
+        );
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(*network_id, 0, &roster);
     let mut parent: Option<V2FinalityArtifact> = None;
     let mut artifacts = Vec::with_capacity(blocks.len());
     for block in blocks {
@@ -308,6 +316,9 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("snapshot-eviction fixture quorum"),
             roster: roster.clone(),
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster: offline_cash_mint_finality_epoch_roster
+                .clone(),
             nexus_amx_context_hash: Hash::new(b"snapshot eviction nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -1116,6 +1127,45 @@ async fn borrowed_snapshot_wsv_hash_matches_typed_canonical_surface() {
         tree_reference,
     );
     assert_eq!(canonical_state_snapshot_hash(&state), tree_reference);
+}
+#[test]
+fn staged_and_committed_wsv_hashes_commit_consensus_evidence() {
+    let state = state_factory();
+    let committed_without_evidence = canonical_state_snapshot_hash(&state);
+    let staged = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    assert_eq!(
+        canonical_staged_state_snapshot_hash(&staged),
+        committed_without_evidence,
+        "an unchanged evidence table must preserve staged and committed WSV parity"
+    );
+    drop(staged);
+
+    let evidence = canonical_snapshot_v2_phase_vote_evidence(*state.network_id_ref());
+    let evidence_key = crate::sumeragi::evidence::evidence_key(&evidence);
+    let mut staged = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    staged.world.consensus_evidence.insert(
+        evidence_key,
+        EvidenceRecord {
+            evidence,
+            recorded_at_height: 2,
+            recorded_at_view: 0,
+            recorded_at_ms: 2_000,
+            penalty_status: EvidencePenaltyStatus::Pending,
+        },
+    );
+    let staged_with_evidence = canonical_staged_state_snapshot_hash(&staged);
+    assert_ne!(
+        staged_with_evidence, committed_without_evidence,
+        "consensus-owned evidence must change the canonical WSV hash"
+    );
+    staged
+        .commit_world_overlay_for_testing()
+        .expect("commit the consensus evidence overlay");
+    assert_eq!(
+        staged_with_evidence,
+        canonical_state_snapshot_hash(&state),
+        "consensus evidence must have identical staged and committed WSV hashes"
+    );
 }
 #[tokio::test]
 async fn borrowed_snapshot_wsv_hash_canonicalizes_json_lexemes() {

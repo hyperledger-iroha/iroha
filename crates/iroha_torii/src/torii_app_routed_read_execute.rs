@@ -121,6 +121,7 @@ async fn resolve_torii_proof_record_for_supported_routes(
             *route,
             torii_read_request(
                 ToriiReadEndpointV1::ProofRecordGet,
+                ToriiFanoutRouteScopeV1::AllDataspaces,
                 *route,
                 vec![proof_id.clone()],
                 None,
@@ -364,6 +365,7 @@ where
         diagnostics.record_attempt();
         let mut request = torii_read_request(
             endpoint,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             *route,
             path_args.clone(),
             query_string.clone(),
@@ -496,6 +498,7 @@ async fn execute_torii_internal_account_asset_read_for_routes(
 async fn execute_torii_account_read_for_resolved_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
     canonical_account_id: String,
     format: ResponseFormat,
     proxy_memory: Option<ToriiProxyMemoryReservation>,
@@ -531,6 +534,7 @@ async fn execute_torii_account_read_for_resolved_routes(
             *route,
             torii_read_request(
                 ToriiReadEndpointV1::AccountGet,
+                route_scope.clone(),
                 *route,
                 vec![canonical_account_id.clone()],
                 None,
@@ -592,6 +596,7 @@ fn account_history_payload_has_more(payload: &Value, item_count: usize, page_lim
 async fn execute_torii_account_history_read_for_resolved_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
     path_args: Vec<String>,
     query_string: Option<String>,
     proxy_memory: Option<ToriiProxyMemoryReservation>,
@@ -655,6 +660,7 @@ async fn execute_torii_account_history_read_for_resolved_routes(
             routes[0],
             torii_read_request(
                 ToriiReadEndpointV1::AccountHistoryGet,
+                route_scope.clone(),
                 routes[0],
                 vec![account_id],
                 query_string,
@@ -680,12 +686,14 @@ async fn execute_torii_account_history_read_for_resolved_routes(
         |route, page_query_string| {
             let account_id = account_id.clone();
             let proxy_memory = proxy_memory.clone();
+            let route_scope = route_scope.clone();
             async move {
                 execute_torii_read_for_route(
                     app,
                     route,
                     torii_read_request(
                         ToriiReadEndpointV1::AccountHistoryGet,
+                        route_scope,
                         route,
                         vec![account_id],
                         page_query_string,
@@ -835,6 +843,7 @@ where
 async fn execute_torii_read_fanout_for_resolved_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
     merge: ToriiReadFanoutMergeV1,
     endpoint: ToriiReadEndpointV1,
     path_args: Vec<String>,
@@ -846,6 +855,7 @@ async fn execute_torii_read_fanout_for_resolved_routes(
     execute_torii_read_for_supported_resolved_routes(
         app,
         routes,
+        route_scope,
         merge,
         endpoint,
         path_args,
@@ -908,6 +918,7 @@ async fn execute_incoming_torii_read_request_locally_bounded(
 async fn execute_torii_read_for_supported_resolved_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
     merge: ToriiReadFanoutMergeV1,
     endpoint: ToriiReadEndpointV1,
     path_args: Vec<String>,
@@ -946,6 +957,7 @@ async fn execute_torii_read_for_supported_resolved_routes(
     let response = execute_torii_read_fanout_for_resolved_routes_admitted(
         app,
         routes,
+        route_scope,
         merge,
         endpoint,
         path_args,
@@ -961,6 +973,7 @@ async fn execute_torii_read_for_supported_resolved_routes(
 async fn execute_torii_read_fanout_for_resolved_routes_admitted(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
     merge: ToriiReadFanoutMergeV1,
     endpoint: ToriiReadEndpointV1,
     path_args: Vec<String>,
@@ -975,6 +988,7 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
                 return execute_torii_accounts_list_fanout_for_resolved_routes(
                     app,
                     routes,
+                    route_scope,
                     query_string,
                     proxy_memory,
                 )
@@ -983,6 +997,7 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
             match execute_torii_fanout_json_payloads_resolved_routes(
                 app,
                 routes,
+                route_scope,
                 endpoint,
                 path_args,
                 query_string,
@@ -1020,6 +1035,7 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
                         route,
                         torii_read_request(
                             endpoint,
+                            route_scope.clone(),
                             route,
                             path_args.clone(),
                             query_string.clone(),
@@ -1061,6 +1077,7 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
             execute_torii_account_read_for_resolved_routes(
                 app,
                 routes,
+                route_scope,
                 canonical_account_id,
                 response_format_from_torii_proxy(response_format),
                 proxy_memory,
@@ -1071,6 +1088,7 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
             execute_torii_account_history_read_for_resolved_routes(
                 app,
                 routes,
+                route_scope,
                 path_args,
                 query_string,
                 proxy_memory,
@@ -1081,6 +1099,7 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
             match execute_torii_fanout_json_payloads_resolved_routes(
                 app,
                 routes,
+                route_scope,
                 endpoint,
                 path_args,
                 query_string,
@@ -1101,6 +1120,7 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
             match execute_torii_fanout_json_payloads_resolved_routes(
                 app,
                 routes,
+                route_scope,
                 endpoint,
                 path_args,
                 query_string,
@@ -1121,6 +1141,7 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
             match execute_torii_fanout_json_payloads_resolved_routes(
                 app,
                 routes,
+                route_scope,
                 endpoint,
                 path_args,
                 query_string,
@@ -1184,6 +1205,7 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
             match execute_torii_fanout_space_directory_manifest_payloads_resolved_routes(
                 app,
                 routes,
+                route_scope,
                 path_args,
                 shard_query,
                 body,
@@ -1226,6 +1248,7 @@ async fn execute_torii_read_fanout_proxy_request(
     execute_torii_read_fanout_for_resolved_routes(
         app,
         routes,
+        request.route_scope,
         request.merge,
         request.endpoint,
         request.path_args,
@@ -1280,6 +1303,7 @@ async fn execute_torii_read_via_nexus_for_supported_routes(
         return execute_torii_read_fanout_for_resolved_routes(
             app,
             routes,
+            route_scope,
             merge,
             endpoint,
             path_args,
@@ -1313,27 +1337,6 @@ async fn execute_torii_read_via_nexus_for_supported_routes(
     )
     .await
 }
-#[cfg(feature = "app_api")]
-async fn execute_torii_fanout_list_read(
-    app: &SharedAppState,
-    endpoint: ToriiReadEndpointV1,
-    path_args: Vec<String>,
-    query_string: Option<String>,
-    body: Vec<u8>,
-) -> Response {
-    execute_torii_read_fanout_via_nexus(
-        app,
-        ToriiFanoutRouteScopeV1::AllDataspaces,
-        ToriiReadFanoutMergeV1::List,
-        endpoint,
-        path_args,
-        query_string,
-        body,
-        ToriiProxyResponseFormatV1::Json,
-    )
-    .await
-}
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_visible_fanout_list_read(
     app: &SharedAppState,
@@ -1383,6 +1386,7 @@ async fn execute_torii_list_read_for_routes(
         execute_torii_read_fanout_for_resolved_routes(
             app,
             routes,
+            route_scope,
             ToriiReadFanoutMergeV1::List,
             endpoint,
             path_args,
@@ -1418,6 +1422,7 @@ async fn execute_torii_account_history_read_for_routes(
         execute_torii_read_fanout_for_resolved_routes(
             app,
             routes,
+            route_scope,
             ToriiReadFanoutMergeV1::AccountHistory,
             ToriiReadEndpointV1::AccountHistoryGet,
             path_args,
@@ -1430,8 +1435,28 @@ async fn execute_torii_account_history_read_for_routes(
     }
 }
 #[cfg(feature = "app_api")]
-async fn execute_torii_fanout_singleton_read(
+async fn execute_torii_public_pipeline_status_fanout(
     app: &SharedAppState,
+    query_string: Option<String>,
+) -> Response {
+    // Pipeline status is a closed, redacted public projection. Unlike data-bearing singleton
+    // reads, its route contract deliberately spans every dataspace without a caller identity.
+    execute_torii_read_fanout_via_nexus(
+        app,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiReadFanoutMergeV1::Singleton,
+        ToriiReadEndpointV1::PipelineTransactionStatusGet,
+        Vec::new(),
+        query_string,
+        Vec::new(),
+        ToriiProxyResponseFormatV1::Json,
+    )
+    .await
+}
+#[cfg(feature = "app_api")]
+async fn execute_torii_visible_fanout_singleton_read(
+    app: &SharedAppState,
+    caller: Option<&AccountId>,
     endpoint: ToriiReadEndpointV1,
     path_args: Vec<String>,
     query_string: Option<String>,
@@ -1439,7 +1464,9 @@ async fn execute_torii_fanout_singleton_read(
 ) -> Response {
     execute_torii_read_fanout_via_nexus(
         app,
-        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: caller.map(ToString::to_string),
+        },
         ToriiReadFanoutMergeV1::Singleton,
         endpoint,
         path_args,
@@ -1448,28 +1475,6 @@ async fn execute_torii_fanout_singleton_read(
         ToriiProxyResponseFormatV1::Json,
     )
     .await
-}
-#[cfg(feature = "app_api")]
-async fn execute_torii_asset_definition_singleton_read(
-    app: &SharedAppState,
-    endpoint: ToriiReadEndpointV1,
-    definition_id: &AssetDefinitionId,
-) -> Response {
-    let definition_literal = definition_id.to_string();
-    if let Some(route) = torii_asset_definition_read_route(app.as_ref(), definition_id) {
-        return execute_torii_singleton_read_for_routes(
-            app,
-            vec![route],
-            ToriiFanoutRouteScopeV1::AllDataspaces,
-            endpoint,
-            vec![definition_literal],
-            None,
-            Vec::new(),
-        )
-        .await;
-    }
-    execute_torii_fanout_singleton_read(app, endpoint, vec![definition_literal], None, Vec::new())
-        .await
 }
 #[cfg(feature = "app_api")]
 async fn execute_torii_singleton_read_for_routes(
@@ -1497,6 +1502,7 @@ async fn execute_torii_singleton_read_for_routes(
         execute_torii_read_fanout_for_resolved_routes(
             app,
             routes,
+            route_scope,
             ToriiReadFanoutMergeV1::Singleton,
             endpoint,
             path_args,
@@ -1507,26 +1513,6 @@ async fn execute_torii_singleton_read_for_routes(
         )
         .await
     }
-}
-#[cfg(feature = "app_api")]
-async fn execute_torii_account_read_for_routes(
-    app: &SharedAppState,
-    routes: Vec<RoutingDecision>,
-    canonical_account_id: String,
-    format: ResponseFormat,
-) -> Response {
-    execute_torii_read_fanout_for_resolved_routes(
-        app,
-        routes,
-        ToriiReadFanoutMergeV1::Account,
-        ToriiReadEndpointV1::AccountGet,
-        vec![canonical_account_id],
-        None,
-        Vec::new(),
-        torii_proxy_response_format(format),
-        None,
-    )
-    .await
 }
 #[cfg(feature = "app_api")]
 async fn execute_torii_account_read_for_routes_scoped(
@@ -1552,6 +1538,7 @@ async fn execute_torii_account_read_for_routes_scoped(
         execute_torii_read_fanout_for_resolved_routes(
             app,
             routes,
+            route_scope,
             ToriiReadFanoutMergeV1::Account,
             ToriiReadEndpointV1::AccountGet,
             vec![canonical_account_id],
@@ -1564,14 +1551,17 @@ async fn execute_torii_account_read_for_routes_scoped(
     }
 }
 #[cfg(feature = "app_api")]
-async fn execute_torii_fanout_portfolio_read(
+async fn execute_torii_visible_fanout_portfolio_read(
     app: &SharedAppState,
+    caller: Option<&AccountId>,
     uaid_literal: String,
     query_string: Option<String>,
 ) -> Response {
     execute_torii_read_fanout_via_nexus(
         app,
-        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: caller.map(ToString::to_string),
+        },
         ToriiReadFanoutMergeV1::Portfolio,
         ToriiReadEndpointV1::AccountsPortfolio,
         vec![uaid_literal],
@@ -1582,14 +1572,17 @@ async fn execute_torii_fanout_portfolio_read(
     .await
 }
 #[cfg(feature = "app_api")]
-async fn execute_torii_fanout_dataspace_summary_read(
+async fn execute_torii_visible_fanout_dataspace_summary_read(
     app: &SharedAppState,
+    caller: Option<&AccountId>,
     account_literal: String,
     query_string: Option<String>,
 ) -> Response {
     execute_torii_read_fanout_via_nexus(
         app,
-        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: caller.map(ToString::to_string),
+        },
         ToriiReadFanoutMergeV1::DataspaceSummary,
         ToriiReadEndpointV1::NexusDataspacesAccountSummary,
         vec![account_literal],
@@ -1600,14 +1593,17 @@ async fn execute_torii_fanout_dataspace_summary_read(
     .await
 }
 #[cfg(feature = "app_api")]
-async fn execute_torii_fanout_space_directory_bindings_read(
+async fn execute_torii_visible_fanout_space_directory_bindings_read(
     app: &SharedAppState,
+    caller: Option<&AccountId>,
     uaid_literal: String,
     query_string: Option<String>,
 ) -> Response {
     execute_torii_read_fanout_via_nexus(
         app,
-        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: caller.map(ToString::to_string),
+        },
         ToriiReadFanoutMergeV1::SpaceDirectoryBindings,
         ToriiReadEndpointV1::SpaceDirectoryBindingsGet,
         vec![uaid_literal],
@@ -1618,8 +1614,9 @@ async fn execute_torii_fanout_space_directory_bindings_read(
     .await
 }
 #[cfg(feature = "app_api")]
-async fn execute_torii_fanout_space_directory_manifests_read(
+async fn execute_torii_visible_fanout_space_directory_manifests_read(
     app: &SharedAppState,
+    caller: Option<&AccountId>,
     uaid_literal: String,
     query_string: Option<String>,
     offset: u64,
@@ -1627,7 +1624,9 @@ async fn execute_torii_fanout_space_directory_manifests_read(
 ) -> Response {
     execute_torii_read_fanout_via_nexus(
         app,
-        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: caller.map(ToString::to_string),
+        },
         ToriiReadFanoutMergeV1::SpaceDirectoryManifests {
             page_offset: offset,
             page_limit: limit,
@@ -1637,31 +1636,6 @@ async fn execute_torii_fanout_space_directory_manifests_read(
         query_string,
         Vec::new(),
         ToriiProxyResponseFormatV1::Json,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-async fn execute_torii_space_directory_manifests_read_for_resolved_routes(
-    app: &SharedAppState,
-    routes: Vec<RoutingDecision>,
-    uaid_literal: String,
-    query_string: Option<String>,
-    offset: u64,
-    limit: Option<u64>,
-) -> Response {
-    execute_torii_read_fanout_for_resolved_routes(
-        app,
-        routes,
-        ToriiReadFanoutMergeV1::SpaceDirectoryManifests {
-            page_offset: offset,
-            page_limit: limit,
-        },
-        ToriiReadEndpointV1::SpaceDirectoryManifestsGet,
-        vec![uaid_literal],
-        query_string,
-        Vec::new(),
-        ToriiProxyResponseFormatV1::Json,
-        None,
     )
     .await
 }

@@ -28,22 +28,12 @@ pub const CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID: &str =
 /// Canonical circuit identifier for unshielding with one change output.
 pub const CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4";
-/// Canonical circuit identifier for Kagemusha top-up shielding.
-pub const KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID: &str =
-    "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3";
 /// IPA domain exponent for confidential transfer V2.
 pub const CONFIDENTIAL_TRANSFER_V2_IPA_K: u32 = 13;
 /// IPA domain exponent for confidential unshield V2.
 pub const CONFIDENTIAL_UNSHIELD_V2_IPA_K: u32 = 13;
 /// IPA domain exponent for confidential unshield V3.
 pub const CONFIDENTIAL_UNSHIELD_V3_IPA_K: u32 = 13;
-/// IPA domain exponent for Kagemusha top-up shielding.
-pub const KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K: u32 = 13;
-/// Reviewed digest of the canonical Kagemusha top-up verifier key.
-pub const KAGEMUSHA_TOPUP_SHIELD_V2_VK_DIGEST_V1: [u8; 32] = [
-    0x26, 0xc4, 0xdf, 0x74, 0x41, 0xa0, 0xf0, 0x29, 0xf3, 0x6f, 0x51, 0x21, 0x67, 0x64, 0x60, 0x5f,
-    0xc9, 0x93, 0xad, 0x6d, 0xaf, 0x57, 0x39, 0xd3, 0x61, 0x60, 0x4b, 0x25, 0x56, 0x58, 0x66, 0x32,
-];
 /// Reviewed digest of the canonical full-unshield verifier key.
 pub const CONFIDENTIAL_UNSHIELD_V2_VK_DIGEST_V1: [u8; 32] = [
     0xab, 0xd2, 0xc9, 0xf8, 0x0e, 0x4d, 0xea, 0xa9, 0x6d, 0xa6, 0xe2, 0x9c, 0xfc, 0x56, 0xcd, 0xf6,
@@ -65,7 +55,7 @@ pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2
 /// slots; its separately persisted current root retains the completed root.
 pub type ConfidentialTreeFrontierV2 = [Option<[u8; 32]>; CONFIDENTIAL_TREE_DEPTH_V2];
 /// Unsigned range families shared by the public schema, standalone circuits,
-/// and Kagemusha recursive adapters.
+/// and confidential proof builders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConfidentialUnsignedRangeV1 {
     /// Atomic confidential amounts and public redemption amounts.
@@ -173,40 +163,6 @@ macro_rules! define_confidential_public_input_spec {
 /// Canonical public-input schema for confidential transfer V2.
 pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v3","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","network_tag"]}"#;
 define_confidential_public_input_spec! {
-    /// Parsed public inputs for one Kagemusha top-up shield proof.
-    pub struct KagemushaTopUpShieldPublicInputsV2;
-    pub(crate) enum KagemushaTopUpPublicInputV1;
-    constants pub const;
-    count 11;
-    order KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUT_ORDER_V1;
-    schema KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1 =
-        "{\"schema\":\"kagemusha_topup_shield_v3\",\"hash\":\"axiom_poseidon_t3_r2_rf8_rp57_mds0\",\"merkle_leaf_domain\":\"cfleaf03\",\"merkle_node_domain\":\"cfnode03\",\"public_inputs\":[",
-        "]}";
-    first OutputCommitment => output_commitment,
-        "output_commitment", "Newly inserted confidential note commitment.", None;
-    rest
-        SpendNullifier => spend_nullifier,
-            "spend_nullifier", "Nullifier derived for the inserted note.", None;
-        InitialRoot => initial_root,
-            "initial_root", "Root before insertion.", None;
-        FinalizedRoot => finalized_root,
-            "finalized_root", "Root after insertion.", None;
-        AtomicAmount => atomic_amount,
-            "atomic_amount", "Canonically encoded atomic amount.", Some(ConfidentialUnsignedRangeV1::Amount);
-        AssetScale => asset_scale,
-            "asset_scale", "Canonically encoded asset scale.", Some(ConfidentialUnsignedRangeV1::AssetScale);
-        LeafIndex => leaf_index,
-            "leaf_index", "Canonically encoded leaf index.", Some(ConfidentialUnsignedRangeV1::LeafIndex);
-        AssetTag => asset_tag,
-            "asset_tag", "Asset-domain tag.", None;
-        NetworkTag => network_tag,
-            "network_tag", "Exact-network domain tag.", None;
-        PayerTag => payer_tag,
-            "payer_tag", "Payer identity tag.", None;
-        OperationTag => operation_tag,
-            "operation_tag", "Top-up operation tag.", None;
-}
-define_confidential_public_input_spec! {
     /// Typed full-unshield public-input contract.
     pub(crate) struct ConfidentialUnshieldFullPublicInputsV1;
     pub(crate) enum ConfidentialUnshieldFullPublicInputV1;
@@ -264,16 +220,8 @@ define_confidential_public_input_spec! {
         NetworkTag => network_tag,
             "network_tag", "Exact-network domain tag.", None;
 }
-/// Compatibility name for the second Kagemusha top-up schema contract.
-///
-/// The secure-relation rollout changed the authenticated schema contents while
-/// retaining the same public columns. Both names therefore identify the exact
-/// same canonical bytes during the first-release migration.
-pub const KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2: &[u8] =
-    KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1;
 /// Maximum accepted encoded confidential proof size.
-pub const CONFIDENTIAL_V2_MAX_PROOF_BYTES: u32 =
-    iroha_data_model::offline::KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4 as u32;
+pub const CONFIDENTIAL_V2_MAX_PROOF_BYTES: u32 = 192 * 1024;
 /// Width of the pinned Axiom Poseidon secure permutation.
 pub const CONFIDENTIAL_POSEIDON_T_V3: usize = 3;
 /// Sponge rate of the pinned Axiom Poseidon secure permutation.
@@ -298,10 +246,6 @@ pub const CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3: u64 = u64::from_le_bytes(
 pub const CONFIDENTIAL_POSEIDON_ASSET_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfasst03");
 /// Domain word for network tags.
 pub const CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfnet_03");
-/// Domain word for Kagemusha payer tags.
-pub const CONFIDENTIAL_POSEIDON_PAYER_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfpayr03");
-/// Domain word for Kagemusha operation tags.
-pub const CONFIDENTIAL_POSEIDON_OPERATION_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfoper03");
 /// Canonical Merkle authentication path used by confidential circuits.
 #[derive(Debug, Clone)]
 pub struct ConfidentialMerklePathV2 {
@@ -365,23 +309,6 @@ pub struct ConfidentialTransferProofV2 {
     pub output_commitments: Vec<[u8; 32]>,
     /// Authenticated input commitment-tree root.
     pub root: [u8; 32],
-    /// Encoded Halo2 proof envelope.
-    pub proof: ProofBox,
-}
-/// Generated Kagemusha top-up shield evidence and public state.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[derive(Debug, Clone)]
-pub struct KagemushaTopUpShieldProofV2 {
-    /// Newly inserted confidential note commitment.
-    pub output_commitment: [u8; 32],
-    /// Nullifier derived for the inserted note.
-    pub spend_nullifier: [u8; 32],
-    /// Root before insertion.
-    pub initial_root: [u8; 32],
-    /// Root after insertion.
-    pub finalized_root: [u8; 32],
-    /// Inserted leaf index.
-    pub leaf_index: u32,
     /// Encoded Halo2 proof envelope.
     pub proof: ProofBox,
 }
@@ -507,10 +434,6 @@ impl Drop for ConfidentialUnshieldOutputV3 {
 pub fn is_confidential_transfer_v2_circuit_id(raw: &str) -> bool {
     raw == CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
 }
-/// Return whether an identifier exactly selects the production Kagemusha top-up circuit.
-pub fn is_kagemusha_topup_shield_v2_circuit_id(raw: &str) -> bool {
-    raw == KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID
-}
 /// Return whether an identifier exactly selects the production full-unshield circuit.
 pub fn is_confidential_unshield_v2_circuit_id(raw: &str) -> bool {
     raw == CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID
@@ -581,69 +504,6 @@ pub fn confidential_transfer_v2_vk_box() -> Result<VerifyingKeyBox, String> {
             )
         })
         .clone()
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-/// Return the process-cached canonical Kagemusha top-up verifying key.
-pub fn kagemusha_topup_shield_v2_vk_box() -> Result<VerifyingKeyBox, String> {
-    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            build_confidential_v2_vk_box(
-                KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K,
-                KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-                &secure_relation_v3::KagemushaTopUpShieldCircuitV3::<
-                    CONFIDENTIAL_TREE_DEPTH_V2,
-                >::default(),
-            )
-        })
-        .clone()
-}
-/// Require an exact canonical Kagemusha top-up verifying key.
-pub fn ensure_kagemusha_topup_shield_v2_canonical_vk_box(
-    vk_box: &VerifyingKeyBox,
-) -> Result<(), String> {
-    if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
-        return Err(format!(
-            "Kagemusha top-up shield v2 verifier key backend `{}` is not `{}`",
-            vk_box.backend,
-            super::ZK_BACKEND_HALO2_IPA
-        ));
-    }
-    if vk_box.bytes.is_empty() {
-        return Err("Kagemusha top-up shield v2 verifier key must be non-empty".to_owned());
-    }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-    {
-        ensure_confidential_v2_vk_box_shape(
-            vk_box,
-            KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-            KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K,
-            "Kagemusha top-up shield v2",
-        )?;
-        let canonical = kagemusha_topup_shield_v2_vk_box()?;
-        if super::hash_vk(&canonical) != KAGEMUSHA_TOPUP_SHIELD_V2_VK_DIGEST_V1 {
-            return Err(
-                "generated Kagemusha top-up shield v2 verifier key diverges from its reviewed digest"
-                    .to_owned(),
-            );
-        }
-        if super::hash_vk(vk_box) != KAGEMUSHA_TOPUP_SHIELD_V2_VK_DIGEST_V1
-            || vk_box.bytes != canonical.bytes
-        {
-            return Err(
-                "Kagemusha top-up shield v2 verifier key must match the canonical issuance circuit key"
-                    .to_owned(),
-            );
-        }
-        Ok(())
-    }
-    #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-    {
-        Err(
-            "Kagemusha top-up shield v2 verifier key validation requires the Halo2/IPA backend"
-                .to_owned(),
-        )
-    }
 }
 /// Require an exact canonical confidential-transfer verifying key.
 pub fn ensure_confidential_transfer_v2_canonical_vk_box(
@@ -850,20 +710,6 @@ pub fn confidential_transfer_v2_vk_record(
     )
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-/// Build an active verifier record for Kagemusha top-up shielding V2.
-pub fn kagemusha_topup_shield_v2_vk_record(
-    name: &str,
-    version: u32,
-) -> Result<VerifyingKeyRecord, String> {
-    confidential_v2_vk_record(
-        name,
-        version,
-        KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2,
-        kagemusha_topup_shield_v2_vk_box()?,
-    )
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Build an active verifier record for confidential unshield V2.
 pub fn confidential_unshield_v2_vk_record(
     name: &str,
@@ -922,17 +768,6 @@ pub fn parse_transfer_public_inputs(
         columns[7][0],
         columns[8][0],
     ))
-}
-/// Parse the exact public columns from a Kagemusha top-up proof envelope.
-pub fn parse_kagemusha_topup_shield_public_inputs_v2(
-    proof_bytes: &[u8],
-) -> Result<KagemushaTopUpShieldPublicInputsV2, String> {
-    exact_confidential_public_columns::<11>(
-        proof_bytes,
-        "Kagemusha top-up shield",
-        KagemushaTopUpPublicInputV1::ALL.map(KagemushaTopUpPublicInputV1::name),
-    )
-    .map(KagemushaTopUpShieldPublicInputsV2::from_array)
 }
 /// Parse the exact public columns from a full-unshield proof envelope.
 pub fn parse_unshield_public_inputs(
@@ -1172,9 +1007,7 @@ where
         hasher.squeeze()
     })
 }
-/// Shared confidential relation expressions used by standalone proofs and Kagemusha's recursive Eq
-/// step. Keeping this module as the single source of the note, nullifier, and Merkle formulas
-/// prevents the recursive circuit from drifting away from the public confidential proof system.
+/// Shared confidential relation expressions used by standalone proofs.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(super) mod confidential_relation_gadget {
     use halo2_base::{
@@ -1233,8 +1066,7 @@ pub(in crate::zk) mod secure_relation_v3 {
         ConfidentialTransferWitnessV2, ConfidentialUnshieldChangePublicInputV1,
         ConfidentialUnshieldChangePublicInputsV1, ConfidentialUnshieldFullPublicInputV1,
         ConfidentialUnshieldFullPublicInputsV1, ConfidentialUnshieldWitnessV2,
-        ConfidentialUnshieldWitnessV3, ConfidentialUnsignedRangeV1, KagemushaTopUpPublicInputV1,
-        KagemushaTopUpShieldPublicInputsV2, KagemushaTopUpShieldWitnessV2, Scalar,
+        ConfidentialUnshieldWitnessV3, ConfidentialUnsignedRangeV1, Scalar,
         confidential_relation_gadget, scalar_from_repr, scalar_from_u128,
     };
     use halo2_base::{
@@ -1333,41 +1165,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             return Err(
                 "absent transfer output 1 opening must use the canonical all-zero form".to_owned(),
             );
-        }
-        Ok(())
-    }
-    pub(super) fn validate_topup_witness<const DEPTH: usize>(
-        witness: &KagemushaTopUpShieldWitnessV2,
-    ) -> Result<(), String> {
-        if witness.amount == 0 {
-            return Err("Kagemusha top-up amount must be non-zero".to_owned());
-        }
-        if witness.rho == [0; 32] {
-            return Err("Kagemusha top-up rho must be non-zero".to_owned());
-        }
-        if DEPTH >= u32::BITS as usize || u64::from(witness.leaf_index) >= (1u64 << DEPTH) {
-            return Err(format!(
-                "Kagemusha top-up leaf index must fit the {DEPTH}-bit tree"
-            ));
-        }
-        for (bytes, label) in [
-            (witness.spend_scalar, "Kagemusha top-up spend scalar"),
-            (witness.diversifier, "Kagemusha top-up diversifier"),
-            (witness.asset_tag, "Kagemusha top-up asset tag"),
-            (witness.network_tag, "Kagemusha top-up network tag"),
-            (witness.payer_tag, "Kagemusha top-up payer tag"),
-            (witness.operation_tag, "Kagemusha top-up operation tag"),
-        ] {
-            canonical_nonzero_scalar(bytes, label)?;
-        }
-        validate_path::<DEPTH>(&witness.zero_path, "Kagemusha top-up empty-leaf path")?;
-        if witness.output_nodes.len() != DEPTH {
-            return Err(format!(
-                "Kagemusha top-up must carry exactly {DEPTH} output path nodes"
-            ));
-        }
-        for (level, node) in witness.output_nodes.iter().copied().enumerate() {
-            canonical_scalar(node, &format!("Kagemusha top-up output_node[{level}]"))?;
         }
         Ok(())
     }
@@ -1810,220 +1607,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
         Ok(builder)
     }
-    /// Assign the complete secure Kagemusha top-up relation into an existing
-    /// Eq/Fp builder and return named public cells.
-    pub(crate) fn assign_kagemusha_topup_shield_v3<const DEPTH: usize>(
-        ctx: &mut Context<Scalar>,
-        range: &halo2_base::gates::RangeChip<Scalar>,
-        witness: Option<&KagemushaTopUpShieldWitnessV2>,
-    ) -> Result<KagemushaTopUpShieldPublicInputsV2<AssignedValue<Scalar>>, String> {
-        if let Some(witness) = witness {
-            validate_topup_witness::<DEPTH>(witness)?;
-        }
-        let gate = range.gate();
-        let amount = ctx.load_witness(scalar_from_u128(witness.map_or(0, |value| value.amount)));
-        range.range_check(
-            ctx,
-            amount,
-            KagemushaTopUpPublicInputV1::AtomicAmount
-                .range()
-                .expect("top-up amount range is specified")
-                .bits(),
-        );
-        assert_nonzero(ctx, &range, amount);
-        let scale = ctx.load_witness(Scalar::from(u64::from(
-            witness.map_or(0, |value| value.asset_scale),
-        )));
-        range.range_check(
-            ctx,
-            scale,
-            KagemushaTopUpPublicInputV1::AssetScale
-                .range()
-                .expect("top-up scale range is specified")
-                .bits(),
-        );
-        let leaf_index = ctx.load_witness(Scalar::from(u64::from(
-            witness.map_or(0, |value| value.leaf_index),
-        )));
-        let leaf_index_bits = KagemushaTopUpPublicInputV1::LeafIndex
-            .range()
-            .expect("top-up leaf-index range is specified")
-            .bits();
-        if DEPTH != leaf_index_bits {
-            return Err(
-                "Kagemusha top-up circuit depth does not match its public-input spec".into(),
-            );
-        }
-        range.range_check(ctx, leaf_index, leaf_index_bits);
-        let index_bits = gate.num_to_bits(ctx, leaf_index, leaf_index_bits);
-        let rho = ctx.load_witness(if let Some(witness) = witness {
-            super::hash_to_scalar(b"iroha.confidential.v3.note_rho", &[&witness.rho])
-        } else {
-            Scalar::ZERO
-        });
-        let decode = |bytes, label| match witness {
-            Some(_) => canonical_nonzero_scalar(bytes, label).expect("validated top-up scalar"),
-            None => Scalar::ZERO,
-        };
-        let spend = ctx.load_witness(decode(
-            witness.map_or([0; 32], |value| value.spend_scalar),
-            "Kagemusha top-up spend scalar",
-        ));
-        let diversifier = ctx.load_witness(decode(
-            witness.map_or([0; 32], |value| value.diversifier),
-            "Kagemusha top-up diversifier",
-        ));
-        let asset = ctx.load_witness(decode(
-            witness.map_or([0; 32], |value| value.asset_tag),
-            "Kagemusha top-up asset tag",
-        ));
-        let network = ctx.load_witness(decode(
-            witness.map_or([0; 32], |value| value.network_tag),
-            "Kagemusha top-up network tag",
-        ));
-        let payer = ctx.load_witness(decode(
-            witness.map_or([0; 32], |value| value.payer_tag),
-            "Kagemusha top-up payer tag",
-        ));
-        let operation = ctx.load_witness(decode(
-            witness.map_or([0; 32], |value| value.operation_tag),
-            "Kagemusha top-up operation tag",
-        ));
-        for value in [rho, spend, diversifier, asset, network, payer, operation] {
-            assert_nonzero(ctx, &range, value);
-        }
-        let poseidon = confidential_relation_gadget::ConfidentialPoseidonChipV3::new(ctx, &range);
-        let owner = poseidon.hash(
-            ctx,
-            &range,
-            CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3,
-            &[spend, diversifier],
-        );
-        let output_commitment = note_hash(ctx, &range, &poseidon, amount, rho, owner, asset);
-        let spend_nullifier = nullifier_hash(ctx, &range, &poseidon, spend, rho, asset, network);
-        for value in [output_commitment, spend_nullifier] {
-            assert_nonzero(ctx, &range, value);
-        }
-        let note_nullifier_equal = gate.is_equal(ctx, output_commitment, spend_nullifier);
-        gate.assert_is_const(ctx, &note_nullifier_equal, &Scalar::ZERO);
-        let zero = ctx.load_zero();
-        let mut initial_node = poseidon.hash(
-            ctx,
-            &range,
-            CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3,
-            &[zero],
-        );
-        let mut final_node = poseidon.hash(
-            ctx,
-            &range,
-            CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3,
-            &[output_commitment],
-        );
-        for (level, expected_direction) in index_bits.into_iter().enumerate() {
-            let sibling = ctx.load_witness(
-                witness
-                    .and_then(|value| value.zero_path.siblings.get(level).copied())
-                    .map_or(Scalar::ZERO, |bytes| {
-                        canonical_scalar(bytes, "validated Kagemusha top-up sibling")
-                            .expect("validated Kagemusha top-up sibling")
-                    }),
-            );
-            let direction = ctx.load_witness(Scalar::from(u64::from(
-                witness
-                    .and_then(|value| value.zero_path.directions.get(level).copied())
-                    .unwrap_or(0),
-            )));
-            gate.assert_bit(ctx, direction);
-            assert_equal(ctx, &range, direction, expected_direction);
-            let initial_left = gate.select(ctx, sibling, initial_node, direction);
-            let initial_right = gate.select(ctx, initial_node, sibling, direction);
-            initial_node = poseidon.hash(
-                ctx,
-                &range,
-                CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
-                &[initial_left, initial_right],
-            );
-            let carried_initial = ctx.load_witness(
-                witness
-                    .and_then(|value| value.zero_path.witness_nodes.get(level).copied())
-                    .map_or(Scalar::ZERO, |bytes| {
-                        canonical_scalar(bytes, "validated Kagemusha top-up empty node")
-                            .expect("validated Kagemusha top-up empty node")
-                    }),
-            );
-            assert_equal(ctx, &range, initial_node, carried_initial);
-            let final_left = gate.select(ctx, sibling, final_node, direction);
-            let final_right = gate.select(ctx, final_node, sibling, direction);
-            final_node = poseidon.hash(
-                ctx,
-                &range,
-                CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
-                &[final_left, final_right],
-            );
-            let carried_final = ctx.load_witness(
-                witness
-                    .and_then(|value| value.output_nodes.get(level).copied())
-                    .map_or(Scalar::ZERO, |bytes| {
-                        canonical_scalar(bytes, "validated Kagemusha top-up output node")
-                            .expect("validated Kagemusha top-up output node")
-                    }),
-            );
-            assert_equal(ctx, &range, final_node, carried_final);
-        }
-        let carried_initial_root = ctx.load_witness(witness.map_or(Scalar::ZERO, |value| {
-            canonical_scalar(
-                value.zero_path.root,
-                "validated Kagemusha top-up initial root",
-            )
-            .expect("validated Kagemusha top-up initial root")
-        }));
-        assert_equal(ctx, &range, initial_node, carried_initial_root);
-        for root in [initial_node, final_node] {
-            assert_nonzero(ctx, &range, root);
-        }
-        let roots_equal = gate.is_equal(ctx, initial_node, final_node);
-        gate.assert_is_const(ctx, &roots_equal, &Scalar::ZERO);
-        Ok(KagemushaTopUpShieldPublicInputsV2 {
-            output_commitment,
-            spend_nullifier,
-            initial_root: initial_node,
-            finalized_root: final_node,
-            atomic_amount: amount,
-            asset_scale: scale,
-            leaf_index,
-            asset_tag: asset,
-            network_tag: network,
-            payer_tag: payer,
-            operation_tag: operation,
-        })
-    }
-    fn topup_builder<const DEPTH: usize>(
-        witness: Option<&KagemushaTopUpShieldWitnessV2>,
-        k: usize,
-    ) -> Result<BaseCircuitBuilder<Scalar>, String> {
-        let mut builder = BaseCircuitBuilder::new(false)
-            .use_k(k)
-            .use_lookup_bits(k - 1)
-            .use_instance_columns(11);
-        let range = builder.range_chip();
-        let bindings = assign_kagemusha_topup_shield_v3::<DEPTH>(builder.main(0), &range, witness)?;
-        builder.assigned_instances = bindings.into_array().map(|value| vec![value]).to_vec();
-        builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
-        // `halo2-base` estimates packed advice columns from the raw cell
-        // count. This relation crosses a gate-enabled column boundary, where
-        // the required overlap cell makes that estimate one column short.
-        // Reserve the deterministic packing margin in both keygen and proving
-        // layouts.
-        let first_phase = builder
-            .config_params
-            .num_advice_per_phase
-            .first_mut()
-            .expect("top-up relation always uses the first advice phase");
-        *first_phase = first_phase
-            .checked_add(1)
-            .expect("top-up advice-column packing margin must fit usize");
-        Ok(builder)
-    }
     #[derive(Clone, Copy)]
     enum UnshieldWitnessRef<'a> {
         Full(Option<&'a ConfidentialUnshieldWitnessV2>),
@@ -2416,57 +1999,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             let mut builder = match transfer_builder::<DEPTH>(
                 self.witness.as_ref(),
                 super::CONFIDENTIAL_TRANSFER_V2_IPA_K as usize,
-            ) {
-                Ok(builder) => builder,
-                Err(_) => return Err(PlonkError::Synthesis),
-            };
-            let result = <BaseCircuitBuilder<Scalar> as Circuit<Scalar>>::synthesize(
-                &builder, config, layouter,
-            );
-            wipe_builder(&mut builder);
-            result
-        }
-    }
-    /// Fixed-shape Kagemusha top-up relation using the full secure permutation.
-    #[derive(Clone, Default)]
-    pub(in crate::zk) struct KagemushaTopUpShieldCircuitV3<const DEPTH: usize> {
-        pub(super) witness: Option<KagemushaTopUpShieldWitnessV2>,
-    }
-    impl<const DEPTH: usize> zeroize::Zeroize for KagemushaTopUpShieldCircuitV3<DEPTH> {
-        fn zeroize(&mut self) {
-            if let Some(witness) = &mut self.witness {
-                witness.zeroize();
-            }
-            self.witness = None;
-        }
-    }
-    impl<const DEPTH: usize> Drop for KagemushaTopUpShieldCircuitV3<DEPTH> {
-        fn drop(&mut self) {
-            self.zeroize();
-        }
-    }
-    impl<const DEPTH: usize> Circuit<Scalar> for KagemushaTopUpShieldCircuitV3<DEPTH> {
-        type Config = BaseConfig<Scalar>;
-        type FloorPlanner = halo2_proofs::circuit::SimpleFloorPlanner;
-        type Params = ();
-        fn without_witnesses(&self) -> Self {
-            Self::default()
-        }
-        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-            let params =
-                topup_builder::<DEPTH>(None, super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize)
-                    .expect("witness-free top-up relation must have a valid fixed shape")
-                    .config_params;
-            BaseConfig::configure(meta, params)
-        }
-        fn synthesize(
-            &self,
-            config: Self::Config,
-            layouter: impl Layouter<Scalar>,
-        ) -> Result<(), PlonkError> {
-            let mut builder = match topup_builder::<DEPTH>(
-                self.witness.as_ref(),
-                super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize,
             ) {
                 Ok(builder) => builder,
                 Err(_) => return Err(PlonkError::Synthesis),
@@ -3004,251 +2536,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             presence.include_output_1 = false;
             rejects("output_presence", presence);
         }
-        fn sample_topup_witness() -> KagemushaTopUpShieldWitnessV2 {
-            let amount = 10u128;
-            let rho_bytes = [0x71; 32];
-            let rho =
-                super::super::hash_to_scalar(b"iroha.confidential.v3.note_rho", &[&rho_bytes]);
-            let spend = Scalar::from(73);
-            let diversifier = Scalar::from(79);
-            let asset = Scalar::from(83);
-            let network = Scalar::from(89);
-            let owner = native_hash(CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3, &[spend, diversifier]);
-            let commitment = native_hash(
-                CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3,
-                &[scalar_from_u128(amount), rho, owner, asset],
-            );
-            let empty_leaf =
-                native_hash(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[Scalar::ZERO]);
-            let output_leaf =
-                native_hash(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[commitment]);
-            let empty_pair = native_hash(
-                CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
-                &[empty_leaf, empty_leaf],
-            );
-            let initial_root = native_hash(
-                CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
-                &[empty_pair, empty_pair],
-            );
-            let output_pair = native_hash(
-                CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
-                &[empty_leaf, output_leaf],
-            );
-            let final_root = native_hash(
-                CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
-                &[output_pair, empty_pair],
-            );
-            KagemushaTopUpShieldWitnessV2 {
-                amount,
-                asset_scale: 18,
-                leaf_index: 1,
-                rho: rho_bytes,
-                spend_scalar: scalar_to_repr_bytes(spend),
-                diversifier: scalar_to_repr_bytes(diversifier),
-                asset_tag: scalar_to_repr_bytes(asset),
-                network_tag: scalar_to_repr_bytes(network),
-                payer_tag: scalar_to_repr_bytes(Scalar::from(97)),
-                operation_tag: scalar_to_repr_bytes(Scalar::from(101)),
-                zero_path: ConfidentialMerklePathV2 {
-                    siblings: [empty_leaf, empty_pair].map(scalar_to_repr_bytes).to_vec(),
-                    directions: vec![1, 0],
-                    witness_nodes: [empty_pair, initial_root]
-                        .map(scalar_to_repr_bytes)
-                        .to_vec(),
-                    root: scalar_to_repr_bytes(initial_root),
-                },
-                output_nodes: [output_pair, final_root].map(scalar_to_repr_bytes).to_vec(),
-            }
-        }
-        fn expected_topup_instances(witness: &KagemushaTopUpShieldWitnessV2) -> Vec<Vec<Scalar>> {
-            let amount = scalar_from_u128(witness.amount);
-            let rho =
-                super::super::hash_to_scalar(b"iroha.confidential.v3.note_rho", &[&witness.rho]);
-            let spend = scalar_from_repr(witness.spend_scalar).expect("canonical spend");
-            let diversifier = scalar_from_repr(witness.diversifier).expect("canonical diversifier");
-            let asset = scalar_from_repr(witness.asset_tag).expect("canonical asset");
-            let network = scalar_from_repr(witness.network_tag).expect("canonical network");
-            let owner = native_hash(CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3, &[spend, diversifier]);
-            let commitment = native_hash(
-                CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3,
-                &[amount, rho, owner, asset],
-            );
-            let nullifier = native_hash(
-                CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
-                &[spend, rho, asset, network],
-            );
-            vec![
-                vec![commitment],
-                vec![nullifier],
-                vec![scalar_from_repr(witness.zero_path.root).expect("canonical initial root")],
-                vec![
-                    scalar_from_repr(*witness.output_nodes.last().expect("final root"))
-                        .expect("canonical final root"),
-                ],
-                vec![amount],
-                vec![Scalar::from(u64::from(witness.asset_scale))],
-                vec![Scalar::from(u64::from(witness.leaf_index))],
-                vec![asset],
-                vec![network],
-                vec![scalar_from_repr(witness.payer_tag).expect("canonical payer")],
-                vec![scalar_from_repr(witness.operation_tag).expect("canonical operation")],
-            ]
-        }
-        #[test]
-        fn secure_topup_relation_binds_every_public_column() {
-            const K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
-            let witness = sample_topup_witness();
-            let builder = topup_builder::<2>(Some(&witness), K).expect("canonical top-up");
-            let public = expected_topup_instances(&witness);
-            assert_eq!(instances(&builder), public);
-            MockProver::run(K as u32, &builder, public.clone())
-                .expect("secure top-up relation")
-                .assert_satisfied();
-            for column in 0..public.len() {
-                let mut mutated = public.clone();
-                mutated[column][0] += Scalar::ONE;
-                assert!(
-                    MockProver::run(K as u32, &builder, mutated)
-                        .expect("mutated secure top-up relation")
-                        .verify()
-                        .is_err(),
-                    "substitution in top-up public column {column} must fail"
-                );
-            }
-        }
-        #[test]
-        fn shared_amount_range_accepts_bit_127_and_rejects_bit_128() {
-            const K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
-            let amount_bits = super::super::ConfidentialUnsignedRangeV1::Amount.bits();
-            assert_eq!(amount_bits, 128);
-            assert_eq!(
-                super::super::KagemushaTopUpPublicInputV1::AtomicAmount.range(),
-                Some(super::super::ConfidentialUnsignedRangeV1::Amount),
-            );
-            assert_eq!(
-                super::super::ConfidentialUnshieldFullPublicInputV1::PublicAmount.range(),
-                Some(super::super::ConfidentialUnsignedRangeV1::Amount),
-            );
-            assert_eq!(
-                super::super::ConfidentialUnshieldChangePublicInputV1::PublicAmount.range(),
-                Some(super::super::ConfidentialUnsignedRangeV1::Amount),
-            );
-            let verify = |value: Scalar| {
-                let mut builder = BaseCircuitBuilder::new(false)
-                    .use_k(K)
-                    .use_lookup_bits(K - 1);
-                let range = builder.range_chip();
-                let assigned = builder.main(0).load_witness(value);
-                range.range_check(builder.main(0), assigned, amount_bits);
-                builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
-                MockProver::run(K as u32, &builder, Vec::new())
-                    .expect("shared confidential amount-range mock prover")
-                    .verify()
-            };
-            let high_valid = super::super::scalar_from_u128(1_u128 << 127);
-            assert!(
-                verify(high_valid).is_ok(),
-                "a valid u128 with bit 127 set must remain admissible",
-            );
-            assert!(
-                verify(high_valid + high_valid).is_err(),
-                "the field value 2^128 must fail the shared amount gadget",
-            );
-        }
-        #[test]
-        fn secure_topup_rejects_malformed_or_contradictory_paths() {
-            const K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
-            let mut witness = sample_topup_witness();
-            witness.output_nodes.push([0; 32]);
-            assert!(topup_builder::<2>(Some(&witness), K).is_err());
-            let mut witness = sample_topup_witness();
-            witness.zero_path.siblings[0] = [0xff; 32];
-            assert!(topup_builder::<2>(Some(&witness), K).is_err());
-            let mut witness = sample_topup_witness();
-            witness.leaf_index = 0;
-            let builder = topup_builder::<2>(Some(&witness), K).expect("canonical fields");
-            assert!(
-                MockProver::run(K as u32, &builder, instances(&builder))
-                    .expect("direction/index mismatch top-up")
-                    .verify()
-                    .is_err()
-            );
-        }
-        #[test]
-        fn secure_topup_rejects_each_private_witness_and_path_substitution() {
-            const K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
-            let original = sample_topup_witness();
-            let public = expected_topup_instances(&original);
-            let bump = |bytes: [u8; 32]| {
-                scalar_to_repr_bytes(
-                    scalar_from_repr(bytes).expect("canonical mutation source") + Scalar::ONE,
-                )
-            };
-            let rejects =
-                |label: &str, witness: KagemushaTopUpShieldWitnessV2| match topup_builder::<2>(
-                    Some(&witness),
-                    K,
-                ) {
-                    Err(_) => {}
-                    Ok(builder) => assert!(
-                        MockProver::run(K as u32, &builder, public.clone())
-                            .expect("top-up private-witness mutation prover")
-                            .verify()
-                            .is_err(),
-                        "top-up private substitution `{label}` must fail"
-                    ),
-                };
-            let mut witness = original.clone();
-            witness.amount += 1;
-            rejects("amount", witness);
-            let mut witness = original.clone();
-            witness.asset_scale += 1;
-            rejects("asset_scale", witness);
-            let mut witness = original.clone();
-            witness.leaf_index = 0;
-            rejects("leaf_index", witness);
-            let mut witness = original.clone();
-            witness.rho[0] ^= 1;
-            rejects("rho", witness);
-            for (label, mutate) in [
-                ("spend", 0usize),
-                ("diversifier", 1),
-                ("asset", 2),
-                ("network", 3),
-                ("payer", 4),
-                ("operation", 5),
-            ] {
-                let mut witness = original.clone();
-                match mutate {
-                    0 => witness.spend_scalar = bump(witness.spend_scalar),
-                    1 => witness.diversifier = bump(witness.diversifier),
-                    2 => witness.asset_tag = bump(witness.asset_tag),
-                    3 => witness.network_tag = bump(witness.network_tag),
-                    4 => witness.payer_tag = bump(witness.payer_tag),
-                    5 => witness.operation_tag = bump(witness.operation_tag),
-                    _ => unreachable!(),
-                }
-                rejects(label, witness);
-            }
-            for level in 0..2 {
-                let mut witness = original.clone();
-                witness.zero_path.siblings[level] = bump(witness.zero_path.siblings[level]);
-                rejects("sibling", witness);
-                let mut witness = original.clone();
-                witness.zero_path.directions[level] ^= 1;
-                rejects("direction", witness);
-                let mut witness = original.clone();
-                witness.zero_path.witness_nodes[level] =
-                    bump(witness.zero_path.witness_nodes[level]);
-                rejects("empty_witness_node", witness);
-                let mut witness = original.clone();
-                witness.output_nodes[level] = bump(witness.output_nodes[level]);
-                rejects("output_witness_node", witness);
-            }
-            let mut witness = original;
-            witness.zero_path.root = bump(witness.zero_path.root);
-            rejects("initial_root", witness);
-        }
         fn sample_full_unshield_witness() -> ConfidentialUnshieldWitnessV2 {
             let transfer = sample_witness_shape(true, false);
             ConfidentialUnshieldWitnessV2 {
@@ -3427,12 +2714,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     assert_same_shape("transfer", &transfer_empty, &populated);
                 }
             }
-            const TOPUP_K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
-            let topup_empty = topup_builder::<2>(None, TOPUP_K).expect("empty top-up");
-            let topup_witness = sample_topup_witness();
-            let topup_populated =
-                topup_builder::<2>(Some(&topup_witness), TOPUP_K).expect("populated top-up");
-            assert_same_shape("top-up", &topup_empty, &topup_populated);
             const FULL_UNSHIELD_K: usize = super::super::CONFIDENTIAL_UNSHIELD_V2_IPA_K as usize;
             let full_empty = unshield_builder::<2>(UnshieldWitnessRef::Full(None), FULL_UNSHIELD_K)
                 .expect("empty full unshield");
@@ -3556,14 +2837,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 .expect("transfer shape"),
             );
             report(
-                "topup",
-                &topup_builder::<{ super::super::CONFIDENTIAL_TREE_DEPTH_V2 }>(
-                    None,
-                    super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize,
-                )
-                .expect("top-up shape"),
-            );
-            report(
                 "full-unshield",
                 &unshield_builder::<{ super::super::CONFIDENTIAL_TREE_DEPTH_V2 }>(
                     UnshieldWitnessRef::Full(None),
@@ -3622,23 +2895,6 @@ pub fn derive_confidential_asset_tag_v2(asset_definition_id: &str) -> [u8; 32] {
 pub fn derive_confidential_network_tag_v2(network_id: &NetworkId) -> [u8; 32] {
     derive_confidential_network_tag_v3(network_id)
         .expect("exact network identities derive non-zero V3 tags")
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-/// Derive the field tag for a Kagemusha top-up payer.
-pub fn derive_kagemusha_topup_payer_tag_v2(payer: &str) -> [u8; 32] {
-    derive_kagemusha_topup_payer_tag_v3(payer)
-        .expect("validated payer identifiers derive non-zero V3 tags")
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-/// Derive the field tag for a Kagemusha top-up operation.
-pub fn derive_kagemusha_topup_operation_tag_v2(operation_id: &[u8; 32]) -> [u8; 32] {
-    derive_kagemusha_topup_operation_tag_v3(operation_id)
-        .expect("validated non-zero operation IDs derive non-zero V3 tags")
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-/// Encode a `u32` as one canonical Pasta scalar.
-pub fn encode_kagemusha_topup_u32_v2(value: u32) -> [u8; 32] {
-    scalar_to_repr_bytes(Scalar::from(u64::from(value)))
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive a confidential note commitment from its opening and context.
@@ -3766,30 +3022,6 @@ pub fn derive_confidential_network_tag_v3(network_id: &NetworkId) -> Result<[u8;
         CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3,
         b"iroha.confidential.v3.network_id_preimage",
         network_id.as_bytes(),
-    )?))
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-/// Derive the domain-separated V3 Kagemusha payer tag.
-pub fn derive_kagemusha_topup_payer_tag_v3(payer: &str) -> Result<[u8; 32], String> {
-    let canonical = strict_v3_identifier(payer, "Kagemusha payer")?;
-    Ok(scalar_to_repr_bytes(poseidon_tag_v3(
-        CONFIDENTIAL_POSEIDON_PAYER_DOMAIN_V3,
-        b"iroha.kagemusha.topup.payer.preimage.v3",
-        canonical.as_bytes(),
-    )?))
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-/// Derive the domain-separated V3 Kagemusha operation tag.
-pub fn derive_kagemusha_topup_operation_tag_v3(
-    operation_id: &[u8; 32],
-) -> Result<[u8; 32], String> {
-    if *operation_id == [0; 32] {
-        return Err("V3 Kagemusha operation ID must be non-zero".to_owned());
-    }
-    Ok(scalar_to_repr_bytes(poseidon_tag_v3(
-        CONFIDENTIAL_POSEIDON_OPERATION_DOMAIN_V3,
-        b"iroha.kagemusha.topup.operation.preimage.v3",
-        operation_id,
     )?))
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -4774,47 +4006,6 @@ impl Drop for ConfidentialTransferWitnessV2 {
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Debug)]
-/// Secret opening and empty-leaf path consumed by the secure top-up gadget
-/// when it is embedded in the recursive StepEq circuit.
-pub(crate) struct KagemushaTopUpShieldWitnessV2 {
-    amount: u128,
-    asset_scale: u32,
-    leaf_index: u32,
-    rho: [u8; 32],
-    spend_scalar: [u8; 32],
-    diversifier: [u8; 32],
-    asset_tag: [u8; 32],
-    network_tag: [u8; 32],
-    payer_tag: [u8; 32],
-    operation_tag: [u8; 32],
-    zero_path: ConfidentialMerklePathV2,
-    output_nodes: Vec<[u8; 32]>,
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-impl Zeroize for KagemushaTopUpShieldWitnessV2 {
-    fn zeroize(&mut self) {
-        self.amount.zeroize();
-        self.asset_scale.zeroize();
-        self.leaf_index.zeroize();
-        self.rho.zeroize();
-        self.spend_scalar.zeroize();
-        self.diversifier.zeroize();
-        self.asset_tag.zeroize();
-        self.network_tag.zeroize();
-        self.payer_tag.zeroize();
-        self.operation_tag.zeroize();
-        self.zero_path.zeroize();
-        self.output_nodes.zeroize();
-    }
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-impl Drop for KagemushaTopUpShieldWitnessV2 {
-    fn drop(&mut self) {
-        self.zeroize();
-    }
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[derive(Clone, Debug)]
 struct ConfidentialUnshieldWitnessV2 {
     include_input_1: bool,
     input_0_amount: u128,
@@ -4899,233 +4090,6 @@ impl Drop for ConfidentialUnshieldWitnessV3 {
         self.zeroize();
     }
 }
-/// Fixed-shape confidential witness carried by the recursive Eq/Fp Step.
-///
-/// A single authenticated Step verifier key covers initialization, append,
-/// and change-preserving redemption.  Consequently synthesis must assign all
-/// three secure relations in the same order for every profile.  The active
-/// relation is copy-bound to the public operation by constrained profile
-/// bits; the other two relations receive independently valid deterministic
-/// padding witnesses from the constructors below.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[derive(Clone, Debug)]
-pub(crate) struct KagemushaStepSecureWitnessV3 {
-    pub(crate) topup: KagemushaTopUpShieldWitnessV2,
-    pub(crate) transfer: ConfidentialTransferWitnessV2,
-    pub(crate) unshield_change: ConfidentialUnshieldWitnessV3,
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-impl Zeroize for KagemushaStepSecureWitnessV3 {
-    fn zeroize(&mut self) {
-        self.topup.zeroize();
-        self.transfer.zeroize();
-        self.unshield_change.zeroize();
-    }
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-impl Drop for KagemushaStepSecureWitnessV3 {
-    fn drop(&mut self) {
-        self.zeroize();
-    }
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn kagemusha_step_padding_input_paths_v3(
-    commitment: [u8; 32],
-) -> Result<(ConfidentialMerklePathV2, ConfidentialMerklePathV2), String> {
-    let commitment = scalar_from_repr(commitment)
-        .filter(|value| *value != Scalar::ZERO)
-        .ok_or_else(|| "Kagemusha padding commitment must be canonical and non-zero".to_owned())?;
-    let input_leaf =
-        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[commitment]);
-    let empty_roots = confidential_empty_subtree_roots_v3();
-    let empty_leaf = empty_roots[0];
-    let first_parent = merkle_parent_v3(input_leaf, empty_leaf);
-    let mut input_siblings = vec![scalar_to_repr_bytes(empty_leaf)];
-    let mut empty_siblings = vec![scalar_to_repr_bytes(input_leaf)];
-    let mut input_directions = vec![0];
-    let mut empty_directions = vec![1];
-    let mut input_nodes = vec![scalar_to_repr_bytes(first_parent)];
-    let mut empty_nodes = vec![scalar_to_repr_bytes(first_parent)];
-    let mut current = first_parent;
-    for level in 1..CONFIDENTIAL_TREE_DEPTH_V2 {
-        let empty_subtree = empty_roots[level];
-        input_siblings.push(scalar_to_repr_bytes(empty_subtree));
-        empty_siblings.push(scalar_to_repr_bytes(empty_subtree));
-        input_directions.push(0);
-        empty_directions.push(0);
-        current = merkle_parent_v3(current, empty_subtree);
-        input_nodes.push(scalar_to_repr_bytes(current));
-        empty_nodes.push(scalar_to_repr_bytes(current));
-    }
-    let root = scalar_to_repr_bytes(current);
-    Ok((
-        ConfidentialMerklePathV2 {
-            siblings: input_siblings,
-            directions: input_directions,
-            witness_nodes: input_nodes,
-            root,
-        },
-        ConfidentialMerklePathV2 {
-            siblings: empty_siblings,
-            directions: empty_directions,
-            witness_nodes: empty_nodes,
-            root,
-        },
-    ))
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn kagemusha_step_padding_zero_path_v3() -> ConfidentialMerklePathV2 {
-    let empty_roots = confidential_empty_subtree_roots_v3();
-    let siblings = empty_roots[..CONFIDENTIAL_TREE_DEPTH_V2]
-        .iter()
-        .copied()
-        .map(scalar_to_repr_bytes)
-        .collect();
-    let directions = vec![0; CONFIDENTIAL_TREE_DEPTH_V2];
-    let witness_nodes = empty_roots[1..]
-        .iter()
-        .copied()
-        .map(scalar_to_repr_bytes)
-        .collect();
-    ConfidentialMerklePathV2 {
-        siblings,
-        directions,
-        witness_nodes,
-        root: scalar_to_repr_bytes(empty_roots[CONFIDENTIAL_TREE_DEPTH_V2]),
-    }
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-impl KagemushaStepSecureWitnessV3 {
-    /// Construct the fixed witness with a real initialization relation.
-    pub(crate) fn for_topup(topup: KagemushaTopUpShieldWitnessV2) -> Result<Self, String> {
-        secure_relation_v3::validate_topup_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(&topup)?;
-        let mut witness = Self::deterministic_padding()?;
-        witness.topup = topup;
-        Ok(witness)
-    }
-    /// Construct the fixed witness with a real append relation.
-    pub(crate) fn for_transfer(transfer: ConfidentialTransferWitnessV2) -> Result<Self, String> {
-        secure_relation_v3::validate_transfer_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(&transfer)?;
-        let mut witness = Self::deterministic_padding()?;
-        witness.transfer = transfer;
-        Ok(witness)
-    }
-    /// Construct the fixed witness with a real change-redemption relation.
-    pub(crate) fn for_unshield_change(
-        unshield_change: ConfidentialUnshieldWitnessV3,
-    ) -> Result<Self, String> {
-        secure_relation_v3::validate_unshield_v3_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(
-            &unshield_change,
-        )?;
-        let mut witness = Self::deterministic_padding()?;
-        witness.unshield_change = unshield_change;
-        Ok(witness)
-    }
-    /// Return satisfying, non-secret padding for the fixed inactive gadgets.
-    ///
-    /// These values are deliberately unrelated to any public Step value.  A
-    /// profile-gated equality is what selects the active gadget; padding is
-    /// never accepted as a substitute for an active confidential opening.
-    pub(crate) fn deterministic_padding() -> Result<Self, String> {
-        let asset_definition_id = "kagemusha-fixed-padding#internal";
-        let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-            iroha_data_model::block::BlockHeader,
-        >::from_untyped_unchecked(
-            CryptoHash::new(b"kagemusha-fixed-padding-network"),
-        ));
-        let asset_tag = derive_confidential_asset_tag_v3(asset_definition_id)?;
-        let network_tag = derive_confidential_network_tag_v3(&network_id)?;
-        let spend_key = [0x41_u8; 32];
-        let spend_scalar = scalar_to_repr_bytes(hash_to_scalar(
-            b"iroha.confidential.v3.spend_scalar",
-            &[&spend_key],
-        ));
-        let input_diversifier = scalar_to_repr_bytes(Scalar::from(2));
-        let input_rho = [0x42_u8; 32];
-        let input_owner =
-            derive_confidential_owner_tag_v3_with_diversifier(&spend_key, input_diversifier)?;
-        let input_commitment = derive_confidential_note_v3(asset_tag, 2, input_rho, input_owner)?;
-        let (input_path, empty_input_path) =
-            kagemusha_step_padding_input_paths_v3(input_commitment)?;
-        let recipient_key = [0x43_u8; 32];
-        let recipient_owner = derive_confidential_owner_tag_v3_with_diversifier(
-            &recipient_key,
-            scalar_to_repr_bytes(Scalar::from(3)),
-        )?;
-        let transfer = ConfidentialTransferWitnessV2 {
-            include_input_1: false,
-            include_output_1: false,
-            input_0_amount: 2,
-            input_1_amount: 0,
-            output_0_amount: 2,
-            output_1_amount: 0,
-            input_0_rho: input_rho,
-            input_1_rho: [0; 32],
-            output_0_rho: [0x44; 32],
-            output_1_rho: [0; 32],
-            spend_scalar,
-            input_0_diversifier: input_diversifier,
-            input_1_diversifier: [0; 32],
-            output_0_owner_tag: recipient_owner,
-            output_1_owner_tag: [0; 32],
-            asset_tag,
-            network_tag,
-            input_0_path: input_path.clone(),
-            input_1_path: empty_input_path.clone(),
-        };
-        let unshield_change = ConfidentialUnshieldWitnessV3 {
-            include_input_1: false,
-            include_output_0: true,
-            input_0_amount: 2,
-            input_1_amount: 0,
-            output_0_amount: 1,
-            input_0_rho: input_rho,
-            input_1_rho: [0; 32],
-            output_0_rho: [0x45; 32],
-            spend_scalar,
-            input_0_diversifier: input_diversifier,
-            input_1_diversifier: [0; 32],
-            asset_tag,
-            network_tag,
-            input_0_path: input_path,
-            input_1_path: empty_input_path,
-        };
-        let topup_spend_key = [0x46_u8; 32];
-        let topup_spend =
-            hash_to_scalar(b"iroha.confidential.v3.spend_scalar", &[&topup_spend_key]);
-        let topup_diversifier = scalar_to_repr_bytes(Scalar::from(4));
-        let topup_rho = [0x47_u8; 32];
-        let topup_owner =
-            derive_confidential_owner_tag_v3_with_diversifier(&topup_spend_key, topup_diversifier)?;
-        let topup_commitment = derive_confidential_note_v3(asset_tag, 1, topup_rho, topup_owner)?;
-        let zero_path = kagemusha_step_padding_zero_path_v3();
-        let output_nodes = kagemusha_topup_output_path_nodes_v2(topup_commitment, &zero_path)?;
-        let topup = KagemushaTopUpShieldWitnessV2 {
-            amount: 1,
-            asset_scale: 0,
-            leaf_index: 0,
-            rho: topup_rho,
-            spend_scalar: scalar_to_repr_bytes(topup_spend),
-            diversifier: topup_diversifier,
-            asset_tag,
-            network_tag,
-            payer_tag: derive_kagemusha_topup_payer_tag_v3("kagemusha-fixed-padding-payer")?,
-            operation_tag: derive_kagemusha_topup_operation_tag_v3(&[0x48; 32])?,
-            zero_path,
-            output_nodes,
-        };
-        secure_relation_v3::validate_topup_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(&topup)?;
-        secure_relation_v3::validate_transfer_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(&transfer)?;
-        secure_relation_v3::validate_unshield_v3_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(
-            &unshield_change,
-        )?;
-        Ok(Self {
-            topup,
-            transfer,
-            unshield_change,
-        })
-    }
-}
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn parse_vk_for_transfer(
     circuit_id: &str,
@@ -5149,33 +4113,6 @@ fn parse_vk_for_transfer(
     >(vk_box.bytes.as_slice(), &params)
     .ok_or_else(|| {
         "missing/invalid H2VK payload for confidential transfer verifying key".to_owned()
-    })?;
-    Ok((params, parsed))
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn parse_vk_for_kagemusha_topup_shield_v2(
-    circuit_id: &str,
-    vk_box: &VerifyingKeyBox,
-) -> Result<(super::PastaParams, ConfidentialV2VerifyingKey), String> {
-    if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
-        return Err(
-            "Kagemusha top-up shield v2 proving requires a halo2/ipa verifying key".to_owned(),
-        );
-    }
-    if !is_kagemusha_topup_shield_v2_circuit_id(circuit_id) {
-        return Err(format!(
-            "unsupported Kagemusha top-up shield verifier circuit `{circuit_id}`"
-        ));
-    }
-    let params = super::zkparse::params_for_circuit_v1(vk_box.bytes.as_slice(), circuit_id)
-        .ok_or_else(|| {
-            "invalid fixed Kagemusha top-up parameter metadata in verifying key envelope".to_owned()
-        })?;
-    let parsed = super::zkparse::vk_from_bytes::<
-        secure_relation_v3::KagemushaTopUpShieldCircuitV3<CONFIDENTIAL_TREE_DEPTH_V2>,
-    >(vk_box.bytes.as_slice(), &params)
-    .ok_or_else(|| {
-        "missing/invalid H2VK payload for Kagemusha top-up shield verifying key".to_owned()
     })?;
     Ok((params, parsed))
 }
@@ -5260,28 +4197,6 @@ fn cached_confidential_transfer_v2_proving_key() -> Result<&'static Confidential
                 CONFIDENTIAL_TREE_DEPTH_V2,
             >::default(),
             "transfer",
-        )
-    }) {
-        Ok(proving_key) => Ok(proving_key),
-        Err(err) => Err(err.clone()),
-    }
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn cached_kagemusha_topup_shield_v2_proving_key()
--> Result<&'static ConfidentialV2ProvingKey, String> {
-    static CACHE: std::sync::OnceLock<Result<ConfidentialV2ProvingKey, String>> =
-        std::sync::OnceLock::new();
-    match CACHE.get_or_init(|| {
-        let vk_box = kagemusha_topup_shield_v2_vk_box()?;
-        let (params, parsed_vk) =
-            parse_vk_for_kagemusha_topup_shield_v2(KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID, &vk_box)?;
-        derive_confidential_v2_proving_key(
-            &params,
-            parsed_vk,
-            &secure_relation_v3::KagemushaTopUpShieldCircuitV3::<
-                CONFIDENTIAL_TREE_DEPTH_V2,
-            >::default(),
-            "Kagemusha top-up shield v2",
         )
     }) {
         Ok(proving_key) => Ok(proving_key),
@@ -5374,322 +4289,6 @@ fn encode_halo2_envelope(
         super::ZK_BACKEND_HALO2_IPA.to_owned(),
         encoded,
     ))
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn kagemusha_topup_output_path_nodes_v2(
-    output_commitment: [u8; 32],
-    path: &ConfidentialMerklePathV2,
-) -> Result<Vec<[u8; 32]>, String> {
-    let commitment = scalar_from_repr(output_commitment)
-        .ok_or_else(|| "output commitment must be a canonical Pasta scalar".to_owned())?;
-    let mut node =
-        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[commitment]);
-    let mut nodes = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
-    for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
-        let sibling = scalar_from_repr(path.siblings[level]).ok_or_else(|| {
-            format!("top-up zero path sibling[{level}] must be a canonical Pasta scalar")
-        })?;
-        node = match path.directions[level] {
-            0 => merkle_parent_v3(node, sibling),
-            1 => merkle_parent_v3(sibling, node),
-            _ => {
-                return Err(format!(
-                    "top-up zero path direction[{level}] must be 0 or 1"
-                ));
-            }
-        };
-        nodes.push(scalar_to_repr_bytes(node));
-    }
-    Ok(nodes)
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn validate_kagemusha_topup_shield_statement_v2(
-    output_commitment: [u8; 32],
-    spend_nullifier: [u8; 32],
-    initial_root: [u8; 32],
-    finalized_root: [u8; 32],
-) -> Result<(), String> {
-    if output_commitment == [0; 32] {
-        return Err("Kagemusha top-up output commitment must be non-zero".to_owned());
-    }
-    if spend_nullifier == [0; 32] {
-        return Err("Kagemusha top-up spend nullifier must be non-zero".to_owned());
-    }
-    if output_commitment == spend_nullifier {
-        return Err(
-            "Kagemusha top-up output commitment and spend nullifier must be distinct".to_owned(),
-        );
-    }
-    if initial_root == [0; 32] {
-        return Err("Kagemusha top-up initial root must be non-zero".to_owned());
-    }
-    if finalized_root == [0; 32] {
-        return Err("Kagemusha top-up finalized root must be non-zero".to_owned());
-    }
-    if initial_root == finalized_root {
-        return Err("Kagemusha top-up output must change the confidential root".to_owned());
-    }
-    Ok(())
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-struct PreparedKagemushaTopUpShieldV3 {
-    witness: KagemushaTopUpShieldWitnessV2,
-    public: KagemushaTopUpShieldPublicInputsV2,
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-impl PreparedKagemushaTopUpShieldV3 {
-    fn instance_columns(&self) -> Result<Vec<Vec<Scalar>>, String> {
-        self.public
-            .try_map(|field, bytes| {
-                scalar_from_repr(bytes)
-                    .map(|value| vec![value])
-                    .ok_or_else(|| {
-                        format!(
-                            "Kagemusha top-up public input '{}' at column {} is not a canonical Pasta scalar",
-                            field.name(),
-                            field.index(),
-                        )
-                    })
-                })
-            .map(|public| public.into_array().to_vec())
-    }
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[allow(clippy::too_many_arguments)]
-fn prepare_kagemusha_topup_shield_v3(
-    network_id: &NetworkId,
-    asset_definition_id: &str,
-    payer: &str,
-    operation_id: [u8; 32],
-    atomic_amount: u128,
-    asset_scale: u32,
-    spend_key: &[u8],
-    rho: [u8; 32],
-    diversifier: [u8; 32],
-    leaf_index: u32,
-    zero_path: &ConfidentialMerklePathV2,
-) -> Result<PreparedKagemushaTopUpShieldV3, String> {
-    if asset_definition_id.is_empty() || asset_definition_id.trim() != asset_definition_id {
-        return Err("Kagemusha top-up asset definition must be exact and non-empty".to_owned());
-    }
-    if payer.is_empty() || payer.trim() != payer {
-        return Err("Kagemusha top-up payer must be exact and non-empty".to_owned());
-    }
-    if operation_id == [0; 32] {
-        return Err("Kagemusha top-up operation_id must be non-zero".to_owned());
-    }
-    if atomic_amount == 0 {
-        return Err("Kagemusha top-up atomic amount must be positive".to_owned());
-    }
-    if asset_scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 {
-        return Err("Kagemusha top-up asset scale exceeds the protocol maximum".to_owned());
-    }
-    if spend_key.len() != 32 || spend_key.iter().all(|byte| *byte == 0) {
-        return Err("Kagemusha top-up spend key must be exactly 32 non-zero bytes".to_owned());
-    }
-    if rho == [0; 32] {
-        return Err("Kagemusha top-up rho must be non-zero".to_owned());
-    }
-    let diversifier_scalar = scalar_from_repr(diversifier)
-        .filter(|value| *value != Scalar::ZERO)
-        .ok_or_else(|| "Kagemusha top-up diversifier must be a non-zero Pasta scalar".to_owned())?;
-    let leaf_index_usize = usize::try_from(leaf_index)
-        .map_err(|_| "Kagemusha top-up leaf_index does not fit usize".to_owned())?;
-    let topup_insertion_capacity =
-        usize::try_from(iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2)
-            .expect("the fixed Kagemusha top-up insertion capacity fits usize");
-    if leaf_index_usize >= topup_insertion_capacity {
-        return Err(format!(
-            "Kagemusha top-up leaf_index must be < {topup_insertion_capacity} so the complete recursive lifecycle and final empty frontier leaf remain available"
-        ));
-    }
-    let initial_root = zero_path.root;
-    let normalized_zero_path = normalize_supplied_confidential_merkle_path_v2(
-        [0; 32],
-        Some(leaf_index_usize),
-        zero_path,
-        initial_root,
-        "Kagemusha top-up zero path",
-    )?;
-    let spend_scalar = hash_to_scalar(b"iroha.confidential.v3.spend_scalar", &[spend_key]);
-    let owner_tag = confidential_poseidon_hash_v3(
-        CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3,
-        &[spend_scalar, diversifier_scalar],
-    );
-    let asset_tag = derive_confidential_asset_tag_v3(asset_definition_id)?;
-    let network_tag = derive_confidential_network_tag_v3(network_id)?;
-    let rho_scalar = hash_to_scalar(b"iroha.confidential.v3.note_rho", &[&rho]);
-    let asset_scalar = scalar_from_repr(asset_tag).expect("derived asset tag is canonical");
-    let network_scalar = scalar_from_repr(network_tag).expect("derived network tag is canonical");
-    let output_commitment = scalar_to_repr_bytes(confidential_poseidon_hash_v3(
-        CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3,
-        &[
-            scalar_from_u128(atomic_amount),
-            rho_scalar,
-            owner_tag,
-            asset_scalar,
-        ],
-    ));
-    let spend_nullifier = scalar_to_repr_bytes(confidential_poseidon_hash_v3(
-        CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
-        &[spend_scalar, rho_scalar, asset_scalar, network_scalar],
-    ));
-    let output_nodes =
-        kagemusha_topup_output_path_nodes_v2(output_commitment, &normalized_zero_path)?;
-    let finalized_root = output_nodes
-        .last()
-        .copied()
-        .ok_or_else(|| "Kagemusha top-up path must not be empty".to_owned())?;
-    validate_kagemusha_topup_shield_statement_v2(
-        output_commitment,
-        spend_nullifier,
-        initial_root,
-        finalized_root,
-    )?;
-    let payer_tag = derive_kagemusha_topup_payer_tag_v3(payer)?;
-    let operation_tag = derive_kagemusha_topup_operation_tag_v3(&operation_id)?;
-    let witness = KagemushaTopUpShieldWitnessV2 {
-        amount: atomic_amount,
-        asset_scale,
-        leaf_index,
-        rho,
-        spend_scalar: scalar_to_repr_bytes(spend_scalar),
-        diversifier,
-        asset_tag,
-        network_tag,
-        payer_tag,
-        operation_tag,
-        zero_path: normalized_zero_path,
-        output_nodes,
-    };
-    secure_relation_v3::validate_topup_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(&witness)?;
-    Ok(PreparedKagemushaTopUpShieldV3 {
-        witness,
-        public: KagemushaTopUpShieldPublicInputsV2 {
-            output_commitment,
-            spend_nullifier,
-            initial_root,
-            finalized_root,
-            atomic_amount: scalar_to_repr_bytes(scalar_from_u128(atomic_amount)),
-            asset_scale: scalar_to_repr_bytes(Scalar::from(u64::from(asset_scale))),
-            leaf_index: scalar_to_repr_bytes(Scalar::from(u64::from(leaf_index))),
-            asset_tag,
-            network_tag,
-            payer_tag,
-            operation_tag,
-        },
-    })
-}
-/// Prepare the exact secure initialization witness embedded by recursive StepEq.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn prepare_kagemusha_step_topup_witness_v3(
-    network_id: &NetworkId,
-    asset_definition_id: &str,
-    payer: &str,
-    operation_id: [u8; 32],
-    atomic_amount: u128,
-    asset_scale: u32,
-    spend_key: &[u8],
-    rho: [u8; 32],
-    diversifier: [u8; 32],
-    leaf_index: u32,
-    zero_path: &ConfidentialMerklePathV2,
-) -> Result<KagemushaStepSecureWitnessV3, String> {
-    let prepared = prepare_kagemusha_topup_shield_v3(
-        network_id,
-        asset_definition_id,
-        payer,
-        operation_id,
-        atomic_amount,
-        asset_scale,
-        spend_key,
-        rho,
-        diversifier,
-        leaf_index,
-        zero_path,
-    )?;
-    KagemushaStepSecureWitnessV3::for_topup(prepared.witness)
-}
-/// Build a Kagemusha top-up shield proof from one exact note opening.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[allow(clippy::too_many_arguments)]
-pub fn build_kagemusha_topup_shield_proof_v2(
-    network_id: &NetworkId,
-    asset_definition_id: &str,
-    payer: &str,
-    operation_id: [u8; 32],
-    atomic_amount: u128,
-    asset_scale: u32,
-    spend_key: &[u8],
-    rho: [u8; 32],
-    diversifier: [u8; 32],
-    leaf_index: u32,
-    zero_path: &ConfidentialMerklePathV2,
-    circuit_id: &str,
-    vk_box: &VerifyingKeyBox,
-) -> Result<KagemushaTopUpShieldProofV2, String> {
-    ensure_kagemusha_topup_shield_v2_canonical_vk_box(vk_box)?;
-    let (params, parsed_vk) = parse_vk_for_kagemusha_topup_shield_v2(circuit_id, vk_box)?;
-    let prepared = prepare_kagemusha_topup_shield_v3(
-        network_id,
-        asset_definition_id,
-        payer,
-        operation_id,
-        atomic_amount,
-        asset_scale,
-        spend_key,
-        rho,
-        diversifier,
-        leaf_index,
-        zero_path,
-    )?;
-    let instance_columns = prepared.instance_columns()?;
-    let PreparedKagemushaTopUpShieldV3 { witness, public } = prepared;
-    let circuit = secure_relation_v3::KagemushaTopUpShieldCircuitV3::<CONFIDENTIAL_TREE_DEPTH_V2> {
-        witness: Some(witness),
-    };
-    let instance_refs = instance_columns
-        .iter()
-        .map(Vec::as_slice)
-        .collect::<Vec<_>>();
-    let instance_wrapper = vec![instance_refs.as_slice()];
-    let proof_raw = create_confidential_v2_proof(
-        &params,
-        cached_kagemusha_topup_shield_v2_proving_key()?,
-        circuit,
-        &instance_wrapper,
-        "Kagemusha top-up shield v2",
-    )?;
-    {
-        let proofs_instances = [&instance_refs[..]];
-        super::halo2_backend::verify_ipa_proof(
-            &params,
-            &parsed_vk,
-            proof_raw.as_slice(),
-            &proofs_instances,
-        )
-        .map_err(|error| {
-            format!(
-                "generated Kagemusha top-up shield proof failed local self-verification: {error}"
-            )
-        })?;
-    }
-    let proof = encode_halo2_envelope(
-        KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-        vk_box,
-        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2.to_vec(),
-        &instance_columns,
-        proof_raw,
-    )?;
-    Ok(KagemushaTopUpShieldProofV2 {
-        output_commitment: public.output_commitment,
-        spend_nullifier: public.spend_nullifier,
-        initial_root: public.initial_root,
-        finalized_root: public.finalized_root,
-        leaf_index,
-        proof,
-    })
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 struct PreparedConfidentialTransferV3 {
@@ -6039,41 +4638,6 @@ fn normalize_confidential_transfer_paths_v3(
         )?
     };
     Ok((input_0_path, input_1_path))
-}
-/// Prepare the exact secure append witness embedded by recursive StepEq.
-///
-/// This is the same normalization and witness construction used by the
-/// standalone proof builder; recursive proving does not trust a standalone
-/// proof receipt or reconstruct a second confidential relation.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub(crate) fn prepare_kagemusha_step_transfer_witness_v3_with_paths(
-    network_id: &NetworkId,
-    asset_definition_id: &str,
-    spend_key: &[u8],
-    input_paths: &[ConfidentialMerklePathV2],
-    inputs: &[ConfidentialTransferInputV2],
-    outputs: &[ConfidentialTransferOutputV2],
-    root_hint: [u8; 32],
-) -> Result<KagemushaStepSecureWitnessV3, String> {
-    let prepared = prepare_confidential_transfer_v3_resolved_paths(
-        network_id,
-        asset_definition_id,
-        spend_key,
-        inputs,
-        outputs,
-        root_hint,
-        |input_0, input_1, input_0_commitment, input_1_commitment| {
-            normalize_confidential_transfer_paths_v3(
-                input_paths,
-                root_hint,
-                input_0,
-                input_1,
-                input_0_commitment,
-                input_1_commitment,
-            )
-        },
-    )?;
-    KagemushaStepSecureWitnessV3::for_transfer(prepared.witness)
 }
 /// Build a confidential transfer proof using explicitly supplied input paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -6729,45 +5293,6 @@ fn normalize_confidential_unshield_change_paths_v4(
         )?
     };
     Ok((input_0_path, input_1_path))
-}
-/// Prepare the exact secure change-redemption witness embedded by StepEq.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub(crate) fn prepare_kagemusha_step_unshield_change_witness_v4_with_paths(
-    network_id: &NetworkId,
-    asset_definition_id: &str,
-    spend_key: &[u8],
-    input_paths: &[ConfidentialMerklePathV2],
-    inputs: &[ConfidentialUnshieldInputV2],
-    outputs: &[ConfidentialUnshieldOutputV3],
-    public_amount: u128,
-    root_hint: [u8; 32],
-) -> Result<KagemushaStepSecureWitnessV3, String> {
-    if outputs.len() != 1 {
-        return Err(
-            "recursive redemption-change Step requires exactly one private change output"
-                .to_owned(),
-        );
-    }
-    let prepared = prepare_confidential_unshield_change_v4_resolved_paths(
-        network_id,
-        asset_definition_id,
-        spend_key,
-        inputs,
-        outputs,
-        public_amount,
-        root_hint,
-        |input_0, input_1, input_0_commitment, input_1_commitment| {
-            normalize_confidential_unshield_change_paths_v4(
-                input_paths,
-                root_hint,
-                input_0,
-                input_1,
-                input_0_commitment,
-                input_1_commitment,
-            )
-        },
-    )?;
-    KagemushaStepSecureWitnessV3::for_unshield_change(prepared.witness)
 }
 /// Build a terminal-full or change-preserving V3 unshield using explicit paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]

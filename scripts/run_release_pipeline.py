@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I -S
 """
 Orchestrate the canonical Iroha 3 release pipeline.
 
@@ -23,17 +23,196 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
+import types
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Tuple, TypeVar
 from urllib import error as urllib_error
 from urllib import request as urllib_request
+
+
+_SCRIPT_DIRECTORY = Path(os.path.abspath(__file__)).parent
+_MAX_BOOTSTRAP_MODULE_BYTES = 2 * 1024 * 1024
+_BOOTSTRAP_RELEASE_MODULE_SHA256 = {
+    "release_artifact_contract": "ad4a5bd832f95a55ef2d4bee8a451ef3f5af14d244a1a14a232ec5cc4d59e253",
+    "release_manifest_signing": "743c89d7264ac24d504ee7ea4098bb9c604896bf2eeb401d29e90d47f1ab3638",
+    "publish_plan": "02eb639a4aeb1fa03f7d1c52b6a012775684d9c8fe848b3c91375692ad34c180",
+    # This source owns the reviewed surface seal. Its one literal digest is
+    # normalized before hashing so resealing does not create a hash cycle with
+    # this pipeline's bootstrap trust anchor.
+    "check_release_feature_graph": "dd6477d7378f4a30524ef093375036410bc8e1d751028e1e18b51cd035404a93",
+}
+
+
+def _bootstrap_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_nlink,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _normalized_bootstrap_payload(name: str, payload: bytes) -> bytes:
+    """Normalize only the review seal literal which intentionally changes."""
+
+    if name != "check_release_feature_graph":
+        return payload
+    pattern = re.compile(
+        rb'TRUSTED_RELEASE_SURFACE_SHA256\s*=\s*\(\s*"(?P<digest>[0-9a-f]{64})"\s*\)'
+    )
+    matches = tuple(pattern.finditer(payload))
+    if len(matches) != 1:
+        raise RuntimeError(
+            "release pipeline bootstrap checker seal declaration is ambiguous"
+        )
+    match = matches[0]
+    return (
+        payload[: match.start("digest")]
+        + b"0" * 64
+        + payload[match.end("digest") :]
+    )
+
+
+def _stable_bootstrap_sources() -> dict[str, tuple[Path, bytes]]:
+    """Capture every bootstrap helper before any of its bytes execute."""
+
+    directory_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    repository = _SCRIPT_DIRECTORY.parent
+    repository_before_path = repository.lstat()
+    repository_fd = os.open(repository, directory_flags)
+    scripts_fd = -1
+    try:
+        repository_before = os.fstat(repository_fd)
+        if (
+            not stat.S_ISDIR(repository_before.st_mode)
+            or _bootstrap_identity(repository_before_path)
+            != _bootstrap_identity(repository_before)
+            or repository_before.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            raise RuntimeError(
+                "release pipeline repository must be one non-shared-writable directory"
+            )
+        scripts_before_path = os.stat(
+            _SCRIPT_DIRECTORY.name,
+            dir_fd=repository_fd,
+            follow_symlinks=False,
+        )
+        scripts_fd = os.open(
+            _SCRIPT_DIRECTORY.name, directory_flags, dir_fd=repository_fd
+        )
+        scripts_before = os.fstat(scripts_fd)
+        if (
+            not stat.S_ISDIR(scripts_before.st_mode)
+            or _bootstrap_identity(scripts_before_path)
+            != _bootstrap_identity(scripts_before)
+            or scripts_before.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            raise RuntimeError(
+                "release pipeline scripts must be one non-shared-writable directory"
+            )
+
+        captured: dict[str, tuple[Path, bytes]] = {}
+        for name, expected_sha256 in _BOOTSTRAP_RELEASE_MODULE_SHA256.items():
+            filename = f"{name}.py"
+            before_path = os.stat(filename, dir_fd=scripts_fd, follow_symlinks=False)
+            descriptor = os.open(filename, file_flags, dir_fd=scripts_fd)
+            try:
+                before = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(before.st_mode)
+                    or _bootstrap_identity(before_path) != _bootstrap_identity(before)
+                    or before.st_nlink != 1
+                    or before.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+                    or before.st_size <= 0
+                    or before.st_size > _MAX_BOOTSTRAP_MODULE_BYTES
+                ):
+                    raise RuntimeError(
+                        "release pipeline bootstrap helper must be one singly linked, "
+                        f"non-shared-writable regular file: {filename}"
+                    )
+                payload = bytearray()
+                while True:
+                    chunk = os.read(descriptor, 1024 * 1024)
+                    if not chunk:
+                        break
+                    payload.extend(chunk)
+                after = os.fstat(descriptor)
+                after_path = os.stat(
+                    filename, dir_fd=scripts_fd, follow_symlinks=False
+                )
+            finally:
+                os.close(descriptor)
+            if (
+                len(payload) != before.st_size
+                or _bootstrap_identity(before) != _bootstrap_identity(after)
+                or _bootstrap_identity(before) != _bootstrap_identity(after_path)
+            ):
+                raise RuntimeError(
+                    f"release pipeline bootstrap helper changed while read: {filename}"
+                )
+            normalized = _normalized_bootstrap_payload(name, bytes(payload))
+            if hashlib.sha256(normalized).hexdigest() != expected_sha256:
+                raise RuntimeError(
+                    f"release pipeline bootstrap helper differs from review: {filename}"
+                )
+            captured[name] = (_SCRIPT_DIRECTORY / filename, bytes(payload))
+
+        repository_after = os.fstat(repository_fd)
+        repository_after_path = repository.lstat()
+        scripts_after = os.fstat(scripts_fd)
+        scripts_after_path = os.stat(
+            _SCRIPT_DIRECTORY.name,
+            dir_fd=repository_fd,
+            follow_symlinks=False,
+        )
+        if (
+            _bootstrap_identity(repository_before)
+            != _bootstrap_identity(repository_after)
+            or _bootstrap_identity(repository_before)
+            != _bootstrap_identity(repository_after_path)
+            or _bootstrap_identity(scripts_before) != _bootstrap_identity(scripts_after)
+            or _bootstrap_identity(scripts_before)
+            != _bootstrap_identity(scripts_after_path)
+        ):
+            raise RuntimeError(
+                "release pipeline bootstrap directories changed while read"
+            )
+        return captured
+    finally:
+        if scripts_fd >= 0:
+            os.close(scripts_fd)
+        os.close(repository_fd)
+
+
+def _load_release_modules() -> None:
+    """Execute only the complete, previously captured bootstrap source set."""
+
+    captured = _stable_bootstrap_sources()
+    for name in _BOOTSTRAP_RELEASE_MODULE_SHA256:
+        if name in sys.modules:
+            continue
+        path, payload = captured[name]
+        module = types.ModuleType(name)
+        module.__file__ = str(path)
+        module.__package__ = ""
+        sys.modules[name] = module
+        exec(compile(payload, str(path), "exec"), module.__dict__)
+
+
+_load_release_modules()
 
 from publish_plan import (
     PublishPlanError,
@@ -57,6 +236,7 @@ from release_manifest_signing import (
     ReleaseManifestSignatureError,
     sign_release_manifest,
 )
+from check_release_feature_graph import validate_trusted_release_surface_commit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RELEASE_PROFILE = "iroha3"
@@ -83,6 +263,59 @@ _FASTPQ_ROLLOUT_STAMP_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}")
 
 class PipelineError(RuntimeError):
     """Fatal error raised during the release pipeline."""
+
+
+_ACTION_RESULT = TypeVar("_ACTION_RESULT")
+_HOSTILE_CHILD_ENVIRONMENT = frozenset(
+    {
+        "BASH_ENV",
+        "BASHOPTS",
+        "BASH_XTRACEFD",
+        "CDPATH",
+        "ENV",
+        "GLOBIGNORE",
+        "PS4",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_ENCODED_RUSTDOCFLAGS",
+        "CARGO_HOME",
+        "RUSTC",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTDOC",
+        "RUSTDOCFLAGS",
+        "RUSTFLAGS",
+        "SHELLOPTS",
+    }
+)
+
+
+def _hostile_child_environment_name(name: str) -> bool:
+    """Return whether one inherited name can inject release child behavior."""
+
+    if name in _HOSTILE_CHILD_ENVIRONMENT or name.startswith(
+        ("BASH_FUNC_", "CARGO_BUILD_")
+    ):
+        return True
+    return name.startswith("CARGO_TARGET_") and name.endswith(
+        ("_LINKER", "_RUNNER", "_RUSTFLAGS", "_RUSTDOCFLAGS")
+    )
+
+
+def _scrubbed_child_environment(
+    overrides: Dict[str, str] | None = None,
+) -> Dict[str, str]:
+    """Return inherited release state without interpreter or shell hooks."""
+
+    environment = os.environ.copy()
+    if overrides is not None:
+        environment.update(overrides)
+    for name in tuple(environment):
+        if _hostile_child_environment_name(name):
+            environment.pop(name, None)
+    environment["PYTHONNOUSERSITE"] = "1"
+    return environment
 
 
 def ensure_tool(name: str) -> None:
@@ -123,9 +356,56 @@ def render_command(cmd: Iterable[str]) -> str:
 
 
 def run(cmd: List[str], *, cwd: Path | None = None, env: Dict[str, str] | None = None) -> None:
-    display = render_command(cmd)
+    command = [str(argument) for argument in cmd]
+    executable = Path(command[0])
+    if (
+        executable.suffix == ".py"
+        and executable.resolve().is_relative_to(_SCRIPT_DIRECTORY)
+    ):
+        command = [
+            sys.executable,
+            "-I",
+            "-S",
+            str(_SCRIPT_DIRECTORY / "run_isolated_release_tool.py"),
+            str(executable),
+            *command[1:],
+        ]
+    display = render_command(command)
     print(f"[release-pipeline] $ {display}", flush=True)
-    subprocess.run(cmd, check=True, cwd=cwd or REPO_ROOT, env=env)
+    subprocess.run(
+        command,
+        check=True,
+        cwd=cwd or REPO_ROOT,
+        env=_scrubbed_child_environment(env),
+    )
+
+
+def release_subprocess_environment(source_date_epoch: int) -> Dict[str, str]:
+    """Return the inherited release environment without interpreter/shell hooks."""
+
+    environment = _scrubbed_child_environment()
+    environment["SOURCE_DATE_EPOCH"] = str(source_date_epoch)
+    return environment
+
+
+def validate_release_source(commit: str, action: str) -> None:
+    """Require the exact reviewed source immediately before a trusted action."""
+
+    try:
+        validate_trusted_release_surface_commit(REPO_ROOT, commit)
+    except RuntimeError as exc:
+        raise PipelineError(f"{action}: {exc}") from exc
+
+
+def run_trusted_release_action(
+    commit: str,
+    action: str,
+    operation: Callable[[], _ACTION_RESULT],
+) -> _ACTION_RESULT:
+    """Validate sealed source before starting one irreversible action."""
+
+    validate_release_source(commit, action)
+    return operation()
 
 
 def repo_version() -> str:
@@ -141,27 +421,35 @@ def _parse_prebuilt_matrix(
     *,
     option: str,
     dimensions: set[str],
-) -> Dict[str, str]:
-    result: Dict[str, str] = {}
+) -> Dict[str, Tuple[str, str]]:
+    result: Dict[str, Tuple[str, str]] = {}
     for spec in specs or ():
         if "=" not in spec:
             raise PipelineError(
-                f"Invalid {option} value; expected dimension=path"
+                f"Invalid {option} value; expected dimension=path@sha256:digest"
             )
-        dimension, path = spec.split("=", 1)
-        if dimension not in dimensions or not path:
+        dimension, authenticated_path = spec.split("=", 1)
+        path, separator, provenance_sha256 = authenticated_path.rpartition(
+            "@sha256:"
+        )
+        if (
+            dimension not in dimensions
+            or not separator
+            or not path
+            or re.fullmatch(r"[0-9a-f]{64}", provenance_sha256) is None
+        ):
             raise PipelineError(f"Invalid {option} release dimension")
         if dimension in result:
             raise PipelineError(f"Duplicate {option} identity '{dimension}'")
         if any(ord(character) < 0x20 or ord(character) == 0x7F for character in path):
             raise PipelineError(f"{option} paths must not contain controls")
-        result[dimension] = path
+        result[dimension] = (path, provenance_sha256)
     return result
 
 
 def parse_bundle_prebuilt_dirs(
     specs: Iterable[str] | None,
-) -> Dict[str, str]:
+) -> Dict[str, Tuple[str, str]]:
     return _parse_prebuilt_matrix(
         specs,
         option="--bundle-prebuilt-bin-dir",
@@ -171,7 +459,7 @@ def parse_bundle_prebuilt_dirs(
 
 def parse_image_prebuilt_dirs(
     specs: Iterable[str] | None,
-) -> Dict[str, str]:
+) -> Dict[str, Tuple[str, str]]:
     return _parse_prebuilt_matrix(
         specs,
         option="--image-prebuilt-bin-dir",
@@ -418,7 +706,6 @@ def summarize_fastpq_rollout_bundle(bundle_dir: Path, *, dry_run: bool) -> List[
             continue
         run(
             [
-                sys.executable,
                 str(helper),
                 "--manifest",
                 str(manifest),
@@ -565,8 +852,8 @@ def main() -> int:
         "--bundle-prebuilt-bin-dir",
         action="append",
         help=(
-            "Reviewed bundle binary directory as target=path; required exactly "
-            "once for each mandatory Linux/macOS/Windows target."
+            "Reviewed bundle binary directory as target=path@sha256:manifest; "
+            "required exactly once for each mandatory target."
         ),
     )
     parser.add_argument(
@@ -630,8 +917,8 @@ def main() -> int:
         "--image-prebuilt-bin-dir",
         action="append",
         help=(
-            "Reviewed image binary directory as platform=path; required once "
-            "for every required Linux image platform."
+            "Reviewed image binary directory as platform=path@sha256:manifest; "
+            "required once for every required Linux image platform."
         ),
     )
     parser.add_argument(
@@ -860,7 +1147,7 @@ def main() -> int:
             "bundle/evidence lanes require absolute --zstd and "
             "--trusted-zstd-sha256 as 64 lowercase hex"
         )
-    bundle_prebuilt_dirs: Dict[str, str] = {}
+    bundle_prebuilt_dirs: Dict[str, Tuple[str, str]] = {}
     if not args.skip_bundles:
         bundle_prebuilt_dirs = parse_bundle_prebuilt_dirs(
             args.bundle_prebuilt_bin_dir
@@ -879,7 +1166,7 @@ def main() -> int:
         raise PipelineError(
             "at least one bundle or image release lane must be enabled"
         )
-    image_prebuilt_dirs: Dict[str, str] = {}
+    image_prebuilt_dirs: Dict[str, Tuple[str, str]] = {}
     image_platforms = tuple(args.image_platforms or ())
     if not args.skip_images:
         image_required = {
@@ -1027,6 +1314,8 @@ def main() -> int:
         raise PipelineError(
             "--source-commit does not match the repository HEAD"
         )
+    if not args.dry_run:
+        validate_release_source(commit, "Release source preflight failed")
 
     release_root = (
         Path(os.path.abspath(Path(args.output_dir).expanduser()))
@@ -1048,8 +1337,7 @@ def main() -> int:
             raise PipelineError(
                 f"Failed to create fresh release output: {exc}"
             ) from exc
-    release_env = os.environ.copy()
-    release_env["SOURCE_DATE_EPOCH"] = str(source_date_epoch)
+    release_env = release_subprocess_environment(source_date_epoch)
 
     dp_script = REPO_ROOT / "scripts" / "telemetry" / "run_privacy_dp_notebook.sh"
     if not args.skip_privacy_dp:
@@ -1155,7 +1443,9 @@ def main() -> int:
                     "--zstd",
                     str(args.zstd),
                     "--prebuilt-bin-dir",
-                    bundle_prebuilt_dirs[target_triple],
+                    bundle_prebuilt_dirs[target_triple][0],
+                    "--trusted-prebuilt-provenance-sha256",
+                    bundle_prebuilt_dirs[target_triple][1],
                 ]
                 if args.dry_run:
                     print(
@@ -1241,7 +1531,9 @@ def main() -> int:
                     "--artifacts-dir",
                     str(artifact_dir),
                     "--prebuilt-bin-dir",
-                    image_prebuilt_dirs[image_platform],
+                    image_prebuilt_dirs[image_platform][0],
+                    "--trusted-prebuilt-provenance-sha256",
+                    image_prebuilt_dirs[image_platform][1],
                 ]
                 if args.dry_run:
                     print(
@@ -1335,7 +1627,11 @@ def main() -> int:
         if args.dry_run:
             print(f"[release-pipeline] (dry-run) {render_command(publish_cmd)}")
         else:
-            run(publish_cmd)
+            run_trusted_release_action(
+                commit,
+                "Android Maven publication refused changed release source",
+                lambda: run(publish_cmd, env=release_env),
+            )
 
         sbom_src = REPO_ROOT / "artifacts" / "android" / "sbom" / provided_version
         sbom_dest = android_dir / "sbom"
@@ -1606,6 +1902,10 @@ def main() -> int:
             assert args.trusted_signing_fingerprint is not None
             assert args.release_manifest_verifier is not None
             assert args.trusted_release_manifest_verifier_sha256 is not None
+            validate_release_source(
+                commit,
+                "Aggregate manifest signing refused changed release source",
+            )
             try:
                 aggregate_signing_result = sign_release_manifest(
                     manifest_path,
@@ -1769,6 +2069,11 @@ def main() -> int:
                 raise PipelineError(
                     "Publish plan validation failed; see publish_plan_report.json"
                 )
+
+    if not args.dry_run:
+        validate_release_source(
+            commit, "Release source changed during pipeline execution"
+        )
 
     summary = release_root / "SUMMARY.txt"
     lines = [

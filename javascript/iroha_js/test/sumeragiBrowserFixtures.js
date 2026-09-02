@@ -30,7 +30,8 @@ export function browserSumeragiStatusFixture() {
     parent_state_root: browserSumeragiHash(0x34),
     post_state_root: browserSumeragiHash(0x35),
     ordinary_writes_root: browserSumeragiHash(0x36),
-    topup_anchor_count: 0,
+    offline_cash_top_up_root: null,
+    offline_cash_top_up_count: 0,
     native_amx_application_manifest_version: 1,
     native_amx_application_manifest_root:
       "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F",

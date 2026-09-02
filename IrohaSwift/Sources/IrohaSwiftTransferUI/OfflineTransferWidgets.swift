@@ -8,7 +8,7 @@ import UIKit
 import AppKit
 #endif
 
-/// Peer transports supported by the current Kagemusha handoff contract.
+/// Peer transports supported by Offline Cash V1.
 public enum IrohaOfflineTransferTransportKind: String, CaseIterable, Identifiable, Sendable {
     case qr
     case nfc
@@ -266,50 +266,45 @@ public struct IrohaOfflineTransferTransportChoice: View {
     }
 }
 
-/// Generates either one canonical direct envelope or the ABI-21 QR stream.
+/// Generates either one complete QR envelope or an animated QR stream.
 public enum IrohaOfflineFountainPayloadFrames {
     public static let defaultSingleFrameLimitBytes = 320
 
     public static func frames(
-        for payload: KagemushaPeerPayload,
-        singleFrameLimitBytes: Int = defaultSingleFrameLimitBytes,
-        options: KagemushaQRStreamOptions = .standard
+        for message: IrohaPeerWireMessageV1,
+        singleFrameLimitBytes: Int = defaultSingleFrameLimitBytes
     ) throws -> [String] {
-        if let direct = try? KagemushaPeerTextCodec.encode(payload),
+        if let direct = try IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: message),
            direct.utf8.count <= max(1, singleFrameLimitBytes) {
             return [direct]
         }
-        return try KagemushaQRStreamCodec.encode(payload, options: options)
+        return try IrohaPeerQRCodecV1.animatedFrameTexts(for: message)
     }
 }
 
 public struct IrohaOfflineFountainPayloadView<Content: View>: View {
-    private let payload: KagemushaPeerPayload
+    private let message: IrohaPeerWireMessageV1
     private let interval: TimeInterval
     private let singleFrameLimitBytes: Int
-    private let options: KagemushaQRStreamOptions
     private let content: (String, Int, Int) -> Content
     @State private var frameIndex = 0
 
     public init(
-        payload: KagemushaPeerPayload,
+        message: IrohaPeerWireMessageV1,
         interval: TimeInterval = 0.20,
         singleFrameLimitBytes: Int = IrohaOfflineFountainPayloadFrames.defaultSingleFrameLimitBytes,
-        options: KagemushaQRStreamOptions = .standard,
         @ViewBuilder content: @escaping (String, Int, Int) -> Content
     ) {
-        self.payload = payload
+        self.message = message
         self.interval = interval
         self.singleFrameLimitBytes = singleFrameLimitBytes
-        self.options = options
         self.content = content
     }
 
     private var frames: [String] {
         (try? IrohaOfflineFountainPayloadFrames.frames(
-            for: payload,
-            singleFrameLimitBytes: singleFrameLimitBytes,
-            options: options
+            for: message,
+            singleFrameLimitBytes: singleFrameLimitBytes
         )) ?? []
     }
 
@@ -318,7 +313,7 @@ public struct IrohaOfflineFountainPayloadView<Content: View>: View {
         let index = visibleFrames.indices.contains(frameIndex) ? frameIndex : 0
         let visible = visibleFrames.indices.contains(index) ? visibleFrames[index] : ""
         content(visible, index, visibleFrames.count)
-            .onChange(of: payload) { _ in frameIndex = 0 }
+            .onChange(of: message) { _ in frameIndex = 0 }
             .onReceive(
                 Timer.publish(every: max(interval, 0.05), on: .main, in: .common).autoconnect()
             ) { _ in
@@ -328,13 +323,27 @@ public struct IrohaOfflineFountainPayloadView<Content: View>: View {
     }
 }
 
+public enum IrohaOfflineNearbyPairingSymbol: String, CaseIterable, Codable, Sendable {
+    case stars = "nearby_pairing_stars"
+    case bird = "nearby_pairing_bird"
+    case mask = "nearby_pairing_mask"
+}
+
+public struct IrohaOfflineNearbyPairingChallenge: Equatable, Hashable, Codable, Sendable {
+    public let symbol: IrohaOfflineNearbyPairingSymbol
+
+    public init(symbol: IrohaOfflineNearbyPairingSymbol) {
+        self.symbol = symbol
+    }
+}
+
 public struct IrohaOfflineNearbyPairingImageTile: View {
-    private let challenge: KagemushaNearbyPairingChallenge
+    private let challenge: IrohaOfflineNearbyPairingChallenge
     private let size: CGFloat
     private let theme: IrohaOfflineTransferTheme
 
     public init(
-        challenge: KagemushaNearbyPairingChallenge,
+        challenge: IrohaOfflineNearbyPairingChallenge,
         size: CGFloat,
         theme: IrohaOfflineTransferTheme = .boi
     ) {
@@ -358,13 +367,13 @@ public struct IrohaOfflineNearbyPairingImageTile: View {
 }
 
 public struct IrohaOfflineNearbyPairingChallengeDisplay: View {
-    private let challenge: KagemushaNearbyPairingChallenge
+    private let challenge: IrohaOfflineNearbyPairingChallenge
     private let title: String
     private let tileSize: CGFloat
     private let theme: IrohaOfflineTransferTheme
 
     public init(
-        challenge: KagemushaNearbyPairingChallenge,
+        challenge: IrohaOfflineNearbyPairingChallenge,
         title: String,
         tileSize: CGFloat = 112,
         theme: IrohaOfflineTransferTheme = .boi
@@ -390,13 +399,13 @@ public struct IrohaOfflineNearbyPairingChallengeDisplay: View {
 public struct IrohaOfflineNearbyPairingChallengeChooser: View {
     private let title: String
     private let theme: IrohaOfflineTransferTheme
-    private let onSelect: (KagemushaNearbyPairingChallenge) -> Void
+    private let onSelect: (IrohaOfflineNearbyPairingChallenge) -> Void
     private let onCancel: () -> Void
 
     public init(
         title: String = "Tap the same picture on both phones.",
         theme: IrohaOfflineTransferTheme = .boi,
-        onSelect: @escaping (KagemushaNearbyPairingChallenge) -> Void,
+        onSelect: @escaping (IrohaOfflineNearbyPairingChallenge) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.title = title
@@ -409,8 +418,8 @@ public struct IrohaOfflineNearbyPairingChallengeChooser: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title).font(.headline).foregroundColor(theme.primaryText)
             HStack(spacing: 10) {
-                ForEach(KagemushaNearbyPairingSymbol.allCases, id: \.rawValue) { symbol in
-                    let challenge = KagemushaNearbyPairingChallenge(symbol: symbol)
+                ForEach(IrohaOfflineNearbyPairingSymbol.allCases, id: \.rawValue) { symbol in
+                    let challenge = IrohaOfflineNearbyPairingChallenge(symbol: symbol)
                     Button { onSelect(challenge) } label: {
                         IrohaOfflineNearbyPairingImageTile(
                             challenge: challenge,

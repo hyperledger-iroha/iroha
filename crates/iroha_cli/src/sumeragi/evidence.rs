@@ -2,99 +2,93 @@
 use super::commands::{EvidenceCountArgs, EvidenceKindArg, EvidenceListArgs};
 use crate::{CliOutputFormat, RunContext};
 use eyre::Result;
-use norito::json::Value;
+use iroha::client::{SumeragiEvidenceAuditRecord, SumeragiEvidencePenaltyStatus};
+
 pub(crate) fn list<C: RunContext>(context: &mut C, args: EvidenceListArgs) -> Result<()> {
     let client = context.client_from_config();
-    let kind = args.kind.map(EvidenceKindArg::as_str);
     let filter = iroha::client::SumeragiEvidenceListFilter {
         limit: args.limit,
         offset: args.offset,
-        kind,
+        kind: args.kind.map(EvidenceKindArg::into_client),
     };
-    let value = client.get_sumeragi_evidence_list_json(&filter)?;
+    let response = client.get_sumeragi_evidence_list(filter)?;
     if matches!(context.output_format(), CliOutputFormat::Text) {
-        let total = value
-            .get("total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        context.println(format!("total={total}"))?;
-        if let Some(items) = value.get("items").and_then(Value::as_array) {
-            for (idx, item) in items.iter().enumerate() {
-                context.println(format_evidence_summary(idx, item))?;
-            }
+        context.println(format!("total={}", response.total))?;
+        for (idx, item) in response.items.iter().enumerate() {
+            context.println(format_evidence_summary(idx, item))?;
         }
     } else {
-        context.print_data(&value)?;
+        context.print_data(&response)?;
     }
     Ok(())
 }
+
 pub(crate) fn count<C: RunContext>(context: &mut C, _args: EvidenceCountArgs) -> Result<()> {
     let client = context.client_from_config();
-    let value = client.get_sumeragi_evidence_count_json()?;
+    let response = client.get_sumeragi_evidence_count()?;
     if matches!(context.output_format(), CliOutputFormat::Text) {
-        let count = value
-            .get("count")
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        context.println(format!("count={count}"))?;
+        context.println(format!("count={}", response.count))?;
     } else {
-        context.print_data(&value)?;
+        context.print_data(&response)?;
     }
     Ok(())
 }
-fn format_evidence_summary(idx: usize, item: &Value) -> String {
-    let mut parts = Vec::new();
+
+fn format_evidence_summary(idx: usize, item: &SumeragiEvidenceAuditRecord) -> String {
     let ordinal = idx + 1;
-    let kind = item.get("kind").and_then(Value::as_str).unwrap_or("-");
-    parts.push(format!("{ordinal}: kind={kind}"));
-    for key in [
-        "class",
-        "height",
-        "view",
-        "epoch",
-        "signer",
-        "context_id",
-        "artifact_hash_1",
-        "artifact_hash_2",
-        "recorded_height",
-        "recorded_view",
-        "consensus_admitted_height",
-    ] {
-        if let Some(value) = item.get(key)
-            && let Some(rendered) = value_to_string(value)
-        {
-            parts.push(format!("{key}={rendered}"));
-        }
+    let (penalty_status, penalty_height) = match item.penalty_status {
+        SumeragiEvidencePenaltyStatus::Pending => ("pending", None),
+        SumeragiEvidencePenaltyStatus::Applied { height } => ("applied", Some(height)),
+        SumeragiEvidencePenaltyStatus::Cancelled { height } => ("cancelled", Some(height)),
+    };
+    let mut summary = format!(
+        "{ordinal}: kind={} class={} height={} view={} epoch={} signer={} context_id={} artifact_hash_1={} artifact_hash_2={} recorded_height={} recorded_view={} recorded_ms={} consensus_admitted_height={} penalty_status={penalty_status}",
+        item.kind,
+        item.class,
+        item.height,
+        item.view,
+        item.epoch,
+        item.signer,
+        item.context_id,
+        item.artifact_hash_1,
+        item.artifact_hash_2,
+        item.recorded_height,
+        item.recorded_view,
+        item.recorded_ms,
+        item.consensus_admitted_height,
+    );
+    if let Some(height) = penalty_height {
+        summary.push_str(&format!(" penalty_height={height}"));
     }
-    if let Some(ms) = item.get("recorded_ms").and_then(Value::as_u64) {
-        parts.push(format!("recorded_ms={ms}"));
-    }
-    parts.join(" ")
+    summary
 }
-fn value_to_string(value: &Value) -> Option<String> {
-    value
-        .as_str()
-        .map(ToString::to_string)
-        .or_else(|| value.as_u64().map(|n| n.to_string()))
-        .or_else(|| value.as_i64().map(|n| n.to_string()))
-        .or_else(|| value.as_bool().map(|b| b.to_string()))
-}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn record(penalty_status: SumeragiEvidencePenaltyStatus) -> SumeragiEvidenceAuditRecord {
+        SumeragiEvidenceAuditRecord {
+            kind: iroha::client::SumeragiEvidenceKind::SumeragiV2Equivocation,
+            class: iroha::client::SumeragiEvidenceClass::PhaseVote,
+            height: 42,
+            view: 7,
+            epoch: 1,
+            signer: 3,
+            context_id: iroha::client::SumeragiEvidenceHash::from_bytes([0xAA; 32]),
+            artifact_hash_1: iroha::client::SumeragiEvidenceHash::from_bytes([0xBB; 32]),
+            artifact_hash_2: iroha::client::SumeragiEvidenceHash::from_bytes([0xCC; 32]),
+            recorded_height: 43,
+            recorded_view: 8,
+            recorded_ms: 1234,
+            consensus_admitted_height: 43,
+            penalty_status,
+        }
+    }
+
     #[test]
-    fn format_evidence_summary_includes_core_fields() {
-        let mut map = norito::json::Map::new();
-        map.insert("kind".to_owned(), Value::from("SumeragiV2Equivocation"));
-        map.insert("height".to_owned(), Value::from(42u64));
-        map.insert("view".to_owned(), Value::from(7u64));
-        map.insert("epoch".to_owned(), Value::from(1u64));
-        map.insert("recorded_ms".to_owned(), Value::from(1234u64));
-        map.insert("signer".to_owned(), Value::from(3u64));
-        map.insert("class".to_owned(), Value::from("phase_vote"));
-        map.insert("context_id".to_owned(), Value::from("AA".repeat(32)));
-        map.insert("consensus_admitted_height".to_owned(), Value::from(43u64));
-        let summary = format_evidence_summary(0, &Value::from(map));
+    fn format_evidence_summary_includes_every_typed_field_and_pending_status() {
+        let summary = format_evidence_summary(0, &record(SumeragiEvidencePenaltyStatus::Pending));
         assert!(summary.contains("1: kind=SumeragiV2Equivocation"));
         assert!(summary.contains("height=42"));
         assert!(summary.contains("view=7"));
@@ -104,15 +98,21 @@ mod tests {
         assert!(summary.contains("context_id="));
         assert!(summary.contains("consensus_admitted_height=43"));
         assert!(summary.contains("recorded_ms=1234"));
+        assert!(summary.contains("penalty_status=pending"));
+        assert!(!summary.contains("penalty_height="));
     }
+
     #[test]
-    fn format_evidence_summary_uses_index_offset() {
-        let mut map = norito::json::Map::new();
-        map.insert("kind".to_owned(), Value::from("SumeragiV2Equivocation"));
-        let summary = format_evidence_summary(5, &Value::from(map));
+    fn format_evidence_summary_uses_index_offset_and_terminal_penalty_height() {
+        let summary = format_evidence_summary(
+            5,
+            &record(SumeragiEvidencePenaltyStatus::Applied { height: 44 }),
+        );
         assert!(
             summary.starts_with("6: kind=SumeragiV2Equivocation"),
             "unexpected summary: {summary}"
         );
+        assert!(summary.contains("penalty_status=applied"));
+        assert!(summary.contains("penalty_height=44"));
     }
 }

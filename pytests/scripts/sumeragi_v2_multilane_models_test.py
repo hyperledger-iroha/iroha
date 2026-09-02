@@ -1486,7 +1486,7 @@ def test_inflight_layout_contract_rejects_queue_cleanup_before_evidence_repair(
     start = source.index("    fn execute_exact_apply(")
     end = source.index("\n    fn finish_durable_apply_completion_against(", start)
     method = source[start:end]
-    promote, finalize = "promote_kagemusha_topup_finality_sidecar", "finalize_committed_block_merge_reservations"
+    promote, finalize = "promote_offline_cash_finality_sidecar", "finalize_committed_block_merge_reservations"
     assert method.count(promote) == 1 and method.count(finalize) == 1
     marker = "__SWAP_POST_CARRIER_REPAIR_ORDER__"
     method = method.replace(promote, marker, 1).replace(finalize, promote, 1).replace(marker, finalize, 1)

@@ -5,10 +5,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{
-        GovernanceReferendumRecord, GovernanceReferendumStatus, State,
-        World,
-    },
+    state::{GovernanceReferendumRecord, GovernanceReferendumStatus, State, World},
 };
 use iroha_data_model::{
     Registrable,

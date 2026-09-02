@@ -165,11 +165,22 @@ mantissa plus an explicit scale. Higher-level ledger helpers additionally
 accept `Decimal` because it is a lossless host value and normalize it before
 calling the codec.
 
-## Kagemusha lifecycle support
+## Offline Cash V1
 
-The Python package intentionally exposes no offline-spend lifecycle. The first-release typed
-Kagemusha lifecycle is supported by the Swift and JVM SDKs; Python keeps only generic online
-transaction, query, and privacy primitives.
+`OfflineCashV1` is the sole typed Python codec/orchestration namespace for the
+five-message request, proof-bearing acceptance authorization, one-use ticket,
+unlinkable payment, and acknowledgement exchange. It also covers mint
+authorization/credit binding and typed encrypted-credit opening, AAD, and
+envelope values. Governed sender recovery uses the fully cross-bound,
+16,384-byte `NoCommitClosure` canonical wire; its proof remains native-verified.
+Requests support `single_exact`, `partial_until_total`,
+`bounded_multi_payment`, and `open_receive`; `open_receive` has no cumulative
+payment-count ceiling. Canonical Norito and unpadded `oc1:` parsers enforce
+per-message and composed-exchange bounds before decoding.
+
+Monetary proving, signing, encryption, decryption, and secure-device state
+changes remain native-only. Python exposes no public predecessor/successor
+state links and no software money-crypto fallback.
 
 
 ## Native Privacy Bridge
@@ -425,7 +436,7 @@ equality of all 17 verifying-key record fields. Register/update fail before the
 request when `local_signing_context` is absent; there is no label, bare-hash,
 per-call, or server-derived fallback.
 
-Kagemusha-capable assets can be registered without shelling out to JavaScript
+Confidential assets can be registered without shelling out to JavaScript
 tooling. The `register_fee_payment` below is the recommended intent returned by
 `/v1/fees/quote` for that exact unsigned payload:
 
@@ -440,13 +451,9 @@ signing_client.register_zk_asset_and_wait(
 )
 ```
 
-The first-release SDK exposes no generic confidential transfer or withdrawal
-instruction. Public-to-confidential ingress and public redemption use the
-proof-bound Kagemusha V4 top-up/redemption protocol so escrow provenance and
-drawdown remain inseparable from settlement. Asset registration binds only the
-optional shield and unshield verifier roles: `vk_shield` names the Kagemusha
-top-up verifier, and `vk_unshield` names its redemption verifier. Kagemusha
-owns its global transfer-v2 verifier independently.
+Asset registration binds the optional confidential shield and unshield
+verifier roles. Offline Cash V1 uses its own reserve-backed mint-fold and
+redemption-voucher protocol rather than those confidential-asset instructions.
 
 ## Dataspace lifecycle helpers
 
@@ -1953,25 +1960,9 @@ diagnostic cap rather than materializing an unbounded registry. Keep the
 operator key runtime-only; the Kaigi SSE feed retains its separate streaming
 authentication contract.
 
-For configuration changes, the client now mirrors the `/v1/configuration` contract so
-admin scripts can stage updates without hand-editing JSON blobs. For example:
-
-```python
-# Update gossip fan-out/intervals while preserving the existing logger/queue/gas sections.
-client.set_network_gossip_config(
-    block_gossip_size=8,
-    block_gossip_period_ms=200,
-    transaction_gossip_size=32,
-    transaction_gossip_period_ms=75,
-)
-
-# Resize the transaction queue deterministically.
-client.set_queue_capacity(capacity=512)
-```
-
-Both helpers fetch the latest configuration, reuse unchanged sections for parity evidence,
-and raise `ValueError` when invalid parameters are supplied, keeping
-admin-surface updates reproducible.
+`/v1/configuration` is a read-only diagnostic snapshot. Runtime configuration
+changes require editing the node configuration and restarting the node, so the
+client intentionally exposes no mutation helper.
 
 Configuration snapshots also expose the active Norito-RPC transport policy without
 requiring callers to parse raw JSON:
@@ -2552,6 +2543,10 @@ no environment variables need to be exported.
 - Surface pipeline recovery sidecars (`/v1/pipeline/recovery/{height}`), Sumeragi evidence listing/counting,
   and pipeline/witness event filters with streaming helpers so Python operators can monitor ledger history
   without reimplementing the Rust toolchain.
+  Evidence reads use the closed first-release `SumeragiV2Equivocation` shape,
+  require a non-null consensus admission height and an exact penalty lifecycle,
+  reject missing, extra, or retired response fields, and stream responses under
+  a 1 KiB count ceiling and 1 MiB JSON-list ceiling.
 - Extend the Torii client with transaction submission/status helpers so signed
   envelopes can be delivered directly to `/v1/pipeline/transactions`.
 - Provide a `submit_transaction_envelope_and_wait` helper that submits a signed

@@ -18,8 +18,8 @@ limits for constrained links and derives per-peer budgets automatically.
 - Home automatically fills `max_incoming`, `max_total_connections`,
   `low_priority_bytes_per_sec`, and `low_priority_rate_per_sec` when those
   fields are not set. Explicit values still win if you provide them.
-- Switching the profile through the config update API reapplies the derived caps
-  so constrained links auto-disable extra lanes without bespoke tuning.
+- Changing the profile requires updating startup configuration and restarting
+  the node. Torii's configuration endpoint is deliberately read-only.
 - MTU hints are advisory; if you override per-topic frame caps, keep them within
   the stated payload envelope to avoid fragmentation on home/consumer links.
 

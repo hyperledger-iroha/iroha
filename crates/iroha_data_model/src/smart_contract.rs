@@ -136,7 +136,7 @@ pub const CONTRACT_HAJIMARI_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint
 /// ABI V1 uses the same address-and-selector scoped invocation permission for
 /// lifecycle operations as it does for permissioned public entrypoints.
 pub const CONTRACT_KAIZEN_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
-/// Maximum duration of a non-consensual Parliament emergency hold, in blocks.
+/// Maximum duration of a certified Parliament emergency hold, in blocks.
 pub const MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1: u64 = 3_600;
 /// Exact first-release contract lifecycle schema version.
 pub const CONTRACT_LIFECYCLE_CONTROL_VERSION_V1: u16 = 1;

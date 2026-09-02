@@ -4,16 +4,6 @@ fn default_args() {
     let args = Args::try_parse_from(["test"]).unwrap();
     assert_eq!(args.terminal_colors, is_coloring_supported());
     assert!(!args.startup.check_config);
-    assert!(
-        args.startup
-            .write_kagemusha_catalog_qualification_seal
-            .is_none()
-    );
-    assert!(
-        args.startup
-            .write_kagemusha_validator_qualification_seal
-            .is_none()
-    );
     #[cfg(feature = "test-network-parliament-signers")]
     assert_eq!(
         args.test_network_parliament_beacon_signer_mode,
@@ -59,115 +49,9 @@ fn check_config_flag_is_opt_in() {
     let args = Args::try_parse_from(["test", "--check-config"]).unwrap();
     assert!(args.startup.check_config);
 }
-#[test]
-fn qualification_seal_writer_requires_check_config() {
-    assert!(
-        Args::try_parse_from([
-            "test",
-            "--write-kagemusha-catalog-qualification-seal",
-            "/Library/SORA/Taira/seals/catalog.norito",
-        ])
-        .is_err()
-    );
-    let args = Args::try_parse_from([
-        "test",
-        "--check-config",
-        "--write-kagemusha-catalog-qualification-seal",
-        "/Library/SORA/Taira/seals/catalog.norito",
-    ])
-    .expect("the explicit writer is valid only with check-config");
-    assert!(args.startup.check_config);
-    assert_eq!(
-        args.startup.write_kagemusha_catalog_qualification_seal,
-        Some(PathBuf::from("/Library/SORA/Taira/seals/catalog.norito"))
-    );
-}
-
-#[test]
-fn validator_seal_writer_requires_check_config_and_conflicts_with_catalog_writer() {
-    let validator_path = "/Library/SORA/Taira/seals/validator.norito";
-    assert!(
-        Args::try_parse_from([
-            "test",
-            "--write-kagemusha-validator-qualification-seal",
-            validator_path,
-        ])
-        .is_err()
-    );
-    let args = Args::try_parse_from([
-        "test",
-        "--check-config",
-        "--write-kagemusha-validator-qualification-seal",
-        validator_path,
-    ])
-    .expect("the validator writer is valid only with check-config");
-    assert_eq!(
-        args.startup.write_kagemusha_validator_qualification_seal,
-        Some(PathBuf::from(validator_path))
-    );
-    assert!(
-        Args::try_parse_from([
-            "test",
-            "--check-config",
-            "--write-kagemusha-catalog-qualification-seal",
-            "/Library/SORA/Taira/seals/catalog.norito",
-            "--write-kagemusha-validator-qualification-seal",
-            validator_path,
-        ])
-        .is_err(),
-        "one invocation must never publish both artifacts"
-    );
-}
-
-#[test]
-fn failed_full_check_never_invokes_validator_signing_action() {
-    use std::cell::Cell;
-
-    let invocations = Cell::new(0_u8);
-    let failed_check = Err(
-        Report::new(MainError::Config)
-            .attach("injected invalid genesis after catalog and reservation preparation"),
-    );
-    let result = continue_after_full_kagemusha_check(failed_check, |()| {
-        invocations.set(invocations.get() + 1);
-        Ok(())
-    });
-    assert!(result.is_err());
-    assert_eq!(invocations.get(), 0, "validator signer must remain untouched");
-}
-
 #[cfg(unix)]
 #[test]
-fn qualification_seal_path_must_be_canonical_and_source_separate() {
-    assert!(validate_canonical_absolute_path(Path::new("seal.norito"), "test seal").is_err());
-    assert!(
-        validate_canonical_absolute_path(Path::new("/trusted/../seal.norito"), "test seal")
-            .is_err()
-    );
-    assert!(
-        validate_canonical_absolute_path(Path::new("/trusted/seal.norito"), "test seal").is_ok()
-    );
-    let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-        .expect("resolve repository default config");
-    config.settlement.offline.kagemusha_release_policy_path =
-        Some(PathBuf::from("/qualified/policy/release-policy.norito"));
-    config.settlement.offline.kagemusha_artifact_dir = Some(PathBuf::from("/qualified/artifacts"));
-    let error = validate_qualification_seal_directory_separation(
-        &config,
-        Path::new("/qualified/policy/catalog-seal.norito"),
-    )
-    .expect_err("seal publication must not mutate the policy parent");
-    assert!(error.contains("must be separate"));
-    let error = validate_qualification_seal_directory_separation(
-        &config,
-        Path::new("/qualified/artifacts/seals/catalog-seal.norito"),
-    )
-    .expect_err("seal publication must not mutate the artifact tree");
-    assert!(error.contains("must be separate"));
-}
-#[cfg(unix)]
-#[test]
-fn qualification_seal_publication_is_immutable_and_exclusive() {
+fn root_owned_artifact_publication_is_immutable_and_exclusive() {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     let temp = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
         .expect("private test root");
@@ -178,8 +62,12 @@ fn qualification_seal_publication_is_immutable_and_exclusive() {
         .expect("private seal directory");
     let path = seal_dir.join("catalog.norito");
     let expected_uid = rustix::process::geteuid().as_raw();
-    let target = QualificationSealPublicationTarget::prepare_for_owner(&path, expected_uid)
-        .expect("trusted absent destination");
+    let target = RootOwnedNoReplaceArtifactPublicationTarget::prepare_for_owner(
+        &path,
+        expected_uid,
+        "test artifact",
+    )
+    .expect("trusted absent destination");
     // Regression: the generic post-rename custody confirmation must accept
     // the destination directory timestamp change caused by its own rename.
     target
@@ -198,8 +86,8 @@ fn qualification_seal_publication_is_immutable_and_exclusive() {
     assert_eq!(metadata.nlink(), 1);
     assert_eq!(metadata.mode() & 0o7777, 0o444);
     #[cfg(target_os = "macos")]
-    require_no_macos_extended_acl(&path, "published qualification seal")
-        .expect("published seal is ACL-free");
+    require_no_macos_extended_acl(&path, "published artifact")
+        .expect("published artifact is ACL-free");
     assert_eq!(
         RootOwnedNoReplaceArtifactPublicationTarget::read_bounded_for_owner(
             &path,
@@ -218,10 +106,14 @@ fn qualification_seal_publication_is_immutable_and_exclusive() {
     )
     .expect_err("the descriptor read must enforce its byte bound");
     assert!(bounded_error.contains("outside 1..=8 bytes"));
-    let error = QualificationSealPublicationTarget::prepare_for_owner(&path, expected_uid)
-        .err()
-        .expect("an existing seal is never replaced");
-    assert!(error.contains("already exists"));
+    let error = RootOwnedNoReplaceArtifactPublicationTarget::prepare_for_owner(
+        &path,
+        expected_uid,
+        "test artifact",
+    )
+    .err()
+    .expect("an existing artifact is never replaced");
+    assert!(error.to_string().contains("already exists"));
     let rejected_path = seal_dir.join("rejected.norito");
     let rejected_target = RootOwnedNoReplaceArtifactPublicationTarget::prepare_for_owner(
         &rejected_path,
@@ -321,7 +213,7 @@ fn root_owned_bounded_reader_rejects_extended_attributes() {
         .join("reservation.norito");
     fs::write(&artifact, b"artifact").expect("write xattr-bearing artifact");
     let status = std::process::Command::new("/usr/bin/xattr")
-        .args(["-w", "com.sora.kagemusha-test", "present"])
+        .args(["-w", "com.sora.offline-cash-test", "present"])
         .arg(&artifact)
         .status()
         .expect("run xattr");
@@ -339,7 +231,7 @@ fn root_owned_bounded_reader_rejects_extended_attributes() {
 }
 #[cfg(target_os = "macos")]
 #[test]
-fn qualification_seal_publication_rejects_acl_writable_parent() {
+fn root_owned_artifact_publication_rejects_acl_writable_parent() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let temp = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
@@ -354,9 +246,10 @@ fn qualification_seal_publication_rejects_acl_writable_parent() {
         .expect("make reader artifact immutable");
     let (publication_error, reader_error) = {
         let _acl = add_macos_acl(&seal_dir, "everyone allow write");
-        let publication_error = QualificationSealPublicationTarget::prepare_for_owner(
+        let publication_error = RootOwnedNoReplaceArtifactPublicationTarget::prepare_for_owner(
             &seal_dir.join("catalog.norito"),
             expected_uid,
+            "test artifact",
         )
         .err()
         .expect("ACL-writable publication parent must fail closed");
@@ -369,7 +262,7 @@ fn qualification_seal_publication_rejects_acl_writable_parent() {
         .expect_err("ACL-writable reader parent must fail closed");
         (publication_error, reader_error)
     };
-    assert!(publication_error.contains("extended ACL"));
+    assert!(publication_error.to_string().contains("extended ACL"));
     assert!(reader_error.contains("extended ACL"));
 }
 #[test]

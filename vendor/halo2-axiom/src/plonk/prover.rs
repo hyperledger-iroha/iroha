@@ -2041,7 +2041,7 @@ fn consuming_proof_matches_borrowed_and_releases_owned_inputs() {
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             // Degree four and four equality columns exercise two permutation
-            // sets of two columns, matching the compact Kagemusha chunk width.
+            // sets of two columns, matching the compact Offline Cash chunk width.
             meta.set_minimum_degree(4);
             let columns = [(); 4].map(|_| meta.advice_column());
             for column in columns {

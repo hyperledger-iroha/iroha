@@ -1108,8 +1108,13 @@ pub(super) mod tests {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
+            let network_id = test_network_id(0x81);
+            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 0, &roster,
+                );
             let context = wire::HeightContext {
-                network_id: test_network_id(0x81),
+                network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
@@ -1120,6 +1125,8 @@ pub(super) mod tests {
                 snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("equal-vote quorum"),
                 roster,
+                offline_cash_mint_finality_epoch_id,
+                offline_cash_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"v2 sync nexus/amx context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
@@ -1237,7 +1244,7 @@ pub(super) mod tests {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }
     fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
-        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
             Hash::new([seed, 1]),
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
@@ -1354,7 +1361,7 @@ pub(super) mod tests {
             .expect("encode history-fixture proposal");
         let block = Arc::new(executed_block);
         let mut context = fixture.context.clone();
-        context.da_layout = wire::SumeragiV2GenesisContextParameters::recommended().da_layout;
+        context.da_layout = wire::recommended_data_availability_layout();
         context.validate().expect("valid history-fixture context");
         let subject = wire::BlockSubject {
             parent_block_hash: None,
@@ -2258,7 +2265,7 @@ pub(super) mod tests {
         assert!(proposal.is_resultless_proposal());
         let block = Arc::new(executed_block);
         let mut context = fixture.context.clone();
-        context.da_layout = wire::SumeragiV2GenesisContextParameters::recommended().da_layout;
+        context.da_layout = wire::recommended_data_availability_layout();
         context.validate().expect("historical context");
         let subject = wire::BlockSubject {
             parent_block_hash: None,

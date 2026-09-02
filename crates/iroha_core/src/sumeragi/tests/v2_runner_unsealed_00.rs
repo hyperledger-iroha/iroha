@@ -10,13 +10,14 @@ fn canonical_body_recovery_batches_all_ordered_heights_before_gate_close() {
             finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
                 &[b"finality".as_slice(), &height.to_le_bytes()].concat(),
             )),
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"parent state"),
-                Hash::new(b"post state"),
-                Hash::new(b"writes"),
-                1,
-                executed_block_wire_hash,
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new(b"parent state"),
+                    Hash::new(b"post state"),
+                    Hash::new(b"writes"),
+                    1,
+                    executed_block_wire_hash,
+                ),
             executed_block_wire_len: 1,
             executed_block_wire_hash,
         }
@@ -227,9 +228,12 @@ fn context() -> (wire::HeightContext, Vec<KeyPair>) {
             power: 1,
         })
         .collect::<Vec<_>>();
+    let network_id = crate::sumeragi::synthetic_network_id("v2-runner-test");
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     (
         wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("v2-runner-test"),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -240,6 +244,8 @@ fn context() -> (wire::HeightContext, Vec<KeyPair>) {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"runner-test-nexus-amx"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -269,13 +275,14 @@ fn decided_recovery_certified_request(
             proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"runner recovery parent state"),
-                Hash::new(b"runner recovery post state"),
-                Hash::new(b"runner recovery ordinary writes"),
-                1,
-                Hash::new(b"runner recovery executed block"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new(b"runner recovery parent state"),
+                    Hash::new(b"runner recovery post state"),
+                    Hash::new(b"runner recovery ordinary writes"),
+                    1,
+                    Hash::new(b"runner recovery executed block"),
+                ),
             signers: (0..super::super::network_topology::commit_quorum_from_len(
                 context.roster.len(),
             ))
@@ -1114,13 +1121,14 @@ fn test_recovered_complete_tip_authority(
             proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"recovered complete-tip parent state"),
-                Hash::new(b"recovered complete-tip post state"),
-                Hash::new(b"recovered complete-tip writes"),
-                1,
-                Hash::new(b"recovered complete-tip executed block"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new(b"recovered complete-tip parent state"),
+                    Hash::new(b"recovered complete-tip post state"),
+                    Hash::new(b"recovered complete-tip writes"),
+                    1,
+                    Hash::new(b"recovered complete-tip executed block"),
+                ),
             signers: Vec::new(),
             aggregate_signature: Vec::new(),
         },

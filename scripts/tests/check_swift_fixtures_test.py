@@ -216,7 +216,7 @@ def test_compare_validates_full_shared_and_three_swift_owned_fixtures(
 ) -> None:
     source, target, _, _ = populate_valid_corpus(tmp_path)
     write(target, "js_email_identifier_request.json", "{}")
-    write(target, "offline/kagemusha_peer_transport_v2.json", "{}")
+    write(target, "offline/retired_peer_transport.json", "{}")
 
     assert MODULE.compare(source, target) == ([], [], [])
 

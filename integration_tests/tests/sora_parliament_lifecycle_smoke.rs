@@ -75,6 +75,7 @@ use iroha::{
             Identifiable as _, Level, QueryBuilderExt as _, Register, SetParameter,
         },
         query::{
+            builder::SingleQueryError,
             dsl::IntoPredicate as _,
             error::{FindError, QueryExecutionFail},
         },
@@ -84,8 +85,8 @@ use iroha::{
 };
 use iroha_core::{
     beacon::{
-        GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_npos_successor_seed_v1,
-        global_threshold_beacon_roster_hash_v1,
+        GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_governance_seed_v1,
+        global_threshold_beacon_npos_successor_seed_v1, global_threshold_beacon_roster_hash_v1,
         parliament_test_network_signer::{
             deterministic_parliament_beacon_key_record_v1,
             deterministic_parliament_beacon_successor_key_record_v1,
@@ -528,8 +529,8 @@ fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> R
                 .execute_single_opt()
             {
                 Ok(exact_match) => exact_match,
-                Err(QueryError::Validation(ValidationFail::QueryFailed(
-                    QueryExecutionFail::NotFound,
+                Err(SingleQueryError::QueryError(QueryError::Validation(
+                    ValidationFail::QueryFailed(QueryExecutionFail::NotFound),
                 ))) => None,
                 Err(error) => {
                     return Err(eyre!(
@@ -607,7 +608,7 @@ fn ordered_validator_roster(
             "the current revision-4 finality context is not an exact four-validator 3-of-4 authority"
         ));
     }
-    if context.da_layout != SumeragiV2GenesisContextParameters::recommended().da_layout {
+    if context.da_layout != recommended_data_availability_layout() {
         return Err(eyre!(
             "the current revision-4 finality context does not retain the mandatory RS16 DA layout"
         ));
@@ -908,6 +909,7 @@ fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
         NonZeroU64::new(height).ok_or_else(|| eyre!("finalized block height must be nonzero"))?;
     let mut matching = client
         .query(FindBlocks)
+        .filter_with(|block| block.equals("height", height).into_predicate())
         .execute_all()
         .map_err(|error| eyre!("query finalized blocks for exact height {height}: {error}"))?
         .into_iter()
@@ -1098,7 +1100,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     );
     assert_eq!(
         handshake.sumeragi_v2.da_layout,
-        SumeragiV2GenesisContextParameters::recommended().da_layout,
+        recommended_data_availability_layout(),
         "the corridor must retain the signed revision-4 RS16 DA layout",
     );
     network.ensure_blocks(1).await?;
@@ -1297,6 +1299,12 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         sortition_pulse.finalized_chain_anchor,
     )
     .wrap_err("independently verify the sortition pulse threshold signature")?;
+    let sortition_governance_seed =
+        global_threshold_beacon_governance_seed_v1(&sortition_pulse, sortition_pulse_height);
+    assert_ne!(
+        sortition_governance_seed, sortition_pulse.seed,
+        "Parliament sortition must consume domain-separated governance entropy, not the raw beacon seed",
+    );
     submit_transition(
         &client,
         attempt_id,
@@ -1318,7 +1326,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             election.pulse_id(),
             Some(BeaconPulseId::new(sortition_pulse.pulse_id))
         );
-        assert_eq!(election.pulse_output(), Some(sortition_pulse.seed));
+        assert_eq!(election.pulse_output(), Some(sortition_governance_seed));
         assert_eq!(election.primary_assignments().len(), BODY_SEATS as usize);
         assert!(election.alternate_assignments().is_empty());
     }
@@ -2087,7 +2095,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         );
         assert_eq!(
             artifact.height_context.da_layout,
-            SumeragiV2GenesisContextParameters::recommended().da_layout,
+            recommended_data_availability_layout(),
             "every enactment proof must retain the signed revision-4 RS16 DA layout",
         );
     }
@@ -2207,6 +2215,8 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let mut npos = SumeragiNposParameters::default();
     npos.epoch_length_blocks = NonZeroU64::new(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
         .expect("mandatory NPoS epoch length is non-zero");
+    npos.evidence_horizon_blocks = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS * 2;
+    npos.slashing_delay_blocks = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;
     npos.validate()
         .map_err(|error| eyre!("invalid mandatory NPoS fixture: {error}"))?;
 
@@ -2345,6 +2355,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         boundary_height,
     )?;
     client.submit(rotation_certificate, fee())?;
+    network.ensure_blocks(pulse_height - 1).await?;
     assert_no_global_beacon_pulse_at(
         &client,
         pulse_height - 1,
@@ -2526,6 +2537,8 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     let mut npos = SumeragiNposParameters::default();
     npos.epoch_length_blocks = NonZeroU64::new(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
         .expect("mandatory NPoS epoch length is non-zero");
+    npos.evidence_horizon_blocks = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS * 2;
+    npos.slashing_delay_blocks = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;
     npos.validate()
         .map_err(|error| eyre!("invalid fail-closed NPoS fixture: {error}"))?;
 

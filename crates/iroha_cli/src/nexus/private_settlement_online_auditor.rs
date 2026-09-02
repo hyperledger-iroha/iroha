@@ -409,9 +409,9 @@ where
 /// Fetch, decrypt, evaluate, sign, and submit one approval as a fail-closed CLI operation.
 ///
 /// The client transport supplies exact three-of-four views and acknowledgement
-/// quorums. `credentials` may be backed by an HSM/KMS provider; `request_signer`
-/// authenticates the four HTTP requests and must advertise that provider's
-/// exact purpose-separated approval key.
+/// quorums. `credentials` may be supplied by a deployment-owned provider;
+/// `request_signer` authenticates the four HTTP requests and must advertise
+/// that provider's exact purpose-separated approval key.
 ///
 /// # Errors
 ///

@@ -5942,7 +5942,7 @@ redistributable schemas, and official trust/revocation bundles.
   `sm-neon-force` force-enables only the `Auto` policy and explicit
   `force-disable` still pins the scalar fallback. The
   `iroha_data_model --all-targets` strict clippy gate is green after clearing
-  the Kagemusha/ZK-ACE test/bench lint surface, and the touched-package
+  the offline-cash/ZK-ACE test/bench lint surface, and the touched-package
   all-target gate for `iroha_data_model`, `connect_norito_bridge`,
   `iroha_js_host`, `iroha_kagami`, and `sorafs_orchestrator` now also passes
   with `--no-deps`. The full `soranet-relay` strict clippy gate now reaches and
@@ -6071,8 +6071,8 @@ redistributable schemas, and official trust/revocation bundles.
 						  requests, caller-signed Torii SoraFS repair command transactions, SoraFS orchestrator Taikai
 					  cache-admission envelope/gossip signatures, Core oracle observation
 					  signatures, Core SoraDNS directory-builder signatures, runtime-upgrade
-					  provenance signatures, Offline note key-certificate issuer signatures,
-					  snapshot ML-DSA signature sidecars, Core fraud-attestation signatures, JDG
+					  provenance signatures, snapshot ML-DSA signature sidecars, Core
+					  fraud-attestation signatures, JDG
 					  simple-threshold ML-DSA committee signatures, and Sumeragi direct
 					  vote/merge/RBC/VRF plus peer trust-gossip ML-DSA signatures use it before digest, typed-payload
 					  verification,
@@ -6601,15 +6601,11 @@ redistributable schemas, and official trust/revocation bundles.
 						  signing payloads, SoraFS admission/pin fixture generators, and SoraFS
 						  gateway token-signing key rotation now also extract embedded Ed25519
 						  public-key payloads through checked accessors before writing operator
-						  artifacts; offline note tests, ADDR-2 compliance
-						  vectors, and Offline V1/V2 interop vector generators now also extract
-						  fixture public-key payloads through checked accessors before embedding
-						  certificate, address, or offline FI public-key fields and sign issuer
-						  certificate payloads through `Signature::try_new`; the remaining
+						  artifacts; ADDR-2 compliance vectors now also extract fixture public-key
+						  payloads through checked accessors before embedding address fields; the remaining
 						  SoraFS conformance/chunker/pin/discovery fixtures, gov draw fixtures,
 						  bridge proof vectors, config/test-network assertions, dev key example,
-						  Swift parity generator, and offline-note integration certificate helpers
-						  now also use checked public-key accessors, leaving the compatibility-accessor
+						  Swift parity generator now also uses checked public-key accessors, leaving the compatibility-accessor
 						  scan confined to `iroha_crypto` internals, tests, and benches; inside
 						  `iroha_crypto`, BLS PoP fixtures, generated public-key roundtrips,
 						  Ed25519 aggregate/batch fixtures, ML-DSA/PQC fixtures, and the Ed25519
@@ -6706,7 +6702,7 @@ redistributable schemas, and official trust/revocation bundles.
   ciphertext, and low-order-free X25519 ephemeral keys before envelope use;
   this structural validation is not value authorization. The proofless generic
   `zk::Shield` instruction and CLI/native/SDK transaction encoders are removed,
-  public-to-confidential ingress requires the proof-bound Kagemusha V4 top-up,
+  public-to-confidential ingress requires the proof-bound Offline Cash V1 top-up,
   and the standalone envelope utility retains the same payload preflight;
   standalone ML-KEM public-key validation, secret-key validation,
   encapsulation, and decapsulation now reject all-zero public keys, all-zero
@@ -7474,25 +7470,11 @@ redistributable schemas, and official trust/revocation bundles.
   their typed JSON or Norito request directly and return an asynchronous typed
   operation reference; there is no version-nested route or whole-payload
   wrapper.
-- Completed 2026-06-06: removed the stale legacy Offline policy/revocation HTTP
-  route registrations from Torii and the source/generated OpenAPI surfaces; the
-  Offline readiness smokes now assert `/v1/offline/revocations*` is absent.
-- Completed 2026-07-11: deleted the classic issuer, key-refill, note-issue,
-  audit, V1 Kagemusha, and version-nested routes instead of preserving
-  rejection or compatibility shims. Router and catalog tests assert those
-  method/path pairs cannot resolve through aliases or parameter capture.
 - Completed 2026-07-30 and finalized 2026-08-30: removed the unshipped
   governance council `derive-vrf` prototype, its `gov_vrf` feature, HTTP/MCP
   surfaces, and independently authorized persist/replace/manual epoch-roster
   surfaces. Attempt-local Parliament bodies use canonical bonded-citizen
   snapshots plus finalized threshold-beacon pulses.
-- Completed 2026-06-06: refreshed `fixtures/offline/interop_contract_v2.json`
-  and its generator so the published redeem vector uses
-  `OFFLINE_NOTE_KEY_CERTIFICATE_VERSION` directly. Torii now consumes the
-  committed fixture without normalization and keeps a separate stale-version
-  rejection regression, while Swift, Kotlin/JVM, and Java Android SDK
-  constructors mirror the same key-certificate version.
-
 ## SoraFS paid pin validation follow-ups
 
 - Completed 2026-06-04: reran the SoraFS paid-pin validation corridor across
@@ -10231,11 +10213,11 @@ redistributable schemas, and official trust/revocation bundles.
     regressions consume account material;
     core ZK root-hint fixtures now use checked random Ed25519 key generation
     before stale/recent root-window regressions consume account material;
-    core Kagemusha audit fixtures now use checked random Ed25519 key generation
+    core offline-cash audit fixtures now use checked random Ed25519 key generation
     before protocol-bound confidential-state regressions consume account
     material;
     core ZK asset verifier-key enforcement fixtures now use checked random
-    Ed25519 key generation before Kagemusha top-up/redemption VK-role binding
+    Ed25519 key generation before offline top-up/redemption VK-role binding
     regressions consume account material;
     core fraud monitoring authority and attester fixtures now use checked
     random Ed25519 key generation before admission and attestation regressions
@@ -10485,17 +10467,6 @@ redistributable schemas, and official trust/revocation bundles.
     session-key fixtures now use checked default and Ed25519 key generation
     before control-frame, capability, privacy, and persistence regressions
     consume them;
-    core queue-router offline note certificate fixtures now use checked
-    deterministic Ed25519 seed expansion before offline note routing
-    regressions consume them;
-    core offline note account, certificate, audit, redeem, and escrow fixtures
-    now use checked deterministic Ed25519 seed expansion before offline lineage
-    and duplicate-replay regressions consume them;
-    integration offline-note certificate fixtures now use checked deterministic
-    Ed25519 seed expansion and `Signature::try_new` before the four-peer
-    issue/audit/redeem duplicate-replay regression consumes them, while the
-    dormant V2 fixture remains unregistered until the current data-model/ZK API
-    exposes its referenced V2 symbols;
     data-model streaming ticket event account fixtures now use checked
     deterministic Ed25519 seed expansion before privacy-route and ticket
     roundtrip regressions consume them;
@@ -10509,14 +10480,14 @@ redistributable schemas, and official trust/revocation bundles.
     expansion before test-network regressions consume them;
     JS host multihash and smart-contract-code JSON fixtures now use checked
     deterministic Ed25519 seed expansion before binding regressions consume them;
-    connect-norito bridge offline-note prover, Connect/crypto FFI, identifier
+    connect-norito bridge Offline Cash prover, Connect/crypto FFI, identifier
     receipt, account-address, ML-DSA signing, and signed-transaction fixtures now
     use checked deterministic Ed25519/ML-DSA seed and typed-signature
-    construction before bridge FFI/offline-note regressions consume them;
+    construction before bridge FFI/Offline Cash regressions consume them;
     feature-gated core ZK-ACE STARK account fixtures now use checked
     deterministic Ed25519 seed expansion before STARK prover regressions consume
     them;
-    core ZK OpenVerify STARK prover and offline-note guardrail/real-prover
+    core ZK OpenVerify STARK prover and Offline Cash guardrail/real-prover
     account plus one-use key-certificate fixtures now use checked deterministic
     Ed25519 seed expansion before STARK and offline recursive proof regressions
     consume them;
@@ -10756,13 +10727,10 @@ redistributable schemas, and official trust/revocation bundles.
     transactions; CLI Soracloud release-governance, provenance,
     uploaded-model, generated-HF, and mutation-auth header signatures now share
     a checked `Signature::try_new` helper and return contextual command errors
-    on backend signing failure; Torii Offline Notes V1 issue submission and V2
-    issue/redeem submission now use
-    issuer-local checked `TransactionBuilder::try_sign` helpers before queue
-    submission; the shared Connect Norito bridge transaction encoder now uses
+    on backend signing failure; the shared Connect Norito bridge transaction encoder now uses
     `TransactionBuilder::try_sign` and propagates a bridge transaction-signing
     error through transfer, shield/unshield, ZK, governance, mint/burn,
-    multisig, identifier, and Offline Notes FFI exports; Torii App API
+    multisig and identifier FFI exports; Torii App API
     transaction submissions now share a checked
     `TransactionBuilder::try_sign` helper across confidential relay, account
     onboarding/faucet/alias, space-directory manifests, contract
@@ -10863,15 +10831,7 @@ redistributable schemas, and official trust/revocation bundles.
     regressions on checked fixtures; BFV full-bootstrap release-audit reviewer
     fixtures now use checked seeded reviewer key derivation plus
     `SignatureOf::try_new` for the wrong-reviewer signoff negative path; Torii
-    offline issuer attestation, body-auth, multisig witness, and signed lineage
-    fixtures now use checked seeded Ed25519 key generation plus
-    `Signature::try_new`, with wrong-verifier receipt, stale/replay/tampered
-    body proof, multisig, certificate usage-limit, signed-balance tamper, and
-    refill lineage coverage on checked fixtures; Torii offline v2 issuer
-    fixtures now route local seeded Ed25519
-    material through `KeyPair::try_from_seed` and attestation receipts through
-    `Signature::try_new`, with wrong-verifier and certificate-key
-    canonicalization regressions covering the receipt path; xtask SoraNet
+    xtask SoraNet
     testnet drill bundle, FastPQ bench manifest, Taikai anchor bundle, and
     OpenAPI manifest signers now propagate `Signature::try_new` failures with
     command context, with the signing-focused xtask suite verifying the
@@ -10981,10 +10941,6 @@ redistributable schemas, and official trust/revocation bundles.
 	core identifier ISI receipt and output-opening fixtures now use checked
 	`SignatureOf::try_new`, with claim/revoke, missing-UAID, invalid receipt,
 	invalid opening, mismatched opening, zero-hash, expired-receipt, and reclaim
-	regressions rerun;
-	core offline note one-use certificate fixtures now use checked
-	`Signature::try_new`, with certificate shape, topup anchoring, reused output
-	certificate, mutated anchored claim, and invalid output-certificate signature
 	regressions rerun;
 	core domain endorsement fixtures now use checked `Signature::try_new`, with
 	accepted, missing, duplicate, expired, scoped, mismatched, and unregister

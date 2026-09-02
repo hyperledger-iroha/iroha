@@ -383,8 +383,11 @@ fn authenticated_runtime_context() -> (wire::HeightContext, Vec<KeyPair>) {
             power: 1,
         })
         .collect::<Vec<_>>();
+    let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-runtime-ingress-test");
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 1, &roster);
     let context = wire::HeightContext {
-        network_id: crate::sumeragi::synthetic_network_id("sumeragi-v2-runtime-ingress-test"),
+        network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: 1,
@@ -395,6 +398,8 @@ fn authenticated_runtime_context() -> (wire::HeightContext, Vec<KeyPair>) {
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("runtime fixture quorum"),
         roster,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"runtime ingress nexus context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: wire::DataAvailabilityLayout {
@@ -583,13 +588,14 @@ fn signed_runtime_quorum_certificate_for_phase_at_view(
         block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 5])),
         payload_hash: Hash::new([marker, 6]),
     };
-    let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-        Hash::new([marker, 7]),
-        Hash::new([marker, 8]),
-        Hash::new([marker, 9]),
-        1,
-        Hash::new([marker, 10]),
-    );
+    let execution_commitment =
+        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            Hash::new([marker, 7]),
+            Hash::new([marker, 8]),
+            Hash::new([marker, 9]),
+            1,
+            Hash::new([marker, 10]),
+        );
     let signers = vec![0, 1, 2];
     let preimage = wire::Vote {
         round,
@@ -1239,7 +1245,7 @@ fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() 
     );
     let mut changed_commitment = commit;
     changed_commitment.execution_commitment =
-        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
             Hash::new(b"foreign Validate-to-Apply parent state"),
             Hash::new(b"foreign Validate-to-Apply post state"),
             Hash::new(b"foreign Validate-to-Apply writes"),

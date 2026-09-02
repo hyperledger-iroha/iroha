@@ -180,6 +180,31 @@ fn torii_explicit_lane_route_rejects_inactive_autoscale_range_lane() {
     );
 }
 #[test]
+fn public_lane_route_rejects_restricted_selector_like_absent() {
+    let mut app = mk_app_state_for_tests();
+    let (restricted_lane, _) = configure_private_ingress_routes_for_test(&mut app);
+    let restricted_error = torii_route_for_public_lane_id(app.as_ref(), restricted_lane)
+        .expect_err("public-lane route must hide a restricted lane");
+    let absent_error = torii_route_for_public_lane_id(app.as_ref(), LaneId::new(999))
+        .expect_err("public-lane route must reject an absent lane");
+    assert!(matches!(
+        restricted_error,
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound
+        ))
+    ));
+    assert!(matches!(
+        absent_error,
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound
+        ))
+    ));
+    assert!(
+        torii_route_for_public_lane_id(app.as_ref(), LaneId::SINGLE).is_ok(),
+        "the active public lane remains addressable",
+    );
+}
+#[test]
 fn torii_fanout_route_discovery_excludes_inactive_autoscale_range_lane() {
     let authority = routed_read_test_account(0x7d);
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
@@ -1228,6 +1253,7 @@ async fn execute_torii_read_request_locally_alias_resolve_rejects_invalid_proxy_
         &app,
         torii_read_request(
             ToriiReadEndpointV1::AliasResolve,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             route,
             Vec::new(),
             None,
@@ -1257,6 +1283,7 @@ async fn execute_torii_read_request_locally_alias_resolve_index_rejects_invalid_
         &app,
         torii_read_request(
             ToriiReadEndpointV1::AliasResolveIndex,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             route,
             Vec::new(),
             None,
@@ -1286,6 +1313,7 @@ async fn execute_torii_read_request_locally_alias_lookup_by_account_rejects_inva
         &app,
         torii_read_request(
             ToriiReadEndpointV1::AliasLookupByAccount,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             route,
             Vec::new(),
             None,
@@ -1320,6 +1348,7 @@ async fn execute_torii_read_request_locally_alias_resolve_uses_route_local_alias
         &app,
         torii_read_request(
             ToriiReadEndpointV1::AliasResolve,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             route,
             Vec::new(),
             None,
@@ -1521,6 +1550,7 @@ async fn protected_alias_reads_ignore_unsigned_public_upstream() {
         route,
         torii_read_request(
             ToriiReadEndpointV1::AliasResolveIndex,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             route,
             Vec::new(),
             None,
@@ -1556,7 +1586,14 @@ async fn protected_alias_reads_ignore_unsigned_public_upstream() {
         let response = execute_torii_read_for_route(
             &app,
             route,
-            torii_read_request(endpoint, route, Vec::new(), None, body),
+            torii_read_request(
+                endpoint,
+                ToriiFanoutRouteScopeV1::AllDataspaces,
+                route,
+                Vec::new(),
+                None,
+                body,
+            ),
             None,
         )
         .await;
@@ -1692,6 +1729,7 @@ async fn execute_torii_read_request_locally_alias_resolve_index_uses_route_local
         &app,
         torii_read_request(
             ToriiReadEndpointV1::AliasResolveIndex,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             route,
             Vec::new(),
             None,
@@ -1764,6 +1802,7 @@ async fn execute_torii_read_request_locally_alias_lookup_by_account_filters_item
         &app,
         torii_read_request(
             ToriiReadEndpointV1::AliasLookupByAccount,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             route,
             Vec::new(),
             None,
@@ -1983,9 +2022,7 @@ fn torii_visibility_account_from_headers_rejects_partial_signature_as_unauthoriz
     let authority = routed_read_test_account(0x8f);
     let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     let method = Method::GET;
-    let uri: Uri = "/v1/explorer/transactions"
-        .parse()
-        .expect("valid URI");
+    let uri: Uri = "/v1/explorer/transactions".parse().expect("valid URI");
     let mut headers = HeaderMap::new();
     headers.insert(HEADER_SIGNATURE, HeaderValue::from_static("00"));
     let err = torii_visibility_account_from_headers(

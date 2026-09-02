@@ -87,7 +87,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests",
         "org.hyperledger.iroha.android.nexus.UaidJsonParserTests",
         "org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests",
-        "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest",
         "org.hyperledger.iroha.android.privacy.ConfidentialNoteTests",
         "org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest",
         "org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests",

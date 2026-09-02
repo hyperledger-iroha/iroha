@@ -27,6 +27,10 @@ use iroha_data_model::{
         TimeoutCertificate, TimeoutJustification, TimeoutVote, TimeoutVoteGroup, ValidatorPower,
         Vote, encode_payload_chunks, native_amx_application_manifest_empty_root,
     },
+    isi::offline_cash_v1::{
+        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterV1,
+        OfflineCashMintFinalityValidatorKeysV1,
+    },
     merge::MergeLedgerEntry,
     peer::PeerId,
 };
@@ -106,8 +110,8 @@ struct PreV4ExecutionCommitment {
     parent_state_root: Hash,
     post_state_root: Hash,
     ordinary_writes_root: Hash,
-    topup_anchor_root: Option<Hash>,
-    topup_anchor_count: u32,
+    offline_cash_top_up_root: Option<Hash>,
+    offline_cash_top_up_count: u32,
     native_amx_application_manifest_version: u16,
     native_amx_application_manifest_root: Hash,
     native_amx_application_manifest_count: u32,
@@ -143,6 +147,30 @@ fn network_id(seed: u8) -> NetworkId {
         )),
     )
 }
+fn mint_finality_roster(
+    network_id: NetworkId,
+    epoch: u64,
+    roster: &[ValidatorPower],
+) -> OfflineCashMintFinalityEpochRosterV1 {
+    OfflineCashMintFinalityEpochRosterV1 {
+        version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        network_id,
+        epoch,
+        validators: roster
+            .iter()
+            .enumerate()
+            .map(
+                |(index, validator)| OfflineCashMintFinalityValidatorKeysV1 {
+                    validator: validator.validator.clone(),
+                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
+                        32],
+                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
+                        32],
+                },
+            )
+            .collect(),
+    }
+}
 fn context() -> HeightContext {
     let mut peers = (1..=4).map(peer).collect::<Vec<_>>();
     peers.sort();
@@ -153,11 +181,18 @@ fn context() -> HeightContext {
             power: 1,
         })
         .collect::<Vec<_>>();
+    let network_id = network_id(0x71);
+    let mint_finality_roster = mint_finality_roster(network_id, 2, &roster);
+    let mint_finality_epoch_id = mint_finality_roster
+        .finality_epoch_id()
+        .expect("valid fixture mint-finality roster");
     HeightContext {
-        network_id: network_id(0x71),
+        network_id,
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 2,
+        offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster: mint_finality_roster,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
@@ -197,7 +232,7 @@ fn subject(seed: u8) -> BlockSubject {
     }
 }
 fn execution_commitment(seed: u8) -> ExecutionCommitment {
-    ExecutionCommitment::without_topups_or_merge_carrier(
+    ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new([seed, 3]),
         Hash::new([seed, 4]),
         Hash::new([seed, 5]),
@@ -630,8 +665,8 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         parent_state_root: commitment.parent_state_root,
         post_state_root: commitment.post_state_root,
         ordinary_writes_root: commitment.ordinary_writes_root,
-        topup_anchor_root: commitment.topup_anchor_root,
-        topup_anchor_count: commitment.topup_anchor_count,
+        offline_cash_top_up_root: commitment.offline_cash_top_up_root,
+        offline_cash_top_up_count: commitment.offline_cash_top_up_count,
         native_amx_application_manifest_version: commitment.native_amx_application_manifest_version,
         native_amx_application_manifest_root: commitment.native_amx_application_manifest_root,
         native_amx_application_manifest_count: commitment.native_amx_application_manifest_count,

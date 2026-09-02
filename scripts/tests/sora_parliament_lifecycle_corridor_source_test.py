@@ -215,7 +215,11 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
     "NonZeroU64::new(height)",
     ".query(FindBlocks)",
     '.filter_with(|block| block.equals("height", height).into_predicate())',
-    ".execute_single()",
+    ".execute_all()",
+    ".filter(|block| block.header().height() == requested_height)",
+    'ok_or_else(|| eyre!("finalized block height {height} is absent"))',
+    "if matching.next().is_some()",
+    "finalized block stream contains duplicate height",
     "if block.header().height() != requested_height",
     "finalized block stream returned height",
     "let block = exact_block(client, height)",
@@ -618,14 +622,19 @@ def validate_exact_absence_classification(source: str) -> None:
     )
     require(
         source.count(
+            '.query(FindBlocks)\n        .filter_with(|block| block.equals("height", height).into_predicate())\n        .execute_all()'
+        )
+        == 1
+        and source.count(
             '.filter_with(|block| block.equals("height", height).into_predicate())'
         )
-        and source.count(".execute_single()") == 1,
-        "exact finalized-block checks must use one bounded exact-height query",
-    )
-    require(
-        ".query(FindBlocks)\n        .execute_all()" not in source,
-        "finalized-block checks must not use an unbounded block inventory query",
+        == 1
+        and source.count(
+            ".filter(|block| block.header().height() == requested_height)"
+        )
+        == 1
+        and source.count("if matching.next().is_some()") == 1,
+        "exact finalized-block checks must use one bounded, locally exact, duplicate-rejecting query",
     )
 
     broad_absence_patterns = {
@@ -1152,7 +1161,7 @@ def validate_feature_only_fault_wiring(
         '#[cfg(feature = "test-network-parliament-signers")]',
         "test_network_emit_invalid_outbound_partial_v1()",
         "partial.signature_share[0] ^= 1;",
-        "let _ = active.aggregator.accept_partial(partial)?;",
+        "let _ = next_aggregator.accept_partial(partial)?;",
     ):
         require(marker in lifecycle, f"feature-only beacon lifecycle lost `{marker}`")
 
@@ -1383,7 +1392,7 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 1,
             ),
             "unbounded block inventory query": corridor.replace(
-                ".query(FindBlocks)\n        .filter_with(|block| block.equals(\"height\", height).into_predicate())\n        .execute_single()",
+                ".query(FindBlocks)\n        .filter_with(|block| block.equals(\"height\", height).into_predicate())\n        .execute_all()",
                 ".query(FindBlocks)\n        .execute_all()",
                 1,
             ),

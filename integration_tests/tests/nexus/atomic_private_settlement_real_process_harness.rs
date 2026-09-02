@@ -3344,7 +3344,7 @@ fn ensure_fault_ledger_unchanged_before_finality(
 fn verify_signed_rs16_finality(network: &Network, finalized_height: u64) -> Result<u64> {
     let height = NonZeroU64::new(finalized_height)
         .ok_or_else(|| eyre!("finalized receipt height is zero"))?;
-    let expected_layout = SumeragiV2GenesisContextParameters::recommended().da_layout;
+    let expected_layout = recommended_data_availability_layout();
     let mut observations = 0_u64;
     for peer in network.peers() {
         let (proof, block_hash) = peer

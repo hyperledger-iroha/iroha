@@ -37,7 +37,7 @@ class IrohaPeerQRFrameV1(
                 index == 0 && total == 1 &&
                     framePayload.size > IrohaPeerWireMessageV1.HEADER_LENGTH &&
                     framePayload.size <= IrohaPeerWireMessageV1.HEADER_LENGTH +
-                    IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES,
+                    IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_CASH_ENCODED_BYTES,
             ) { "Malformed complete IRQR frame" }
             IrohaPeerQRFrameKindV1.HEADER -> require(
                 index == 0 && framePayload.size == IrohaPeerWireMessageV1.HEADER_LENGTH,
@@ -85,7 +85,7 @@ class IrohaPeerQRFrameV1(
         const val PAYLOAD_OFFSET = 32
         const val FIXED_OVERHEAD = 36
         private const val MAXIMUM_DATA_SHARDS =
-            (IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES + 255) / 256
+            (IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_CASH_ENCODED_BYTES + 255) / 256
         private val MAGIC = "IRQR".toByteArray(Charsets.US_ASCII)
 
         @JvmStatic
@@ -546,7 +546,7 @@ class IrohaPeerQRScanSessionV1 @JvmOverloads constructor(
 
         try {
             val maximumShards =
-                (IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES +
+                (IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_CASH_ENCODED_BYTES +
                     IrohaPeerQRCodecV1.SHARD_BYTES - 1) / IrohaPeerQRCodecV1.SHARD_BYTES
             require(frame.total <= maximumShards) { "IRQR total exceeds profile bound" }
             candidate.declaredTotal?.let {

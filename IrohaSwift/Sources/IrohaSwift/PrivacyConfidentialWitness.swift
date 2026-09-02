@@ -169,7 +169,7 @@ public struct PrivacyConfidentialMerklePathWitnessV2: Equatable, Sendable {
     }
 }
 
-/// Path-based privacy witness used by first-release Kagemusha lifecycle calls.
+/// Path-based privacy witness used by first-release confidential lifecycle calls.
 ///
 /// Exactly two paths are carried because the transfer and unshield circuits
 /// always expose two input slots. For a one-input proof the second path is the

@@ -17,7 +17,6 @@ public final class VerifyingKeyInstructionUtilsTests {
     "halo2/pasta/kaigi-roster-v1",
     "halo2/pasta/kaigi-usage-v1",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -89,7 +88,7 @@ public final class VerifyingKeyInstructionUtilsTests {
 
   private static void verifierRegistryIsClosedExactTypedAndImmutable() {
     final Set<String> expected = new LinkedHashSet<>(Arrays.asList(EXACT_REGISTRY));
-    assert expected.size() == 9 : "test registry must not contain duplicates";
+    assert expected.size() == 8 : "test registry must not contain duplicates";
     assert expected.equals(VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1)
         : "Java registry must exactly mirror the native registry";
 
@@ -137,8 +136,6 @@ public final class VerifyingKeyInstructionUtilsTests {
       "halo2/pasta/ipa-pasta-cycle-v1",
       "halo2/ipa-pasta-cycle-v1",
       "halo2/pasta/ivm-overlay-bind",
-      "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-      "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
       "halo2/pasta/tiny-add",
       "stark/fri/",
       "stark/fri",

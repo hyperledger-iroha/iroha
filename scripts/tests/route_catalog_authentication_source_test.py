@@ -17,12 +17,10 @@ AUTHENTICATION_TESTS = (
     / "crates/iroha_torii_shared/src/route_catalog/authentication_routes_test.rs"
 )
 INCLUDE = 'include!("authentication_routes_test.rs");'
-HELPER_SHA256 = "cb17ec818a1c49205d7d23d51dfcb37f080b4f4825f98fcc96aaa1f0b6174bd8"
+HELPER_SHA256 = "007253c6083a5d1583837f9d29685bd3be27bdaf5bdb51f1465ba03b6595da75"
 CASE_SHA256 = {
-    "offline_receiver_lineage_requires_account_authentication_before_expensive_proof_work":
-        "0cc00c6f1d652db23d7eac505623335d4e6572631e948b80d86021bc17000ffc",
     "application_query_posts_authenticate_before_expensive_compute":
-        "d869931ef3d8a378b8ae04b4765ac34c584a425bfa657a6d0fda5529d7882ebb",
+        "14c59414e87abd483e0d0af11e9b7c6f960e922aced66fcdb47d3c50f2e0564b",
     "local_sorafs_governance_state_is_operator_signed":
         "466e491e4c368c9129e23333bf877529c56ec036037156902bc6f67df6facd0b",
     "node_local_core_and_pipeline_reads_require_exact_operator_signatures":

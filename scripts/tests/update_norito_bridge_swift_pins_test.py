@@ -204,7 +204,6 @@ def validate(
             "version": "1.0.0",
             "native_bridge_abi_version": 23,
             "privacy_production_enabled": False,
-            "kagemusha_production_authorization_sha256": None,
             "cargo_features": [],
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",
@@ -249,9 +248,6 @@ def validate(
             "bridge_header_sha256": hashlib.sha256(header).hexdigest(),
             "required_symbols": list(validator.EXPECTED_REQUIRED_SYMBOLS),
             "forbidden_symbols": list(validator.EXPECTED_FORBIDDEN_SYMBOLS),
-            "kagemusha_mobile_artifact_roles": validator.expected_kagemusha_roles(
-                False
-            ),
             "hashes": self.hashes,
         }
         (xcframework / "NoritoBridge.artifacts.json").write_text(

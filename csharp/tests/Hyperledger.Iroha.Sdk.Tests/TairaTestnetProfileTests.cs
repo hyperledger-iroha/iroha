@@ -13,9 +13,9 @@ public sealed class TairaTestnetProfileTests
         Assert.Equal("https://taira.sora.org/", TairaTestnetProfile.ToriiBaseUri.AbsoluteUri);
         Assert.Equal("fc56984b-2be7-431d-840e-21514d1883f0", TairaTestnetProfile.ChainId);
         Assert.Equal((ushort)369, TairaTestnetProfile.I105Discriminant);
-        Assert.Equal("7ZepsJTHCVLKsrFFNZGSRGZgvBhv", TairaTestnetProfile.KagemushaAssetDefinitionId);
-        Assert.Equal("ds#boi.is", TairaTestnetProfile.KagemushaAssetAlias);
-        Assert.Equal((uint)2, TairaTestnetProfile.KagemushaAssetScale);
+        Assert.Equal("7ZepsJTHCVLKsrFFNZGSRGZgvBhv", TairaTestnetProfile.OfflineCashAssetDefinitionId);
+        Assert.Equal("ds#boi.is", TairaTestnetProfile.OfflineCashAssetAlias);
+        Assert.Equal((uint)2, TairaTestnetProfile.OfflineCashAssetScale);
         Assert.Equal("6TEAJqbb8oEPmLncoNiMRbLEK6tw", TairaTestnetProfile.XorAssetDefinitionId);
         Assert.Equal("xor#universal", TairaTestnetProfile.XorAssetAlias);
         Assert.Equal((uint)9, TairaTestnetProfile.XorAssetScale);

@@ -459,15 +459,22 @@ fn merge_carrier_finality_artifact_with_network(
     parent: Option<&V2FinalityArtifact>,
     network_id: iroha_data_model::NetworkId,
 ) -> V2FinalityArtifact {
-    let keypair = merge_carrier_finality_fixture_keypair();
-    let_row! { roster = vec![ValidatorPower { validator: PeerId::new(keypair.public_key().clone()), power: 1, }] };
+    let mut keypairs = vec![merge_carrier_finality_fixture_keypair()];
+    keypairs.extend((0xD4_u8..=0xD6).map(|seed| {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("derive deterministic merge-carrier finality fixture key")
+    }));
+    keypairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let_row! { roster = keypairs.iter().map(|keypair| ValidatorPower { validator: PeerId::new(keypair.public_key().clone()), power: 1, }).collect::<Vec<_>>() };
     let height = block.header().height().get();
     assert_eq!(
         parent.map_or(1, |artifact| artifact.height.saturating_add(1)),
         height,
         "merge-carrier finality fixtures must form a contiguous chain"
     );
-    let_row! { context = HeightContext { network_id, protocol_version: PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: u64::MAX, next_epoch_snapshot: None, mode: ConsensusMode::Permissioned, parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()), snapshot_bootstrap: None, quorum: DualQuorum::from_roster(&roster).expect("valid one-validator fixture quorum"), roster, nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"), execution_policy_hash: Hash::new(b"state merge finality execution policy"), da_layout: DataAvailabilityLayout { encoding: PayloadEncoding::ReedSolomon16, chunk_size_bytes: 1024, data_shards: 1, parity_shards: 1, max_payload_size_bytes: 4096, max_chunk_count: 8, }, leader_seed: [0xD3; 32], } };
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let_row! { context = HeightContext { network_id, protocol_version: PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: u64::MAX, next_epoch_snapshot: None, mode: ConsensusMode::Permissioned, parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()), snapshot_bootstrap: None, quorum: DualQuorum::from_roster(&roster).expect("valid four-validator fixture quorum"), roster, offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"), execution_policy_hash: Hash::new(b"state merge finality execution policy"), da_layout: DataAvailabilityLayout { encoding: PayloadEncoding::ReedSolomon16, chunk_size_bytes: 1024, data_shards: 1, parity_shards: 1, max_payload_size_bytes: 4096, max_chunk_count: 8, }, leader_seed: [0xD3; 32], } };
     let executed_block_wire = block.encode_wire().expect("canonical executed block wire");
     let_row! { mut execution_commitment = ExecutionCommitment::new_without_merge_carrier( Hash::new(b"state merge finality parent state"), Hash::new(b"state merge finality post state"), Hash::new(b"state merge finality ordinary writes"), None, 0, 1, Hash::new(&executed_block_wire), ) .expect("canonical merge-carrier finality execution commitment") };
     execution_commitment.executed_block_wire_len =
@@ -482,13 +489,13 @@ fn merge_carrier_finality_artifact_with_network(
         });
     let_row! { subject = BlockSubject { parent_block_hash: block.header().prev_block_hash(), block_hash: block.hash(), payload_hash: block .canonical_proposal_wire_hash() .expect("canonical proposal block wire"), } };
     let_row! { round = ConsensusRound { context_id: context.id(), height, view: block.header().view_change_index(), } };
-    let_row! { mut commit_qc = QuorumCertificate { round, proposal_round: round, phase: GlobalPhase::Commit, subject, execution_commitment, signers: vec![0], aggregate_signature: vec![1], } };
+    let_row! { mut commit_qc = QuorumCertificate { round, proposal_round: round, phase: GlobalPhase::Commit, subject, execution_commitment, signers: vec![0, 1, 2], aggregate_signature: vec![1], } };
     let_row! { preimage = commit_qc .signer_preimage(&context, 0) .expect("valid merge-carrier finality fixture signer") };
-    let_row! { signature = Signature::try_new(keypair.private_key(), &preimage) .expect("sign merge-carrier finality fixture vote") .payload() .to_vec() };
-    commit_qc.aggregate_signature =
-        iroha_crypto::bls_normal_aggregate_signatures(&[signature.as_slice()])
-            .expect("aggregate merge-carrier finality fixture vote");
-    let_row! { validator_set_pops = vec![ bls_normal_pop_prove(keypair.private_key()) .expect("derive merge-carrier finality fixture PoP"), ] };
+    let_row! { signatures = keypairs.iter().take(3).map(|keypair| Signature::try_new(keypair.private_key(), &preimage).expect("sign merge-carrier finality fixture vote").payload().to_vec()).collect::<Vec<_>>() };
+    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+        .expect("aggregate merge-carrier finality fixture vote");
+    let_row! { validator_set_pops = keypairs.iter().map(|keypair| bls_normal_pop_prove(keypair.private_key()).expect("derive merge-carrier finality fixture PoP")).collect() };
     let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
     artifact
         .verify()

@@ -35,7 +35,7 @@ public final class IrohaPeerNearbySecureChannelV1 implements AutoCloseable {
       38 + org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyV1.MAXIMUM_MESSAGE_BYTES + 16;
   private static final int MAXIMUM_IPM1_MESSAGE_BYTES =
       IrohaPeerWireMessageV1.HEADER_LENGTH
-          + IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES;
+          + IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_CASH_ENCODED_BYTES;
 
   @FunctionalInterface
   public interface SignatureVerifier {

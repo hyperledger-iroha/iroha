@@ -17,6 +17,8 @@ import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
+import org.hyperledger.iroha.sdk.offline.OfflineCashDevicePublicKeyV1;
+import org.hyperledger.iroha.sdk.offline.OfflineCashP256Codec;
 
 /** Package-private canonical Norito codec for the current registration instruction. */
 final class OfflineDeviceAttestationCodec {
@@ -147,7 +149,7 @@ final class OfflineDeviceAttestationCodec {
             assetDefinitionId,
             androidPackageName,
             androidSigningCertificateSha256,
-            KagemushaP256Codec.requireUncompressedPublicKey(publicKey),
+            OfflineCashP256Codec.requireUncompressedPublicKey(publicKey),
             recentBlockHeight,
             recentBlockHash,
             expiresAtMs);
@@ -212,7 +214,7 @@ final class OfflineDeviceAttestationCodec {
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionBytes),
-          new KagemushaDevicePublicKeyV2(
+          new OfflineCashDevicePublicKeyV1(
               readField(decoder, OfflineDeviceAttestationCodec::readP256PublicKey)),
           readField(decoder, OfflineDeviceAttestationCodec::readString),
           readField(decoder, OfflineDeviceAttestationCodec::readString),
@@ -383,7 +385,7 @@ final class OfflineDeviceAttestationCodec {
       if (this.androidSigningCertificateSha256.length != 32) {
         throw new IllegalArgumentException("android_signing_certificate_sha256 must be 32 bytes");
       }
-      KagemushaP256Codec.requireUncompressedPublicKey(this.publicKey);
+      OfflineCashP256Codec.requireUncompressedPublicKey(this.publicKey);
       if (recentBlockHeight <= 0 || expiresAtMs <= 0) {
         throw new IllegalArgumentException("challenge lifetime fields must be positive");
       }
@@ -446,16 +448,16 @@ final class OfflineDeviceAttestationCodec {
   }
 
   private static void p256PublicKey(final NoritoEncoder encoder, final byte[] value) {
-    final byte[] key = KagemushaP256Codec.requireUncompressedPublicKey(value);
+    final byte[] key = OfflineCashP256Codec.requireUncompressedPublicKey(value);
     encoder.writeBytes(key);
   }
 
   private static byte[] readP256PublicKey(final NoritoDecoder decoder) {
-    if (decoder.remaining() != KagemushaP256Codec.PUBLIC_KEY_BYTES) {
+    if (decoder.remaining() != OfflineCashP256Codec.PUBLIC_KEY_BYTES) {
       throw new IllegalArgumentException("P-256 public key must contain exactly 65 bytes");
     }
-    return KagemushaP256Codec.requireUncompressedPublicKey(
-        decoder.readBytes(KagemushaP256Codec.PUBLIC_KEY_BYTES));
+    return OfflineCashP256Codec.requireUncompressedPublicKey(
+        decoder.readBytes(OfflineCashP256Codec.PUBLIC_KEY_BYTES));
   }
 
   private static void optionString(final NoritoEncoder encoder, final String value) {

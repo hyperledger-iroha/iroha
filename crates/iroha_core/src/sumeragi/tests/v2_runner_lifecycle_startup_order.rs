@@ -106,6 +106,63 @@ fn emergency_fast_idles_before_any_active_height_recovery() {
     assert!(inventory_release < ingress_close && ingress_close < passive_return);
     assert!(passive_return < platform_check && platform_check < recovery);
 }
+
+#[test]
+fn authenticated_terminal_startup_idles_without_constructing_a_successor() {
+    let source = include_str!("../v2_runner.rs");
+    let terminal_start = source
+        .find("RecoveredV2Startup::Terminal(terminal) =>")
+        .expect("runner must classify the authenticated terminal startup result");
+    let active_parts = source[terminal_start..]
+        .find("recovered.into_parts()")
+        .map(|offset| terminal_start + offset)
+        .expect("ordinary recovered heights still enter active lifecycle construction");
+    let terminal_arm = &source[terminal_start..active_parts];
+    let anchors = [
+        "terminal.verified_context().context()",
+        "terminal.matches_kura(kura.as_ref())",
+        "terminal.predecessor().height() != u64::MAX",
+        "wait_for_terminal_shutdown(",
+        "return Ok(());",
+    ];
+    let mut remainder = terminal_arm;
+    for anchor in anchors {
+        let offset = remainder
+            .find(anchor)
+            .unwrap_or_else(|| panic!("terminal startup lost safety anchor: {anchor}"));
+        remainder = &remainder[offset + anchor.len()..];
+    }
+    for forbidden in ["build_verified_successor(", "into_parts_with_lifecycle"] {
+        assert!(
+            !terminal_arm.contains(forbidden),
+            "terminal startup must not derive successor authority through `{forbidden}`"
+        );
+    }
+
+    let wait_start = source
+        .find("fn wait_for_terminal_shutdown(")
+        .expect("terminal runner must retain an explicit inert wait");
+    let wait_end = source[wait_start..]
+        .find("include!(\"v2_runner/lifecycle_terminal_recovery.rs\")")
+        .map(|offset| wait_start + offset)
+        .expect("terminal inert wait remains independently bounded");
+    let wait = &source[wait_start..wait_end];
+    let anchors = [
+        "ingress_ready.store(false, Ordering::Release)",
+        "block_rx.close()",
+        "super::status::clear_v2_status()",
+        "while !shutdown_signal.is_sent()",
+        "wake_rx.recv_timeout(IDLE_POLL)",
+    ];
+    let mut remainder = wait;
+    for anchor in anchors {
+        let offset = remainder
+            .find(anchor)
+            .unwrap_or_else(|| panic!("terminal inert wait lost safety anchor: {anchor}"));
+        remainder = &remainder[offset + anchor.len()..];
+    }
+}
+
 #[test]
 fn lane_evidence_repair_fence_accepts_an_empty_unquarantined_replay() {
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);

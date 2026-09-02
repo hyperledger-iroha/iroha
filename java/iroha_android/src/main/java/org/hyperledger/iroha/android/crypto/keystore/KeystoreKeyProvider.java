@@ -26,6 +26,8 @@ import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVeri
 public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
 
   private static final byte[] NO_CHALLENGE = new byte[0];
+  private static final String ANDROID_STRONGBOX_UNAVAILABLE_EXCEPTION =
+      "android.security.keystore.StrongBoxUnavailableException";
 
   private final KeystoreBackend backend;
   private final KeyGenParameters parameters;
@@ -59,7 +61,8 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
     if (parameters.requireStrongBox() && !backend.metadata().strongBoxBacked()) {
       throw new KeyManagementException("StrongBox required but backend is not StrongBox-capable");
     }
-    final KeyGenerationResult result = backend.generate(alias, parameters);
+    final KeyGenerationResult result =
+        generateWithPreferredStrongBoxFallback(alias, parameters);
     final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
         outcomeFor(alias, result.keyPair());
     if (parameters.requireStrongBox()
@@ -87,11 +90,45 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
     if (effective.requireStrongBox() && !backend.metadata().strongBoxBacked()) {
       throw new KeyManagementException("StrongBox required but backend is not StrongBox-capable");
     }
-    final KeyGenerationResult result = backend.generate(alias, effective);
+    final KeyGenerationResult result = generateWithPreferredStrongBoxFallback(alias, effective);
     final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
         outcomeFor(alias, result.keyPair());
     enforcePreference(preference, outcome);
     return outcome;
+  }
+
+  private KeyGenerationResult generateWithPreferredStrongBoxFallback(
+      final String alias, final KeyGenParameters effective)
+      throws KeyManagementException {
+    try {
+      return backend.generate(alias, effective);
+    } catch (final KeyManagementException strongBoxFailure) {
+      if (!effective.preferStrongBox()
+          || effective.requireStrongBox()
+          || !isStrongBoxUnavailableFailure(strongBoxFailure)) {
+        throw strongBoxFailure;
+      }
+      final KeyGenParameters fallback =
+          effective.toBuilder().setRequireStrongBox(false).setPreferStrongBox(false).build();
+      try {
+        return backend.generate(alias, fallback);
+      } catch (final KeyManagementException fallbackFailure) {
+        fallbackFailure.addSuppressed(strongBoxFailure);
+        throw fallbackFailure;
+      }
+    }
+  }
+
+  private static boolean isStrongBoxUnavailableFailure(final Throwable failure) {
+    Throwable current = failure;
+    while (current != null) {
+      if (current instanceof StrongBoxUnavailableFailure
+          || ANDROID_STRONGBOX_UNAVAILABLE_EXCEPTION.equals(current.getClass().getName())) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
   }
 
   /** Returns the measured security route for an existing or newly generated key. */
@@ -374,5 +411,17 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
       return alias.equals(other.alias)
           && Arrays.equals(challengeFingerprint, other.challengeFingerprint);
     }
+  }
+}
+
+final class StrongBoxUnavailableFailure extends java.security.GeneralSecurityException {
+  private static final long serialVersionUID = 1L;
+
+  StrongBoxUnavailableFailure(final String message) {
+    super(message);
+  }
+
+  StrongBoxUnavailableFailure(final String message, final Throwable cause) {
+    super(message, cause);
   }
 }

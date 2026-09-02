@@ -521,6 +521,35 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
 ) -> (GenesisBlock, AccountId, Vec<PeerId>, KeyPair) {
+    fn append_external_genesis_transaction(
+        mut builder: GenesisBuilder,
+        instructions: Vec<InstructionBox>,
+        vk_registry_instructions: &mut Vec<InstructionBox>,
+    ) -> GenesisBuilder {
+        if instructions.is_empty() {
+            return builder;
+        }
+
+        vk_registry_instructions.extend(instructions.iter().cloned());
+        let mut transaction_instructions = Vec::with_capacity(instructions.len());
+        for instruction in instructions {
+            if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() {
+                builder = builder.append_parameter(set_parameter.inner().clone());
+            } else {
+                transaction_instructions.push(instruction);
+            }
+        }
+        if transaction_instructions.is_empty() {
+            return builder;
+        }
+
+        builder = builder.next_transaction();
+        for instruction in transaction_instructions {
+            builder = builder.append_instruction(instruction);
+        }
+        builder
+    }
+
     fn try_default_executor_path() -> Option<PathBuf> {
         if std::env::var("IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR")
             .ok()
@@ -807,15 +836,9 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         ));
     }
     let mut vk_registry_instructions = Vec::new();
-    for tx_instr in extra_transactions.into_iter() {
-        if tx_instr.is_empty() {
-            continue;
-        }
-        builder = builder.next_transaction();
-        vk_registry_instructions.extend(tx_instr.iter().cloned());
-        for instruction in tx_instr {
-            builder = builder.append_instruction(instruction);
-        }
+    for tx_instr in extra_transactions {
+        builder =
+            append_external_genesis_transaction(builder, tx_instr, &mut vk_registry_instructions);
     }
     let topology_vec: Vec<PeerId> = topology.iter().cloned().collect();
     if !topology_vec.is_empty() {
@@ -854,15 +877,9 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             panic!("topology entry present for peer {dangling_pk} that is absent from topology");
         }
     }
-    for tx_instr in post_topology_transactions.into_iter() {
-        if tx_instr.is_empty() {
-            continue;
-        }
-        builder = builder.next_transaction();
-        vk_registry_instructions.extend(tx_instr.iter().cloned());
-        for instruction in tx_instr {
-            builder = builder.append_instruction(instruction);
-        }
+    for tx_instr in post_topology_transactions {
+        builder =
+            append_external_genesis_transaction(builder, tx_instr, &mut vk_registry_instructions);
     }
     let vk_set_hash = iroha_genesis::compute_genesis_vk_set_hash(vk_registry_instructions.iter())
         .expect("compute genesis verifying key set hash");
@@ -1087,12 +1104,6 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
         state.set_gov(config.gov.clone());
         state.content = config.content.clone();
         state.set_settlement(config.settlement.clone());
-        state.set_kagemusha_release_catalog(
-            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
-                &config.settlement.offline,
-            )
-            .map_err(|error| eyre!("load Kagemusha catalog for genesis pre-execution: {error}"))?,
-        );
     }
     if let Some(zk_config) = runtime_config.map(|config| &config.zk).or(zk_config) {
         state.set_zk(zk_config.clone()).map_err(Report::from)?;
@@ -1442,6 +1453,46 @@ mod tests {
             vec![HijiriParametersV1::first_release_genesis()],
             "test-network genesis must seed exactly one neutral first-release Hijiri snapshot"
         );
+    }
+    #[test]
+    fn parameter_only_addition_does_not_create_empty_genesis_transaction() {
+        init_instruction_registry();
+        let parameter = Parameter::Block(
+            iroha_data_model::parameter::system::BlockParameter::MaxTransactions(
+                std::num::NonZeroU64::new(17).expect("non-zero test transaction limit"),
+            ),
+        );
+        let (baseline, _, _, _) = build_minimal_genesis_unexecuted(
+            Vec::new(),
+            UniqueVec::new(),
+            Vec::new(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+        );
+        let (with_parameter, _, _, _) = build_minimal_genesis_unexecuted(
+            vec![vec![InstructionBox::from(SetParameter::new(
+                parameter.clone(),
+            ))]],
+            UniqueVec::new(),
+            Vec::new(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+        );
+
+        assert_eq!(
+            with_parameter.0.external_transactions().count(),
+            baseline.0.external_transactions().count(),
+            "routing a parameter into the authoritative snapshot must not leave an empty transaction"
+        );
+        assert!(with_parameter.0.external_transactions().any(|transaction| {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                return false;
+            };
+            instructions.iter().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<SetParameter>()
+                    .is_some_and(|set_parameter| set_parameter.inner() == &parameter)
+            })
+        }));
     }
     #[test]
     fn genesis_allows_wonderland_assets_from_genesis_authority() {

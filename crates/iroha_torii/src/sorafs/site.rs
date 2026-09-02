@@ -4,6 +4,12 @@ use crate::secure_file_metadata::{
     same_file, unchanged,
 };
 use http::uri::Authority;
+use iroha_core::state::WorldReadOnly;
+use iroha_crypto::Hash;
+use iroha_data_model::soracloud::{
+    SORA_SERVICE_CONFIG_ENTRY_VERSION_V1, SoraRouteVisibilityV1, SoraServiceConfigEntryV1,
+};
+use mv::storage::StorageReadOnly as _;
 use std::{
     collections::BTreeSet,
     fs::File,
@@ -15,6 +21,154 @@ use std::{
 pub const SITE_BINDINGS_SCHEMA_VERSION_V1: u8 = 1;
 /// Maximum JSON container nesting accepted before parsing.
 const SITE_BINDINGS_MAX_JSON_DEPTH: usize = 16;
+/// Ledger service-config name carrying one authoritative public static-site binding.
+pub(crate) const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
+const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
+
+#[derive(Clone, Debug, norito::derive::JsonDeserialize)]
+struct AuthoritativeAppStaticSiteBindingV1 {
+    schema_version: u16,
+    hostname: String,
+    mount_path: String,
+    index_document: String,
+    spa_fallback: bool,
+    manifest_digest_hex: String,
+}
+
+/// Validated ledger-authoritative public static-site binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AuthoritativeAppSiteBinding {
+    /// Canonical public hostname selected by the active service revision.
+    pub(crate) hostname: String,
+    /// Validated single-component document served for the site root.
+    pub(crate) index_document: String,
+    /// Whether an unresolved extensionless path falls back to the index document.
+    pub(crate) spa_fallback: bool,
+    /// Canonical lower-case digest of the locally stored site manifest.
+    pub(crate) manifest_digest_hex: String,
+}
+
+/// Return whether one active public SoraCloud revision selects `host`.
+///
+/// This intentionally does not require a valid static-site config. Selecting
+/// the host first lets the gateway return a stable service failure for a
+/// malformed authoritative binding instead of falling through to an unrelated
+/// Torii 404 or a weaker operator-file binding.
+pub(crate) fn has_authoritative_public_site_host(world: &impl WorldReadOnly, host: &str) -> bool {
+    world
+        .soracloud_service_deployments()
+        .iter()
+        .any(|(service_id, deployment)| {
+            world
+                .soracloud_service_revisions()
+                .get(&(
+                    service_id.to_string(),
+                    deployment.current_service_version.clone(),
+                ))
+                .and_then(|bundle| bundle.service.route.as_ref())
+                .is_some_and(|route| {
+                    route.visibility == SoraRouteVisibilityV1::Public
+                        && normalize_host_header(&route.host).as_deref() == Some(host)
+                })
+        })
+}
+
+/// Resolve and validate the newest ledger-authoritative binding for `host`.
+pub(crate) fn authoritative_app_site_binding(
+    world: &impl WorldReadOnly,
+    host: &str,
+) -> Result<Option<AuthoritativeAppSiteBinding>, String> {
+    let mut best_candidate: Option<(u64, String, SoraServiceConfigEntryV1)> = None;
+    for (service_id, deployment) in world.soracloud_service_deployments().iter() {
+        let service_name = service_id.to_string();
+        let Some(bundle) = world.soracloud_service_revisions().get(&(
+            service_name.clone(),
+            deployment.current_service_version.clone(),
+        )) else {
+            continue;
+        };
+        let Some(route) = bundle.service.route.as_ref() else {
+            continue;
+        };
+        if route.visibility != SoraRouteVisibilityV1::Public
+            || normalize_host_header(&route.host).as_deref() != Some(host)
+        {
+            continue;
+        }
+        let Some(config_entry) = deployment.service_configs.get(APP_STATIC_SITE_CONFIG_NAME) else {
+            continue;
+        };
+        let replace =
+            best_candidate
+                .as_ref()
+                .is_none_or(|(best_sequence, best_service_name, _)| {
+                    config_entry.last_update_sequence > *best_sequence
+                        || (config_entry.last_update_sequence == *best_sequence
+                            && service_name < *best_service_name)
+                });
+        if replace {
+            best_candidate = Some((
+                config_entry.last_update_sequence,
+                service_name,
+                config_entry.clone(),
+            ));
+        }
+    }
+    let Some((_sequence, service_name, config_entry)) = best_candidate else {
+        return Ok(None);
+    };
+    if config_entry.schema_version != SORA_SERVICE_CONFIG_ENTRY_VERSION_V1
+        || config_entry.config_name != APP_STATIC_SITE_CONFIG_NAME
+    {
+        return Err(format!(
+            "service `{service_name}` has invalid static-site config metadata"
+        ));
+    }
+    let encoded_value = norito::json::to_vec(&config_entry.value_json)
+        .map_err(|_| format!("service `{service_name}` static-site config is not encodable"))?;
+    if Hash::new(encoded_value) != config_entry.value_hash {
+        return Err(format!(
+            "service `{service_name}` static-site config hash does not match its value"
+        ));
+    }
+    let binding = config_entry
+        .value_json
+        .try_into_any_norito::<AuthoritativeAppStaticSiteBindingV1>()
+        .map_err(|_| format!("service `{service_name}` static-site config is not decodable"))?;
+    if binding.schema_version != APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1 {
+        return Err(format!(
+            "service `{service_name}` static-site config has an unsupported schema"
+        ));
+    }
+    if normalize_host_header(&binding.hostname).as_deref() != Some(host) {
+        return Err(format!(
+            "service `{service_name}` static-site config hostname does not match its route"
+        ));
+    }
+    if binding.mount_path != "/" {
+        return Err(format!(
+            "service `{service_name}` static-site config mount path is unsupported"
+        ));
+    }
+    validate_index_document_name(&binding.index_document)
+        .map_err(|_| format!("service `{service_name}` static-site index document is invalid"))?;
+    if binding.manifest_digest_hex.len() != 64
+        || binding
+            .manifest_digest_hex
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "service `{service_name}` static-site manifest digest is invalid"
+        ));
+    }
+    Ok(Some(AuthoritativeAppSiteBinding {
+        hostname: binding.hostname,
+        index_document: binding.index_document,
+        spa_fallback: binding.spa_fallback,
+        manifest_digest_hex: binding.manifest_digest_hex,
+    }))
+}
 /// Versioned JSON document loaded once from the configured startup path.
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::JsonDeserialize, norito::derive::JsonSerialize,

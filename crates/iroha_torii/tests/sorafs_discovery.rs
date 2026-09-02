@@ -1523,7 +1523,9 @@ impl DiscoveryNativeTransactionSigner {
             SorafsNativeTransactionSignerRoleV1::ProofOutcome => {
                 ("provider://sorafs/discovery/proof-outcome", 0xD7)
             }
-            SorafsNativeTransactionSignerRoleV1::Repair => ("provider://sorafs/discovery/repair", 0xD8),
+            SorafsNativeTransactionSignerRoleV1::Repair => {
+                ("provider://sorafs/discovery/repair", 0xD8)
+            }
             SorafsNativeTransactionSignerRoleV1::Reserve => {
                 ("provider://sorafs/discovery/reserve", 0xD9)
             }

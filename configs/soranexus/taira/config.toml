@@ -124,6 +124,9 @@ allowed_headers = [
   "authorization",
   "content-type",
   "idempotency-key",
+  "mcp-method",
+  "mcp-name",
+  "mcp-protocol-version",
   "x-api-token",
   "x-iroha-onboarding-token",
   "x-iroha-account",
@@ -140,8 +143,8 @@ profile = "writer"
 expose_operator_routes = false
 allow_tool_prefixes = ["iroha."]
 
-[torii.kagemusha_commands]
-private_key_file = "/run/secrets/iroha/taira-kagemusha-commands-private-key"
+[torii.offline_cash_v1_commands]
+private_key_file = "/run/secrets/iroha/taira-offline-cash-v1-commands-private-key"
 minimum_xor_balance = "1"
 max_tx_value = "1000000000"
 operation_registry_max_entries = 4096
@@ -150,7 +153,7 @@ operation_registry_max_bytes = 593920
 # The base template deliberately has no active `[settlement.offline]` release
 # paths, so ordinary rendering has no dependency on unpublished artifacts.
 # Runtime deployments that enable settlement must provide their reviewed
-# Kagemusha policy, catalog, qualification seal, and decoded-budget settings
+# Offline Cash V1 policy, artifact release, qualification seal, and decoded-budget settings
 # through their deployment-specific configuration source.
 
 [torii.account_onboarding]

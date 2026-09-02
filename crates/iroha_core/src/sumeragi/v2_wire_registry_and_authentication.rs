@@ -1086,9 +1086,10 @@ fn verify_authenticated_message(
             verify_individual_signature(
                 context,
                 vote.signer,
-                &vote.signature,
+                vote.bls_signature()?,
                 &vote.signature_preimage(),
-            )
+            )?;
+            verify_offline_cash_mint_finality_vote(context, vote)
         }
         wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
             verify_quorum_certificate(context, certificate, proofs_of_possession)
@@ -1177,7 +1178,68 @@ fn verify_quorum_certificate(
             actual,
         } => AdapterError::ProofOfPossessionCount { expected, actual },
         other => AdapterError::Cryptography(other.to_string()),
-    })
+    })?;
+    verify_offline_cash_mint_finality_certificate(context, certificate)
+}
+fn verify_offline_cash_mint_finality_vote(
+    context: &wire::HeightContext,
+    vote: &wire::Vote,
+) -> Result<(), AdapterError> {
+    let payload = vote.offline_cash_finality_seal_payload()?;
+    let required = vote.phase == wire::GlobalPhase::Commit
+        && (vote.execution_commitment.offline_cash_top_up_count != 0
+            || context.next_epoch_snapshot.is_some());
+    let Some(payload) = payload else {
+        if required {
+            return Err(AdapterError::Cryptography(
+                "Offline Cash V1 authoritative Commit vote is missing its Pasta seal share"
+                    .to_owned(),
+            ));
+        }
+        return Ok(());
+    };
+    let share =
+        crate::zk::offline_cash_v1_recursion::decode_offline_cash_mint_finality_seal_share_v1(
+            payload,
+        )
+        .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
+    crate::zk::offline_cash_v1_recursion::verify_offline_cash_mint_finality_seal_share_v1(
+        &context.offline_cash_mint_finality_epoch_roster,
+        context,
+        vote,
+        &share,
+    )
+    .map_err(|error| AdapterError::Cryptography(error.to_string()))
+}
+fn verify_offline_cash_mint_finality_certificate(
+    context: &wire::HeightContext,
+    certificate: &wire::QuorumCertificate,
+) -> Result<(), AdapterError> {
+    let payload = certificate.offline_cash_finality_seal_payload()?;
+    let required = certificate.phase == wire::GlobalPhase::Commit
+        && (certificate.execution_commitment.offline_cash_top_up_count != 0
+            || context.next_epoch_snapshot.is_some());
+    let Some(payload) = payload else {
+        if required {
+            return Err(AdapterError::Cryptography(
+                "Offline Cash V1 authoritative CommitQC is missing its Pasta seal bundle"
+                    .to_owned(),
+            ));
+        }
+        return Ok(());
+    };
+    let bundle =
+        crate::zk::offline_cash_v1_recursion::decode_offline_cash_mint_finality_seal_bundle_v1(
+            payload,
+        )
+        .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
+    crate::zk::offline_cash_v1_recursion::verify_offline_cash_mint_finality_seal_bundle_v1(
+        &context.offline_cash_mint_finality_epoch_roster,
+        context,
+        certificate,
+        &bundle,
+    )
+    .map_err(|error| AdapterError::Cryptography(error.to_string()))
 }
 /// Verify one certificate against immutable historical context authority.
 ///

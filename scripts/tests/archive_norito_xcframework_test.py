@@ -25,7 +25,7 @@ VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
 NORMALIZED_ZIP_TIME = (2023, 11, 14, 22, 13, 20)
 KNOWN_FIXTURE_ARCHIVE_SHA256 = (
-    "861264508201d99494f427b7b0eaeacc5f61ba2870dcd94162f768576f5782b3"
+    "2bf1628975247c1fe1ff42f88cede8eac80a8bd76f5516164eeddbecaa3bd302"
 )
 SLICE_METADATA = {
     "ios-arm64": ("ios", ["arm64"], None),
@@ -166,7 +166,6 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
             "version": "0.1.0",
             "native_bridge_abi_version": 23,
             "privacy_production_enabled": False,
-            "kagemusha_production_authorization_sha256": None,
             "cargo_features": [],
             "build_environment": build_environment,
             "source_commit": "1" * 40,
@@ -177,9 +176,6 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
             "bridge_header_sha256": digest(header),
             "required_symbols": validator.EXPECTED_REQUIRED_SYMBOLS,
             "forbidden_symbols": validator.EXPECTED_FORBIDDEN_SYMBOLS,
-            "kagemusha_mobile_artifact_roles": validator.expected_kagemusha_roles(
-                False
-            ),
             "hashes": hashes,
         }
         (self.framework / "NoritoBridge.artifacts.json").write_text(
@@ -728,16 +724,16 @@ print(f"{digest} {size}")
             builder,
         )
         self.assertIn("protocol_abis != header_abis", builder)
-        self.assertIn("KAGEMUSHA_ARTIFACT_ABI_VERSION=21", builder)
         self.assertIn(
             '"native_bridge_abi_version": $BRIDGE_ABI_VERSION,',
             builder,
         )
-        self.assertEqual(
-            builder.count('"abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,'),
-            14,
+        self.assertIn(
+            '"connect_norito_offline_cash_v1_payment_validate"', builder
         )
-        self.assertNotIn('"abi": $BRIDGE_ABI_VERSION,', builder)
+        self.assertIn(
+            '"connect_norito_offline_cash_device_execute_v1"', builder
+        )
         self.assertNotIn(
             "CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32",
             builder,
@@ -807,10 +803,10 @@ print(f"{digest} {size}")
             }
             EXPECTED_REQUIRED_SYMBOLS = [
                 "connect_norito_bridge_abi_version",
-                "connect_norito_kagemusha_required_v4",
+                "connect_norito_offline_cash_v1_payment_validate",
             ]
             EXPECTED_FORBIDDEN_SYMBOLS = [
-                "connect_norito_kagemusha_retired_v3"
+                "connect_norito_forbidden_symbol"
             ]
 
         def canonical_output(tool: Path, arguments: list[str]) -> str:
@@ -822,7 +818,7 @@ print(f"{digest} {size}")
             self.assertEqual(arguments[:-1], ["-gUj"])
             return (
                 "_connect_norito_bridge_abi_version\n"
-                "_connect_norito_kagemusha_required_v4\n"
+                "_connect_norito_offline_cash_v1_payment_validate\n"
             )
 
         with (
@@ -851,7 +847,7 @@ print(f"{digest} {size}")
             }
             EXPECTED_REQUIRED_SYMBOLS = [
                 "connect_norito_bridge_abi_version",
-                "connect_norito_kagemusha_required_v4",
+                "connect_norito_offline_cash_v1_payment_validate",
             ]
             EXPECTED_FORBIDDEN_SYMBOLS = []
 
@@ -864,7 +860,7 @@ print(f"{digest} {size}")
             if arguments[:-1] == ["-gj"]:
                 return (
                     "_connect_norito_bridge_abi_version\n"
-                    "_connect_norito_kagemusha_required_v4\n"
+                    "_connect_norito_offline_cash_v1_payment_validate\n"
                 )
             self.assertEqual(arguments[:-1], ["-gUj"])
             return "_connect_norito_bridge_abi_version\n"
@@ -899,10 +895,10 @@ print(f"{digest} {size}")
             }
             EXPECTED_REQUIRED_SYMBOLS = [
                 "connect_norito_bridge_abi_version",
-                "connect_norito_kagemusha_required_v4",
+                "connect_norito_offline_cash_v1_payment_validate",
             ]
             EXPECTED_FORBIDDEN_SYMBOLS = [
-                "connect_norito_kagemusha_retired_v3"
+                "connect_norito_forbidden_symbol"
             ]
 
         def wrong_architecture(tool: Path, arguments: list[str]) -> str:
@@ -913,7 +909,7 @@ print(f"{digest} {size}")
                 ) + "\n"
             return (
                 "_connect_norito_bridge_abi_version\n"
-                "_connect_norito_kagemusha_required_v4\n"
+                "_connect_norito_offline_cash_v1_payment_validate\n"
             )
 
         def missing_export(tool: Path, arguments: list[str]) -> str:
@@ -922,7 +918,7 @@ print(f"{digest} {size}")
                 return " ".join(
                     NativePolicy.EXPECTED_SLICES[identifier]["architectures"]
                 ) + "\n"
-            return "_connect_norito_kagemusha_required_v4\n"
+            return "_connect_norito_offline_cash_v1_payment_validate\n"
 
         with (
             mock.patch.object(owner.sys, "platform", "darwin"),

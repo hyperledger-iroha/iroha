@@ -2631,9 +2631,8 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::active_watchdog_is_deadline_driven_edge_triggered_and_recovers_on_progress
   sumeragi::status::v2_liveness_watchdog_tests::active_watchdog_resets_on_successor_owner_and_status_clear
   sumeragi::status::v2_liveness_watchdog_tests::rejected_running_successor_failure_projection_preserves_status
-  zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin
   block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round
-  offline::kagemusha_v4_topup_provenance_tests::compact_qc_rejects_foreign_or_future_proposal_origin
+  block::consensus_v2::tests::offline_cash_consensus_signature_envelope_roundtrips_and_rejects_drift
   block::consensus_v2::tests::height_context_identity_ignores_reproposal_round_and_rejects_split_rounds
   block::consensus_v2::tests::timeout_proposal_accepts_only_the_selected_prepare_subject
   sumeragi_v2_runner::prepare_qc_split_tests::locked_commit_progress_witness_rejects_inexact_or_empty_ownership
@@ -2830,7 +2829,6 @@ multilane_config_fixtures_ignored_unit_list="$(
 )"
 production_data_model_modules=(
   block::consensus_v2::finality::tests
-  offline::kagemusha_v4_topup_provenance_tests
   block::consensus_v2::tests
 )
 for required_test in "${required_production_liveness_tests[@]}"; do
@@ -3766,9 +3764,7 @@ production_liveness_modules=(
   sumeragi::v2_runner::lifecycle_height_driver::tests
   sumeragi::v2_worker::tests
   sumeragi::status::v2_liveness_watchdog_tests
-  zk::kagemusha_finality::tests
   block::consensus_v2::finality::tests
-  offline::kagemusha_v4_topup_provenance_tests
   block::consensus_v2::tests
   sumeragi_v2_runner
   peer::run::tests
@@ -3812,9 +3808,7 @@ production_liveness_leg_ids=(
   production-v2-lifecycle-height-driver
   production-v2-worker
   production-v2-watchdog
-  production-kagemusha-finality
   production-data-model-v2-finality
-  production-data-model-offline-compact-qc
   production-data-model-v2-context-identity
   production-v2-integration-runner
   production-p2p-peer-reliable-flush

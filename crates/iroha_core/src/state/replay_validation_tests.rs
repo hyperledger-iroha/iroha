@@ -1055,6 +1055,7 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
     genesis_builder = genesis_builder.append_instruction(Register::trigger(heartbeat_trigger));
     let genesis_block = genesis_builder
         .build_raw()
+        .expect("NPoS replay fixture forms one valid raw genesis transaction")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta()
         .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)

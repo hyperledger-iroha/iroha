@@ -50,8 +50,6 @@ mod instruction_registry_reset;
 mod join_kaigi_commitment_roundtrip;
 #[path = "../join_kaigi_decode.rs"]
 mod join_kaigi_decode;
-#[path = "../kagemusha_value_contract.rs"]
-mod kagemusha_value_contract;
 #[path = "../kaigi_events_roundtrip.rs"]
 mod kaigi_events_roundtrip;
 #[path = "../lane_relay_roundtrip.rs"]

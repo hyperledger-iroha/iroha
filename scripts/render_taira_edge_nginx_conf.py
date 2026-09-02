@@ -65,8 +65,9 @@ PUBLIC_TORII_CORS_ORIGINS = [
 ]
 PUBLIC_TORII_CORS_METHODS = "GET, POST, DELETE, OPTIONS"
 PUBLIC_TORII_CORS_HEADERS = (
-    "accept, authorization, content-type, idempotency-key, x-api-token, "
-    "x-iroha-onboarding-token, x-iroha-account, x-iroha-signature, "
+    "accept, authorization, content-type, idempotency-key, mcp-method, mcp-name, "
+    "mcp-protocol-version, x-api-token, x-iroha-onboarding-token, "
+    "x-iroha-account, x-iroha-signature, "
     "x-iroha-timestamp-ms, x-iroha-nonce, x-iroha-witness"
 )
 PUBLIC_TORII_CORS_EXPOSED_HEADERS = "etag, location, retry-after"

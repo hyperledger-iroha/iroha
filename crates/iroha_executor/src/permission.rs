@@ -167,9 +167,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::parameter::{CanSetHijiriParameters},
     iroha_executor_data_model::permission::sccp::{CanManageSccpGovernance},
     iroha_executor_data_model::permission::sccp::{CanProposeSccpRouteGovernance},
-    iroha_executor_data_model::permission::offline::{CanManageOfflineEscrow},
-    iroha_executor_data_model::permission::offline::{CanActivateKagemushaRecursiveReleaseV4},
-    iroha_executor_data_model::permission::offline::{CanManageOfflineDeviceAttestationPolicy},
+    iroha_executor_data_model::permission::offline::{CanManageOfflineReserve},
     iroha_executor_data_model::permission::role::{CanManageRoles},
     iroha_executor_data_model::permission::trigger::{CanRegisterTrigger},
     iroha_executor_data_model::permission::trigger::{CanRegisterGlobalDataTrigger},
@@ -244,9 +242,7 @@ impl AnyPermission {
                 | Self::CanReadAllLedgerData(_)
                 | Self::CanReadRestrictedDataspace(_)
                 | Self::CanRegisterGlobalDataTrigger(_)
-                | Self::CanManageOfflineEscrow(_)
-                | Self::CanActivateKagemushaRecursiveReleaseV4(_)
-                | Self::CanManageOfflineDeviceAttestationPolicy(_)
+                | Self::CanManageOfflineReserve(_)
                 | Self::CanManageRoles(_)
                 | Self::CanUpgradeExecutor(_)
                 | Self::CanRegisterSmartContractCode(_)
@@ -1062,17 +1058,10 @@ mod sccp {
     }
 }
 mod offline {
-    //! Pass conditions for governed offline-settlement releases.
+    //! Pass conditions for offline cash reserve settlement.
     use super::*;
-    use iroha_executor_data_model::permission::offline::{
-        CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
-        CanManageOfflineEscrow,
-    };
-    impl_validate_grant_revoke_via!(OnlyGenesis::from =>
-        CanManageOfflineEscrow,
-        CanActivateKagemushaRecursiveReleaseV4,
-        CanManageOfflineDeviceAttestationPolicy,
-    );
+    use iroha_executor_data_model::permission::offline::CanManageOfflineReserve;
+    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanManageOfflineReserve,);
 }
 pub mod asset {
     //! Module with pass conditions for asset related tokens
@@ -1974,10 +1963,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Hash, PublicKey};
-    use iroha_executor_data_model::permission::offline::{
-        CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
-        CanManageOfflineEscrow,
-    };
+    use iroha_executor_data_model::permission::offline::CanManageOfflineReserve;
     use iroha_executor_data_model::permission::{
         account::{
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
@@ -2322,39 +2308,11 @@ mod tests {
     fn governed_offline_permissions_are_immutable_after_genesis() {
         let banking_authority = make_account_id();
         let context = make_context(&banking_authority, 2);
-        let results = [
-            (
-                "CanManageOfflineEscrow",
-                CanManageOfflineEscrow.validate_grant(&banking_authority, &context, &Iroha),
-                CanManageOfflineEscrow.validate_revoke(&banking_authority, &context, &Iroha),
-            ),
-            (
-                "CanActivateKagemushaRecursiveReleaseV4",
-                CanActivateKagemushaRecursiveReleaseV4.validate_grant(
-                    &banking_authority,
-                    &context,
-                    &Iroha,
-                ),
-                CanActivateKagemushaRecursiveReleaseV4.validate_revoke(
-                    &banking_authority,
-                    &context,
-                    &Iroha,
-                ),
-            ),
-            (
-                "CanManageOfflineDeviceAttestationPolicy",
-                CanManageOfflineDeviceAttestationPolicy.validate_grant(
-                    &banking_authority,
-                    &context,
-                    &Iroha,
-                ),
-                CanManageOfflineDeviceAttestationPolicy.validate_revoke(
-                    &banking_authority,
-                    &context,
-                    &Iroha,
-                ),
-            ),
-        ];
+        let results = [(
+            "CanManageOfflineReserve",
+            CanManageOfflineReserve.validate_grant(&banking_authority, &context, &Iroha),
+            CanManageOfflineReserve.validate_revoke(&banking_authority, &context, &Iroha),
+        )];
         for (name, grant, revoke) in results {
             for result in [grant, revoke] {
                 let error = result.expect_err(
@@ -2374,39 +2332,11 @@ mod tests {
     fn governed_offline_permissions_can_only_be_seeded_in_genesis() {
         let genesis_authority = make_account_id();
         let context = make_context(&genesis_authority, 1);
-        let results = [
-            (
-                "CanManageOfflineEscrow",
-                CanManageOfflineEscrow.validate_grant(&genesis_authority, &context, &Iroha),
-                CanManageOfflineEscrow.validate_revoke(&genesis_authority, &context, &Iroha),
-            ),
-            (
-                "CanActivateKagemushaRecursiveReleaseV4",
-                CanActivateKagemushaRecursiveReleaseV4.validate_grant(
-                    &genesis_authority,
-                    &context,
-                    &Iroha,
-                ),
-                CanActivateKagemushaRecursiveReleaseV4.validate_revoke(
-                    &genesis_authority,
-                    &context,
-                    &Iroha,
-                ),
-            ),
-            (
-                "CanManageOfflineDeviceAttestationPolicy",
-                CanManageOfflineDeviceAttestationPolicy.validate_grant(
-                    &genesis_authority,
-                    &context,
-                    &Iroha,
-                ),
-                CanManageOfflineDeviceAttestationPolicy.validate_revoke(
-                    &genesis_authority,
-                    &context,
-                    &Iroha,
-                ),
-            ),
-        ];
+        let results = [(
+            "CanManageOfflineReserve",
+            CanManageOfflineReserve.validate_grant(&genesis_authority, &context, &Iroha),
+            CanManageOfflineReserve.validate_revoke(&genesis_authority, &context, &Iroha),
+        )];
         for (name, grant, revoke) in results {
             assert!(grant.is_ok(), "genesis must grant {name}: {grant:?}");
             assert!(revoke.is_ok(), "genesis must revoke {name}: {revoke:?}");

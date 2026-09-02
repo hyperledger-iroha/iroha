@@ -50,7 +50,6 @@ class NoritoBridgeAppleSliceHandoffTests(unittest.TestCase):
             "bridge_header_sha256": digest,
             "privacy_production_enabled": False,
             "cargo_features": [],
-            "kagemusha_production_authorization_sha256": None,
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",
                 "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",

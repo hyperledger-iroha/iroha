@@ -13,7 +13,6 @@ import (
 const (
 	maxVoteSignaturePayloadBytes = 524
 	maxExecutedBlockWireBytes    = 256 * 1024 * 1024
-	maxTopupAnchorsPerBlock      = 16
 	maxNativeAMXManifestLeaves   = 1024
 	maxLaneFinalityStatements    = 1024
 	nativeAMXManifestVersion     = 1
@@ -27,9 +26,9 @@ type ExecutionCommitmentWitness struct {
 	ParentStateRoot                   [32]uints.U8
 	PostStateRoot                     [32]uints.U8
 	OrdinaryWritesRoot                [32]uints.U8
-	HasTopupAnchorRoot                frontend.Variable
-	TopupAnchorRoot                   [32]uints.U8
-	TopupAnchorCount                  frontend.Variable
+	HasOfflineCashTopUpRoot           frontend.Variable
+	OfflineCashTopUpRoot              [32]uints.U8
+	OfflineCashTopUpCount             frontend.Variable
 	NativeAMXApplicationManifestVer   frontend.Variable
 	NativeAMXApplicationManifestRoot  [32]uints.U8
 	NativeAMXApplicationManifestCount frontend.Variable
@@ -45,7 +44,7 @@ type ExecutionCommitmentWitness struct {
 
 func constrainExecutionCommitment(api frontend.API, execution *ExecutionCommitmentWitness) error {
 	for _, present := range []frontend.Variable{
-		execution.HasTopupAnchorRoot,
+		execution.HasOfflineCashTopUpRoot,
 		execution.HasLaneFinalityManifest,
 		execution.HasMergeCarrier,
 	} {
@@ -66,7 +65,7 @@ func constrainExecutionCommitment(api frontend.API, execution *ExecutionCommitme
 		present frontend.Variable
 		digest  []uints.U8
 	}{
-		{execution.HasTopupAnchorRoot, execution.TopupAnchorRoot[:]},
+		{execution.HasOfflineCashTopUpRoot, execution.OfflineCashTopUpRoot[:]},
 		{execution.HasLaneFinalityManifest, execution.LaneFinalityManifestRoot[:]},
 		{execution.HasMergeCarrier, execution.MergeCarrierEntryHash[:]},
 	} {
@@ -75,7 +74,7 @@ func constrainExecutionCommitment(api frontend.API, execution *ExecutionCommitme
 		}
 	}
 
-	if _, err := u32Bytes(api, execution.TopupAnchorCount); err != nil {
+	if _, err := u32Bytes(api, execution.OfflineCashTopUpCount); err != nil {
 		return err
 	}
 	if _, err := u32Bytes(api, execution.NativeAMXApplicationManifestCount); err != nil {
@@ -97,27 +96,26 @@ func constrainExecutionCommitment(api frontend.API, execution *ExecutionCommitme
 	comparison32 := cmp.NewBoundedComparator(api, new(big.Int).Lsh(big.NewInt(1), 32), false)
 	comparison64 := cmp.NewBoundedComparator(api, new(big.Int).Lsh(big.NewInt(1), 64), false)
 
-	topupCountIsZero := api.IsZero(execution.TopupAnchorCount)
-	api.AssertIsEqual(execution.HasTopupAnchorRoot, api.Sub(1, topupCountIsZero))
-	comparison32.AssertIsLessEq(execution.TopupAnchorCount, maxTopupAnchorsPerBlock)
-	topupCountBytes, err := u32Bytes(api, execution.TopupAnchorCount)
+	offlineCashTopUpCountIsZero := api.IsZero(execution.OfflineCashTopUpCount)
+	api.AssertIsEqual(execution.HasOfflineCashTopUpRoot, api.Sub(1, offlineCashTopUpCountIsZero))
+	offlineCashTopUpCountBytes, err := u32Bytes(api, execution.OfflineCashTopUpCount)
 	if err != nil {
 		return err
 	}
-	topupPreimage := constants([]byte("iroha:kagemusha:v2:post-state-root"))
-	topupPreimage = append(topupPreimage, uints.NewU8(0))
-	topupPreimage = append(topupPreimage, topupCountBytes...)
-	topupPreimage = append(topupPreimage, execution.OrdinaryWritesRoot[:]...)
-	topupPreimage = append(topupPreimage, execution.TopupAnchorRoot[:]...)
-	topupPostStateRoot, err := irohaBlake2bHash(api, topupPreimage)
+	offlineCashTopUpPreimage := constants([]byte("iroha:offline-cash:v1:post-state-root"))
+	offlineCashTopUpPreimage = append(offlineCashTopUpPreimage, uints.NewU8(0))
+	offlineCashTopUpPreimage = append(offlineCashTopUpPreimage, offlineCashTopUpCountBytes...)
+	offlineCashTopUpPreimage = append(offlineCashTopUpPreimage, execution.OrdinaryWritesRoot[:]...)
+	offlineCashTopUpPreimage = append(offlineCashTopUpPreimage, execution.OfflineCashTopUpRoot[:]...)
+	offlineCashPostStateRoot, err := irohaBlake2bHash(api, offlineCashTopUpPreimage)
 	if err != nil {
 		return err
 	}
 	if err := assertConditionalBytesEqual(
 		api,
-		execution.HasTopupAnchorRoot,
+		execution.HasOfflineCashTopUpRoot,
 		execution.PostStateRoot[:],
-		topupPostStateRoot[:],
+		offlineCashPostStateRoot[:],
 	); err != nil {
 		return err
 	}
@@ -315,9 +313,9 @@ func initializeExecutionCommitment(execution *ExecutionCommitmentWitness) {
 	zeroU8s(execution.ParentStateRoot[:])
 	zeroU8s(execution.PostStateRoot[:])
 	zeroU8s(execution.OrdinaryWritesRoot[:])
-	execution.HasTopupAnchorRoot = 0
-	zeroU8s(execution.TopupAnchorRoot[:])
-	execution.TopupAnchorCount = 0
+	execution.HasOfflineCashTopUpRoot = 0
+	zeroU8s(execution.OfflineCashTopUpRoot[:])
+	execution.OfflineCashTopUpCount = 0
 	execution.NativeAMXApplicationManifestVer = 0
 	zeroU8s(execution.NativeAMXApplicationManifestRoot[:])
 	execution.NativeAMXApplicationManifestCount = 0
@@ -344,7 +342,7 @@ func assertExecutionCommitmentsEqual(
 		{left.ParentStateRoot[:], right.ParentStateRoot[:]},
 		{left.PostStateRoot[:], right.PostStateRoot[:]},
 		{left.OrdinaryWritesRoot[:], right.OrdinaryWritesRoot[:]},
-		{left.TopupAnchorRoot[:], right.TopupAnchorRoot[:]},
+		{left.OfflineCashTopUpRoot[:], right.OfflineCashTopUpRoot[:]},
 		{left.NativeAMXApplicationManifestRoot[:], right.NativeAMXApplicationManifestRoot[:]},
 		{left.LaneFinalityManifestRoot[:], right.LaneFinalityManifestRoot[:]},
 		{left.MergeCarrierEntryHash[:], right.MergeCarrierEntryHash[:]},
@@ -355,8 +353,8 @@ func assertExecutionCommitmentsEqual(
 		}
 	}
 	for _, pair := range [][2]frontend.Variable{
-		{left.HasTopupAnchorRoot, right.HasTopupAnchorRoot},
-		{left.TopupAnchorCount, right.TopupAnchorCount},
+		{left.HasOfflineCashTopUpRoot, right.HasOfflineCashTopUpRoot},
+		{left.OfflineCashTopUpCount, right.OfflineCashTopUpCount},
 		{left.NativeAMXApplicationManifestVer, right.NativeAMXApplicationManifestVer},
 		{left.NativeAMXApplicationManifestCount, right.NativeAMXApplicationManifestCount},
 		{left.HasLaneFinalityManifest, right.HasLaneFinalityManifest},

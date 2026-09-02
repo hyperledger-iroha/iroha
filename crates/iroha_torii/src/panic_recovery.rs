@@ -92,6 +92,28 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn upgrade_callback_panic_is_controlled_and_drops_owned_cleanup() {
+        struct CleanupProbe(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for CleanupProbe {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cleanup = CleanupProbe(std::sync::Arc::clone(&dropped));
+        let result = catch_async_recoverable(async move {
+            let _cleanup = cleanup;
+            assert!(iroha_core::panic_hook::is_suppressed());
+            panic!("injected WebSocket upgrade callback panic");
+        })
+        .await;
+        assert!(result.is_err());
+        assert!(dropped.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!iroha_core::panic_hook::is_suppressed());
+    }
+
     #[test]
     fn ordinary_invariant_panics_remain_unsuppressed() {
         let result = std::panic::catch_unwind(|| {

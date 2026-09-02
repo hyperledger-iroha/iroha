@@ -502,6 +502,23 @@ SMART_CONTRACT_NOTES: dict[str, list[str]] = {
         "Requires an active retained lifecycle record and its exact non-zero `expected_revision`; successful deactivation advances the revision but preserves origin and ownership.",
         "Only the current account owner may submit this raw instruction; Parliament deactivation uses the certified governance lifecycle corridor.",
     ],
+    "iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation": [
+        "Only the current account owner may change delegation, guarded by the exact lifecycle `expected_revision`.",
+        "Delegated Parliament may activate or deactivate through certified governance, but cannot transfer ownership or change delegation.",
+    ],
+    "iroha_data_model::isi::smart_contract_code::OfferContractOwnership": [
+        "The current account owner records a revision-guarded pending owner; ownership does not move until a separate acceptance.",
+    ],
+    "iroha_data_model::isi::smart_contract_code::AcceptContractOwnership": [
+        "Only the pending account owner may accept; successful acceptance clears the offer and Parliament delegation and advances the lifecycle revision.",
+    ],
+    "iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer": [
+        "Only the current account owner may cancel an outstanding offer, guarded by the exact lifecycle `expected_revision`.",
+    ],
+    "iroha_data_model::isi::smart_contract_code::CommitContractDeployment": [
+        "Atomically creates a fresh account-owned lifecycle and rotates the stable alias under compare-and-swap deployment guards.",
+        "Raw deployment is rejected for protected namespaces; those addresses are created only by the certified Parliament deployment corridor.",
+    ],
     "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes": [
         "Removal succeeds only when no manifest or active instance references the target `code_hash`; provide an audit reason when automating removals.",
     ],

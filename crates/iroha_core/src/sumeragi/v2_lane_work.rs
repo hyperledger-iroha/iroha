@@ -18584,6 +18584,12 @@ pub(super) mod tests {
                 power,
             })
             .collect::<Vec<_>>();
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id,
+                context_epoch,
+                &roster,
+            );
         let mut context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -18617,19 +18623,22 @@ pub(super) mod tests {
                         format!("v2-lane-work-parent-payload:{}", height - 1).as_bytes(),
                     ),
                 },
-                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                    Hash::new(b"lane-work parent state"),
-                    Hash::new(b"lane-work post state"),
-                    Hash::new(b"lane-work ordinary writes"),
-                    1,
-                    Hash::new(b"lane-work executed block wire"),
-                ),
+                execution_commitment:
+                    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                        Hash::new(b"lane-work parent state"),
+                        Hash::new(b"lane-work post state"),
+                        Hash::new(b"lane-work ordinary writes"),
+                        1,
+                        Hash::new(b"lane-work executed block wire"),
+                    ),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xA5; 48],
             }),
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: super::super::v2_recovery::committed_nexus_amx_context_hash(
                 state.as_ref(),
             ),
@@ -25165,13 +25174,14 @@ pub(super) mod tests {
                 proposal_round: round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
-                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                    Hash::new(b"lane rollover parent state"),
-                    Hash::new(b"lane rollover post state"),
-                    Hash::new(b"lane rollover writes"),
-                    1,
-                    Hash::new(b"lane rollover executed block"),
-                ),
+                execution_commitment:
+                    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                        Hash::new(b"lane rollover parent state"),
+                        Hash::new(b"lane rollover post state"),
+                        Hash::new(b"lane rollover writes"),
+                        1,
+                        Hash::new(b"lane rollover executed block"),
+                    ),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xA5; 48],
             },
@@ -25196,7 +25206,7 @@ pub(super) mod tests {
             adapter,
             keys,
             block,
-            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
                 Hash::new(b"historical request parent state"),
                 Hash::new(b"historical request post state"),
                 Hash::new(b"historical request writes"),
@@ -25324,13 +25334,14 @@ pub(super) mod tests {
                 block_hash: parent.hash(),
                 payload_hash: Hash::new(&parent_wire),
             },
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"lane-certificate parent state"),
-                Hash::new(b"lane-certificate parent post-state"),
-                Hash::new(b"lane-certificate parent writes"),
-                1,
-                Hash::new(&parent_wire),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new(b"lane-certificate parent state"),
+                    Hash::new(b"lane-certificate parent post-state"),
+                    Hash::new(b"lane-certificate parent writes"),
+                    1,
+                    Hash::new(&parent_wire),
+                ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xA5; 48],
         });

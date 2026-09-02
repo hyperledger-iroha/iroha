@@ -1,6 +1,4 @@
 //! Offline command surfaces.
-mod kagemusha_lifecycle;
-mod kagemusha_rollout;
 use crate::{Run, RunContext, cli_output::print_with_optional_text};
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
@@ -38,9 +36,6 @@ const KATAKANA_STYLE_NAME: &str = "sora-temple-command";
 const KATAKANA_HIGH_CONTRAST_STYLE_NAME: &str = "sora-temple-command-high-contrast";
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
-    /// Governed Kagemusha recursive-release operations.
-    #[command(subcommand)]
-    Kagemusha(KagemushaCommand),
     /// Petal Stream optical handoff tooling.
     #[command(subcommand)]
     Petal(PetalCommand),
@@ -48,14 +43,12 @@ pub(crate) enum Command {
 impl Command {
     pub(crate) fn allows_fallback_config(&self) -> bool {
         match self {
-            Self::Kagemusha(command) => command.allows_fallback_config(),
             Self::Petal(_) => true,
         }
     }
 
     pub(crate) fn preflight_before_operator_key_load(&self) -> Result<()> {
         match self {
-            Self::Kagemusha(command) => command.preflight_before_operator_key_load(),
             Self::Petal(_) => Ok(()),
         }
     }
@@ -63,43 +56,7 @@ impl Command {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
-            Self::Kagemusha(command) => Run::run(command, context),
             Self::Petal(command) => Run::run(command, context),
-        }
-    }
-}
-#[derive(Subcommand, Debug)]
-pub(crate) enum KagemushaCommand {
-    /// Prepare, independently sign, assemble, and submit one exact lifecycle transaction.
-    #[command(name = "lifecycle-v4")]
-    LifecycleV4(kagemusha_lifecycle::Args),
-    /// Execute the phase-separated, exact-byte Kagemusha V4 rollout corridor.
-    #[command(name = "rollout-v4")]
-    RolloutV4(kagemusha_rollout::Args),
-}
-impl KagemushaCommand {
-    fn allows_fallback_config(&self) -> bool {
-        matches!(
-            self,
-            Self::LifecycleV4(args) if args.allows_fallback_config()
-        ) || matches!(
-            self,
-            Self::RolloutV4(args) if args.allows_fallback_config()
-        )
-    }
-
-    fn preflight_before_operator_key_load(&self) -> Result<()> {
-        match self {
-            Self::LifecycleV4(args) => args.preflight_before_operator_key_load(),
-            Self::RolloutV4(_) => Ok(()),
-        }
-    }
-}
-impl Run for KagemushaCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::LifecycleV4(args) => args.run(context),
-            Self::RolloutV4(args) => args.run(context),
         }
     }
 }

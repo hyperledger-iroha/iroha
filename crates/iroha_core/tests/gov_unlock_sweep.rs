@@ -5,8 +5,8 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{
         GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
-        GovernanceReferendumRecord, GovernanceReferendumStatus,
-        GovernanceReferendumTallyV1, State, World, WorldReadOnly,
+        GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceReferendumTallyV1, State,
+        World, WorldReadOnly,
     },
 };
 use iroha_crypto::KeyPair;

@@ -59,6 +59,23 @@ public sealed class NetworkId : IEquatable<NetworkId>
         return new NetworkId(value, decoded);
     }
 
+    /// <summary>Creates a network identity from exactly 32 marked genesis-hash bytes.</summary>
+    public static NetworkId FromBytes(ReadOnlySpan<byte> value)
+    {
+        if (value.Length != ByteLength || (value[^1] & 1) == 0)
+        {
+            throw new ArgumentException(
+                "Network id bytes must be one marked 32-byte hash.",
+                nameof(value));
+        }
+
+        var body = Convert.ToHexString(value);
+        var prefix = $"hash:{body}";
+        return new NetworkId(
+            $"{prefix}#{Crc16(Encoding.ASCII.GetBytes(prefix)):X4}",
+            value.ToArray());
+    }
+
     /// <summary>Returns a defensive copy of the exact 32-byte genesis hash.</summary>
     public byte[] ToBytes() => bytes.ToArray();
 

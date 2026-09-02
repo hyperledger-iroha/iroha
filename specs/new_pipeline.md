@@ -263,7 +263,14 @@ Example mapping: pacs.008 → ledger
 
 ## Kotodama Smart Contract Lifecycle (IVM Bytecode)
 
-Phases (normative)
+> Historical proposal (non-normative): this section predates the first-release
+> revisioned contract lifecycle. Retired instance registration, upgrade, and
+> deprecation sketches below are retained only as design history. The current
+> normative deployment and ownership model is specified in
+> [`contract_deployment.md`](contract_deployment.md).
+
+Historical phases (non-normative)
+
 - Author: write Kotodama source (`.ko`) with explicit entrypoints and Norito‑typed parameters/returns. Avoid global mutable state; declare state keys via canonical key helpers when possible.
 - Build: compile to IVM bytecode (`.to`) with a pinned toolchain. Produce a manifest:
   - `code_hash` (Blake2b‑32), `abi_hash`, `compiler_fingerprint` (rustc/LLVM), feature bitmap (e.g., `cuda=false`, `metal=false`), `access_set_hints` (advisory RW‑keys per entrypoint), and `schema_hash` for argument/return types. CPU SIMD capability is always reported automatically.
@@ -1857,44 +1864,31 @@ CRDT/commutative precompiles (optional)
 
 ---
 
-## ZK Assets (protocol-bound confidential ledger)
+## Offline Cash V1 (protocol-bound aggregate balance)
 
 The first release does not expose generic deposit, transfer, or withdrawal
-instructions. Public settlement belongs exclusively to Kagemusha V4:
+instructions. Its sole offline-cash settlement surface is:
 
-- `TopUpKagemushaRecursiveV4` transfers the exact public amount into the
-  protocol escrow and appends the proof-authenticated note.
-- `RedeemKagemushaRecursiveV4` consumes the authenticated note and nullifier,
-  allocates exact finalized-anchor drawdown, and transfers the public amount
-  out of that escrow. It never mints against an escrow-backed note.
-- The transfer-v2 relation remains only as an internal recursive-proof
-  component selected by Kagemusha's protocol-global canonical verifier. No
-  executor, IVM guest, Torii client, SDK, or escrow protocol can construct a
-  generic movement instruction.
+- `TopUpOfflineCashV1`, which atomically debits the payer, credits the sole
+  reserve for `(network, asset)`, and fixes one hardware-bound mint credit;
+- device-to-device `SendSplit` and `ReceiveFold`, which move value between
+  recursively proven aggregate balances without touching consensus state; and
+- `RedeemOfflineCashV1`, which verifies a hardware-bound full or partial
+  redemption voucher, consumes one terminal nullifier, debits the reserve, and
+  credits the beneficiary atomically.
 
-Each registered confidential asset persists optional `vk_shield` and
-`vk_unshield` role bindings, its spent nullifier set, append-only commitments,
-the sole first-release depth-16 `PoseidonPastaV1` tree profile, a fixed 16-slot
-frontier, current root, bounded root history, and bounded reorg checkpoints.
-`RegisterZkAsset` has no mode or boolean enablement fields: presence of the
-corresponding verifier-key binding is the sole role-enablement signal. It also
-has no asset-bound transfer verifier. Admission requires a recent root,
-canonical public-input shape, the active canonical verifier for the exact
-Kagemusha operation, bounded proof and output counts, and a valid proof before
-any ledger mutation. Batch append is atomic and costs `O(batch * depth)`;
-snapshot decode and admitted audit rebuild the compact projection and compare
-the root, frontier, history, and checkpoints.
+Each hardware lane and asset has one hidden `u128` balance, policy and device
+binding, hardware epoch, logical sequence, consumed-credit sparse-Merkle root,
+nonce, and public commitment. The fixed-shape paired-Pasta recursion implements
+`Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFold`, `RedeemSplit`, and `Rotate`.
+It verifies the normalized GuardBundle, recursively verifies every consumed
+parent proof, and folds all prior proof obligations into constant-size history
+accumulators. No hop, note, input, origin, fan-in, ancestry, or proof-depth
+field participates in admission.
 
-The underlying Halo2/IPA-over-Pasta top-up, transfer, full-redemption, and
-change-redemption relations remain implementation components. Their typed
-public-input specifications bind asset/chain domains, roots, commitments,
-nullifiers, amounts, and Kagemusha context. Retaining a circuit does not retain
-a public instruction or a compatibility decoder.
-
-Conservation is enforced twice: circuits constrain note values, while the
-Kagemusha ledger independently caps aggregate public redemption by finalized
-top-up drawdown and pays by escrow transfer. Nullifiers are permanent spent-note
-identities for the asset. Kagemusha anchors, drawdowns, and receipts provide the
-auditable public-settlement record; authenticated tree state is available from
-the protocol-specific query surface. There is no generic confidential event
-wire in V1.
+Conservation is enforced twice: circuits prove exact balance arithmetic, while
+the ledger maintains `reserve = total_topups - total_redemptions` with checked
+`u128` arithmetic and idempotent operation records. Peer transfers do not alter
+the reserve. Top-up finality is verified inside the mint helper and redemption
+proofs are terminally decided against the authenticated release artifacts; a
+host-side certificate check alone grants no monetary authority.

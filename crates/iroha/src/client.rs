@@ -31,8 +31,7 @@ use crate::{
         },
         prelude::*,
         transaction::{
-            TransactionBuilder, TransactionEntrypoint, TransactionSubmissionReceipt,
-            error::TransactionRejectionReason,
+            TransactionBuilder, TransactionEntrypoint, error::TransactionRejectionReason,
         },
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
@@ -52,11 +51,11 @@ use derive_more::Display;
 use eyre::{Result, WrapErr, eyre};
 use futures_util::{Stream, StreamExt, stream};
 use http_default::{AsyncWebSocketStream, WebSocketStream};
-pub use iroha_config::client_api::{
-    ConfidentialGas as ConfidentialGasDTO, ConfigGetDTO, ConfigUpdateDTO, Logger as LoggerDTO,
-};
+pub use iroha_config::client_api::{ConfidentialGas as ConfidentialGasDTO, ConfigGetDTO};
 use iroha_config::parameters::actual::SorafsRolloutPhase;
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
+/// Closed penalty lifecycle returned by the Sumeragi evidence audit API.
+pub use iroha_data_model::block::consensus::EvidencePenaltyStatus as SumeragiEvidencePenaltyStatus;
 pub use iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1;
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
@@ -69,7 +68,7 @@ use iroha_data_model::{
         AliasPlanDispositionV1, AliasPlanResourceV1, AliasQuoteGuardV1, AliasSetupPlanRequestV1,
         AliasSetupReportV1, AliasTransactionPlanBodyV1, AliasTransactionPlanV1,
     },
-    block::consensus::{EvidenceRecord, SumeragiDiagnosticsStatus},
+    block::consensus::SumeragiDiagnosticsStatus,
     block::consensus_v2::{SumeragiV2QcResponse, SumeragiV2Status},
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
@@ -81,14 +80,9 @@ use iroha_data_model::{
         AssetPermissionManifest, FeeSponsorProgram, FeeSponsorProgramId, LaneLifecycleParameterV1,
         LaneLifecyclePlan, LaneLifecycleStatusV1, UniversalAccountId,
     },
-    offline::{KagemushaOperationKindV4, KagemushaOperationRequestV4},
     privacy::PrivacyExact12CapabilityManifestV1,
     query::error::QueryExecutionFail,
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
-    sorafs::orderbook_submission::{
-        SorafsOrderbookSubmissionIdentityV1,
-        decode_and_verify_sorafs_orderbook_submission_receipt_v1,
-    },
     sorafs::pin_registry::PinStatusKindV1,
 };
 use iroha_logger::prelude::*;
@@ -179,9 +173,17 @@ pub struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
     pub counts: PrivateSettlementTestNetworkStateCountsV1,
 }
 pub use iroha_torii_shared::offline_api::{
-    OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES, OfflineOperationStatus,
+    OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1, OFFLINE_CASH_OPERATION_STATUS_MAX_BYTES_V1,
+    OfflineCashFinalityTrustAnchorV1, OfflineCashOperationStatusV1, OfflineCashReadinessV1,
+    OfflineCashRedemptionRequestV1, OfflineCashTopUpRequestV1,
 };
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
+pub use iroha_torii_shared::sumeragi_evidence_api::{
+    SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT,
+    SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_MAX_LIMIT,
+    SUMERAGI_EVIDENCE_LIST_MAX_OFFSET, SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES,
+    SumeragiEvidenceCountResponse, SumeragiEvidenceListWireResponse,
+};
 pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1,
     VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
@@ -202,9 +204,8 @@ use iroha_torii_shared::{
     PipelineTransactionDetailsResponse, PipelineTransactionStatusResponse,
     TriggerCompletionListResponse,
     offline_api::{
-        OFFLINE_OPERATION_REFERENCE_MAX_BYTES, OFFLINE_OPERATION_STATUS_MAX_BYTES,
-        OFFLINE_STATUS_MAX_BYTES, OfflineOperationIdentity, OfflineOperationKind, OfflineOperationReference,
-        OfflineRedeemRequest, OfflineStatus, OfflineTopUpRequest,
+        OFFLINE_CASH_OPERATION_STATUS_ROUTE_PREFIX_V1, OFFLINE_CASH_READINESS_MAX_BYTES_V1,
+        OfflineCashOperationKindV1, OfflineCashOperationStateV1,
     },
     uri as torii_uri,
 };
@@ -8752,24 +8753,269 @@ fn shared_data_model_compatibility_state(
     guard.insert(key, Arc::downgrade(&state));
     state
 }
-/// Filters for `/v1/sumeragi/evidence` listing endpoint.
-#[derive(Debug, Default, Clone)]
-pub struct SumeragiEvidenceListFilter<'a> {
-    /// Maximum number of entries to return (server caps at 1000).
-    pub limit: Option<u32>,
-    /// Offset into the persisted evidence list.
-    pub offset: Option<u32>,
-    /// Optional filter by the sole first-release kind, `SumeragiV2Equivocation`.
-    pub kind: Option<&'a str>,
+/// Sole evidence kind exposed by the first-release Sumeragi audit API.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SumeragiEvidenceKind {
+    /// Independently verifiable Sumeragi-v2 equivocation evidence.
+    SumeragiV2Equivocation,
 }
-impl SumeragiEvidenceListFilter<'_> {
-    fn apply_to_url(&self, url: &mut Url) {
-        let mut query = url.query_pairs_mut();
-        for (key, value) in self.param_entries() {
-            query.append_pair(key, &value);
+
+impl SumeragiEvidenceKind {
+    /// Return the exact query and JSON literal used by Torii.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SumeragiV2Equivocation => "SumeragiV2Equivocation",
         }
     }
-    fn param_entries(&self) -> Vec<(&'static str, String)> {
+}
+
+impl fmt::Display for SumeragiEvidenceKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl norito::json::FastJsonWrite for SumeragiEvidenceKind {
+    fn write_json(&self, output: &mut String) {
+        norito::json::write_json_string(self.as_str(), output);
+    }
+
+    fn write_json_to(
+        &self,
+        output: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_str(), output)
+    }
+}
+
+impl norito::json::JsonDeserialize for SumeragiEvidenceKind {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        match parser.parse_string()?.as_str() {
+            "SumeragiV2Equivocation" => Ok(Self::SumeragiV2Equivocation),
+            other => Err(norito::json::Error::Message(format!(
+                "unknown Sumeragi evidence kind `{other}`"
+            ))),
+        }
+    }
+}
+
+/// Closed equivocation class exposed by the Sumeragi evidence audit API.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SumeragiEvidenceClass {
+    /// Conflicting proposals signed by one proposer for the same round.
+    Proposal,
+    /// Conflicting phase votes signed by one validator for the same round.
+    PhaseVote,
+    /// Conflicting timeout votes signed by one validator for the same round.
+    TimeoutVote,
+}
+
+impl SumeragiEvidenceClass {
+    /// Return the exact JSON literal used by Torii.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Proposal => "proposal",
+            Self::PhaseVote => "phase_vote",
+            Self::TimeoutVote => "timeout_vote",
+        }
+    }
+}
+
+impl fmt::Display for SumeragiEvidenceClass {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl norito::json::FastJsonWrite for SumeragiEvidenceClass {
+    fn write_json(&self, output: &mut String) {
+        norito::json::write_json_string(self.as_str(), output);
+    }
+
+    fn write_json_to(
+        &self,
+        output: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_str(), output)
+    }
+}
+
+impl norito::json::JsonDeserialize for SumeragiEvidenceClass {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        match parser.parse_string()?.as_str() {
+            "proposal" => Ok(Self::Proposal),
+            "phase_vote" => Ok(Self::PhaseVote),
+            "timeout_vote" => Ok(Self::TimeoutVote),
+            other => Err(norito::json::Error::Message(format!(
+                "unknown Sumeragi evidence class `{other}`"
+            ))),
+        }
+    }
+}
+
+/// Canonical raw lowercase 32-byte digest used by the evidence audit projection.
+///
+/// This API representation intentionally differs from the tagged, checksummed
+/// JSON spelling of [`Hash`]: Torii's evidence audit contract uses exactly 64
+/// lowercase hexadecimal characters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SumeragiEvidenceHash([u8; Hash::LENGTH]);
+
+impl SumeragiEvidenceHash {
+    /// Construct a digest from its exact 32 bytes.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; Hash::LENGTH]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow the exact digest bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; Hash::LENGTH] {
+        &self.0
+    }
+}
+
+impl fmt::Display for SumeragiEvidenceHash {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl norito::json::FastJsonWrite for SumeragiEvidenceHash {
+    fn write_json(&self, output: &mut String) {
+        norito::json::write_json_string(&self.to_string(), output);
+    }
+
+    fn write_json_to(
+        &self,
+        output: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(&self.to_string(), output)
+    }
+}
+
+impl norito::json::JsonDeserialize for SumeragiEvidenceHash {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        if value.len() != Hash::LENGTH * 2
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(norito::json::Error::Message(
+                "Sumeragi evidence hash must contain exactly 64 lowercase hexadecimal characters"
+                    .into(),
+            ));
+        }
+        let mut bytes = [0_u8; Hash::LENGTH];
+        hex::decode_to_slice(value.as_bytes(), &mut bytes).map_err(|error| {
+            norito::json::Error::Message(format!("invalid Sumeragi evidence hash: {error}"))
+        })?;
+        Ok(Self(bytes))
+    }
+}
+
+/// One strict JSON audit record returned by `/v1/sumeragi/evidence`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiEvidenceAuditRecord {
+    /// Evidence kind; the first release exposes only Sumeragi-v2 equivocation.
+    pub kind: SumeragiEvidenceKind,
+    /// Exact equivocation artifact class.
+    pub class: SumeragiEvidenceClass,
+    /// Consensus height named by both conflicting artifacts.
+    pub height: u64,
+    /// Consensus view named by both conflicting artifacts.
+    pub view: u64,
+    /// Frozen epoch of the authenticated height context.
+    pub epoch: u64,
+    /// Validator index that signed both conflicting artifacts.
+    pub signer: u32,
+    /// Digest of the frozen height context.
+    pub context_id: SumeragiEvidenceHash,
+    /// Digest of the first conflicting artifact.
+    pub artifact_hash_1: SumeragiEvidenceHash,
+    /// Digest of the second conflicting artifact.
+    pub artifact_hash_2: SumeragiEvidenceHash,
+    /// Canonical block height at which the evidence record was committed.
+    pub recorded_height: u64,
+    /// View observed when the evidence record was committed.
+    pub recorded_view: u64,
+    /// Millisecond timestamp recorded with the committed evidence.
+    pub recorded_ms: u64,
+    /// Consensus height whose block first admitted the evidence.
+    pub consensus_admitted_height: u64,
+    /// Closed deterministic penalty lifecycle.
+    pub penalty_status: SumeragiEvidencePenaltyStatus,
+}
+
+/// Strict JSON response returned by `/v1/sumeragi/evidence`.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiEvidenceListResponse {
+    /// Total number of matching committed evidence records before pagination.
+    pub total: u64,
+    /// Bounded page of committed evidence audit records.
+    pub items: Vec<SumeragiEvidenceAuditRecord>,
+}
+
+/// Filters for `/v1/sumeragi/evidence` listing endpoint.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SumeragiEvidenceListFilter {
+    /// Maximum number of entries to return (`1..=1000`).
+    pub limit: Option<u32>,
+    /// Offset into the persisted evidence list (`0..=10000`).
+    pub offset: Option<u32>,
+    /// Optional filter by the sole first-release evidence kind.
+    pub kind: Option<SumeragiEvidenceKind>,
+}
+
+impl SumeragiEvidenceListFilter {
+    /// Validate the first-release bounded query contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `limit` is outside `1..=1000` or `offset` is
+    /// greater than `10000`.
+    pub fn validate(self) -> Result<()> {
+        if let Some(limit) = self.limit
+            && !(1..=SUMERAGI_EVIDENCE_LIST_MAX_LIMIT).contains(&limit)
+        {
+            return Err(eyre!(
+                "Sumeragi evidence limit must be in 1..={SUMERAGI_EVIDENCE_LIST_MAX_LIMIT}"
+            ));
+        }
+        if let Some(offset) = self.offset
+            && offset > SUMERAGI_EVIDENCE_LIST_MAX_OFFSET
+        {
+            return Err(eyre!(
+                "Sumeragi evidence offset must be in 0..={SUMERAGI_EVIDENCE_LIST_MAX_OFFSET}"
+            ));
+        }
+        Ok(())
+    }
+
+    fn apply_to_url(self, url: &mut Url) -> Result<()> {
+        let mut query = url.query_pairs_mut();
+        for (key, value) in self.param_entries()? {
+            query.append_pair(key, &value);
+        }
+        Ok(())
+    }
+
+    fn param_entries(self) -> Result<Vec<(&'static str, String)>> {
+        self.validate()?;
         let mut out = Vec::with_capacity(3);
         if let Some(limit) = self.limit {
             out.push(("limit", limit.to_string()));
@@ -8778,40 +9024,42 @@ impl SumeragiEvidenceListFilter<'_> {
             out.push(("offset", offset.to_string()));
         }
         if let Some(kind) = self.kind {
-            out.push(("kind", kind.to_string()));
+            out.push(("kind", kind.as_str().to_owned()));
         }
-        out
-    }
-}
-fn secure_transaction_submission_uses_direct_loopback(url: &Url) -> Result<bool> {
-    if url.host().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(eyre!(
-            "verified transaction submission requires an exact origin without userinfo, query, or fragment"
-        ));
-    }
-    let loopback = match url.host() {
-        Some(url::Host::Domain(domain)) => domain == "localhost",
-        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    };
-    match url.scheme() {
-        "https" => Ok(false),
-        "http" if loopback => Ok(true),
-        "http" => Err(eyre!(
-            "verified transaction submission permits cleartext HTTP only for exact localhost, 127/8, or ::1 loopback hosts"
-        )),
-        _ => Err(eyre!(
-            "verified transaction submission requires HTTPS or exact loopback HTTP"
-        )),
+        Ok(out)
     }
 }
 
+fn validate_sumeragi_evidence_page(
+    total: u64,
+    item_count: usize,
+    filter: SumeragiEvidenceListFilter,
+) -> Result<()> {
+    let page_limit = filter.limit.unwrap_or(SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT) as usize;
+    if item_count > page_limit {
+        return Err(eyre!(
+            "Sumeragi evidence response contains {item_count} items, exceeding the requested limit {page_limit}"
+        ));
+    }
+    let item_count = u64::try_from(item_count)
+        .map_err(|_| eyre!("Sumeragi evidence response item count is not representable as u64"))?;
+    if total < item_count {
+        return Err(eyre!(
+            "Sumeragi evidence response total {total} is smaller than its {item_count}-item page"
+        ));
+    }
+    if item_count != 0 {
+        let end = u64::from(filter.offset.unwrap_or(0))
+            .checked_add(item_count)
+            .ok_or_else(|| eyre!("Sumeragi evidence response page range overflowed u64"))?;
+        if total < end {
+            return Err(eyre!(
+                "Sumeragi evidence response total {total} is smaller than the non-empty page end {end}"
+            ));
+        }
+    }
+    Ok(())
+}
 fn exact_single_response_header_value<'a>(
     response: &'a Response<Vec<u8>>,
     name: &'static str,
@@ -8858,62 +9106,6 @@ fn reject_explicit_null_fee_sponsor_program_optionals(body: &[u8]) -> Result<()>
     Ok(())
 }
 
-/// Strict response verifier for high-assurance transaction submission.
-#[derive(Clone, Copy)]
-struct VerifiedTransactionResponseHandler;
-impl VerifiedTransactionResponseHandler {
-    fn handle(
-        response: &Response<Vec<u8>>,
-        expected_identity: &SorafsOrderbookSubmissionIdentityV1,
-        expected_receipt_signer: &PublicKey,
-    ) -> Result<TransactionSubmissionReceipt> {
-        if response.body().len() > TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES {
-            return Err(eyre!(
-                "verified transaction response exceeds the {} byte limit",
-                TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES
-            ));
-        }
-        if response.status() != StatusCode::ACCEPTED {
-            return Err(ResponseReport::with_msg(
-                "Unexpected verified transaction response",
-                response,
-            )
-            .unwrap_or_else(core::convert::identity)
-            .into());
-        }
-        if response.headers().contains_key("x-iroha-reject-code") {
-            return Err(eyre!(
-                "accepted verified transaction response carried a rejection code"
-            ));
-        }
-        let content_type = exact_single_response_header(response, "content-type")?;
-        if !content_type.eq_ignore_ascii_case(APPLICATION_NORITO) {
-            return Err(eyre!(
-                "verified transaction response must contain canonical Norito"
-            ));
-        }
-        let entrypoint_hash =
-            exact_single_response_header(response, TRANSACTION_ENTRYPOINT_HASH_HEADER)?;
-        if entrypoint_hash != expected_identity.entrypoint_hash.to_string() {
-            return Err(eyre!(
-                "verified transaction response entrypoint identity differs from the submitted wire"
-            ));
-        }
-        let signed_transaction_hash =
-            exact_single_response_header(response, SIGNED_TRANSACTION_HASH_HEADER)?;
-        if signed_transaction_hash != expected_identity.signed_transaction_hash.to_string() {
-            return Err(eyre!(
-                "verified transaction response signed-transaction identity differs from the submitted wire"
-            ));
-        }
-        decode_and_verify_sorafs_orderbook_submission_receipt_v1(
-            response.body(),
-            expected_identity,
-            expected_receipt_signer,
-        )
-        .wrap_err("verified transaction receipt failed canonical authentication")
-    }
-}
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QueuePlanOutcomeUnknownIdentity {
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -9130,15 +9322,6 @@ fn decode_parameters_for_test(
     resp: &Response<Vec<u8>>,
 ) -> Result<iroha_data_model::parameter::Parameters> {
     decode_parameters_response(resp)
-}
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0F) as usize] as char);
-    }
-    out
 }
 fn sumeragi_qc_json_payload(response: &SumeragiV2QcResponse) -> Result<norito::json::Value> {
     norito::json::to_value(response)
@@ -9401,9 +9584,9 @@ impl Client {
     fn ensure_offline_operation_status_response_size(response: &Response<Vec<u8>>) -> Result<()> {
         let content_type = Self::response_content_type(response);
         let (representation, maximum_bytes) = if Self::is_json_content_type(content_type) {
-            ("JSON", OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES)
+            ("JSON", OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1)
         } else if Self::is_norito_content_type(content_type) {
-            ("Norito", OFFLINE_OPERATION_STATUS_MAX_BYTES)
+            ("Norito", OFFLINE_CASH_OPERATION_STATUS_MAX_BYTES_V1)
         } else {
             return Ok(());
         };
@@ -9492,15 +9675,27 @@ impl Client {
         }
         Ok(())
     }
-    fn validate_offline_operation_reference(
+    fn validate_offline_cash_submission(
         response: &Response<Vec<u8>>,
-        reference: &OfflineOperationReference,
-        expected_identity: &OfflineOperationIdentity,
+        status: &OfflineCashOperationStatusV1,
+        operation_id: [u8; 32],
+        kind: OfflineCashOperationKindV1,
     ) -> Result<()> {
-        reference
-            .validate_for_submission(expected_identity)
-            .map_err(|error| eyre!("invalid offline operation reference: {error}"))?;
-        let expected_status_uri = format!("/v1/offline/operations/{}", expected_identity.operation_id);
+        status
+            .validate()
+            .map_err(|error| eyre!("invalid Offline Cash V1 operation status: {error}"))?;
+        if status.operation_id != operation_id
+            || status.kind != kind
+            || status.state != OfflineCashOperationStateV1::Pending
+        {
+            return Err(eyre!(
+                "accepted Offline Cash V1 response is not the request-bound pending operation"
+            ));
+        }
+        let expected_status_uri = format!(
+            "{OFFLINE_CASH_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+            hex::encode(operation_id)
+        );
         let location = response
             .headers()
             .get(http::header::LOCATION)
@@ -9521,66 +9716,6 @@ impl Client {
         let _ = retry_after;
         Ok(())
     }
-    fn observe_offline_operation_status(
-        status: &OfflineOperationStatus,
-        reference: &mut OfflineOperationReference,
-    ) -> Result<()> {
-        reference
-            .observe_status(status)
-            .map_err(|error| eyre!("invalid offline operation status: {error}"))
-    }
-    fn offline_operation_identity(
-        request: KagemushaOperationRequestV4<'_>,
-    ) -> Result<OfflineOperationIdentity> {
-        let authorization = request.authorization();
-        let kind = match request.kind() {
-            KagemushaOperationKindV4::TopUp => OfflineOperationKind::TopUp,
-            KagemushaOperationKindV4::Redeem => OfflineOperationKind::Redeem,
-        };
-        let authority_digest = iroha_data_model::offline::kagemusha_operation_authority_digest_v4(
-            &authorization.authority,
-        )
-        .wrap_err("failed to derive offline request authority digest")?;
-        let request_digest = request
-            .canonical_request_digest()
-            .wrap_err("failed to derive canonical offline request digest")?;
-        Ok(OfflineOperationIdentity {
-            operation_id: bytes_to_hex(&authorization.operation_id),
-            request_authority_digest: bytes_to_hex(&authority_digest),
-            canonical_request_digest: bytes_to_hex(&request_digest),
-            kind,
-            issued_at_ms: authorization.issued_at_ms,
-            expires_at_ms: authorization.expires_at_ms,
-        })
-    }
-    fn validate_offline_capability(status: &OfflineStatus) -> Result<()> {
-        if status.cash_handoff_capability
-            != iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
-        {
-            return Err(eyre!(
-                "offline capability response does not advertise cash_handoff_v1"
-            ));
-        }
-        if status.required_bridge_abi_version
-            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
-        {
-            return Err(eyre!(
-                "offline capability response does not advertise native bridge ABI 23"
-            ));
-        }
-        if status.max_hops != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
-        {
-            return Err(eyre!(
-                "offline capability response does not advertise the canonical peer-spend hop limit"
-            ));
-        }
-        if !status.ready {
-            return Err(eyre!(
-                "offline capability response must report the universally compiled capability as ready"
-            ));
-        }
-        Ok(())
-    }
     /// Discover the universally compiled offline cash-handoff capability.
     ///
     /// The capability is independent of backend configuration, asset catalogs,
@@ -9589,21 +9724,23 @@ impl Client {
     /// # Errors
     /// Returns an error for transport failures, non-success responses, malformed
     /// negotiated representations, or a response that does not describe the
-    /// exact first-release `cash_handoff_v1` ABI-21 capability.
-    pub fn get_offline_capability(&self) -> Result<OfflineStatus> {
+    /// exact four-field first-release `cash_handoff_v1` capability.
+    pub fn get_offline_capability(&self) -> Result<OfflineCashReadinessV1> {
         let url = join_torii_url(&self.torii_url, torii_uri::OFFLINE_READINESS);
         let response = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", self.wire_format_preference.accept_header())
-                .max_response_bytes(OFFLINE_STATUS_MAX_BYTES),
+                .max_response_bytes(OFFLINE_CASH_READINESS_MAX_BYTES_V1),
         )?;
-        let status: OfflineStatus = Self::parse_negotiated_typed_response(
+        let status: OfflineCashReadinessV1 = Self::parse_negotiated_typed_response(
             &response,
             StatusCode::OK,
             "Failed to discover offline capability",
             self.wire_format_preference,
         )?;
-        Self::validate_offline_capability(&status)?;
+        status
+            .validate()
+            .map_err(|error| eyre!("invalid Offline Cash V1 readiness response: {error}"))?;
         Ok(status)
     }
     /// Submit a signed online-to-offline top-up operation.
@@ -9616,15 +9753,16 @@ impl Client {
     /// decoding, or response-to-request binding validation fails.
     pub fn submit_offline_top_up(
         &self,
-        request: &OfflineTopUpRequest,
-    ) -> Result<OfflineOperationReference> {
+        request: &OfflineCashTopUpRequestV1,
+    ) -> Result<OfflineCashOperationStatusV1> {
         request
-            .validate_public_binding()
-            .wrap_err("invalid offline top-up request")?;
+            .validate()
+            .wrap_err("invalid Offline Cash V1 top-up request")?;
         self.submit_offline_operation(
             torii_uri::OFFLINE_TOP_UP,
             request,
-            Self::offline_operation_identity(KagemushaOperationRequestV4::TopUp(request))?,
+            request.operation_id,
+            OfflineCashOperationKindV1::TopUp,
         )
     }
     /// Submit a signed offline redemption operation.
@@ -9637,78 +9775,69 @@ impl Client {
     /// decoding, or response-to-request binding validation fails.
     pub fn submit_offline_redeem(
         &self,
-        request: &OfflineRedeemRequest,
-    ) -> Result<OfflineOperationReference> {
+        request: &OfflineCashRedemptionRequestV1,
+    ) -> Result<OfflineCashOperationStatusV1> {
         request
-            .validate_public_binding()
-            .wrap_err("invalid offline redemption request")?;
+            .validate()
+            .wrap_err("invalid Offline Cash V1 redemption request")?;
         self.submit_offline_operation(
             torii_uri::OFFLINE_REDEEM,
             request,
-            Self::offline_operation_identity(KagemushaOperationRequestV4::Redeem(request))?,
+            request.operation_id,
+            OfflineCashOperationKindV1::Redemption,
         )
     }
     fn submit_offline_operation<T>(
         &self,
         path: &str,
         request: &T,
-        identity: OfflineOperationIdentity,
-    ) -> Result<OfflineOperationReference>
+        operation_id: [u8; 32],
+        kind: OfflineCashOperationKindV1,
+    ) -> Result<OfflineCashOperationStatusV1>
     where
         T: norito::NoritoSerialize,
     {
-        identity.validate_structure().map_err(|error| eyre!("invalid offline operation identity: {error}"))?;
-        let operation_id = &identity.operation_id;
         let body = to_bytes(request).wrap_err("failed to encode offline request as Norito")?;
         let url = join_torii_url(&self.torii_url, path);
         let response = self.send_builder(
             self.default_request(HttpMethod::POST, url)
                 .header("Content-Type", APPLICATION_NORITO)
                 .header("Accept", self.wire_format_preference.accept_header())
-                .header("Idempotency-Key", operation_id)
-                .max_response_bytes(OFFLINE_OPERATION_REFERENCE_MAX_BYTES)
+                .header("Idempotency-Key", &hex::encode(operation_id))
+                .max_response_bytes(OFFLINE_CASH_OPERATION_STATUS_MAX_BYTES_V1)
                 .body(body),
         )?;
-        let reference: OfflineOperationReference = Self::parse_negotiated_typed_response(
+        Self::ensure_offline_operation_status_response_size(&response)?;
+        let status: OfflineCashOperationStatusV1 = Self::parse_negotiated_typed_response(
             &response,
             StatusCode::ACCEPTED,
             "Failed to submit offline operation",
             self.wire_format_preference,
         )?;
-        Self::validate_offline_operation_reference(
-            &response,
-            &reference,
-            &identity,
-        )?;
-        Ok(reference)
+        Self::validate_offline_cash_submission(&response, &status, operation_id, kind)?;
+        Ok(status)
     }
-    /// Poll the current state and advance the active Pending-attempt cursor.
-    ///
-    /// A validated different Pending transaction replaces the reference's
-    /// transaction hash while retaining the signed request's immutable
-    /// submission time. Terminal observations may identify a different retry
-    /// or globally winning transaction but do not rewrite the pending cursor.
+    /// Poll one Offline Cash V1 operation.
     ///
     /// # Errors
-    /// Returns an error for a malformed accepted-operation reference, transport
-    /// failure, non-success response, malformed negotiated representation, or
-    /// a response whose operation or kind differs, or a Pending response whose
-    /// request-bound submission time changes.
+    /// Applied results require a caller-pinned finality anchor. Pending and
+    /// rejected responses are validated without one.
     pub fn poll_offline_operation_status(
         &self,
-        reference: &mut OfflineOperationReference,
-    ) -> Result<OfflineOperationStatus> {
-        reference
-            .validate_structure()
-            .map_err(|error| eyre!("invalid offline operation reference: {error}"))?;
-        let operation_id = &reference.identity.operation_id;
-        let path = torii_uri::OFFLINE_OPERATION.replace("{operation_id}", operation_id);
+        operation_id: [u8; 32],
+        trust_anchor: Option<&OfflineCashFinalityTrustAnchorV1>,
+    ) -> Result<OfflineCashOperationStatusV1> {
+        if operation_id == [0; 32] {
+            return Err(eyre!("Offline Cash V1 operation id must be non-zero"));
+        }
+        let operation_id_text = hex::encode(operation_id);
+        let path = torii_uri::OFFLINE_OPERATION.replace("{operation_id}", &operation_id_text);
         let url = join_torii_url(&self.torii_url, &path);
         let max_response_bytes = match self.wire_format_preference {
-            WireFormatPreference::NoritoOnly => OFFLINE_OPERATION_STATUS_MAX_BYTES,
+            WireFormatPreference::NoritoOnly => OFFLINE_CASH_OPERATION_STATUS_MAX_BYTES_V1,
             WireFormatPreference::NoritoPreferred
             | WireFormatPreference::JsonPreferred
-            | WireFormatPreference::JsonOnly => OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
+            | WireFormatPreference::JsonOnly => OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
         };
         let response = self.send_builder(
             self.default_request(HttpMethod::GET, url)
@@ -9716,13 +9845,29 @@ impl Client {
                 .max_response_bytes(max_response_bytes),
         )?;
         Self::ensure_offline_operation_status_response_size(&response)?;
-        let status: OfflineOperationStatus = Self::parse_negotiated_typed_response(
+        let status: OfflineCashOperationStatusV1 = Self::parse_negotiated_typed_response(
             &response,
             StatusCode::OK,
             "Failed to fetch offline operation",
             self.wire_format_preference,
         )?;
-        Self::observe_offline_operation_status(&status, reference)?;
+        if status.operation_id != operation_id {
+            return Err(eyre!(
+                "Offline Cash V1 operation status is bound to a different operation id"
+            ));
+        }
+        if status.state == OfflineCashOperationStateV1::Applied {
+            let trust_anchor = trust_anchor.ok_or_else(|| {
+                eyre!("applied Offline Cash V1 status requires a caller-pinned finality anchor")
+            })?;
+            status
+                .validate_against(trust_anchor)
+                .map_err(|error| eyre!("untrusted Offline Cash V1 applied status: {error}"))?;
+        } else {
+            status
+                .validate()
+                .map_err(|error| eyre!("invalid Offline Cash V1 operation status: {error}"))?;
+        }
         Ok(status)
     }
     /// GET `/v1/sumeragi/status` — consensus status snapshot.
@@ -10010,53 +10155,83 @@ impl Client {
     pub fn get_sumeragi_qc_json(&self) -> Result<norito::json::Value> {
         sumeragi_qc_json_payload(&self.get_sumeragi_qc()?)
     }
-    /// GET `/v1/sumeragi/evidence/count` — total persisted evidence entries.
+    /// GET `/v1/sumeragi/evidence/count` — total committed evidence entries.
     ///
     /// # Errors
-    /// Returns an error if the request fails or the response is non-OK/invalid JSON.
-    pub fn get_sumeragi_evidence_count_json(&self) -> Result<norito::json::Value> {
+    /// Returns an error if the request fails or the response is non-OK or does
+    /// not match the strict first-release JSON contract.
+    pub fn get_sumeragi_evidence_count(&self) -> Result<SumeragiEvidenceCountResponse> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence/count");
         let response = self.send_builder(
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES),
         )?;
-        let value =
-            Self::parse_json_ok_response(&response, "Failed to get sumeragi evidence count")?;
-        Ok(value)
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to get sumeragi evidence count",
+            " ",
+        )?;
+        let content_type = Self::response_content_type(&response);
+        if !Self::is_exact_json_content_type(content_type) {
+            return Err(eyre!(
+                "Failed to get sumeragi evidence count: invalid content-type `{content_type}` (expected {APPLICATION_JSON})"
+            ));
+        }
+        Self::parse_typed_json_ok_response(&response, "Failed to get sumeragi evidence count")
     }
-    /// GET `/v1/sumeragi/evidence` — list persisted evidence entries.
+    /// GET `/v1/sumeragi/evidence` — list committed evidence audit entries.
     ///
     /// # Errors
-    /// Returns an error if the request fails or the response is non-OK/invalid JSON.
-    pub fn get_sumeragi_evidence_list_json(
+    /// Returns an error if the filter is out of range, the request fails, or the
+    /// response is non-OK or violates the strict first-release JSON contract.
+    pub fn get_sumeragi_evidence_list(
         &self,
-        filter: &SumeragiEvidenceListFilter<'_>,
-    ) -> Result<norito::json::Value> {
+        filter: SumeragiEvidenceListFilter,
+    ) -> Result<SumeragiEvidenceListResponse> {
         let mut url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence");
-        filter.apply_to_url(&mut url);
+        filter.apply_to_url(&mut url)?;
         let req = self
             .operator_signed_request(HttpMethod::GET, url, Vec::new())?
-            .header("Accept", APPLICATION_JSON);
+            .header("Accept", APPLICATION_JSON)
+            .max_response_bytes(SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES);
         let response = self.send_builder(req)?;
-        let value =
-            Self::parse_json_ok_response(&response, "Failed to get sumeragi evidence list")?;
-        Ok(value)
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to get sumeragi evidence list",
+            " ",
+        )?;
+        let content_type = Self::response_content_type(&response);
+        if !Self::is_exact_json_content_type(content_type) {
+            return Err(eyre!(
+                "Failed to get sumeragi evidence list: invalid content-type `{content_type}` (expected {APPLICATION_JSON})"
+            ));
+        }
+        let decoded: SumeragiEvidenceListResponse =
+            Self::parse_typed_json_ok_response(&response, "Failed to get sumeragi evidence list")?;
+        validate_sumeragi_evidence_page(decoded.total, decoded.items.len(), filter)
+            .wrap_err("Failed to get sumeragi evidence list")?;
+        Ok(decoded)
     }
-    /// GET `/v1/sumeragi/evidence` — list persisted evidence entries (Norito wire).
+    /// GET `/v1/sumeragi/evidence` — list committed evidence entries (Norito wire).
     ///
-    /// Sets `Accept: application/x-norito` and decodes the `(total, Vec<EvidenceRecord>)` payload.
+    /// Sets `Accept: application/x-norito` and decodes the typed response.
     ///
     /// # Errors
-    /// Returns an error if the request fails, the response is non-OK, or Norito decoding fails.
+    /// Returns an error if the filter is out of range, the request fails, the
+    /// response is non-OK, or the Norito payload is invalid or unbounded.
     pub fn get_sumeragi_evidence_list_wire(
         &self,
-        filter: &SumeragiEvidenceListFilter<'_>,
-    ) -> Result<(u64, Vec<EvidenceRecord>)> {
+        filter: SumeragiEvidenceListFilter,
+    ) -> Result<SumeragiEvidenceListWireResponse> {
         let mut url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence");
-        filter.apply_to_url(&mut url);
+        filter.apply_to_url(&mut url)?;
         let req = self
             .operator_signed_request(HttpMethod::GET, url, Vec::new())?
-            .header("Accept", APPLICATION_NORITO);
+            .header("Accept", APPLICATION_NORITO)
+            .max_response_bytes(SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES);
         let response = self.send_builder(req)?;
         if response.status() != StatusCode::OK {
             return Err(eyre!(
@@ -10065,10 +10240,18 @@ impl Client {
                 std::str::from_utf8(response.body()).unwrap_or("")
             ));
         }
-        let decoded: (u64, Vec<EvidenceRecord>) =
-            decode_from_bytes(response.body()).map_err(|err| {
+        let content_type = Self::response_content_type(&response);
+        if !Self::is_norito_content_type(content_type) {
+            return Err(eyre!(
+                "Failed to decode sumeragi evidence list: invalid content-type `{content_type}` (expected {APPLICATION_NORITO})"
+            ));
+        }
+        let decoded: SumeragiEvidenceListWireResponse = decode_from_bytes(response.body())
+            .map_err(|err| {
                 eyre!("Failed to decode sumeragi evidence list Norito payload: {err}")
             })?;
+        validate_sumeragi_evidence_page(decoded.total, decoded.items.len(), filter)
+            .wrap_err("Failed to get sumeragi evidence list")?;
         Ok(decoded)
     }
 }
@@ -10081,788 +10264,68 @@ fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) ->
     builder.body(body).unwrap()
 }
 #[cfg(test)]
-mod offline_client_tests {
-    use super::{evidence_http_tests::*, *};
-    use crate::{http::Response as HttpResponse, http_default::RequestSnapshot};
-    use iroha_data_model::{
-        NetworkId,
-        account::AccountId,
-        asset::{AssetDefinitionId, AssetId},
-        block::consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout,
-            ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId, PROTOCOL_VERSION,
-            PayloadEncoding, QuorumCertificate,
-        },
-        domain::DomainId,
-        offline::{
-            KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2,
-            KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendTopUpAnchorV4,
-            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-            KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
-            KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
-            kagemusha_topup_anchor_leaf_hash_v2, kagemusha_topup_anchor_node_hash_v2,
-        },
-        proof::VerifyingKeyId,
-    };
-    use iroha_torii_shared::offline_api::{
-        OfflineOperationResult, OfflineOperationState, OfflineTopUpResult,
-    };
-    use norito::derive::NoritoSerialize;
-    use std::sync::{Arc, Mutex};
-    #[derive(NoritoSerialize)]
-    struct CommandFixture {
-        nonce: u64,
-    }
-    fn header<'a>(snapshot: &'a RequestSnapshot, name: &str) -> Option<&'a str> {
-        snapshot
-            .headers
-            .iter()
-            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
-    }
-    fn operation_reference(
-        operation_id: &str,
-        kind: OfflineOperationKind,
-    ) -> OfflineOperationReference {
-        OfflineOperationReference {
-            identity: operation_identity(operation_id, kind),
-            state: OfflineOperationState::Pending,
-            transaction_hash: canonical_transaction_hash_text(),
-            status_uri: format!("/v1/offline/operations/{operation_id}"),
-        }
-    }
-    fn operation_identity(
-        operation_id: &str,
-        kind: OfflineOperationKind,
-    ) -> OfflineOperationIdentity {
-        OfflineOperationIdentity {
-            operation_id: operation_id.to_owned(),
-            request_authority_digest: "33".repeat(32),
-            canonical_request_digest: "55".repeat(32),
+mod offline_cash_v1_client_tests {
+    use super::*;
+
+    fn pending_status(
+        operation_id: [u8; 32],
+        kind: OfflineCashOperationKindV1,
+    ) -> OfflineCashOperationStatusV1 {
+        OfflineCashOperationStatusV1 {
+            version: iroha_torii_shared::offline_api::OFFLINE_CASH_CHAIN_VERSION_V1,
+            operation_id,
             kind,
-            issued_at_ms: 42,
-            expires_at_ms: 300_042,
+            state: OfflineCashOperationStateV1::Pending,
+            result: None,
+            rejection: None,
         }
     }
-    fn canonical_transaction_hash_text() -> String {
-        format!("{}23", "22".repeat(31))
-    }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture keeps the applied result, anchor, compact QC, and proof mutually consistent"
-    )]
-    fn applied_topup_status_fixture() -> (OfflineOperationReference, OfflineOperationStatus) {
-        let operation_id = [0x11; 32];
-        let mut transaction_hash = [0x22; 32];
-        transaction_hash[31] = 0x23;
-        let network_id = NetworkId::from_genesis_hash(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"offline-client-topup")),
-        );
-        let payer_key = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
-            .expect("deterministic top-up payer key");
-        let payer = AccountId::new(payer_key.public_key().clone());
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("client", "offline").expect("fixture domain"),
-            "cash".parse().expect("fixture asset name"),
-        );
-        let amount = KagemushaScaledAmountV2::new(500, 2).expect("fixture amount");
-        let anchor = KagemushaRecursiveSpendTopUpAnchorV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
-            network_id,
-            payer: payer.clone(),
-            asset: AssetId::new(asset_definition.clone(), payer),
-            asset_scale: amount.scale,
-            amount,
-            initial_root: [0x31; 32],
-            finalized_root: [0x32; 32],
-            shield_leaf_index: 7,
-            current_note: KagemushaSpendableNoteDescriptorV2 {
-                network_id,
-                asset: asset_definition,
-                note_commitment: [0x33; 32],
-                spend_nullifier: [0x34; 32],
-                amount,
-            },
-            topup_operation_id: operation_id,
-            shield_verifier_id: VerifyingKeyId::new("halo2/ipa", "topup-shield-v2"),
-            shield_verifier_commitment: [0x35; 32],
-            artifact_binding: KagemushaRecursiveSpendArtifactBindingV4 {
-                version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-                generation: "kagemusha-release-v4-1".to_owned(),
-                manifest_sha256: [0x36; 32],
-            },
-            finalized_height: 42,
-            finalized_tx_hash: transaction_hash,
-            anchor_digest: [0; 32],
-        }
-        .finalize_digest()
-        .expect("valid top-up anchor");
-        let context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-            Hash::new(b"offline-client-topup-context"),
-        ));
-        let round = ConsensusRound {
-            context_id,
-            height: anchor.finalized_height,
-            view: 0,
-        };
-        let ordinary_writes_root = Hash::new(b"offline-client-ordinary-writes");
-        let topup_anchor_leaf =
-            kagemusha_topup_anchor_leaf_hash_v2(operation_id, anchor.anchor_digest)
-                .expect("valid top-up leaf");
-        let sibling = kagemusha_topup_anchor_leaf_hash_v2([0x41; 32], [0x42; 32])
-            .expect("valid sibling top-up leaf");
-        let topup_anchor_root = kagemusha_topup_anchor_node_hash_v2(0, topup_anchor_leaf, sibling);
-        let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
-            Hash::new(b"offline-client-parent-state"),
-            ExecutionCommitment::topup_post_state_root(2, ordinary_writes_root, topup_anchor_root),
-            ordinary_writes_root,
-            Some(topup_anchor_root),
-            2,
-            1,
-            Hash::new(b"offline-client-block-wire"),
-        )
-        .expect("valid execution commitment");
-        let finality_proof = KagemushaTopUpFinalityProofV2 {
-            version: KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2,
-            anchor: anchor.compact_ref().expect("valid anchor reference"),
-            commit_qc: KagemushaTopUpFinalityCompactQcV2 {
-                height_context: KagemushaTopUpFinalityHeightContextV2 {
-                    context_id,
-                    network_id,
-                    protocol_version: PROTOCOL_VERSION,
-                    height: anchor.finalized_height,
-                    epoch: 0,
-                    epoch_end_height: 100,
-                    next_epoch_snapshot: None,
-                    mode: ConsensusMode::Permissioned,
-                    parent_commit_qc: None,
-                    snapshot_bootstrap: None,
-                    nexus_amx_context_hash: Hash::new(b"offline-client-amx"),
-                    execution_policy_hash: Hash::new(b"offline-client-policy"),
-                    da_layout: DataAvailabilityLayout {
-                        encoding: PayloadEncoding::ReedSolomon16,
-                        chunk_size_bytes: 1024,
-                        data_shards: 1,
-                        parity_shards: 1,
-                        max_payload_size_bytes: 4096,
-                        max_chunk_count: 8,
-                    },
-                    leader_seed: [0x37; 32],
-                },
-                certificate: QuorumCertificate {
-                    round,
-                    proposal_round: round,
-                    phase: GlobalPhase::Commit,
-                    subject: BlockSubject {
-                        parent_block_hash: None,
-                        block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                            b"offline-client-block",
-                        )),
-                        payload_hash: Hash::new(b"offline-client-payload"),
-                    },
-                    execution_commitment,
-                    signers: vec![0],
-                    aggregate_signature: vec![0x38; 96],
-                },
-            },
-            anchor_path: KagemushaTopUpAnchorMerkleProofV2 {
-                leaf_index: 0,
-                leaf_count: 2,
-                siblings: vec![sibling.into()],
-            },
-        };
-        let operation_id = hex::encode(operation_id);
-        let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
-        (
-            reference,
-            OfflineOperationStatus::Applied {
-                identity: reference.identity.clone(),
-                result: OfflineOperationResult::TopUp(OfflineTopUpResult {
-                    transaction_hash: hex::encode(transaction_hash),
-                    finalized_block_height: anchor.finalized_height,
-                    anchor,
-                    finality_proof,
-                }),
-            },
-        )
-    }
-    fn topup_result_mut(status: &mut OfflineOperationStatus) -> &mut OfflineTopUpResult {
-        let OfflineOperationStatus::Applied {
-            result: OfflineOperationResult::TopUp(result),
-            ..
-        } = status
-        else {
-            panic!("fixture must be an applied top-up")
-        };
-        result
-    }
-    fn accepted_response(reference: &OfflineOperationReference) -> HttpResponse<Vec<u8>> {
-        HttpResponse::builder()
+
+    #[test]
+    fn accepted_status_must_match_operation_kind_and_location() {
+        let operation_id = [0x41; 32];
+        let status = pending_status(operation_id, OfflineCashOperationKindV1::TopUp);
+        let response = Response::builder()
             .status(StatusCode::ACCEPTED)
-            .header("content-type", APPLICATION_NORITO)
-            .header("location", &reference.status_uri)
-            .header("retry-after", "1")
-            .body(norito::to_bytes(reference).expect("encode operation reference"))
-            .expect("response")
-    }
-    fn universal_offline_capability() -> OfflineStatus {
-        OfflineStatus {
-            cash_handoff_capability:
-                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
-            required_bridge_abi_version:
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            ready: true,
-        }
-    }
-    #[test]
-    fn offline_capability_request_is_asset_neutral_and_exact() {
-        let capability = universal_offline_capability();
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", "application/json; charset=utf-8")
-            .body(norito::json::to_vec(&capability).expect("encode capability"))
+            .header(
+                http::header::LOCATION,
+                format!(
+                    "{OFFLINE_CASH_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+                    hex::encode(operation_id)
+                ),
+            )
+            .header(http::header::RETRY_AFTER, "1")
+            .body(Vec::new())
             .expect("response");
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let result = with_mock_http(respond_with(&snapshots, response), || {
-            client_with_base_url(base_url()).get_offline_capability()
-        })
-        .expect("offline capability response");
-        assert_eq!(result.cash_handoff_capability, "cash_handoff_v1");
-        assert_eq!(result.required_bridge_abi_version, 23);
-        assert_eq!(result.max_hops, 8);
-        assert!(result.ready);
-        let snapshots = snapshots.lock().expect("snapshots");
-        assert_eq!(snapshots.len(), 1);
-        let snapshot = &snapshots[0];
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), torii_uri::OFFLINE_READINESS);
-        assert!(snapshot.url.query().is_none());
-        assert_eq!(snapshot.max_response_bytes, OFFLINE_STATUS_MAX_BYTES);
-        assert_single_accept_header(snapshot, ACCEPT_NORITO_PREFERRED);
-    }
-    #[test]
-    fn offline_capability_rejects_non_universal_claims() {
-        let mut cases = Vec::new();
-        let mut wrong_capability = universal_offline_capability();
-        wrong_capability.cash_handoff_capability = "cash_handoff_v2".to_owned();
-        cases.push(wrong_capability);
-        let mut wrong_abi = universal_offline_capability();
-        wrong_abi.required_bridge_abi_version = 20;
-        cases.push(wrong_abi);
-        let mut wrong_hops = universal_offline_capability();
-        wrong_hops.max_hops = 7;
-        cases.push(wrong_hops);
-        let mut not_ready = universal_offline_capability();
-        not_ready.ready = false;
-        cases.push(not_ready);
-        for capability in cases {
-            let response = HttpResponse::builder()
-                .status(StatusCode::OK)
-                .header("content-type", APPLICATION_NORITO)
-                .body(norito::to_bytes(&capability).expect("encode capability"))
-                .expect("response");
-            let error = with_mock_http(
-                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-                || client_with_base_url(base_url()).get_offline_capability(),
-            )
-            .expect_err("non-universal capability claim must fail closed");
-            assert!(
-                error.to_string().contains("offline capability"),
-                "unexpected error: {error:#}"
-            );
-        }
-    }
-    #[test]
-    fn command_submission_uses_direct_norito_and_signed_idempotency_key() {
-        let fixture = CommandFixture { nonce: 7 };
-        let operation_bytes = [0x11; 32];
-        let operation_id = bytes_to_hex(&operation_bytes);
-        for (path, kind) in [
-            (torii_uri::OFFLINE_TOP_UP, OfflineOperationKind::TopUp),
-            (torii_uri::OFFLINE_REDEEM, OfflineOperationKind::Redeem),
-        ] {
-            let identity = operation_identity(&operation_id, kind);
-            let reference = operation_reference(&operation_id, kind);
-            let response = accepted_response(&reference);
-            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let returned = with_mock_http(respond_with(&snapshots, response), || {
-                client_with_base_url(base_url())
-                    .submit_offline_operation(path, &fixture, identity)
-            })
-            .expect("accepted operation");
-            assert_eq!(returned, reference);
-            let snapshots = snapshots.lock().expect("snapshots");
-            assert_eq!(snapshots.len(), 1);
-            let snapshot = &snapshots[0];
-            assert_eq!(snapshot.method, HttpMethod::POST);
-            assert_eq!(snapshot.url.path(), path);
-            assert_eq!(header(snapshot, "content-type"), Some(APPLICATION_NORITO));
-            assert_eq!(
-                header(snapshot, "idempotency-key"),
-                Some(operation_id.as_str())
-            );
-            assert_eq!(
-                snapshot.max_response_bytes,
-                OFFLINE_OPERATION_REFERENCE_MAX_BYTES
-            );
-            assert_single_accept_header(snapshot, ACCEPT_NORITO_PREFERRED);
-            assert_eq!(
-                snapshot.body,
-                norito::to_bytes(&fixture).expect("encode command fixture")
-            );
-        }
-    }
-    #[test]
-    fn command_submission_rejects_zero_ids_and_forged_response_binding() {
-        let fixture = CommandFixture { nonce: 7 };
-        let client = client_with_base_url(base_url());
-        let zero_id = "00".repeat(32);
-        let zero_error = client
-            .submit_offline_operation(
-                torii_uri::OFFLINE_TOP_UP,
-                &fixture,
-                operation_identity(&zero_id, OfflineOperationKind::TopUp),
-            )
-            .expect_err("zero operation id must fail before transport");
-        assert!(zero_error.to_string().contains("must be non-zero"));
-        let operation_bytes = [0x11; 32];
-        let operation_id = bytes_to_hex(&operation_bytes);
-        let mut zero_time_identity = operation_identity(&operation_id, OfflineOperationKind::TopUp);
-        zero_time_identity.issued_at_ms = 0;
-        let zero_time_error = client
-            .submit_offline_operation(
-                torii_uri::OFFLINE_TOP_UP,
-                &fixture,
-                zero_time_identity,
-            )
-            .expect_err("zero submission time must fail before transport");
-        assert!(zero_time_error.to_string().contains("issued_at_ms"));
-        let wrong_kind = operation_reference(&operation_id, OfflineOperationKind::Redeem);
-        let response = accepted_response(&wrong_kind);
-        let error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || {
-                client_with_base_url(base_url()).submit_offline_operation(
-                    torii_uri::OFFLINE_TOP_UP,
-                    &fixture,
-                    operation_identity(&operation_id, OfflineOperationKind::TopUp),
-                )
-            },
-        )
-        .expect_err("cross-kind forged response must fail closed");
-        assert!(error.to_string().contains("identity or initial state"));
-
-        let mut wrong_time = operation_reference(&operation_id, OfflineOperationKind::TopUp);
-        wrong_time.identity.issued_at_ms = 43;
-        wrong_time.identity.expires_at_ms = 300_043;
-        let response = accepted_response(&wrong_time);
-        let error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || {
-                client_with_base_url(base_url()).submit_offline_operation(
-                    torii_uri::OFFLINE_TOP_UP,
-                    &fixture,
-                    operation_identity(&operation_id, OfflineOperationKind::TopUp),
-                )
-            },
-        )
-        .expect_err("forged signed-request time must fail closed");
-        assert!(error.to_string().contains("identity"));
-    }
-    #[test]
-    fn operation_status_request_validates_path_id_and_payload_binding() {
-        let operation_id = "11".repeat(32);
-        let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
-        let newer_transaction_hash = format!("{}25", "22".repeat(31));
-        let status = OfflineOperationStatus::Pending {
-            identity: reference.identity.clone(),
-            transaction_hash: newer_transaction_hash.clone(),
-        };
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&status).expect("encode status"))
-            .expect("response");
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        with_mock_http(respond_with(&snapshots, response), || {
-            client_with_base_url(base_url()).poll_offline_operation_status(&mut reference)
-        })
-        .expect("operation status");
-        assert_eq!(reference.transaction_hash, newer_transaction_hash);
-        assert_eq!(reference.identity.issued_at_ms, 42);
-        let snapshots = snapshots.lock().expect("snapshots");
-        assert_eq!(
-            snapshots[0].url.path(),
-            format!("/v1/offline/operations/{operation_id}")
-        );
-        assert_eq!(
-            snapshots[0].max_response_bytes,
-            OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES
-        );
-        assert_single_accept_header(&snapshots[0], ACCEPT_NORITO_PREFERRED);
-        drop(snapshots);
-
-        let repeated_response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&status).expect("encode repeated status"))
-            .expect("response");
-        with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), repeated_response),
-            || client_with_base_url(base_url()).poll_offline_operation_status(&mut reference),
-        )
-        .expect("second poll uses the advanced pending cursor");
-
-        let changed_time = OfflineOperationStatus::Pending {
-            identity: OfflineOperationIdentity {
-                issued_at_ms: 43,
-                expires_at_ms: 300_043,
-                ..reference.identity.clone()
-            },
-            transaction_hash: format!("{}27", "22".repeat(31)),
-        };
-        let changed_time_response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&changed_time).expect("encode changed-time status"))
-            .expect("response");
-        let unchanged_reference = reference.clone();
-        let error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), changed_time_response),
-            || client_with_base_url(base_url()).poll_offline_operation_status(&mut reference),
-        )
-        .expect_err("a retry hash cannot change the request-bound timestamp");
-        assert!(error.to_string().contains("submission time"));
-        assert_eq!(reference, unchanged_reference);
-
-        let mut malformed_reference = reference.clone();
-        malformed_reference.identity.operation_id = "../redeem".to_owned();
-        malformed_reference.status_uri = "/v1/offline/operations/../redeem".to_owned();
-        let malformed = client_with_base_url(base_url())
-            .poll_offline_operation_status(&mut malformed_reference)
-            .expect_err("path injection must fail locally");
-        assert!(malformed.to_string().contains("64 lowercase hexadecimal"));
-
-        let zero_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let mut zero_reference = operation_reference(&"0".repeat(64), OfflineOperationKind::TopUp);
-        let zero_error = with_mock_http(
-            respond_with(
-                &zero_snapshots,
-                mk_response(StatusCode::INTERNAL_SERVER_ERROR, Vec::new(), None),
-            ),
-            || client_with_base_url(base_url()).poll_offline_operation_status(&mut zero_reference),
-        )
-        .expect_err("zero operation id must fail before transport");
-        assert!(zero_error.to_string().contains("must not be zero"));
-        assert!(zero_snapshots.lock().expect("snapshots").is_empty());
-    }
-    #[test]
-    fn operation_status_response_enforces_representation_size_before_decode() {
-        let operation_id = "11".repeat(32);
-        let original_reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
-        for (content_type, maximum_bytes, decode_error) in [
-            (
-                APPLICATION_NORITO,
-                OFFLINE_OPERATION_STATUS_MAX_BYTES,
-                "failed to decode Norito payload",
-            ),
-            (
-                APPLICATION_JSON,
-                OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
-                "failed to decode JSON payload",
-            ),
-        ] {
-            let exact_limit_response = HttpResponse::builder()
-                .status(StatusCode::OK)
-                .header("content-type", content_type)
-                .body(vec![0; maximum_bytes])
-                .expect("exact-limit response");
-            let mut exact_limit_reference = original_reference.clone();
-            let exact_limit_error = with_mock_http(
-                respond_with(&Arc::new(Mutex::new(Vec::new())), exact_limit_response),
-                || {
-                    client_with_base_url(base_url())
-                        .poll_offline_operation_status(&mut exact_limit_reference)
-                },
-            )
-            .expect_err("an invalid exact-limit body must reach the representation decoder");
-            assert!(exact_limit_error.to_string().contains(decode_error));
-            assert_eq!(exact_limit_reference, original_reference);
-
-            let oversized_response = HttpResponse::builder()
-                .status(StatusCode::OK)
-                .header("content-type", content_type)
-                .body(vec![0; maximum_bytes + 1])
-                .expect("oversized response");
-            let mut oversized_reference = original_reference.clone();
-            let oversized_error = with_mock_http(
-                respond_with(&Arc::new(Mutex::new(Vec::new())), oversized_response),
-                || {
-                    client_with_base_url(base_url())
-                        .poll_offline_operation_status(&mut oversized_reference)
-                },
-            )
-            .expect_err("an oversized body must fail before representation decoding");
-            let oversized_message = oversized_error.to_string();
-            assert!(
-                oversized_message
-                    .contains(&format!("response exceeds the {maximum_bytes}-byte limit"))
-            );
-            assert!(!oversized_message.contains("failed to decode"));
-            assert_eq!(oversized_reference, original_reference);
-        }
-    }
-    #[test]
-    fn operation_status_error_response_is_bounded_without_mutating_reference() {
-        let operation_id = "11".repeat(32);
-        let original_reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
-        let envelope = ErrorEnvelope::new(
-            "offline_service_unavailable",
-            "offline operation lookup is temporarily unavailable",
-        );
-        let response = HttpResponse::builder()
-            .status(StatusCode::SERVICE_UNAVAILABLE)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&envelope).expect("encode error envelope"))
-            .expect("bounded error response");
-        let mut bounded_reference = original_reference.clone();
-        let bounded_error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || {
-                client_with_base_url(base_url())
-                    .poll_offline_operation_status(&mut bounded_reference)
-            },
-        )
-        .expect_err("a non-success response must remain an error");
-        assert!(
-            bounded_error
-                .to_string()
-                .contains("offline_service_unavailable")
-        );
-        assert_eq!(bounded_reference, original_reference);
-
-        let oversized_response = HttpResponse::builder()
-            .status(StatusCode::SERVICE_UNAVAILABLE)
-            .header("content-type", APPLICATION_NORITO)
-            .body(vec![0; OFFLINE_OPERATION_STATUS_MAX_BYTES + 1])
-            .expect("oversized error response");
-        let mut oversized_reference = original_reference.clone();
-        let oversized_error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), oversized_response),
-            || {
-                client_with_base_url(base_url())
-                    .poll_offline_operation_status(&mut oversized_reference)
-            },
-        )
-        .expect_err("an oversized Norito error must fail before typed decoding");
-        assert!(oversized_error.to_string().contains(&format!(
-            "response exceeds the {}-byte limit",
-            OFFLINE_OPERATION_STATUS_MAX_BYTES
-        )));
-        assert_eq!(oversized_reference, original_reference);
-    }
-    #[test]
-    fn pending_operation_status_rejects_zero_issued_at_ms() {
-        let operation_id = "11".repeat(32);
-        let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
-        let status = OfflineOperationStatus::Pending {
-            identity: OfflineOperationIdentity {
-                issued_at_ms: 0,
-                ..reference.identity.clone()
-            },
-            transaction_hash: canonical_transaction_hash_text(),
-        };
-        let error = Client::observe_offline_operation_status(&status, &mut reference)
-            .expect_err("zero request issuance time must fail closed");
-        assert!(error.to_string().contains("issued_at_ms"));
-    }
-    #[test]
-    fn offline_operation_responses_reject_unmarked_transaction_hashes() {
-        let operation_id = "11".repeat(32);
-        let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
-        reference.transaction_hash = "22".repeat(32);
-        let response = accepted_response(&reference);
-        let reference_error = Client::validate_offline_operation_reference(
+        Client::validate_offline_cash_submission(
             &response,
-            &reference,
-            &operation_id,
-            OfflineOperationKind::TopUp,
-            42,
+            &status,
+            operation_id,
+            OfflineCashOperationKindV1::TopUp,
         )
-        .expect_err("a transaction hash without the Iroha marker must fail closed");
-        assert!(reference_error.to_string().contains("hash marker"));
-
-        let status = OfflineOperationStatus::Pending {
-            identity: reference.identity.clone(),
-            transaction_hash: "22".repeat(32),
-        };
-        let mut valid_reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
-        let status_error = Client::observe_offline_operation_status(&status, &mut valid_reference)
-            .expect_err("a status transaction hash without the Iroha marker must fail closed");
-        assert!(status_error.to_string().contains("hash marker"));
-    }
-    #[test]
-    fn applied_topup_status_binds_operation_anchor_proof_and_finality() {
-        let (mut reference, status) = applied_topup_status_fixture();
-        Client::observe_offline_operation_status(&status, &mut reference)
-            .expect("mutually bound applied top-up status");
-
-        let mut mismatched_transaction = status.clone();
-        topup_result_mut(&mut mismatched_transaction).transaction_hash =
-            format!("{}25", "22".repeat(31));
-        let error =
-            Client::observe_offline_operation_status(&mismatched_transaction, &mut reference)
-                .expect_err("terminal transaction must match the finalized anchor");
-        assert!(error.to_string().contains("not mutually bound"));
-
-        let mut mismatched_proof = status.clone();
-        topup_result_mut(&mut mismatched_proof)
-            .finality_proof
-            .anchor
-            .anchor_digest[0] ^= 1;
-        let error = Client::observe_offline_operation_status(&mismatched_proof, &mut reference)
-            .expect_err("finality proof must select the returned anchor");
+        .expect("request-bound pending status");
         assert!(
-            error
-                .to_string()
-                .contains("topup_finality.anchor_path.inclusion")
-        );
-
-        let mut forged_path = status.clone();
-        topup_result_mut(&mut forged_path)
-            .finality_proof
-            .anchor_path
-            .siblings[0][0] ^= 1;
-        let error = Client::observe_offline_operation_status(&forged_path, &mut reference)
-            .expect_err("every Merkle sibling must authenticate the finalized top-up");
-        assert!(error.to_string().contains("finality proof is invalid"));
-
-        let mut mismatched_height = status;
-        topup_result_mut(&mut mismatched_height).finalized_block_height += 1;
-        let error = Client::observe_offline_operation_status(&mismatched_height, &mut reference)
-            .expect_err("terminal height must match the anchor and QC context");
-        assert!(
-            error
-                .to_string()
-                .contains("topup_finality.terminal_binding")
-        );
-    }
-    #[test]
-    fn applied_operation_status_rejects_zero_finalized_height() {
-        let operation_id = "11".repeat(32);
-        let mut reference = operation_reference(&operation_id, OfflineOperationKind::Redeem);
-        let status = OfflineOperationStatus::Applied {
-            identity: reference.identity.clone(),
-            result: OfflineOperationResult::Redeem(
-                iroha_torii_shared::offline_api::OfflineRedeemResult {
-                    transaction_hash: canonical_transaction_hash_text(),
-                    finalized_block_height: 0,
-                },
-            ),
-        };
-        let error = Client::observe_offline_operation_status(&status, &mut reference)
-            .expect_err("zero applied finality height must fail closed");
-        assert!(error.to_string().contains("finalized_block_height"));
-    }
-    #[test]
-    fn applied_redemption_status_accepts_another_authorized_winner() {
-        let operation_id = "11".repeat(32);
-        let mut reference = operation_reference(&operation_id, OfflineOperationKind::Redeem);
-        let original_reference = reference.clone();
-        let status = OfflineOperationStatus::Applied {
-            identity: reference.identity.clone(),
-            result: OfflineOperationResult::Redeem(
-                iroha_torii_shared::offline_api::OfflineRedeemResult {
-                    transaction_hash: format!("{}25", "22".repeat(31)),
-                    finalized_block_height: 1,
-                },
-            ),
-        };
-        Client::observe_offline_operation_status(&status, &mut reference)
-            .expect("another authorized transaction may win global finality");
-        assert_eq!(reference, original_reference);
-    }
-    #[test]
-    fn negotiated_only_preferences_reject_opposite_kagemusha_representations() {
-        let capability = universal_offline_capability();
-        let json_capability_response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&capability).expect("encode JSON capability"))
-            .expect("JSON capability response");
-        let capability_error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), json_capability_response),
-            || {
-                client_with_base_url(base_url())
-                    .with_wire_format_preference(WireFormatPreference::NoritoOnly)
-                    .get_offline_capability()
-            },
-        )
-        .expect_err("NoritoOnly must reject a JSON capability response");
-        assert!(capability_error.to_string().contains("violates NoritoOnly"));
-
-        let fixture = CommandFixture { nonce: 7 };
-        let operation_bytes = [0x11; 32];
-        let operation_id = bytes_to_hex(&operation_bytes);
-        let accepted = operation_reference(&operation_id, OfflineOperationKind::TopUp);
-        let submission_error = with_mock_http(
-            respond_with(
-                &Arc::new(Mutex::new(Vec::new())),
-                accepted_response(&accepted),
-            ),
-            || {
-                client_with_base_url(base_url())
-                    .with_wire_format_preference(WireFormatPreference::JsonOnly)
-                    .submit_offline_operation(
-                        torii_uri::OFFLINE_TOP_UP,
-                        &fixture,
-                        operation_identity(&operation_id, OfflineOperationKind::TopUp),
-                    )
-            },
-        )
-        .expect_err("JsonOnly must reject a Norito accepted reference");
-        assert!(submission_error.to_string().contains("violates JsonOnly"));
-
-        let status = OfflineOperationStatus::Pending {
-            identity: reference.identity.clone(),
-            transaction_hash: format!("{}25", "22".repeat(31)),
-        };
-        let json_status_response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&status).expect("encode JSON status"))
-            .expect("JSON operation status response");
-        let original_reference = accepted.clone();
-        let mut status_reference = accepted;
-        let status_error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), json_status_response),
-            || {
-                client_with_base_url(base_url())
-                    .with_wire_format_preference(WireFormatPreference::NoritoOnly)
-                    .poll_offline_operation_status(&mut status_reference)
-            },
-        )
-        .expect_err("NoritoOnly must reject a JSON operation status");
-        assert!(status_error.to_string().contains("violates NoritoOnly"));
-        assert_eq!(status_reference, original_reference);
-    }
-    #[test]
-    fn negotiated_decoder_rejects_retired_and_missing_media_types() {
-        let capability = universal_offline_capability();
-        let body = norito::json::to_vec(&capability).expect("encode capability");
-        for content_type in [Some("text/json"), Some("application/octet-stream"), None] {
-            let response = mk_response(StatusCode::OK, body.clone(), content_type);
-            let error = Client::parse_negotiated_typed_response::<OfflineStatus>(
+            Client::validate_offline_cash_submission(
                 &response,
-                StatusCode::OK,
-                "offline response",
-                WireFormatPreference::NoritoPreferred,
+                &status,
+                operation_id,
+                OfflineCashOperationKindV1::Redemption,
             )
-            .expect_err("unadvertised representation must fail closed");
-            assert!(error.to_string().contains("invalid content-type"));
-        }
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn readiness_uses_only_the_offline_cash_v1_contract() {
+        let readiness = OfflineCashReadinessV1 {
+            cash_handoff_capability: iroha_data_model::offline::OFFLINE_CASH_HANDOFF_CAPABILITY_V1
+                .to_owned(),
+            wire_version: iroha_data_model::offline::OFFLINE_CASH_WIRE_VERSION_V1,
+            device_lifecycle_version:
+                iroha_data_model::offline::OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION_V1,
+            ready: true,
+        };
+        readiness.validate().expect("exact V1 readiness");
     }
 }
 #[cfg(test)]
@@ -11046,14 +10509,15 @@ mod status_tests {
 #[cfg(test)]
 mod evidence_filter_tests {
     use super::*;
+
     #[test]
     fn evidence_filter_apply_sets_expected_params() {
         let filter = SumeragiEvidenceListFilter {
             limit: Some(25),
             offset: Some(10),
-            kind: Some("SumeragiV2Equivocation"),
+            kind: Some(SumeragiEvidenceKind::SumeragiV2Equivocation),
         };
-        let params = filter.param_entries();
+        let params = filter.param_entries().expect("valid bounded filter");
         assert_eq!(
             params,
             vec![
@@ -11066,58 +10530,204 @@ mod evidence_filter_tests {
     #[test]
     fn evidence_filter_apply_no_params() {
         let filter = SumeragiEvidenceListFilter::default();
-        let params = filter.param_entries();
+        let params = filter.param_entries().expect("default filter is valid");
         assert!(params.is_empty());
     }
+
     #[test]
-    fn evidence_filter_param_entries_preserve_adversarial_kind_literal() {
-        let injected_kind = "SumeragiV2Equivocation&limit=999&offset=999";
-        let filter = SumeragiEvidenceListFilter {
-            limit: Some(1),
-            offset: Some(0),
-            kind: Some(injected_kind),
-        };
-        assert_eq!(
-            filter.param_entries(),
-            vec![
-                ("limit", "1".to_string()),
-                ("offset", "0".to_string()),
-                ("kind", injected_kind.to_string())
-            ]
+    fn evidence_filter_rejects_out_of_range_pagination() {
+        for limit in [0, SUMERAGI_EVIDENCE_LIST_MAX_LIMIT + 1, u32::MAX] {
+            let error = SumeragiEvidenceListFilter {
+                limit: Some(limit),
+                ..SumeragiEvidenceListFilter::default()
+            }
+            .validate()
+            .expect_err("out-of-range limit must fail locally");
+            assert!(error.to_string().contains("limit"));
+        }
+        for offset in [SUMERAGI_EVIDENCE_LIST_MAX_OFFSET + 1, u32::MAX] {
+            let error = SumeragiEvidenceListFilter {
+                offset: Some(offset),
+                ..SumeragiEvidenceListFilter::default()
+            }
+            .validate()
+            .expect_err("out-of-range offset must fail locally");
+            assert!(error.to_string().contains("offset"));
+        }
+        SumeragiEvidenceListFilter {
+            limit: Some(SUMERAGI_EVIDENCE_LIST_MAX_LIMIT),
+            offset: Some(SUMERAGI_EVIDENCE_LIST_MAX_OFFSET),
+            kind: Some(SumeragiEvidenceKind::SumeragiV2Equivocation),
+        }
+        .validate()
+        .expect("inclusive pagination boundaries must remain valid");
+    }
+
+    #[test]
+    fn evidence_page_validation_uses_exact_default_and_offset_bounds() {
+        validate_sumeragi_evidence_page(
+            50,
+            SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT as usize,
+            SumeragiEvidenceListFilter::default(),
+        )
+        .expect("exact default page bound");
+        assert!(
+            validate_sumeragi_evidence_page(
+                51,
+                SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT as usize + 1,
+                SumeragiEvidenceListFilter::default(),
+            )
+            .is_err(),
+            "omitted limit must retain the server's 50-item default"
+        );
+        validate_sumeragi_evidence_page(
+            2,
+            0,
+            SumeragiEvidenceListFilter {
+                offset: Some(10),
+                ..SumeragiEvidenceListFilter::default()
+            },
+        )
+        .expect("an offset beyond total may produce an empty page");
+        assert!(
+            validate_sumeragi_evidence_page(
+                2,
+                1,
+                SumeragiEvidenceListFilter {
+                    offset: Some(2),
+                    ..SumeragiEvidenceListFilter::default()
+                },
+            )
+            .is_err(),
+            "non-empty page end must not exceed total"
         );
     }
+}
+
+#[cfg(test)]
+mod evidence_json_contract_tests {
+    use super::*;
+
+    fn valid_record_json() -> String {
+        let context = "01".repeat(Hash::LENGTH);
+        let first = "23".repeat(Hash::LENGTH);
+        let second = "ab".repeat(Hash::LENGTH);
+        format!(
+            r#"{{"kind":"SumeragiV2Equivocation","class":"phase_vote","height":42,"view":7,"epoch":3,"signer":2,"context_id":"{context}","artifact_hash_1":"{first}","artifact_hash_2":"{second}","recorded_height":43,"recorded_view":8,"recorded_ms":1234,"consensus_admitted_height":43,"penalty_status":{{"status":"pending","details":null}}}}"#
+        )
+    }
+
     #[test]
-    fn evidence_filter_param_entries_preserve_control_characters_and_equals() {
-        let injected_kind = "SumeragiV2Equivocation=1%0a\r\nX-Iroha-Injected: yes";
-        let filter = SumeragiEvidenceListFilter {
-            limit: Some(u32::MAX),
-            offset: Some(u32::MAX - 1),
-            kind: Some(injected_kind),
-        };
+    fn evidence_json_dtos_accept_the_exact_contract() {
+        let record: SumeragiEvidenceAuditRecord =
+            norito::json::from_str(&valid_record_json()).expect("valid evidence audit record");
+        assert_eq!(record.kind, SumeragiEvidenceKind::SumeragiV2Equivocation);
+        assert_eq!(record.class, SumeragiEvidenceClass::PhaseVote);
+        assert_eq!(record.signer, 2);
         assert_eq!(
-            filter.param_entries(),
-            vec![
-                ("limit", u32::MAX.to_string()),
-                ("offset", (u32::MAX - 1).to_string()),
-                ("kind", injected_kind.to_string())
-            ]
+            record.penalty_status,
+            SumeragiEvidencePenaltyStatus::Pending
+        );
+        assert_eq!(record.context_id.to_string(), "01".repeat(Hash::LENGTH));
+
+        let list_json = format!(r#"{{"total":1,"items":[{}]}}"#, valid_record_json());
+        let list: SumeragiEvidenceListResponse =
+            norito::json::from_str(&list_json).expect("valid evidence list response");
+        assert_eq!(list.total, 1);
+        assert_eq!(list.items, vec![record]);
+        let encoded = norito::json::to_json(&list).expect("encode typed evidence list response");
+        let value: norito::json::Value =
+            norito::json::from_str(&encoded).expect("decode rendered response value");
+        let item = value["items"][0]
+            .as_object()
+            .expect("rendered evidence record object");
+        assert_eq!(item.len(), 14);
+    }
+
+    #[test]
+    fn evidence_record_rejects_missing_extra_and_wrong_typed_fields() {
+        let missing = valid_record_json().replace(r#","consensus_admitted_height":43"#, "");
+        assert!(
+            norito::json::from_str::<SumeragiEvidenceAuditRecord>(&missing).is_err(),
+            "consensus admission height is required"
+        );
+
+        let mut extra = valid_record_json();
+        assert_eq!(extra.pop(), Some('}'));
+        extra.push_str(r#","retired":true}"#);
+        assert!(
+            norito::json::from_str::<SumeragiEvidenceAuditRecord>(&extra).is_err(),
+            "unknown evidence record fields must fail"
+        );
+
+        let wrong_type = valid_record_json().replace(r#""height":42"#, r#""height":"42""#);
+        assert!(
+            norito::json::from_str::<SumeragiEvidenceAuditRecord>(&wrong_type).is_err(),
+            "numeric fields must reject strings"
         );
     }
+
     #[test]
-    fn evidence_filter_param_entries_preserve_zero_values_and_blank_kind() {
-        let filter = SumeragiEvidenceListFilter {
-            limit: Some(0),
-            offset: Some(0),
-            kind: Some(""),
-        };
-        assert_eq!(
-            filter.param_entries(),
-            vec![
-                ("limit", "0".to_string()),
-                ("offset", "0".to_string()),
-                ("kind", String::new())
-            ]
-        );
+    fn evidence_record_rejects_unknown_literals_and_noncanonical_hashes() {
+        for invalid in [
+            valid_record_json().replace("SumeragiV2Equivocation", "SumeragiV1Equivocation"),
+            valid_record_json().replace("phase_vote", "double_prepare"),
+            valid_record_json().replace(&"01".repeat(Hash::LENGTH), &"0A".repeat(Hash::LENGTH)),
+            valid_record_json().replace(&"01".repeat(Hash::LENGTH), "01"),
+        ] {
+            assert!(
+                norito::json::from_str::<SumeragiEvidenceAuditRecord>(&invalid).is_err(),
+                "invalid literal or hash must fail: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_penalty_status_is_closed_and_requires_exact_details() {
+        for status in [
+            r#"{"status":"pending","details":null}"#,
+            r#"{"status":"applied","details":{"height":44}}"#,
+            r#"{"status":"cancelled","details":{"height":45}}"#,
+        ] {
+            norito::json::from_str::<SumeragiEvidencePenaltyStatus>(status)
+                .expect("valid evidence penalty status");
+        }
+        for invalid in [
+            r#"{"status":"pending","details":{"height":44}}"#,
+            r#"{"status":"applied","details":null}"#,
+            r#"{"status":"cancelled","details":{}}"#,
+            r#"{"status":"unknown","details":null}"#,
+            r#"{"status":"applied","details":{"height":44,"extra":1}}"#,
+            r#"{"status":"pending","details":null,"extra":1}"#,
+        ] {
+            assert!(
+                norito::json::from_str::<SumeragiEvidencePenaltyStatus>(invalid).is_err(),
+                "invalid penalty status must fail: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_response_envelopes_are_exact() {
+        let count: SumeragiEvidenceCountResponse =
+            norito::json::from_str(r#"{"count":7}"#).expect("exact count response");
+        assert_eq!(count.count, 7);
+        for invalid in [r#"{}"#, r#"{"count":"7"}"#, r#"{"count":7,"extra":0}"#] {
+            assert!(
+                norito::json::from_str::<SumeragiEvidenceCountResponse>(invalid).is_err(),
+                "invalid count envelope must fail: {invalid}"
+            );
+        }
+        for invalid in [
+            r#"{"items":[]}"#,
+            r#"{"total":0}"#,
+            r#"{"total":0,"items":[],"extra":0}"#,
+        ] {
+            assert!(
+                norito::json::from_str::<SumeragiEvidenceListResponse>(invalid).is_err(),
+                "invalid list envelope must fail: {invalid}"
+            );
+        }
     }
 }
 #[cfg(test)]
@@ -13389,64 +12999,65 @@ mod evidence_http_tests {
             .expect("manifest build")
     }
     fn captured_evidence_list(
-        filter: &SumeragiEvidenceListFilter<'_>,
-    ) -> (Result<Value>, RequestSnapshot) {
-        capture_request(json_response(StatusCode::OK, r#"{"items":[]}"#), || {
-            client_with_base_url(base_url()).get_sumeragi_evidence_list_json(filter)
-        })
+        filter: SumeragiEvidenceListFilter,
+    ) -> (Result<SumeragiEvidenceListResponse>, RequestSnapshot) {
+        capture_request(
+            json_response(StatusCode::OK, r#"{"total":0,"items":[]}"#),
+            || client_with_base_url(base_url()).get_sumeragi_evidence_list(filter),
+        )
     }
     #[test]
-    fn get_evidence_count_fetches_json() {
+    fn get_evidence_count_fetches_typed_json() {
         let client = client_with_base_url(base_url());
-        let (json, snapshot) =
+        let (response, snapshot) =
             capture_request(json_response(StatusCode::OK, r#"{"count":7}"#), || {
-                client.get_sumeragi_evidence_count_json()
+                client.get_sumeragi_evidence_count()
             });
-        let json = json.expect("count request");
-        let count_value = json
-            .as_object()
-            .and_then(|map| map.get("count"))
-            .expect("count field");
-        match count_value {
-            norito::json::Value::Number(number) => {
-                assert_eq!(number.as_u64(), Some(7));
-            }
-            other => panic!("unexpected count payload: {other:?}"),
-        }
+        assert_eq!(response.expect("count request").count, 7);
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence/count");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES
+        );
         assert!(
             snapshot
                 .headers
                 .iter()
                 .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
                     && value == APPLICATION_JSON),
-            "evidence count JSON helper must request JSON"
+            "typed evidence count helper must request JSON"
         );
         super::tests::assert_operator_signature_headers(&snapshot);
     }
     #[test]
-    fn get_evidence_list_includes_query_params() {
+    fn get_evidence_list_fetches_typed_json_with_bounded_query() {
         let filter = SumeragiEvidenceListFilter {
             limit: Some(5),
             offset: Some(2),
-            kind: Some("SumeragiV2Equivocation"),
+            kind: Some(SumeragiEvidenceKind::SumeragiV2Equivocation),
         };
-        let (json, snapshot) = captured_evidence_list(&filter);
-        let json = json.expect("list request");
-        assert!(
-            json.as_object().is_some(),
-            "list response should decode as object"
+        let (response, snapshot) = captured_evidence_list(filter);
+        assert_eq!(
+            response.expect("list request"),
+            SumeragiEvidenceListResponse {
+                total: 0,
+                items: Vec::new(),
+            }
         );
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES
+        );
         assert!(
             snapshot
                 .headers
                 .iter()
                 .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
                     && value == APPLICATION_JSON),
-            "evidence list JSON helper must request JSON"
+            "typed evidence list helper must request JSON"
         );
         let params: HashMap<_, _> = snapshot
             .url
@@ -13461,83 +13072,23 @@ mod evidence_http_tests {
         );
     }
     #[test]
-    fn get_evidence_list_percent_encodes_adversarial_kind_filter() {
-        let injected_kind = "SumeragiV2Equivocation&limit=999&offset=999";
-        let filter = SumeragiEvidenceListFilter {
-            limit: Some(5),
-            offset: Some(2),
-            kind: Some(injected_kind),
-        };
-        let (result, snapshot) = captured_evidence_list(&filter);
-        result.expect("list request");
-        let params: Vec<_> = snapshot
-            .url
-            .query_pairs()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect();
-        assert_eq!(
-            params,
-            vec![
-                ("limit".to_string(), "5".to_string()),
-                ("offset".to_string(), "2".to_string()),
-                ("kind".to_string(), injected_kind.to_string()),
-            ],
-            "kind filter must not inject sibling query parameters"
-        );
-    }
-    #[test]
-    fn get_evidence_list_percent_encodes_control_character_kind_filter() {
-        let injected_kind = "SumeragiV2Equivocation=1%0a\r\nX-Iroha-Injected: yes";
-        let filter = SumeragiEvidenceListFilter {
-            limit: Some(u32::MAX),
-            offset: Some(u32::MAX - 1),
-            kind: Some(injected_kind),
-        };
-        let (result, snapshot) = captured_evidence_list(&filter);
-        result.expect("list request");
-        let raw_query = snapshot.url.query().expect("query string");
-        assert!(
-            !raw_query.contains('\r') && !raw_query.contains('\n'),
-            "query string must percent-encode control characters: {raw_query:?}"
-        );
-        let params: Vec<_> = snapshot
-            .url
-            .query_pairs()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect();
-        assert_eq!(
-            params,
-            vec![
-                ("limit".to_string(), u32::MAX.to_string()),
-                ("offset".to_string(), (u32::MAX - 1).to_string()),
-                ("kind".to_string(), injected_kind.to_string()),
-            ],
-            "control-character kind filter must remain a single query value"
-        );
-    }
-    #[test]
-    fn get_evidence_list_preserves_zero_and_blank_filter_params() {
-        let filter = SumeragiEvidenceListFilter {
-            limit: Some(0),
-            offset: Some(0),
-            kind: Some(""),
-        };
-        let (result, snapshot) = captured_evidence_list(&filter);
-        result.expect("list request");
-        let params: Vec<_> = snapshot
-            .url
-            .query_pairs()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect();
-        assert_eq!(
-            params,
-            vec![
-                ("limit".to_string(), "0".to_string()),
-                ("offset".to_string(), "0".to_string()),
-                ("kind".to_string(), String::new()),
-            ],
-            "zero and blank filter values must remain explicit query params"
-        );
+    fn get_evidence_list_rejects_invalid_pagination_before_transport() {
+        let client = client_with_base_url(base_url());
+        let error = client
+            .get_sumeragi_evidence_list(SumeragiEvidenceListFilter {
+                limit: Some(0),
+                ..SumeragiEvidenceListFilter::default()
+            })
+            .expect_err("zero limit must fail before transport");
+        assert!(error.to_string().contains("limit"));
+
+        let error = client
+            .get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter {
+                offset: Some(SUMERAGI_EVIDENCE_LIST_MAX_OFFSET + 1),
+                ..SumeragiEvidenceListFilter::default()
+            })
+            .expect_err("oversized offset must fail before transport");
+        assert!(error.to_string().contains("offset"));
     }
     #[test]
     fn get_evidence_count_rejects_malformed_success_payload() {
@@ -13547,7 +13098,7 @@ mod evidence_http_tests {
                 &Arc::new(Mutex::new(Vec::new())),
                 json_response(StatusCode::OK, r#"{"count":"#),
             ),
-            || client.get_sumeragi_evidence_count_json(),
+            || client.get_sumeragi_evidence_count(),
         )
         .expect_err("malformed successful count response should fail");
         let message = err.to_string();
@@ -13561,14 +13112,49 @@ mod evidence_http_tests {
         );
     }
     #[test]
+    fn evidence_json_reads_reject_missing_or_unnegotiated_media_types() {
+        for content_type in [None, Some("application/problem+json")] {
+            let client = client_with_base_url(base_url());
+            let count_error = with_mock_http(
+                respond_with(
+                    &Arc::new(Mutex::new(Vec::new())),
+                    mk_response(StatusCode::OK, br#"{"count":0}"#.to_vec(), content_type),
+                ),
+                || client.get_sumeragi_evidence_count(),
+            )
+            .expect_err("count response must use the negotiated JSON media type");
+            assert!(
+                count_error.to_string().contains("invalid content-type"),
+                "unexpected count error: {count_error}"
+            );
+
+            let list_error = with_mock_http(
+                respond_with(
+                    &Arc::new(Mutex::new(Vec::new())),
+                    mk_response(
+                        StatusCode::OK,
+                        br#"{"total":0,"items":[]}"#.to_vec(),
+                        content_type,
+                    ),
+                ),
+                || client.get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default()),
+            )
+            .expect_err("list response must use the negotiated JSON media type");
+            assert!(
+                list_error.to_string().contains("invalid content-type"),
+                "unexpected list error: {list_error}"
+            );
+        }
+    }
+    #[test]
     fn get_evidence_list_rejects_duplicate_key_success_payload() {
         let client = client_with_base_url(base_url());
         let err = with_mock_http(
             respond_with(
                 &Arc::new(Mutex::new(Vec::new())),
-                json_response(StatusCode::OK, r#"{"items":[],"items":[]}"#),
+                json_response(StatusCode::OK, r#"{"total":0,"items":[],"items":[]}"#),
             ),
-            || client.get_sumeragi_evidence_list_json(&SumeragiEvidenceListFilter::default()),
+            || client.get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default()),
         )
         .expect_err("duplicate-key successful list response should fail");
         let message = err.to_string();
@@ -13589,7 +13175,7 @@ mod evidence_http_tests {
                 &Arc::new(Mutex::new(Vec::new())),
                 json_response(StatusCode::INTERNAL_SERVER_ERROR, r#"{"error":1}"#),
             ),
-            || client.get_sumeragi_evidence_count_json(),
+            || client.get_sumeragi_evidence_count(),
         )
         .unwrap_err();
         assert!(
@@ -13637,13 +13223,14 @@ mod evidence_http_tests {
             height: context.height,
             view: 3,
         };
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"client evidence parent state"),
-            Hash::new(b"client evidence post state"),
-            Hash::new(b"client evidence ordinary writes"),
-            1,
-            Hash::new(b"client evidence block"),
-        );
+        let execution_commitment =
+            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new(b"client evidence parent state"),
+                Hash::new(b"client evidence post state"),
+                Hash::new(b"client evidence ordinary writes"),
+                1,
+                Hash::new(b"client evidence block"),
+            );
         let vote = |seed: u8| Vote {
             round,
             proposal_round: round,
@@ -13675,18 +13262,28 @@ mod evidence_http_tests {
         }
     }
     #[test]
-    fn get_evidence_list_wire_decodes_norito_payload() {
+    fn get_evidence_list_wire_decodes_shared_server_payload() {
+        use iroha_torii_shared::sumeragi_evidence_api::SumeragiEvidenceListWireResponse as SharedSumeragiEvidenceListWireResponse;
+
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let sample = sample_record();
-        let payload = (7_u64, vec![sample.clone()]);
-        let (total, items) = with_mock_http(
+        let payload = SharedSumeragiEvidenceListWireResponse {
+            total: 7,
+            items: vec![sample.clone()],
+        };
+        assert_eq!(
+            <SharedSumeragiEvidenceListWireResponse as norito::NoritoSerialize>::schema_hash(),
+            <SumeragiEvidenceListWireResponse as norito::NoritoSerialize>::schema_hash(),
+            "the server and client must negotiate one named Norito schema",
+        );
+        let response = with_mock_http(
             respond_with(&snapshots, norito_response(StatusCode::OK, &payload)),
-            || client.get_sumeragi_evidence_list_wire(&SumeragiEvidenceListFilter::default()),
+            || client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default()),
         )
         .expect("wire request");
-        assert_eq!(total, 7);
-        assert_eq!(items, vec![sample]);
+        assert_eq!(response.total, 7);
+        assert_eq!(response.items, vec![sample]);
         let snapshot = snapshots
             .lock()
             .expect("lock snapshots")
@@ -13695,6 +13292,10 @@ mod evidence_http_tests {
             .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES
+        );
         let headers: HashMap<_, _> = snapshot
             .headers
             .iter()
@@ -13713,10 +13314,13 @@ mod evidence_http_tests {
                 &Arc::new(Mutex::new(Vec::new())),
                 norito_response(
                     StatusCode::BAD_REQUEST,
-                    &(0_u64, Vec::<EvidenceRecord>::new()),
+                    &SumeragiEvidenceListWireResponse {
+                        total: 0,
+                        items: Vec::new(),
+                    },
                 ),
             ),
-            || client.get_sumeragi_evidence_list_wire(&SumeragiEvidenceListFilter::default()),
+            || client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default()),
         )
         .unwrap_err();
         assert!(
@@ -13724,6 +13328,29 @@ mod evidence_http_tests {
                 .contains("Failed to get sumeragi evidence list"),
             "unexpected error: {err}"
         );
+    }
+    #[test]
+    fn get_evidence_list_wire_rejects_missing_or_unnegotiated_media_type() {
+        let client = client_with_base_url(base_url());
+        let payload = SumeragiEvidenceListWireResponse {
+            total: 0,
+            items: Vec::new(),
+        };
+        let body = norito::to_bytes(&payload).expect("encode shared evidence response");
+        for content_type in [Some(APPLICATION_JSON), None] {
+            let err = with_mock_http(
+                respond_with(
+                    &Arc::new(Mutex::new(Vec::new())),
+                    mk_response(StatusCode::OK, body.clone(), content_type),
+                ),
+                || client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default()),
+            )
+            .expect_err("wire response must declare the negotiated Norito media type");
+            assert!(
+                err.to_string().contains("invalid content-type"),
+                "unexpected error for content type {content_type:?}: {err}"
+            );
+        }
     }
     include!("client/activation_evidence_tests.rs");
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
@@ -14562,7 +14189,7 @@ mod evidence_http_tests {
             );
         }
         type JsonRequest = fn(&Client) -> Result<Value>;
-        let requests: [(&str, &str, JsonRequest); 4] = [
+        let requests: [(&str, &str, JsonRequest); 3] = [
             (
                 "/v1/runtime/abi/active",
                 "runtime ABI active JSON",
@@ -14578,11 +14205,6 @@ mod evidence_http_tests {
                 "node capabilities JSON",
                 Client::get_node_capabilities_json,
             ),
-            (
-                "/v1/sumeragi/evidence/count",
-                "Sumeragi evidence count JSON",
-                Client::get_sumeragi_evidence_count_json,
-            ),
         ];
         for (path, expectation, request) in requests {
             let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
@@ -14591,11 +14213,20 @@ mod evidence_http_tests {
             result.expect(expectation);
             assert_json_accept(&snapshot, path);
         }
-        let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
-            let filter = SumeragiEvidenceListFilter::default();
-            client_with_base_url(base_url()).get_sumeragi_evidence_list_json(&filter)
-        });
-        result.expect("Sumeragi evidence list JSON");
+        let (result, snapshot) =
+            capture_request(json_response(StatusCode::OK, r#"{"count":0}"#), || {
+                client_with_base_url(base_url()).get_sumeragi_evidence_count()
+            });
+        result.expect("typed Sumeragi evidence count");
+        assert_json_accept(&snapshot, "/v1/sumeragi/evidence/count");
+        let (result, snapshot) = capture_request(
+            json_response(StatusCode::OK, r#"{"total":0,"items":[]}"#),
+            || {
+                client_with_base_url(base_url())
+                    .get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default())
+            },
+        );
+        result.expect("typed Sumeragi evidence list");
         assert_json_accept(&snapshot, "/v1/sumeragi/evidence");
     }
     fn assert_connection_refused_confirmation(seed: u8) {
@@ -16381,65 +16012,6 @@ impl Client {
         }?;
         finish_nonblocking_transaction_submission(disposition, hash)
     }
-    /// Submit one exact Kagemusha lifecycle archive through its dedicated durable route.
-    ///
-    /// The capability probe and write share the same HTTPS-or-direct-loopback transport policy.
-    /// Success requires an exact `202 Accepted` response, singleton transaction-identity headers,
-    /// and a bounded canonical receipt signed by `expected_receipt_signer` over both identities.
-    ///
-    /// # Errors
-    ///
-    /// Fails before network I/O if the prepared body differs from `transaction` or the configured
-    /// origin is unsafe. Transport ambiguity and every missing, malformed, untrusted, or
-    /// identity-mismatched acknowledgement fail closed.
-    pub fn submit_prepared_kagemusha_lifecycle_payload(
-        &self,
-        transaction: &SignedTransaction,
-        payload: &PreparedTransactionPayload,
-        expected_receipt_signer: &PublicKey,
-    ) -> Result<TransactionSubmissionReceipt> {
-        let canonical = Self::prepare_transaction_payload(transaction);
-        if canonical.hash() != payload.hash() || canonical.as_bytes() != payload.as_bytes() {
-            return Err(eyre!(
-                "prepared Kagemusha lifecycle body differs from the authorized transaction wire"
-            ));
-        }
-        let direct_loopback = secure_transaction_submission_uses_direct_loopback(&self.torii_url)?;
-        let url = join_torii_url(&self.torii_url, torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION);
-        self.ensure_transaction_submit_compatibility_with_transport(direct_loopback, true)?;
-
-        let mut headers = self.transaction_headers_without_content_type();
-        headers.retain(|name, _| {
-            !name.eq_ignore_ascii_case("accept") && !name.eq_ignore_ascii_case("prefer")
-        });
-        let mut request = DefaultRequestBuilder::new(HttpMethod::POST, url)
-            .headers(headers)
-            .header("Content-Type", APPLICATION_NORITO)
-            .header("Accept", APPLICATION_NORITO)
-            .body(payload.as_bytes().to_vec())
-            .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES);
-        if self.torii_request_timeout != Duration::ZERO {
-            request = request.timeout(self.torii_request_timeout);
-        }
-        if direct_loopback {
-            request = request.direct_loopback();
-        }
-        let transaction_hash = payload.hash();
-        let uncertain_context = format!(
-            "Kagemusha lifecycle submission outcome is uncertain for transaction \
-             {transaction_hash}; do not retry automatically"
-        );
-        let response = request
-            .build()?
-            .send()
-            .wrap_err_with(|| uncertain_context.clone())?;
-        let identity = SorafsOrderbookSubmissionIdentityV1 {
-            entrypoint_hash: transaction.hash_as_entrypoint(),
-            signed_transaction_hash: payload.hash(),
-        };
-        VerifiedTransactionResponseHandler::handle(&response, &identity, expected_receipt_signer)
-            .wrap_err_with(|| uncertain_context)
-    }
     /// Submit a prebuilt transaction with the asynchronous HTTP transport.
     ///
     /// Returns the submitted transaction's hash once Torii accepts the request.
@@ -17526,32 +17098,6 @@ impl Client {
     /// Returns an error if fetching the configuration fails or the payload cannot be decoded.
     pub fn get_confidential_gas_schedule(&self) -> Result<ConfidentialGasDTO> {
         self.get_config().map(|cfg| cfg.confidential_gas)
-    }
-    /// Send a request to change the configuration of a specified field.
-    ///
-    /// # Errors
-    /// If sending request or decoding fails
-    /// Update node configuration via `/v1/config`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails or response is non-OK.
-    pub fn set_config(&self, dto: &ConfigUpdateDTO) -> Result<()> {
-        // Prefer Norito's fast JSON writer when available
-        let body = norito::json::to_json(dto)
-            .map(std::string::String::into_bytes)
-            .wrap_err(format!("Failed to serialize {dto:?}"))?;
-        let url = join_torii_url(&self.torii_url, torii_uri::CONFIGURATION);
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::POST, url, body)?
-                .header(http::header::CONTENT_TYPE, APPLICATION_JSON),
-        )?;
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::ACCEPTED,
-            "Failed to post configuration with HTTP status",
-            ". ",
-        )?;
-        Ok(())
     }
     /// Gets network status seen from the peer
     ///
@@ -18973,8 +18519,8 @@ impl Client {
     /// Quote fees for an exact multisig-authority payload using its detached app-auth witness.
     ///
     /// The supplied signatures must be in canonical public-key order and include at least two
-    /// distinct members. This deliberately mirrors the stricter direct Kagemusha lifecycle
-    /// authorization floor instead of accepting a one-member weighted-threshold witness.
+    /// distinct members. This uses the strict hardware-lifecycle authorization floor instead of
+    /// accepting a one-member weighted-threshold witness.
     ///
     /// # Errors
     /// Returns an error if the payload, witness, multisig policy, request binding, signatures,
@@ -32736,295 +32282,6 @@ mod tests {
             TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES
         );
     }
-    fn verified_submission_response(
-        transaction: &SignedTransaction,
-        signer: &KeyPair,
-    ) -> HttpResponse<Vec<u8>> {
-        let entrypoint_hash = transaction.hash_as_entrypoint();
-        let signed_transaction_hash = transaction.hash();
-        let receipt = TransactionSubmissionReceipt::sign(
-            iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
-                entrypoint_hash: entrypoint_hash.clone(),
-                signed_transaction_hash: Some(signed_transaction_hash.clone()),
-                submitted_at_ms: 1,
-                submitted_at_height: 1,
-                signer: signer.public_key().clone(),
-            },
-            signer,
-        );
-        HttpResponse::builder()
-            .status(StatusCode::ACCEPTED)
-            .header("content-type", APPLICATION_NORITO)
-            .header(
-                TRANSACTION_ENTRYPOINT_HASH_HEADER,
-                entrypoint_hash.to_string(),
-            )
-            .header(
-                SIGNED_TRANSACTION_HASH_HEADER,
-                signed_transaction_hash.to_string(),
-            )
-            .body(norito::encode_canonical(&receipt).expect("canonical receipt"))
-            .expect("receipt response")
-    }
-    #[test]
-    fn verified_lifecycle_submit_pins_direct_transport_body_and_receipt() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let client = client_with_base_url(
-            Url::parse("http://localhost:19191/").expect("loopback client URL"),
-        );
-        let transaction = empty_transaction(&client);
-        let prepared = Client::prepare_transaction_payload(&transaction);
-        let receipt_signer = checked_random_keypair();
-        *client
-            .data_model_compatibility
-            .lock()
-            .expect("compatibility cache lock") = DataModelCompatibility::SubmitCompatible;
-        let responder = {
-            let store = Arc::clone(&store);
-            let transaction = transaction.clone();
-            let receipt_signer = receipt_signer.clone();
-            move |snapshot: RequestSnapshot| {
-                let capabilities = snapshot.url.path() == "/v1/node/capabilities";
-                store.lock().expect("snapshot lock").push(snapshot);
-                Ok(if capabilities {
-                    json_response(StatusCode::OK, &compatible_capabilities_body())
-                } else {
-                    verified_submission_response(&transaction, &receipt_signer)
-                })
-            }
-        };
-        let receipt = with_mock_http(responder, || {
-            client.submit_prepared_kagemusha_lifecycle_payload(
-                &transaction,
-                &prepared,
-                receipt_signer.public_key(),
-            )
-        })
-        .expect("exact verified lifecycle submission");
-        assert_eq!(
-            receipt.payload.entrypoint_hash,
-            transaction.hash_as_entrypoint()
-        );
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 2);
-        assert!(snapshots.iter().all(|snapshot| snapshot.direct_loopback));
-        assert_eq!(
-            snapshots[0].max_response_bytes,
-            NODE_CAPABILITIES_RESPONSE_MAX_BYTES
-        );
-        assert_eq!(snapshots[1].body, prepared.as_bytes());
-        assert_eq!(
-            snapshots[1].url.path(),
-            torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION
-        );
-        assert_single_accept_header(&snapshots[1], APPLICATION_NORITO);
-    }
-    #[test]
-    fn verified_lifecycle_submit_marks_transport_failure_outcome_uncertain() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let client = client_with_base_url(
-            Url::parse("http://localhost:19191/").expect("loopback client URL"),
-        );
-        let transaction = empty_transaction(&client);
-        let prepared = Client::prepare_transaction_payload(&transaction);
-        let receipt_signer = checked_random_keypair();
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let capabilities = snapshot.url.path() == "/v1/node/capabilities";
-                store.lock().expect("snapshot lock").push(snapshot);
-                if capabilities {
-                    Ok(json_response(
-                        StatusCode::OK,
-                        &compatible_capabilities_body(),
-                    ))
-                } else {
-                    Err(eyre!("synthetic lifecycle transport failure"))
-                }
-            }
-        };
-
-        let error = with_mock_http(responder, || {
-            client.submit_prepared_kagemusha_lifecycle_payload(
-                &transaction,
-                &prepared,
-                receipt_signer.public_key(),
-            )
-        })
-        .expect_err("post-dispatch transport failure must be outcome-uncertain");
-        let rendered = format!("{error:#}");
-        assert!(
-            rendered.contains(&format!(
-                "Kagemusha lifecycle submission outcome is uncertain for transaction {}; do not \
-                 retry automatically",
-                transaction.hash()
-            )),
-            "unexpected lifecycle submission error: {rendered}"
-        );
-        assert!(rendered.contains("synthetic lifecycle transport failure"));
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
-        assert_eq!(
-            snapshots[1].url.path(),
-            torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION
-        );
-    }
-    #[test]
-    fn verified_lifecycle_submit_marks_acknowledgement_validation_outcome_uncertain() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let client = client_with_base_url(
-            Url::parse("http://localhost:19191/").expect("loopback client URL"),
-        );
-        let transaction = empty_transaction(&client);
-        let prepared = Client::prepare_transaction_payload(&transaction);
-        let receipt_signer = checked_random_keypair();
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let capabilities = snapshot.url.path() == "/v1/node/capabilities";
-                store.lock().expect("snapshot lock").push(snapshot);
-                Ok(if capabilities {
-                    json_response(StatusCode::OK, &compatible_capabilities_body())
-                } else {
-                    HttpResponse::builder()
-                        .status(StatusCode::ACCEPTED)
-                        .header("content-type", APPLICATION_NORITO)
-                        .body(Vec::new())
-                        .expect("malformed acknowledgement fixture")
-                })
-            }
-        };
-
-        let error = with_mock_http(responder, || {
-            client.submit_prepared_kagemusha_lifecycle_payload(
-                &transaction,
-                &prepared,
-                receipt_signer.public_key(),
-            )
-        })
-        .expect_err("malformed post-POST acknowledgement must fail closed");
-        let rendered = format!("{error:#}");
-        assert!(
-            rendered.contains(&format!(
-                "Kagemusha lifecycle submission outcome is uncertain for transaction {}; do not \
-                 retry automatically",
-                transaction.hash()
-            )),
-            "unexpected lifecycle submission error: {rendered}"
-        );
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
-        assert_eq!(
-            snapshots[1].url.path(),
-            torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION
-        );
-    }
-    #[test]
-    fn verified_lifecycle_submit_rejects_unsafe_origins_before_io() {
-        for rejected in [
-            "http://example.com/",
-            "http://localhost.example/",
-            "ftp://localhost/",
-            "https://user@example.com/",
-            "https://example.com/?query=1",
-            "https://example.com/#fragment",
-        ] {
-            let client = client_with_base_url(Url::parse(rejected).expect("hostile URL"));
-            let transaction = empty_transaction(&client);
-            let prepared = Client::prepare_transaction_payload(&transaction);
-            let signer = checked_random_keypair();
-            let (result, snapshots) =
-                capture_requests(empty_response(StatusCode::ACCEPTED), || {
-                    client.submit_prepared_kagemusha_lifecycle_payload(
-                        &transaction,
-                        &prepared,
-                        signer.public_key(),
-                    )
-                });
-            assert!(result.is_err(), "unsafe origin must fail: {rejected}");
-            assert!(
-                snapshots.is_empty(),
-                "unsafe origin performed I/O: {rejected}"
-            );
-        }
-    }
-    #[test]
-    fn verified_transaction_response_rejects_missing_or_untrusted_evidence() {
-        let client = client_with_base_url(base_url());
-        let transaction = empty_transaction(&client);
-        let signer = checked_random_keypair();
-        let identity = SorafsOrderbookSubmissionIdentityV1 {
-            entrypoint_hash: transaction.hash_as_entrypoint(),
-            signed_transaction_hash: transaction.hash(),
-        };
-        let valid = verified_submission_response(&transaction, &signer);
-        VerifiedTransactionResponseHandler::handle(&valid, &identity, signer.public_key())
-            .expect("valid receipt response");
-
-        let empty = HttpResponse::builder()
-            .status(StatusCode::ACCEPTED)
-            .header("content-type", APPLICATION_NORITO)
-            .header(
-                TRANSACTION_ENTRYPOINT_HASH_HEADER,
-                identity.entrypoint_hash.to_string(),
-            )
-            .header(
-                SIGNED_TRANSACTION_HASH_HEADER,
-                identity.signed_transaction_hash.to_string(),
-            )
-            .body(Vec::new())
-            .unwrap();
-        assert!(
-            VerifiedTransactionResponseHandler::handle(&empty, &identity, signer.public_key())
-                .is_err()
-        );
-
-        let mut missing_header = verified_submission_response(&transaction, &signer);
-        missing_header
-            .headers_mut()
-            .remove(TRANSACTION_ENTRYPOINT_HASH_HEADER);
-        assert!(
-            VerifiedTransactionResponseHandler::handle(
-                &missing_header,
-                &identity,
-                signer.public_key(),
-            )
-            .is_err()
-        );
-
-        let wrong_signer = checked_random_keypair();
-        assert!(
-            VerifiedTransactionResponseHandler::handle(
-                &valid,
-                &identity,
-                wrong_signer.public_key(),
-            )
-            .is_err()
-        );
-        let mut noncanonical = verified_submission_response(&transaction, &signer);
-        noncanonical.body_mut().push(0);
-        assert!(
-            VerifiedTransactionResponseHandler::handle(
-                &noncanonical,
-                &identity,
-                signer.public_key(),
-            )
-            .is_err()
-        );
-        let ok = verified_submission_response(&transaction, &signer);
-        let (mut parts, body) = ok.into_parts();
-        parts.headers.append(
-            TRANSACTION_ENTRYPOINT_HASH_HEADER,
-            identity.entrypoint_hash.to_string().parse().unwrap(),
-        );
-        let duplicate = HttpResponse::from_parts(parts, body);
-        assert!(
-            VerifiedTransactionResponseHandler::handle(&duplicate, &identity, signer.public_key(),)
-                .is_err()
-        );
-    }
     fn empty_transaction(client: &Client) -> SignedTransaction {
         client.build_transaction(
             Vec::<InstructionBox>::new(),
@@ -34016,29 +33273,6 @@ mod tests {
                 "id=timer&entrypoint_hash=abcd&outcome=failure&from_height=10&to_height=20&limit=5&scan_limit_blocks=100"
             )
         );
-    }
-    #[test]
-    fn set_config_includes_operator_signature_headers_when_key_configured() {
-        let mut client = client_with_base_url(base_url());
-        client.set_operator_key_pair(checked_random_keypair());
-        let update = ConfigUpdateDTO {
-            logger: LoggerDTO {
-                level: iroha_data_model::Level::INFO,
-                filter: None,
-            },
-            network_acl: None,
-            network: None,
-            soranet_handshake: None,
-            transport: None,
-            compute_pricing: None,
-        };
-        let (result, snapshot) = capture_request(empty_response(StatusCode::BAD_REQUEST), || {
-            client.set_config(&update)
-        });
-        let _ = result.expect_err("mocked bad request response should fail");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), torii_uri::CONFIGURATION);
-        assert_operator_signature_headers(&snapshot);
     }
     #[test]
     fn debug_witness_json_uses_exact_operator_authentication_boundary() {
@@ -35919,13 +35153,14 @@ mod tests {
                 )),
                 payload_hash: Hash::new(b"client-qc-payload"),
             },
-            execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"client-qc-parent-state"),
-                Hash::new(b"client-qc-post-state"),
-                Hash::new(b"client-qc-writes"),
-                1,
-                Hash::new(b"client-qc-executed-wire"),
-            ),
+            execution_commitment:
+                ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new(b"client-qc-parent-state"),
+                    Hash::new(b"client-qc-post-state"),
+                    Hash::new(b"client-qc-writes"),
+                    1,
+                    Hash::new(b"client-qc-executed-wire"),
+                ),
         };
         let response = SumeragiV2QcResponse {
             highest_prepare_qc: Some(certificate),

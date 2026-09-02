@@ -5,7 +5,7 @@ use iroha_data_model::{
         AddSignatory, BurnBox, CustomInstruction, GrantBox, MintBox, RegisterBox,
         RemoveAssetKeyValue, RemoveKeyValueBox, RemoveSignatory, RevokeBox, SetAccountQuorum,
         SetAssetKeyValue, SetKeyValueBox, TransferAssetBatch, TransferBox, UnregisterBox,
-        offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
+        offline_cash_v1::{RedeemOfflineCashV1, TopUpOfflineCashV1},
         staking::RecordPublicLaneRewards,
     },
     prelude::InstructionBox,
@@ -206,24 +206,20 @@ fn collect_instruction_account_activities(
         );
         return;
     }
-    if let Some(topup) = any.downcast_ref::<TopUpKagemushaRecursiveV4>() {
+    if let Some(top_up) = any.downcast_ref::<TopUpOfflineCashV1>() {
+        push_unique(out, &top_up.request.payer, AccountActivityRole::Outgoing);
         push_unique(
             out,
-            topup.request.asset.account(),
-            AccountActivityRole::Outgoing,
+            &top_up.request.recipient,
+            AccountActivityRole::Incoming,
         );
         return;
     }
-    if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
+    if let Some(redeem) = any.downcast_ref::<RedeemOfflineCashV1>() {
         push_unique(
             out,
-            &redeem.request.recipient,
+            &redeem.request.voucher.statement.beneficiary,
             AccountActivityRole::Incoming,
-        );
-        push_unique(
-            out,
-            &redeem.request.authorization.authority,
-            AccountActivityRole::Outgoing,
         );
         return;
     }

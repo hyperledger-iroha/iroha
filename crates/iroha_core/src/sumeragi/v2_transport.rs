@@ -1120,8 +1120,13 @@ mod tests {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
+            let network_id = test_network_id(0x91);
+            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 7, &roster,
+                );
             let context = wire::HeightContext {
-                network_id: test_network_id(0x91),
+                network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 7,
@@ -1132,6 +1137,8 @@ mod tests {
                 snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
+                offline_cash_mint_finality_epoch_id,
+                offline_cash_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"transport-test-nexus-amx-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
@@ -1223,7 +1230,7 @@ mod tests {
                     phase: wire::GlobalPhase::Prepare,
                     subject: self.manifest.subject,
                     execution_commitment:
-                        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
                             Hash::new(b"transport fixture parent state"),
                             Hash::new(b"transport fixture post state"),
                             Hash::new(b"transport fixture ordinary writes"),

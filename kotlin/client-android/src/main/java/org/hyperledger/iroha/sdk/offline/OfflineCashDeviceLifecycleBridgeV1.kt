@@ -7,11 +7,12 @@ import java.security.MessageDigest
 /**
  * Fail-closed Android entry point for the Offline Cash V1 secure-device lifecycle.
  *
- * Android KeyMint single-use signing keys do not provide the atomic journal, trusted clock,
- * exact-next counter, or authenticated payment outbox required by Offline Cash V1. This bridge
- * therefore becomes available only when the loaded native bridge exposes the complete hardware
- * capability frame. Missing symbols, partial capabilities, malformed replies, and every native
- * failure leave the wallet online-only. There is no software backend or downgrade path.
+ * Android KeyMint single-use signing keys do not provide the atomic journal, authenticated
+ * multi-credit inbox, trusted clock, exact-next counter, hardware-epoch rotation, or authenticated
+ * payment outbox required by Offline Cash V1. This bridge therefore becomes available only when
+ * the loaded native bridge exposes the complete hardware capability frame. Missing symbols,
+ * partial capabilities, malformed replies, and every native failure leave the wallet online-only.
+ * There is no software backend or downgrade path.
  */
 class OfflineCashDeviceLifecycleBridgeV1 private constructor(
     private val endpoint: Endpoint?,
@@ -26,22 +27,50 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
         AVAILABLE,
     }
 
-    /** Exact operations in the sealed Core journal/outbox contract. */
+    /**
+     * Exact operations in Core's sealed reservation, transition, and recovery flow.
+     *
+     * The service reserves bytes before accepting authority, prepares a deterministic candidate
+     * before consuming a predecessor, commits that candidate exactly once, and recovers every
+     * terminal certificate and installed envelope byte-identically.
+     */
     enum class Operation(val code: Int) {
-        RESERVE_RECEIVE_INTENT_AND_SIGN(1),
-        RECOVER_RECEIVE_INTENT_AND_SIGNATURE(2),
-        BIND_RECEIVE_REQUEST_DIGEST(3),
-        PUBLISH_SEND_PAYMENT(4),
-        RECOVER_ACTIVE_INTENT(5),
-        CANCEL_EXPIRED_RECEIVE(6),
-        COMMIT_INTENT_EXACT_NEXT(7),
-        RECOVER_TERMINAL(8),
-        RECOVER_RECEIVE_TERMINAL(9),
-        SIGN_RECEIVE_ACKNOWLEDGEMENT(10),
-        STAGE_PAYMENT(11),
-        RECOVER_STAGED_PAYMENT_DIGEST(12),
-        PUBLISH_STAGED_PAYMENT(13),
-        RECOVER_PUBLISHED_PAYMENT(14),
+        READ_ACTIVE_HARDWARE_CREDENTIAL(1),
+        RESERVE_INBOX_BYTES_AND_ISSUE_ACCEPTANCE_TICKET(2),
+        RECOVER_ACCEPTANCE_TICKET(3),
+        STAGE_INBOUND_PAYMENT(4),
+        RECOVER_STAGED_INBOUND_PAYMENT(5),
+        RECOVER_INBOUND_INBOX_PAGE(6),
+        PREPARE_EXACT_NEXT_TRANSITION(7),
+        RECOVER_PREPARED_TRANSITION(8),
+        ABANDON_UNCOMMITTED_PREPARED_TRANSITION(9),
+        COMMIT_VERIFIED_CANDIDATE(10),
+        RECOVER_TERMINAL_COMMIT_CERTIFICATE(11),
+        INSTALL_FINAL_COMMIT_WRAPPER(12),
+        RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF(13),
+        SIGN_RECEIVE_ACKNOWLEDGEMENT(14),
+        RELEASE_OUTBOX_ENTRY(15),
+        READ_TRUSTED_TIME_OR_LEASE(16),
+    }
+
+    /** Exact secure-backend capabilities required by Offline Cash V1. */
+    enum class Capability(val mask: Int) {
+        EXACT_NEXT_PREDECESSOR_CONSUMPTION(1 shl 0),
+        ONE_USE_SUCCESSOR_AUTHORIZATION(1 shl 1),
+        ROLLBACK_RESISTANT_COUNTER_AND_JOURNAL(1 shl 2),
+        SEALED_TRANSITION_RECOVERY(1 shl 3),
+        ONE_USE_ACCEPTANCE_TICKETS(1 shl 4),
+        DURABLE_INBOX_RESERVATION(1 shl 5),
+        AUTHENTICATED_INBOUND_STAGING(1 shl 6),
+        AUTHORITATIVE_REPLAY_ROOT_RECOVERY(1 shl 7),
+        SENDER_OUTBOX_RESERVATION(1 shl 8),
+        AUTHENTICATED_DURABLE_RETRY_OUTBOX(1 shl 9),
+        ATOMIC_VERIFIED_CANDIDATE_COMMIT(1 shl 10),
+        RECOVERABLE_TERMINAL_COMMIT_CERTIFICATE(1 shl 11),
+        TRUSTED_TIME_OR_LEASE(1 shl 12),
+        OFFLINE_HARDWARE_EPOCH_ROTATION(1 shl 13),
+        ROLLBACK_SAFE_COUNTER_ROLLOVER(1 shl 14),
+        NO_SOFTWARE_FALLBACK(1 shl 15),
     }
 
     /** Stable native failure classification; only [SUCCESS] may carry authoritative bytes. */
@@ -49,7 +78,7 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
         SUCCESS(0),
         UNAVAILABLE(1),
         STALE_OR_CONCURRENT(2),
-        INTENT_MISMATCH(3),
+        BINDING_MISMATCH(3),
         TRUSTED_TIME_REJECTED(4),
         REJECTED(5),
         MISSING(6),
@@ -108,8 +137,7 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
      * Execute one exact canonical Core command.
      *
      * [requestId] is a non-zero 32-byte idempotency binding. [canonicalCommand] is the bounded,
-     * canonical Offline Cash V1 command archive for [operation]; the native backend must reject
-     * every legacy V4/V5 Kagemusha archive rather than relabel it as V1.
+     * canonical Offline Cash V1 command archive for [operation].
      */
     fun execute(
         operation: Operation,
@@ -149,25 +177,9 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
 
         private const val LIBRARY_NAME = "connect_norito_bridge"
         private const val ANDROID_PLATFORM_CODE = 1
-        private const val FEATURE_ONE_INTENT_SLOT = 1 shl 0
-        private const val FEATURE_EXACT_NEXT_COUNTER = 1 shl 1
-        private const val FEATURE_AUTHENTICATED_DURABLE_JOURNAL = 1 shl 2
-        private const val FEATURE_AUTHENTICATED_DURABLE_OUTBOX = 1 shl 3
-        private const val FEATURE_TRUSTED_TIME = 1 shl 4
-        private const val FEATURE_ATOMIC_RESERVE_AND_SIGN = 1 shl 5
-        private const val FEATURE_ATOMIC_COMMIT_AND_TERMINAL_RECEIPT = 1 shl 6
-        private const val FEATURE_TERMINAL_RECOVERY = 1 shl 7
-        private const val FEATURE_NO_SOFTWARE_FALLBACK = 1 shl 8
-        private const val REQUIRED_FEATURES =
-            FEATURE_ONE_INTENT_SLOT or
-                FEATURE_EXACT_NEXT_COUNTER or
-                FEATURE_AUTHENTICATED_DURABLE_JOURNAL or
-                FEATURE_AUTHENTICATED_DURABLE_OUTBOX or
-                FEATURE_TRUSTED_TIME or
-                FEATURE_ATOMIC_RESERVE_AND_SIGN or
-                FEATURE_ATOMIC_COMMIT_AND_TERMINAL_RECEIPT or
-                FEATURE_TERMINAL_RECOVERY or
-                FEATURE_NO_SOFTWARE_FALLBACK
+        private val REQUIRED_FEATURES = Capability.values().fold(0) { mask, capability ->
+            mask or capability.mask
+        }
         private const val ONLINE_ONLY_MESSAGE =
             "Offline Cash V1 requires a rollback-resistant secure journal/outbox backend; this device remains online-only"
 

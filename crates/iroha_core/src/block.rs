@@ -319,34 +319,14 @@ fn validate_block_transaction_admission(
     let private_settlement_carrier_binding =
         crate::private_settlement::carrier::signed_private_settlement_carrier_binding_v1(tx)
             .map_err(TransactionRejectionReason::Validation)?;
-    let kagemusha_operation_carrier_binding =
-        crate::kagemusha_operation::signed_kagemusha_operation_carrier_binding_v4(tx)
-            .map_err(TransactionRejectionReason::Validation)?;
-    let canary_wire_identity =
-        crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(tx)
-            .map_err(TransactionRejectionReason::Validation)?;
-    let lifecycle_entrypoint =
-        crate::smartcontracts::isi::offline::signed_lifecycle_entrypoint_context(tx)
-            .map_err(TransactionRejectionReason::Validation)?;
     state_tx.bind_privacy_transaction_intent_v1(privacy_intent_binding);
     state_tx.bind_private_settlement_carrier_v1(private_settlement_carrier_binding);
-    state_tx.bind_kagemusha_operation_carrier_v4(kagemusha_operation_carrier_binding);
     state_tx.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
-    let phase_index = u64::try_from(entrypoint_index).map_err(|_| {
+    state_tx.current_entrypoint_index = Some(u64::try_from(entrypoint_index).map_err(|_| {
         TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::InternalError(
-            "Kagemusha ordinary phase index exceeds u64".to_owned(),
+            "ordinary phase index exceeds u64".to_owned(),
         ))
-    })?;
-    state_tx.current_entrypoint_index = Some(phase_index);
-    state_tx.bind_kagemusha_operation_execution_locator_v4(Some(
-        crate::kagemusha_operation::KagemushaOperationExecutionLocatorV4::new(
-            crate::kagemusha_operation::KagemushaOperationExecutionPhaseV4::Ordinary,
-            phase_index,
-        ),
-    ));
-    state_tx.kagemusha_taira_canary_external_entrypoint = true;
-    state_tx.kagemusha_taira_canary_wire_identity = canary_wire_identity;
-    state_tx.kagemusha_release_lifecycle_entrypoint = lifecycle_entrypoint;
+    })?);
     StateBlock::validate_stateful_admission(tx, state_tx, Some(routing))
 }
 fn commit_stateful_admission_sequence(
@@ -444,22 +424,6 @@ mod overlay_error_tests {
         assert!(uses_live_batch_scheduler(&batch));
         let instructions = Executable::Instructions(Vec::<InstructionBox>::new().into());
         assert!(!uses_live_batch_scheduler(&instructions));
-    }
-    #[test]
-    fn prepared_overlay_admission_installs_exact_kagemusha_context() {
-        let source = include_str!("block.rs");
-        let start = source
-            .find("fn validate_block_transaction_admission(")
-            .expect("prepared-overlay admission helper");
-        let end = source[start..]
-            .find("fn commit_stateful_admission_sequence(")
-            .map(|offset| start + offset)
-            .expect("prepared-overlay admission helper boundary");
-        let helper = &source[start..end];
-        assert!(helper.contains("signed_kagemusha_operation_carrier_binding_v4(tx)"));
-        assert!(helper.contains("bind_kagemusha_operation_carrier_v4"));
-        assert!(helper.contains("KagemushaOperationExecutionPhaseV4::Ordinary"));
-        assert!(helper.contains("bind_kagemusha_operation_execution_locator_v4"));
     }
     #[test]
     fn governance_ballot_requires_an_exact_standalone_direct_entrypoint() {
@@ -12105,22 +12069,6 @@ pub(crate) mod valid {
             }
             let height = block.header().height().get();
             crate::sumeragi::witness::start_block();
-            let mut kagemusha_operation_reservations =
-                crate::kagemusha_operation::KagemushaOperationReservationBatchV4::new(
-                    height,
-                    crate::kagemusha_operation::KagemushaOperationExecutionPhaseV4::Ordinary,
-                );
-            crate::kagemusha_operation::reserve_kagemusha_operation_outcomes_v4(
-                state_block,
-                &mut kagemusha_operation_reservations,
-                0,
-                block.external_entrypoints_slice(),
-            )
-            .map_err(|error| {
-                Self::execution_context_error(format!(
-                    "failed to reserve Kagemusha operation outcomes: {error}"
-                ))
-            })?;
             let sequential_entrypoints = Self::sequential_entrypoints_for_live_execution(block);
             if let Some(entrypoints) = sequential_entrypoints {
                 Self::validate_and_record_entrypoints_sequential(
@@ -12138,22 +12086,6 @@ pub(crate) mod valid {
                             "QueuePlan pending application obligation could not be resolved: {error}"
                         ))
                     })?;
-                crate::kagemusha_operation::finalize_kagemusha_operation_outcomes_v4(
-                    state_block,
-                    kagemusha_operation_reservations,
-                    [
-                        crate::kagemusha_operation::KagemushaOperationResultSegmentV4::new(
-                            0,
-                            block.external_entrypoints_slice(),
-                            block.results().take(block.external_entrypoint_count()),
-                        ),
-                    ],
-                )
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "failed to finalize Kagemusha operation outcomes: {error}"
-                    ))
-                })?;
                 return Ok(());
             }
             // Prepare scheduling: collect transactions, their access sets, and hashes
@@ -15920,22 +15852,6 @@ pub(crate) mod valid {
                         "QueuePlan pending application obligation could not be resolved: {error}"
                     ))
                 })?;
-            crate::kagemusha_operation::finalize_kagemusha_operation_outcomes_v4(
-                state_block,
-                kagemusha_operation_reservations,
-                [
-                    crate::kagemusha_operation::KagemushaOperationResultSegmentV4::new(
-                        0,
-                        block.external_entrypoints_slice(),
-                        block.results().take(block.external_entrypoint_count()),
-                    ),
-                ],
-            )
-            .map_err(|error| {
-                Self::execution_context_error(format!(
-                    "failed to finalize Kagemusha operation outcomes: {error}"
-                ))
-            })?;
             Ok(())
         }
         /// Execute a locally constructed block whose admission checks were completed upstream.
@@ -16539,12 +16455,25 @@ pub(crate) mod valid {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
-            let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended();
+            let mint_finality_roster = crate::offline_cash_v1_test_fixtures::mint_finality_roster(
+                state.network_id,
+                0,
+                &roster,
+            );
+            let mint_finality_epoch_id = mint_finality_roster
+                .finality_epoch_id()
+                .expect("cache fixture mint-finality roster is canonical");
+            let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended(
+                mint_finality_roster.clone(),
+                None,
+            );
             let parent_context = wire::HeightContext {
                 network_id: state.network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
+                offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
+                offline_cash_mint_finality_epoch_roster: mint_finality_roster,
                 epoch_end_height: u64::MAX,
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
@@ -16576,15 +16505,16 @@ pub(crate) mod valid {
             let parent_wire = parent
                 .encode_wire()
                 .expect("cache fixture parent has canonical executed bytes");
-            let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"cache fixture parent state"),
-                Hash::new(b"cache fixture post state"),
-                Hash::new(b"cache fixture ordinary writes"),
-                u64::try_from(parent_wire.len()).expect("cache fixture parent length fits u64"),
-                parent
-                    .executed_block_wire_hash()
-                    .expect("cache fixture parent has a result-bearing wire hash"),
-            );
+            let execution_commitment =
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new(b"cache fixture parent state"),
+                    Hash::new(b"cache fixture post state"),
+                    Hash::new(b"cache fixture ordinary writes"),
+                    u64::try_from(parent_wire.len()).expect("cache fixture parent length fits u64"),
+                    parent
+                        .executed_block_wire_hash()
+                        .expect("cache fixture parent has a result-bearing wire hash"),
+                );
             let vote = wire::Vote {
                 round,
                 proposal_round: round,
@@ -16984,6 +16914,10 @@ pub(crate) mod valid {
                     },
                 )
                 .collect::<Vec<_>>();
+            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 7, &roster,
+                );
             let height_context = iroha_data_model::block::consensus_v2::HeightContext {
                 network_id,
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
@@ -17004,6 +16938,8 @@ pub(crate) mod valid {
                 quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
                     .expect("equal-vote fixture has a canonical quorum"),
                 roster,
+                offline_cash_mint_finality_epoch_id,
+                offline_cash_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"equal-vote-merge-nexus-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
@@ -18575,8 +18511,13 @@ pub(crate) mod valid {
                     },
                 )
                 .collect::<Vec<_>>();
+            let network_id = crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit");
+            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 0, &roster,
+                );
             let context = iroha_data_model::block::consensus_v2::HeightContext {
-                network_id: crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit"),
+                network_id,
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
                 height: signed.header().height().get(),
                 epoch: 0,
@@ -18588,6 +18529,8 @@ pub(crate) mod valid {
                 quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
                     .expect("fixture quorum"),
                 roster,
+                offline_cash_mint_finality_epoch_id,
+                offline_cash_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"v2 artifact-bound commit context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
@@ -18613,7 +18556,7 @@ pub(crate) mod valid {
                 view: signed.header().view_change_index(),
             };
             let execution =
-                iroha_data_model::block::consensus_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+                iroha_data_model::block::consensus_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
                     Hash::new(b"artifact-bound parent state"),
                     Hash::new(b"artifact-bound post state"),
                     Hash::new(b"artifact-bound ordinary writes"),
@@ -23024,8 +22967,13 @@ pub(crate) mod valid {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
+            let network_id = *state.network_id_ref();
+            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 0, &roster,
+                );
             let context = consensus_v2::HeightContext {
-                network_id: state.network_id_ref().clone(),
+                network_id,
                 protocol_version: consensus_v2::PROTOCOL_VERSION,
                 height: 3,
                 epoch: 0,
@@ -23036,6 +22984,8 @@ pub(crate) mod valid {
                 snapshot_bootstrap: Some(anchor),
                 quorum: consensus_v2::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
+                offline_cash_mint_finality_epoch_id,
+                offline_cash_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"snapshot validation Nexus/AMX"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: consensus_v2::DataAvailabilityLayout {
@@ -24475,7 +24425,8 @@ pub(crate) mod valid {
                 .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
                 .next_transaction()
                 .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
-                .build_raw();
+                .build_raw()
+                .expect("ordered genesis parameters form one valid raw transaction");
             let genesis = manifest
                 .build_and_sign(&genesis_keypair)
                 .expect("ordered genesis parameters should build");

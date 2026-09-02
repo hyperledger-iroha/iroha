@@ -83,9 +83,8 @@ the exact 9+3 invocation inventory without treating the fake tools as execution 
 
 ## Blocked Top-Level Fuzz Targets
 
-`fuzz/Cargo.toml` declares seven additional libFuzzer binaries: `da_replay_cache`, `proof_stream_transport`,
-`da_ingest_schema`, `soranet_handshake`, `lane_relay_envelope`, `kagemusha_v4_release_bundle_parser`, and
-`kagemusha_v4_recursive_topology`. The manifest is an explicit standalone cargo-fuzz workspace, but these targets are
+`fuzz/Cargo.toml` declares five additional libFuzzer binaries: `da_replay_cache`, `proof_stream_transport`,
+`da_ingest_schema`, `soranet_handshake`, and `lane_relay_envelope`. The manifest is an explicit standalone cargo-fuzz workspace, but these targets are
 not release-wired and must not be reported as executed. There is no tracked `fuzz/Cargo.lock`: the repository ignores
 nested lockfiles, and the root lock does not contain the standalone fuzz package, `libfuzzer-sys`, or `arbitrary`.
 Moving the package into the root workspace would therefore require changing the signed root `Cargo.lock`.
@@ -102,8 +101,7 @@ the exact `cargo-fuzz 0.13.2` version output, and separately binds the sanitizer
 `rustc -Vv` output (full commit hash/date, host, release, and LLVM version). It also requires an authenticated
 locking/offline Cargo proxy for cargo-fuzz's nested launches, binds an exact tracked `fuzz/Cargo.lock`
 path/mode/OID/digest/size descriptor, remeasures both locks and the source tree after each campaign, and places target,
-corpus, and crash outputs under the sibling
-`kagemusha-internal-validation-v1` runtime tree. Cargo-fuzz still calls `create_dir_all` for its default per-target
+corpus, and crash outputs under a sibling private runtime tree. Cargo-fuzz still calls `create_dir_all` for its default per-target
 artifact directory before applying the supplied libFuzzer artifact prefix; the production runner must create those
 two empty directories before making the source projection read-only and must reject any file appearing there.
 The runner's closed environment manifest must likewise place `TMPDIR`, `HOME`, `CARGO_HOME`, cache locks, and every
@@ -135,6 +133,5 @@ operation therefore needs its own closed-PATH proxy dispatch, exact executable c
 OS-isolation qualification before it can mint production evidence.
 
 TODO: obtain explicit authorization for the standalone fuzz-lock exception without modifying the repository's root
-`Cargo.lock`, implement and qualify the authenticated validation runner/Cargo proxy, and execute the two already
-receipt-wired Kagemusha targets with at least 10,000,000 executions each and zero crashes, timeouts, or out-of-memory
-exits.
+`Cargo.lock`, then implement and qualify the authenticated validation runner/Cargo proxy before treating these targets
+as release evidence.

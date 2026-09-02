@@ -48,7 +48,7 @@ async fn zk_vk_get_returns_record_with_key() {
     rec.key = Some(vk);
     rec.status = ConfidentialStatus::Active;
     rec.gas_schedule_id = Some("test_schedule".into());
-    rec.namespace = "offline_kagemusha".into();
+    rec.namespace = "offline_cash_v1".into();
     rec.owner_manifest_id = Some("builtin:confidential-unshield-v3".into());
     rec.activation_height = Some(10);
     rec.withdraw_height = Some(20);

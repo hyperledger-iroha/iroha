@@ -634,10 +634,10 @@ const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
 const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland.universal";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
 const LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY: u64 = 1_000_000_000;
-const LOCALNET_KAGEMUSHA_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
-const LOCALNET_KAGEMUSHA_ASSET_NAME: &str = "usd";
-const LOCALNET_KAGEMUSHA_ASSET_ALIAS: &str = "usd#wonderland.universal";
-const LOCALNET_KAGEMUSHA_INITIAL_QUANTITY: u64 = 100;
+const LOCALNET_OFFLINE_CASH_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+const LOCALNET_OFFLINE_CASH_ASSET_NAME: &str = "usd";
+const LOCALNET_OFFLINE_CASH_ASSET_ALIAS: &str = "usd#wonderland.universal";
+const LOCALNET_OFFLINE_CASH_INITIAL_QUANTITY: u64 = 100;
 const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
 /// Minimum faucet reserve before startup auto-mints a replenishment.
 const LOCALNET_FEE_ASSET_RESERVE_MIN: u128 = 1_000_000_000_000_000_000_000_000;
@@ -886,17 +886,17 @@ fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, Veri
 fn localnet_sample_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_SAMPLE_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
 }
-fn localnet_kagemusha_asset_literal() -> String {
-    LOCALNET_KAGEMUSHA_ASSET_ID.to_owned()
+fn localnet_offline_cash_asset_literal() -> String {
+    LOCALNET_OFFLINE_CASH_ASSET_ID.to_owned()
 }
-fn localnet_kagemusha_asset_spec_for_client(client_account_id: &AccountId) -> AssetSpec {
+fn localnet_offline_cash_asset_spec_for_client(client_account_id: &AccountId) -> AssetSpec {
     AssetSpec {
-        id: localnet_kagemusha_asset_literal(),
-        name: LOCALNET_KAGEMUSHA_ASSET_NAME.to_owned(),
-        alias: Some(LOCALNET_KAGEMUSHA_ASSET_ALIAS.to_owned()),
+        id: localnet_offline_cash_asset_literal(),
+        name: LOCALNET_OFFLINE_CASH_ASSET_NAME.to_owned(),
+        alias: Some(LOCALNET_OFFLINE_CASH_ASSET_ALIAS.to_owned()),
         owned_by: client_account_id.clone(),
         mint_to: client_account_id.clone(),
-        quantity: LOCALNET_KAGEMUSHA_INITIAL_QUANTITY,
+        quantity: LOCALNET_OFFLINE_CASH_INITIAL_QUANTITY,
     }
 }
 fn requested_localnet_asset_spec(asset_definition_id: &str) -> Result<AssetSpec> {
@@ -925,7 +925,9 @@ fn effective_localnet_assets_for_client(
     client_account_id: &AccountId,
 ) -> Vec<AssetSpec> {
     let mut assets = Vec::with_capacity(extra_assets.len() + 1);
-    assets.push(localnet_kagemusha_asset_spec_for_client(client_account_id));
+    assets.push(localnet_offline_cash_asset_spec_for_client(
+        client_account_id,
+    ));
     let default_client = localnet_client_account_id();
     for asset in extra_assets {
         let mut asset = asset.clone();
@@ -944,11 +946,11 @@ fn validate_localnet_asset_specs(extra_assets: &[AssetSpec]) -> Result<()> {
     let mut seen_asset_ids = BTreeSet::new();
     let mut seen_aliases = BTreeSet::new();
     seen_asset_ids.insert(
-        AssetDefinitionId::parse_address_literal(&localnet_kagemusha_asset_literal())
+        AssetDefinitionId::parse_address_literal(&localnet_offline_cash_asset_literal())
             .expect("built-in localnet asset definition id must parse"),
     );
     seen_aliases.insert(
-        LOCALNET_KAGEMUSHA_ASSET_ALIAS
+        LOCALNET_OFFLINE_CASH_ASSET_ALIAS
             .parse::<AssetDefinitionAlias>()
             .expect("built-in localnet asset alias must parse")
             .to_string(),
@@ -1026,7 +1028,7 @@ pub struct Args {
     #[arg(long, default_value_t = 0)]
     extra_accounts: u16,
     /// Register the optional sample asset and mint to the default account.
-    /// The built-in Kagemusha asset is always emitted.
+    /// The built-in Offline Cash V1 asset is always emitted.
     #[arg(long, default_value_t = false)]
     sample_asset: bool,
     /// Register additional asset definition IDs owned by the generated client signer.
@@ -3780,7 +3782,7 @@ fn append_localnet_contract_permissions_for_client(
     client_account_id: &AccountId,
 ) -> RawGenesisTransaction {
     let enact_governance: Permission = CanEnactGovernance.into();
-    let manage_offline_escrow = Permission::new("CanManageOfflineEscrow".into(), Json::new(()));
+    let manage_offline_reserve = Permission::new("CanManageOfflineReserve".into(), Json::new(()));
     let manage_verifying_keys = Permission::new("CanManageVerifyingKeys".into(), Json::new(()));
     let manage_account_alias: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -3815,7 +3817,7 @@ fn append_localnet_contract_permissions_for_client(
     push_unique(manage_account_alias, client_account_id.clone());
     push_unique(publish_manifest, client_account_id.clone());
     if *client_account_id != *ALICE_ID {
-        push_unique(manage_offline_escrow, client_account_id.clone());
+        push_unique(manage_offline_reserve, client_account_id.clone());
     }
     let mut builder = genesis.into_builder();
     for (permission, destination) in grants {
@@ -5836,8 +5838,8 @@ fn write_localnet_readme(
             "- Owner-held genesis signing key: `{genesis_private_key}`\n",
             "- Client config: `{client_config}`\n\n",
             "## Built-in App API bootstrap\n\n",
-            "- Kagemusha asset definition: `{kagemusha_asset}`\n",
-            "- Kagemusha asset alias: `{kagemusha_alias}`\n",
+            "- Offline Cash V1 asset definition: `{offline_cash_asset}`\n",
+            "- Offline Cash V1 asset alias: `{offline_cash_alias}`\n",
             "- Ephemeral operator authority: `{operator_account_id}`\n",
             "- Ephemeral onboarding authority: `{onboarding_account_id}`\n",
             "- Operator signer sidecar: `{operator_signer_key}`\n",
@@ -5845,7 +5847,7 @@ fn write_localnet_readme(
             "- Onboarding API token sidecar: `{onboarding_token_file}`\n",
             "- Secret-free alias setup intent: `{alias_setup_intent}`\n",
             "- Offline escrow account: deterministic account derived from the exact genesis network id and asset definition\n",
-            "- Generated peer configs enable structural `torii.account_onboarding` and Kagemusha escrow routing\n",
+            "- Generated peer configs enable structural `torii.account_onboarding` and Offline Cash V1 reserve routing\n",
             "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
             "Run `kagami docker` without `--seed` against this directory to validate the exact ",
             "validator identities, PoPs, signed body, verifier key, and expected hash as one ",
@@ -5874,8 +5876,8 @@ fn write_localnet_readme(
         genesis_public_key = genesis_public_key_path.display(),
         genesis_private_key = genesis_private_key_path.display(),
         client_config = client_config_path.display(),
-        kagemusha_asset = LOCALNET_KAGEMUSHA_ASSET_ID,
-        kagemusha_alias = LOCALNET_KAGEMUSHA_ASSET_ALIAS,
+        offline_cash_asset = LOCALNET_OFFLINE_CASH_ASSET_ID,
+        offline_cash_alias = LOCALNET_OFFLINE_CASH_ASSET_ALIAS,
         operator_account_id = operator_account_id,
         onboarding_account_id = onboarding_account_id,
         operator_signer_key = runtime_bundle.operator_signer_key.display(),
@@ -6504,12 +6506,12 @@ mod tests {
     }
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn generated_localnet_bootstraps_universal_kagemusha_asset() {
+    fn generated_localnet_bootstraps_universal_offline_cash_asset() {
         let opts = LocalnetOptions {
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some("kagemusha-bootstrap".to_owned()),
+            seed: Some("offline-cash-bootstrap".to_owned()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 29080,
@@ -6521,21 +6523,21 @@ mod tests {
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let manifest = localnet_genesis_for_opts(&opts);
-        let kagemusha_asset_id =
-            AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
-                .expect("Kagemusha asset id");
-        let kagemusha_alias = LOCALNET_KAGEMUSHA_ASSET_ALIAS
+        let offline_cash_asset_id =
+            AssetDefinitionId::parse_address_literal(LOCALNET_OFFLINE_CASH_ASSET_ID)
+                .expect("Offline Cash V1 asset id");
+        let offline_cash_alias = LOCALNET_OFFLINE_CASH_ASSET_ALIAS
             .parse::<AssetDefinitionAlias>()
-            .expect("Kagemusha asset alias");
+            .expect("Offline Cash V1 asset alias");
         let client_account_id = localnet_client_account_id();
         let (genesis_public_key, _) =
             generate_genesis_key_pair(opts.seed.as_ref().map(String::as_bytes), GENESIS_SEED)
                 .expect("test localnet genesis key generation should succeed");
         let genesis_account_id = AccountId::new(genesis_public_key);
-        let expected_explicit_manage_offline_escrow_grants =
+        let expected_explicit_manage_offline_reserve_grants =
             usize::from(client_account_id != *ALICE_ID);
         let expected_mint_destination =
-            AssetId::new(kagemusha_asset_id.clone(), client_account_id.clone());
+            AssetId::new(offline_cash_asset_id.clone(), client_account_id.clone());
         let has_definition = manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
@@ -6544,26 +6546,26 @@ mod tests {
                     matches!(
                         register,
                         RegisterBox::AssetDefinition(register)
-                            if register.object().id == kagemusha_asset_id
+                            if register.object().id == offline_cash_asset_id
                     )
                 })
         });
         assert!(
             has_definition,
-            "localnet must register the built-in asset used by universal Kagemusha protocols"
+            "localnet must register the built-in Offline Cash V1 asset"
         );
         let has_alias_binding = manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
                 .downcast_ref::<SetAssetDefinitionAlias>()
                 .is_some_and(|set_alias| {
-                    set_alias.asset_definition_id() == &kagemusha_asset_id
-                        && set_alias.alias().as_ref() == Some(&kagemusha_alias)
+                    set_alias.asset_definition_id() == &offline_cash_asset_id
+                        && set_alias.alias().as_ref() == Some(&offline_cash_alias)
                 })
         });
         assert!(
             has_alias_binding,
-            "localnet must bind the built-in Kagemusha asset alias"
+            "localnet must bind the built-in Offline Cash V1 asset alias"
         );
         let has_initial_mint = manifest.instructions().any(|instruction| {
             instruction
@@ -6578,7 +6580,7 @@ mod tests {
         });
         assert!(
             has_initial_mint,
-            "localnet must mint the built-in Kagemusha asset to the client signer"
+            "localnet must mint the built-in Offline Cash V1 asset to the client signer"
         );
         let has_owner_transfer = manifest.instructions().any(|instruction| {
             instruction
@@ -6586,7 +6588,7 @@ mod tests {
                 .downcast_ref::<TransferBox>()
                 .is_some_and(|transfer| match transfer {
                     TransferBox::AssetDefinition(transfer_asset) => {
-                        transfer_asset.object() == &kagemusha_asset_id
+                        transfer_asset.object() == &offline_cash_asset_id
                             && transfer_asset.destination() == &client_account_id
                     }
                     _ => false,
@@ -6594,12 +6596,12 @@ mod tests {
         });
         assert!(
             has_owner_transfer,
-            "localnet must transfer Kagemusha asset ownership to the client signer"
+            "localnet must transfer Offline Cash V1 asset ownership to the client signer"
         );
         let mut has_alias_manage = false;
         let mut has_manifest_publish = false;
-        let mut manage_offline_escrow_grants = 0usize;
-        let mut total_manage_offline_escrow_grants = 0usize;
+        let mut manage_offline_reserve_grants = 0usize;
+        let mut total_manage_offline_reserve_grants = 0usize;
         let mut genesis_manage_verifying_keys_grants = 0usize;
         let mut client_manage_verifying_keys_grants = 0usize;
         let mut total_manage_verifying_keys_grants = 0usize;
@@ -6611,9 +6613,9 @@ mod tests {
                 continue;
             };
             let permission_name: &str = grant_permission.object().name();
-            if permission_name == "CanManageOfflineEscrow" {
-                total_manage_offline_escrow_grants =
-                    total_manage_offline_escrow_grants.saturating_add(1);
+            if permission_name == "CanManageOfflineReserve" {
+                total_manage_offline_reserve_grants =
+                    total_manage_offline_reserve_grants.saturating_add(1);
             }
             if permission_name == "CanManageVerifyingKeys" {
                 total_manage_verifying_keys_grants =
@@ -6630,8 +6632,8 @@ mod tests {
             }
             match permission_name {
                 "CanManageAccountAlias" => has_alias_manage = true,
-                "CanManageOfflineEscrow" => {
-                    manage_offline_escrow_grants = manage_offline_escrow_grants.saturating_add(1);
+                "CanManageOfflineReserve" => {
+                    manage_offline_reserve_grants = manage_offline_reserve_grants.saturating_add(1);
                 }
                 "CanManageVerifyingKeys" => {
                     client_manage_verifying_keys_grants =
@@ -6650,12 +6652,12 @@ mod tests {
             "localnet client signer must be able to publish onboarding manifests"
         );
         assert_eq!(
-            manage_offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
-            "localnet must only emit an explicit CanManageOfflineEscrow grant when the client signer is not Alice"
+            manage_offline_reserve_grants, expected_explicit_manage_offline_reserve_grants,
+            "localnet must only emit an explicit CanManageOfflineReserve grant when the client signer is not Alice"
         );
         assert_eq!(
-            total_manage_offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
-            "localnet genesis must not emit duplicate explicit CanManageOfflineEscrow grants"
+            total_manage_offline_reserve_grants, expected_explicit_manage_offline_reserve_grants,
+            "localnet genesis must not emit duplicate explicit CanManageOfflineReserve grants"
         );
         assert_eq!(
             genesis_manage_verifying_keys_grants, 1,
@@ -6677,7 +6679,7 @@ mod tests {
         );
     }
     #[test]
-    fn permissioned_localnet_genesis_deduplicates_offline_escrow_grant() {
+    fn permissioned_localnet_genesis_deduplicates_offline_reserve_grant() {
         let opts = LocalnetOptions {
             sora_profile: None,
             perf_profile: None,
@@ -6695,9 +6697,9 @@ mod tests {
         };
         let manifest = localnet_genesis_for_opts(&opts);
         let client_account_id = localnet_client_account_id();
-        let expected_explicit_manage_offline_escrow_grants =
+        let expected_explicit_manage_offline_reserve_grants =
             usize::from(client_account_id != *ALICE_ID);
-        let offline_escrow_grants = manifest
+        let offline_reserve_grants = manifest
             .instructions()
             .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
             .filter_map(|grant| match grant {
@@ -6705,11 +6707,13 @@ mod tests {
                 _ => None,
             })
             .filter(|grant_permission| grant_permission.destination() == &client_account_id)
-            .filter(|grant_permission| grant_permission.object().name() == "CanManageOfflineEscrow")
+            .filter(|grant_permission| {
+                grant_permission.object().name() == "CanManageOfflineReserve"
+            })
             .count();
         assert_eq!(
-            offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
-            "permissioned localnet genesis must not duplicate the offline escrow manager grant and must skip the redundant Alice bootstrap grant"
+            offline_reserve_grants, expected_explicit_manage_offline_reserve_grants,
+            "permissioned localnet genesis must not duplicate the Offline Cash reserve manager grant and must skip the redundant Alice bootstrap grant"
         );
     }
     #[test]
@@ -6723,7 +6727,7 @@ mod tests {
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some("kagemusha-config".to_owned()),
+            seed: Some("offline-cash-config".to_owned()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 29080,
@@ -8489,7 +8493,7 @@ mod tests {
             ),
             (
                 "built-in-collision",
-                vec![asset(localnet_kagemusha_asset_literal(), None)],
+                vec![asset(localnet_offline_cash_asset_literal(), None)],
             ),
             (
                 "duplicate-alias",
@@ -9748,7 +9752,7 @@ mod tests {
         assert!(contents.contains(&format!("- Base seed BLAKE3 fingerprint: `{fingerprint}`")));
         assert!(!contents.contains("- Base seed: `Iroha`"));
         assert!(!contents.contains("`Iroha`"));
-        assert!(contents.contains(LOCALNET_KAGEMUSHA_ASSET_ALIAS));
+        assert!(contents.contains(LOCALNET_OFFLINE_CASH_ASSET_ALIAS));
         assert!(contents.contains("genesis.expected_hash"));
         assert!(contents.contains("`kagami docker` without `--seed`"));
         assert!(!contents.contains("IROHA_GENESIS_SIGNED_FILE"));

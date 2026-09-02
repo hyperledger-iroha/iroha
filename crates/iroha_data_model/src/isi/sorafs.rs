@@ -1,9 +1,7 @@
 use super::*;
 use crate::musubi::ArchiveId;
 use crate::sorafs::{
-    anonymity::{
-        SorafsAnonymousJurorCandidacyV1, SorafsAnonymousServiceNoteV1, SorafsCitizenBondV1,
-    },
+    anonymity::SorafsCitizenBondV1,
     capacity::{
         CapacityDeclarationRecord, CapacityDisputeId, CapacityDisputeOutcome,
         CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
@@ -446,52 +444,6 @@ isi! {
     }
 }
 impl crate::seal::Instruction for RequestSorafsCitizenBondExit {}
-isi! {
-    /// Commit one fixed-denomination Kagemusha service note.
-    pub struct RegisterSorafsAnonymousServiceNote {
-        /// Public Kagemusha commitment/nullifier descriptor and creation height.
-        pub note: SorafsAnonymousServiceNoteV1,
-        /// Frozen service-note policy root expected by the submitter.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-        pub policy_root: [u8; 32],
-    }
-}
-impl crate::seal::Instruction for RegisterSorafsAnonymousServiceNote {}
-isi! {
-    /// Prove anonymous juror candidacy and reserve its aged service note atomically.
-    pub struct RegisterSorafsAnonymousJurorCandidacy {
-        /// Typed call-scoped candidacy with its mandatory lattice-to-STARK bridge proof.
-        pub candidacy: SorafsAnonymousJurorCandidacyV1,
-    }
-}
-impl crate::seal::Instruction for RegisterSorafsAnonymousJurorCandidacy {}
-isi! {
-    /// Complete an anonymous juror obligation and emit a fresh refund note.
-    pub struct RefundSorafsAnonymousServiceEscrow {
-        /// Existing reservation identity.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-        pub escrow_id: [u8; 32],
-        /// Fresh Kagemusha output commitment returning the fixed denomination.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-        pub refund_note_commitment: [u8; 32],
-    }
-}
-impl crate::seal::Instruction for RefundSorafsAnonymousServiceEscrow {}
-isi! {
-    /// Slash only a reserved anonymous note after governance adjudication.
-    pub struct SlashSorafsAnonymousServiceEscrow {
-        /// Existing reservation identity.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-        pub escrow_id: [u8; 32],
-        /// Signed misconduct evidence digest; packet loss alone is insufficient.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-        pub evidence_digest: [u8; 32],
-        /// Governance adjudication digest authorising the note-only slash.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-        pub adjudication_digest: [u8; 32],
-    }
-}
-impl crate::seal::Instruction for SlashSorafsAnonymousServiceEscrow {}
 isi! {
     /// Activate the next governance-controlled `SoraFS` orderbook policy revision.
     pub struct SetSorafsOrderbookPolicy {
@@ -1424,45 +1376,6 @@ impl RequestSorafsCitizenBondExit {
         }
     }
 }
-impl RegisterSorafsAnonymousServiceNote {
-    /// Construct a fixed-denomination service-note registration.
-    #[must_use]
-    pub fn new(note: SorafsAnonymousServiceNoteV1, policy_root: [u8; 32]) -> Self {
-        Self { note, policy_root }
-    }
-}
-impl RegisterSorafsAnonymousJurorCandidacy {
-    /// Construct an anonymous candidacy and note-reservation instruction.
-    #[must_use]
-    pub fn new(candidacy: SorafsAnonymousJurorCandidacyV1) -> Self {
-        Self { candidacy }
-    }
-}
-impl RefundSorafsAnonymousServiceEscrow {
-    /// Construct a successful anonymous note refund.
-    #[must_use]
-    pub fn new(escrow_id: [u8; 32], refund_note_commitment: [u8; 32]) -> Self {
-        Self {
-            escrow_id,
-            refund_note_commitment,
-        }
-    }
-}
-impl SlashSorafsAnonymousServiceEscrow {
-    /// Construct a governance-adjudicated note-only slash.
-    #[must_use]
-    pub fn new(
-        escrow_id: [u8; 32],
-        evidence_digest: [u8; 32],
-        adjudication_digest: [u8; 32],
-    ) -> Self {
-        Self {
-            escrow_id,
-            evidence_digest,
-            adjudication_digest,
-        }
-    }
-}
 impl SetSorafsOrderbookPolicy {
     /// Construct a policy-activation instruction.
     #[must_use]
@@ -2098,22 +2011,6 @@ impl_sorafs_decode_from_slice!(RequestSorafsCitizenBondExit {
     expected_authorization_commitment: [u8; 32],
     expected_revision: u64,
 });
-impl_sorafs_decode_from_slice!(RegisterSorafsAnonymousServiceNote {
-    note: SorafsAnonymousServiceNoteV1,
-    policy_root: [u8; 32],
-});
-impl_sorafs_decode_from_slice!(RegisterSorafsAnonymousJurorCandidacy {
-    candidacy: SorafsAnonymousJurorCandidacyV1,
-});
-impl_sorafs_decode_from_slice!(RefundSorafsAnonymousServiceEscrow {
-    escrow_id: [u8; 32],
-    refund_note_commitment: [u8; 32],
-});
-impl_sorafs_decode_from_slice!(SlashSorafsAnonymousServiceEscrow {
-    escrow_id: [u8; 32],
-    evidence_digest: [u8; 32],
-    adjudication_digest: [u8; 32],
-});
 impl_sorafs_decode_from_slice!(SetSorafsOrderbookPolicy {
     policy: OrderbookAdmissionPolicyV1,
 });
@@ -2639,54 +2536,6 @@ mod tests {
             state: crate::sorafs::anonymity::SorafsCitizenBondStateV1::Active,
         }
     }
-    fn anonymous_service_note() -> SorafsAnonymousServiceNoteV1 {
-        SorafsAnonymousServiceNoteV1 {
-            kagemusha_note: crate::offline::KagemushaSpendableNoteDescriptorV2 {
-                network_id: crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-                    crate::block::BlockHeader,
-                >::from_untyped_unchecked(
-                    iroha_crypto::Hash::new(b"sorafs-isi-anonymous-service"),
-                )),
-                asset: crate::asset::AssetDefinitionId::derive_from_components(
-                    crate::domain::DomainId::try_new("sorafs", "universal").expect("domain"),
-                    "service".parse().expect("asset name"),
-                ),
-                note_commitment: [0x51; 32],
-                spend_nullifier: [0x52; 32],
-                amount: crate::offline::KagemushaScaledAmountV2 {
-                    atomic_units: 10_000,
-                    scale: 2,
-                },
-            },
-            created_at_finalized_height: 1_000,
-        }
-    }
-    fn anonymous_candidacy() -> SorafsAnonymousJurorCandidacyV1 {
-        let proof = vec![0x61; 64];
-        let mut candidacy = SorafsAnonymousJurorCandidacyV1 {
-            version: crate::sorafs::anonymity::SORAFS_ANONYMOUS_JUROR_CANDIDACY_VERSION_V1,
-            case_digest: [0x62; 32],
-            citizen_snapshot: crate::sorafs::anonymity::SorafsCitizenBondSnapshotV1 {
-                frozen_policy_root: [0x63; 32],
-                active_membership_root: [0x64; 32],
-                finalized_height: 1_300,
-                active_bond_count: 1_024,
-            },
-            citizen_nullifier: [0x65; 32],
-            juror_tag: [0x66; 32],
-            session_public_key: [0x67; 32],
-            service_note: anonymous_service_note(),
-            service_note_root: [0x68; 32],
-            fee_tag: [0x69; 32],
-            expiry_finalized_height: 2_000,
-            action_digest: [0; 32],
-            bridge_proof_digest:
-                crate::sorafs::anonymity::sorafs_anonymous_candidacy_proof_digest_v1(&proof),
-            bridge_proof: proof,
-        };
-        candidacy.action_digest = candidacy.expected_action_digest();
-        candidacy
-    }
     fn moderation_policy() -> ModerationLedgerPolicyV1 {
         ModerationLedgerPolicyV1 {
             version: crate::sorafs::moderation_ledger::MODERATION_LEDGER_POLICY_VERSION_V1,
@@ -2932,19 +2781,6 @@ mod tests {
             [0x41; 32], [0x42; 32], 1, [0x45; 32],
         ));
         assert_slice_roundtrip(RequestSorafsCitizenBondExit::new([0x41; 32], [0x42; 32], 1));
-        assert_slice_roundtrip(RegisterSorafsAnonymousServiceNote::new(
-            anonymous_service_note(),
-            [0x63; 32],
-        ));
-        assert_slice_roundtrip(RegisterSorafsAnonymousJurorCandidacy::new(
-            anonymous_candidacy(),
-        ));
-        assert_slice_roundtrip(RefundSorafsAnonymousServiceEscrow::new(
-            [0x70; 32], [0x71; 32],
-        ));
-        assert_slice_roundtrip(SlashSorafsAnonymousServiceEscrow::new(
-            [0x70; 32], [0x72; 32], [0x73; 32],
-        ));
         assert_slice_roundtrip(SetSorafsOrderbookPolicy::new(orderbook_policy()));
         assert_slice_roundtrip(SubmitSorafsOrderbookOrder::new(
             vec![0x01, 0x02],
@@ -3222,22 +3058,6 @@ mod tests {
         assert_registry_decodes(
             &registry,
             RequestSorafsCitizenBondExit::new([0x41; 32], [0x42; 32], 1),
-        );
-        assert_registry_decodes(
-            &registry,
-            RegisterSorafsAnonymousServiceNote::new(anonymous_service_note(), [0x63; 32]),
-        );
-        assert_registry_decodes(
-            &registry,
-            RegisterSorafsAnonymousJurorCandidacy::new(anonymous_candidacy()),
-        );
-        assert_registry_decodes(
-            &registry,
-            RefundSorafsAnonymousServiceEscrow::new([0x70; 32], [0x71; 32]),
-        );
-        assert_registry_decodes(
-            &registry,
-            SlashSorafsAnonymousServiceEscrow::new([0x70; 32], [0x72; 32], [0x73; 32]),
         );
         assert_registry_decodes(&registry, SetSorafsOrderbookPolicy::new(orderbook_policy()));
         assert_registry_decodes(

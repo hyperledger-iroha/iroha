@@ -960,7 +960,6 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9",
         "bash ci/check_sorafs_python_native_sdk.sh",
         "bash ci/sdk_sorafs_orchestrator.sh",
-        "bash ci/check_kagemusha_jvm_native_bridge.sh",
         "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     ),
@@ -1871,7 +1870,6 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 'NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"',
                 'NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"',
                 "Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites",
-                "bash ci/check_kagemusha_jvm_native_bridge.sh",
                 "if-no-files-found: error",
             ),
             "csharp-parity": (

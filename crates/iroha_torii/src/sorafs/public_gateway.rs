@@ -12,6 +12,8 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
+#[cfg(not(feature = "app_api"))]
+use iroha_core::state::StateReadOnly as _;
 use std::{
     net::SocketAddr,
     sync::LazyLock,
@@ -143,6 +145,91 @@ pub(crate) async fn handle_get_sorafs_cid_path(
     handle_get_sorafs_cid_path_inner(State(state), headers, uri, Path((cid, raw_path))).await
 }
 
+/// Serve the root document selected by the request's canonical host.
+pub(crate) async fn handle_get_sorafs_site_root(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = reject_client_storage_tokens(&headers) {
+        return response;
+    }
+    let _permit = match acquire_public_gateway_permit() {
+        Ok(permit) => permit,
+        Err(response) => return response,
+    };
+    handle_get_sorafs_site_root_inner(State(state), headers).await
+}
+
+/// Serve a bounded path selected by the request's canonical host.
+pub(crate) async fn handle_get_sorafs_site_path(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(raw_path): Path<String>,
+) -> Response {
+    if let Err(response) = reject_client_storage_tokens(&headers) {
+        return response;
+    }
+    let _permit = match acquire_public_gateway_permit() {
+        Ok(permit) => permit,
+        Err(response) => return response,
+    };
+    handle_get_sorafs_site_path_inner(State(state), headers, Path(raw_path)).await
+}
+
+/// Return whether the canonical request host selects a configured public SoraFS site.
+pub(crate) fn request_host_selects_site(state: &SharedAppState, headers: &HeaderMap) -> bool {
+    request_host_selects_site_inner(state, headers)
+}
+
+#[cfg(feature = "app_api")]
+fn request_host_selects_site_inner(state: &SharedAppState, headers: &HeaderMap) -> bool {
+    super::api::request_host_selects_sorafs_site(state, headers)
+}
+
+#[cfg(not(feature = "app_api"))]
+fn request_host_selects_site_inner(state: &SharedAppState, headers: &HeaderMap) -> bool {
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(super::site::normalize_host_header)
+    else {
+        return false;
+    };
+    let cid_host = state.sorafs_gateway_config.untrusted_hosting.enabled
+        && [
+            state
+                .sorafs_gateway_config
+                .untrusted_hosting
+                .cid_host_suffixes
+                .live
+                .as_str(),
+            state
+                .sorafs_gateway_config
+                .untrusted_hosting
+                .cid_host_suffixes
+                .taira
+                .as_str(),
+        ]
+        .into_iter()
+        .filter(|suffix| !suffix.trim().is_empty())
+        .any(|suffix| {
+            let suffix = suffix.trim().trim_end_matches('.').to_ascii_lowercase();
+            host.strip_suffix(&format!(".{suffix}"))
+                .is_some_and(|label| !label.is_empty() && !label.contains('.'))
+        });
+    if cid_host
+        || state
+            .sorafs_site_bindings
+            .as_deref()
+            .and_then(|bindings| super::site::find_site_binding(bindings, &host))
+            .is_some()
+    {
+        return true;
+    }
+    let state_view = state.state.view();
+    super::site::has_authoritative_public_site_host(state_view.world(), &host)
+}
+
 // Keep the established full gateway implementation when the app API is
 // present.  The outer functions above still provide the feature-independent
 // anonymous route, token rejection, and end-to-end concurrency admission.
@@ -183,6 +270,23 @@ async fn handle_get_sorafs_cid_path_inner(
     path: Path<(String, String)>,
 ) -> Response {
     super::api::handle_get_sorafs_cid_path(state, headers, uri, path).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handle_get_sorafs_site_root_inner(
+    state: State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    super::api::handle_get_sorafs_site_root(state, headers).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handle_get_sorafs_site_path_inner(
+    state: State<SharedAppState>,
+    headers: HeaderMap,
+    path: Path<String>,
+) -> Response {
+    super::api::handle_get_sorafs_site_path(state, headers, path).await
 }
 
 #[cfg(not(feature = "app_api"))]
@@ -402,6 +506,34 @@ fn resolve_local_host(
             spa_fallback: true,
             stored: resolve_local_cid(state, &cid)?,
         });
+    }
+    let authoritative = {
+        let state_view = state.state.view();
+        super::site::authoritative_app_site_binding(state_view.world(), &host)
+    };
+    match authoritative {
+        Ok(Some(binding)) => {
+            let digest = parse_manifest_digest(&binding.manifest_digest_hex)?;
+            let stored = state
+                .sorafs_node
+                .manifest_metadata_by_digest(&digest)
+                .map_err(node_storage_error_response)?;
+            return Ok(ResolvedHost {
+                hostname: binding.hostname,
+                index_document: binding.index_document,
+                spa_fallback: binding.spa_fallback,
+                stored,
+            });
+        }
+        Ok(None) => {}
+        Err(error) => {
+            warn!(%error, %host, "invalid ledger-authoritative SoraCloud static-site binding");
+            return Err(json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "authoritative_site_binding_invalid",
+                "the ledger-authoritative SoraCloud site binding is invalid",
+            ));
+        }
     }
     let binding = state
         .sorafs_site_bindings
@@ -797,6 +929,55 @@ async fn handle_get_sorafs_site_manifest_inner(
         json_entry("files", Value::Array(files)),
     ]))
     .into_response()
+}
+
+#[cfg(not(feature = "app_api"))]
+async fn handle_get_sorafs_site_root_inner(
+    state: State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    handle_get_sorafs_site_path_inner(state, headers, Path(String::new())).await
+}
+
+#[cfg(not(feature = "app_api"))]
+async fn handle_get_sorafs_site_path_inner(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(raw_path): Path<String>,
+) -> Response {
+    let resolved = match resolve_local_host(&state, &headers) {
+        Ok(resolved) => resolved,
+        Err(response) => return response,
+    };
+    if let Err(response) = enforce_local_pre_read(&state, &headers, &resolved.stored).await {
+        return response;
+    }
+    let Some(mut path) =
+        super::site::path_components_for_request(&raw_path, resolved.index_document.as_str())
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let spa_fallback = resolved.spa_fallback
+        && !raw_path
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .contains('.');
+    if resolved.stored.file_by_path(&path).is_none() && spa_fallback {
+        path = vec![resolved.index_document.clone()];
+    }
+    let mut response = read_site_file(&state, &resolved.stored, &path, &headers).await;
+    if response.status().is_success()
+        && let Ok(value) = HeaderValue::from_str(&super::site::encode_content_cid(
+            resolved.stored.manifest_cid(),
+        ))
+    {
+        response
+            .headers_mut()
+            .insert(header::HeaderName::from_static("x-sora-content-cid"), value);
+    }
+    response
 }
 
 #[cfg(not(feature = "app_api"))]
@@ -1267,11 +1448,18 @@ mod tests {
                 .await,
                 handle_get_sorafs_cid_path(
                     State(state.clone()),
-                    headers,
+                    headers.clone(),
                     format!("/sorafs/cid/{cid}/asset.bin")
                         .parse()
                         .expect("CID path URI"),
                     Path((cid.to_owned(), "asset.bin".to_owned())),
+                )
+                .await,
+                handle_get_sorafs_site_root(State(state.clone()), headers.clone()).await,
+                handle_get_sorafs_site_path(
+                    State(state.clone()),
+                    headers,
+                    Path("asset.bin".to_owned()),
                 )
                 .await,
             ];

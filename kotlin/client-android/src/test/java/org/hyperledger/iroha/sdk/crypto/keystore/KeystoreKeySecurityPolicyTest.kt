@@ -2,8 +2,10 @@ package org.hyperledger.iroha.sdk.crypto.keystore
 
 import java.security.KeyPair
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
 import org.hyperledger.iroha.sdk.IrohaKeyManager
 import org.hyperledger.iroha.sdk.crypto.KeyGenerationOutcome
@@ -69,6 +71,113 @@ class KeystoreKeySecurityPolicyTest {
             KeySecurityPreference.STRONGBOX_PREFERRED,
         )
         assertEquals(KeyGenerationOutcome.Route.SOFTWARE, preferred.route)
+    }
+
+    @Test
+    fun `StrongBox preferred retries the keystore without StrongBox`() {
+        val backend = StrongBoxRequestFailingBackend(strongBoxUnavailable = true)
+
+        val outcome = provider(backend).generateWithOutcome(
+            "preferred-keystore-fallback",
+            KeySecurityPreference.STRONGBOX_PREFERRED,
+        )
+
+        assertEquals(KeyGenerationOutcome.Route.SOFTWARE, outcome.route)
+        assertEquals(2, backend.requests.size)
+        assertTrue(backend.requests[0].preferStrongBox)
+        assertFalse(backend.requests[0].requireStrongBox)
+        assertFalse(backend.requests[1].preferStrongBox)
+        assertFalse(backend.requests[1].requireStrongBox)
+    }
+
+    @Test
+    fun `direct Android backend policy retries preferred generation without StrongBox`() {
+        val requests = mutableListOf<KeyGenParameters>()
+        val expected = SoftwareKeyProvider().generateEphemeral()
+        val parameters = KeyGenParameters.Builder()
+            .setPreferStrongBox(true)
+            .build()
+
+        val result = generateAndroidKeystoreWithPreferredStrongBoxFallback(parameters) { request ->
+            requests += request
+            if (request.preferStrongBox) {
+                throw KeyManagementException(
+                    "fixture key generation failure",
+                    StrongBoxUnavailableFailure("fixture StrongBox unavailable"),
+                )
+            }
+            KeyGenerationResult(expected, false)
+        }
+
+        assertSame(expected, result.keyPair)
+        assertEquals(2, requests.size)
+        assertTrue(requests[0].preferStrongBox)
+        assertFalse(requests[1].preferStrongBox)
+        assertFalse(requests[1].requireStrongBox)
+    }
+
+    @Test
+    fun `direct Android backend policy rejects a weaker required result`() {
+        val parameters = KeyGenParameters.Builder()
+            .setRequireStrongBox(true)
+            .setPreferStrongBox(true)
+            .build()
+        var attempts = 0
+
+        assertFailsWith<KeyManagementException> {
+            generateAndroidKeystoreWithPreferredStrongBoxFallback(parameters) {
+                attempts += 1
+                KeyGenerationResult(SoftwareKeyProvider().generateEphemeral(), false)
+            }
+        }
+
+        assertEquals(1, attempts)
+    }
+
+    @Test
+    fun `preferred StrongBox parameters retry plain generation without StrongBox`() {
+        val backend = StrongBoxRequestFailingBackend(strongBoxUnavailable = true)
+        val parameters = KeyGenParameters.Builder()
+            .setPreferStrongBox(true)
+            .build()
+
+        KeystoreKeyProvider(backend, parameters).generate("preferred-parameters-fallback")
+
+        assertEquals(2, backend.requests.size)
+        assertTrue(backend.requests[0].preferStrongBox)
+        assertFalse(backend.requests[1].preferStrongBox)
+        assertFalse(backend.requests[1].requireStrongBox)
+    }
+
+    @Test
+    fun `StrongBox preferred does not downgrade an unrelated generation failure`() {
+        val backend = StrongBoxRequestFailingBackend(strongBoxUnavailable = false)
+
+        assertFailsWith<KeyManagementException> {
+            provider(backend).generateWithOutcome(
+                "preferred-unrelated-failure",
+                KeySecurityPreference.STRONGBOX_PREFERRED,
+            )
+        }
+        assertEquals(1, backend.requests.size)
+    }
+
+    @Test
+    fun `StrongBox required rejects generation failure without fallback`() {
+        val backend = StrongBoxRequestFailingBackend(strongBoxUnavailable = true)
+        val manager = IrohaKeyManager.fromProviders(
+            listOf(provider(backend), SoftwareKeyProvider()),
+        )
+
+        assertFailsWith<KeyManagementException> {
+            manager.generateOrLoad(
+                "required-no-fallback",
+                KeySecurityPreference.STRONGBOX_REQUIRED,
+            )
+        }
+        assertEquals(1, backend.requests.size)
+        assertTrue(backend.requests.single().requireStrongBox)
+        assertTrue(backend.requests.single().preferStrongBox)
     }
 
     @Test
@@ -151,6 +260,42 @@ class KeystoreKeySecurityPolicyTest {
             keySecurity
 
         override fun name(): String = capability.name
+    }
+
+    private class StrongBoxRequestFailingBackend(
+        private val strongBoxUnavailable: Boolean,
+    ) : KeystoreBackend {
+        private val software = SoftwareKeyProvider()
+        val requests = mutableListOf<KeyGenParameters>()
+
+        override fun load(alias: String): KeyPair? = null
+
+        override fun generate(
+            alias: String,
+            parameters: KeyGenParameters,
+        ): KeyGenerationResult {
+            requests += parameters
+            if (parameters.requireStrongBox || parameters.preferStrongBox) {
+                val cause = if (strongBoxUnavailable) {
+                    StrongBoxUnavailableFailure("fixture StrongBox unavailable")
+                } else {
+                    IllegalStateException("fixture unrelated keystore failure")
+                }
+                throw KeyManagementException("fixture key generation failure", cause)
+            }
+            return KeyGenerationResult(software.generateEphemeral(), false)
+        }
+
+        override fun generateEphemeral(parameters: KeyGenParameters): KeyPair =
+            software.generateEphemeral()
+
+        override fun metadata(): KeyProviderMetadata =
+            KeyProviderMetadata.strongBox("failing-strongbox-keystore", false)
+
+        override fun keyMetadata(alias: String, keyPair: KeyPair): KeyProviderMetadata =
+            KeyProviderMetadata.software("failing-strongbox-keystore")
+
+        override fun name(): String = "failing-strongbox-keystore"
     }
 
     private class CapabilityOnlyProvider(

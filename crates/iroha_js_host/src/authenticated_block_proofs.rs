@@ -500,14 +500,15 @@ mod tests {
         let executed_block_wire = block
             .encode_wire()
             .expect("encode authenticated proof fixture block wire");
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"authenticated proof fixture parent state"),
-            Hash::new(b"authenticated proof fixture post state"),
-            Hash::new(b"authenticated proof fixture ordinary writes"),
-            u64::try_from(executed_block_wire.len())
-                .expect("authenticated proof fixture block wire length fits u64"),
-            Hash::new(&executed_block_wire),
-        );
+        let execution_commitment =
+            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new(b"authenticated proof fixture parent state"),
+                Hash::new(b"authenticated proof fixture post state"),
+                Hash::new(b"authenticated proof fixture ordinary writes"),
+                u64::try_from(executed_block_wire.len())
+                    .expect("authenticated proof fixture block wire length fits u64"),
+                Hash::new(&executed_block_wire),
+            );
         let (artifact, finality_keys) =
             finalized_artifact_for_block(&block, network_id, &execution_commitment, None, 1);
         let trusted_context_id = *artifact.context_id().0.as_ref();
@@ -689,14 +690,15 @@ mod tests {
             height,
             view: 0,
         };
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new([b"successor parent state".as_slice(), &height.to_be_bytes()].concat()),
-            Hash::new([b"successor post state".as_slice(), &height.to_be_bytes()].concat()),
-            Hash::new([b"successor writes".as_slice(), &height.to_be_bytes()].concat()),
-            u64::try_from(executed_block_wire.len())
-                .expect("successor fixture block wire length fits u64"),
-            Hash::new(&executed_block_wire),
-        );
+        let execution_commitment =
+            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new([b"successor parent state".as_slice(), &height.to_be_bytes()].concat()),
+                Hash::new([b"successor post state".as_slice(), &height.to_be_bytes()].concat()),
+                Hash::new([b"successor writes".as_slice(), &height.to_be_bytes()].concat()),
+                u64::try_from(executed_block_wire.len())
+                    .expect("successor fixture block wire length fits u64"),
+                Hash::new(&executed_block_wire),
+            );
         let commit_qc = signed_commit_qc(&context, subject, &execution_commitment, round, keys);
         let artifact = V2FinalityArtifact::new(
             context,

@@ -838,7 +838,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'peer_tests.rs',
     ),
     'crates/irohad/src/main.rs': (
-        'main/kagemusha_runtime_effective_config_projection.rs',
         'main/shared_sorafs_provider_cache_tests.rs',
         'main/runtime_deps.rs',
         'sumeragi_lane_relay_item.rs',
@@ -846,8 +845,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'main/resolved_genesis_trust_anchor_wrong_hash_test.rs',
         'main_tests/governance_dag_publisher_binding_signer.rs',
         'main/governance_dag_launcher_tests.rs',
-        'main/kagemusha_runtime_effective_config_projection_tests.rs',
-        'main/kagemusha_startup_source_tests.rs',
         'main/runtime_budget_and_config_tests.rs',
         'main/startup_tail_tests.rs',
     ),
@@ -1002,7 +999,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_worker_main_02.rs',
         'tests/v2_worker_main_04.rs',
         'tests/v2_worker_main_05.rs',
-        'tests/v2_worker_kagemusha_runtime_gate.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs': (
         'v2_worker/exact_output_rollover_claim.rs',
@@ -2756,18 +2752,8 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         19,
     ),
     (
-        "production-kagemusha-finality",
-        "zk::kagemusha_finality::tests",
-        1,
-    ),
-    (
         "production-data-model-v2-finality",
         "block::consensus_v2::finality::tests",
-        1,
-    ),
-    (
-        "production-data-model-offline-compact-qc",
-        "offline::kagemusha_v4_topup_provenance_tests",
         1,
     ),
     (
@@ -3102,10 +3088,9 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_runtime::tests::same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically",
     "sumeragi::v2_runtime::tests::runtime_ingress_carrier_capacity_returns_backpressure_atomically",
     "sumeragi::v2_transport::tests::later_commit_qc_authenticates_the_exact_locked_body_origin",
-    "zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin",
     "block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification",
     "block::consensus_v2::finality::tests::genesis_header_binding_accepts_a_later_first_proposal_origin",
-    "offline::kagemusha_v4_topup_provenance_tests::compact_qc_rejects_foreign_or_future_proposal_origin",
+    "block::consensus_v2::tests::offline_cash_consensus_signature_envelope_roundtrips_and_rejects_drift",
     "block::consensus_v2::tests::height_context_identity_authenticates_the_parent_proposal_origin",
     "sumeragi_v2_runner::prepare_qc_split_tests::restart_scenario_uses_a_contention_tolerant_view_zero_deadline",
     "sumeragi::v2::tests::successor_core_context_preserves_the_parent_certificate_binding",

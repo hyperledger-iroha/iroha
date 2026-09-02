@@ -4,11 +4,15 @@
 
 # Android Security & Compliance Evidence
 
-This document fulfils the hardware-security acceptance criteria called out in
-**AND2** (Secure Key Management & StrongBox) and **AND6** (CI smoke harness &
-compliance) within `roadmap.md`. It consolidates the attestation artefacts,
-device-matrix requirements, tamper-proof logging plan, and disclosure playbooks
-required before Android SDK releases can advance from preview to GA/LTS.
+This document defines the optional hardware-security acceptance criteria called
+out in **AND2** (Secure Key Management & StrongBox) and **AND6** (CI smoke
+harness & compliance) within `roadmap.md`. It consolidates the attestation
+artefacts, device-matrix requirements, tamper-proof logging plan, and disclosure
+playbooks required only when a release explicitly claims StrongBox or a
+physical-device qualification. Software-backed signing and custody remain
+valid for ordinary production, governance, build, test, deployment, and
+release workflows; this hardware evidence does not gate preview, GA, or LTS
+promotion.
 
 - Use this file as the canonical reference when preparing audit packets,
   partner disclosures, and SRE readiness reviews.

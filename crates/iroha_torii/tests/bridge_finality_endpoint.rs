@@ -123,7 +123,7 @@ fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtif
             .canonical_proposal_wire_hash()
             .expect("hash exact bridge fixture proposal wire"),
     };
-    let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+    let execution_commitment = ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"Torii exact-v2 parent state"),
         Hash::new(b"Torii exact-v2 post state"),
         Hash::new(b"Torii exact-v2 ordinary writes"),

@@ -7,18 +7,6 @@ compile_error!(
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
-/// Secret-free protocol-effective configuration capture for validator seals.
-#[path = "main/kagemusha_runtime_effective_config_projection.rs"]
-mod kagemusha_runtime_effective_config_projection;
-/// Catalog and runtime-projection gates shared by normal and snapshot startup.
-#[path = "main/kagemusha_startup.rs"]
-mod kagemusha_startup;
-/// Fail-closed local seam for one Kagemusha validator qualification seal.
-#[path = "main/kagemusha_validator_qualification.rs"]
-mod kagemusha_validator_qualification;
-/// Root-custodied inputs and no-replace output for validator qualification.
-#[path = "main/kagemusha_validator_qualification_command.rs"]
-mod kagemusha_validator_qualification_command;
 /// Deployment-injected factory for the supervised private Musubi publication service.
 pub mod musubi_publication_service;
 /// Asynchronous Nexus DPN fee settlement relay.
@@ -139,14 +127,8 @@ use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
-use kagemusha_startup::{
-    install_configured_kagemusha_release_catalog,
-    load_and_build_configured_kagemusha_validator_qualification_capture,
-    load_configured_kagemusha_release_catalog,
-};
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
-use root_owned_artifact_publication::RootOwnedNoReplaceArtifactPublicationTarget;
 #[cfg(all(test, target_os = "macos"))]
 use root_owned_artifact_publication::require_no_macos_extended_acl;
 pub use runtime_provider_broker::{
@@ -760,24 +742,6 @@ pub struct StartupArgs {
     /// Validate configuration and available genesis, then exit without binding network sockets.
     #[arg(long)]
     pub check_config: bool,
-    /// Fully qualify Kagemusha catalog and publish its canonical cold-start seal at this path.
-    #[arg(
-        long,
-        value_name = "PATH",
-        value_hint(clap::ValueHint::FilePath),
-        requires = "check_config"
-    )]
-    pub write_kagemusha_catalog_qualification_seal: Option<PathBuf>,
-    /// Fully qualify this validator against the configured signed promotion
-    /// reservation and publish its canonical seal at this root-owned path.
-    #[arg(
-        long,
-        value_name = "PATH",
-        value_hint(clap::ValueHint::FilePath),
-        requires = "check_config",
-        conflicts_with = "write_kagemusha_catalog_qualification_seal"
-    )]
-    pub write_kagemusha_validator_qualification_seal: Option<PathBuf>,
     /// Enables trace logs of configuration reading & parsing.
     ///
     /// Might be useful for configuration troubleshooting.
@@ -4601,9 +4565,9 @@ mod network_relay_tests {
         },
         torii_proxy::{
             TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
-            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
-            ToriiReadProxyRequestV1, ToriiRouteHintV1,
+            ToriiFanoutRouteScopeV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1,
+            ToriiProxyRequestV1, ToriiProxyResponseFormatV1, ToriiProxyResponseV1,
+            ToriiReadEndpointV1, ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
     };
     use iroha_crypto::{Hash, HashOf, KeyPair};
@@ -5346,7 +5310,7 @@ mod network_relay_tests {
                 phase: consensus_v2::GlobalPhase::Prepare,
                 subject: sample_v2_subject(),
                 execution_commitment:
-                    consensus_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+                    consensus_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
                         Hash::prehashed([0x64; 32]),
                         Hash::prehashed([0x65; 32]),
                         Hash::prehashed([0x66; 32]),
@@ -5376,7 +5340,7 @@ mod network_relay_tests {
             round: sample_v2_round(5, 7),
             subject: sample_v2_subject(),
             payload_size_bytes: 4,
-            layout: consensus_v2::SumeragiV2GenesisContextParameters::recommended().da_layout,
+            layout: consensus_v2::recommended_data_availability_layout(),
             chunk_hashes: vec![Hash::new(b"body")],
             chunk_root: Hash::new(b"chunk-root"),
         }
@@ -5619,6 +5583,7 @@ mod network_relay_tests {
             visited_peer_ids: Vec::new(),
             request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
+                route_scope: ToriiFanoutRouteScopeV1::AllDataspaces,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
                     dataspace_id: DataSpaceId::UNIVERSAL,
@@ -6373,7 +6338,58 @@ fn authorize_kura_runtime_start(
         (true, true) | (false, false) => Ok(()),
     }
 }
-fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &Config) {
+fn install_offline_cash_v1_runtime_verifier(
+    state: &mut State,
+    config: &Config,
+) -> Result<(), String> {
+    let Some(files) = config.settlement.offline.proof_release.as_ref() else {
+        return Ok(());
+    };
+    let read = |path: &Path, max_bytes, label| {
+        read_bounded_startup_artifact(path, max_bytes, label)
+            .map_err(|error| format!("failed to read {label} at {}: {error}", path.display()))
+    };
+    let manifest = read(
+        &files.manifest,
+        iroha_data_model::offline::OFFLINE_CASH_RELEASE_MANIFEST_MAX_BYTES_V1,
+        "Offline Cash V1 release manifest",
+    )?;
+    let receipt = read(
+        &files.validation_receipt,
+        iroha_data_model::offline::OFFLINE_CASH_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+        "Offline Cash V1 validation receipt",
+    )?;
+    let policy = read(
+        &files.authority_policy,
+        iroha_data_model::offline::OFFLINE_CASH_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
+        "Offline Cash V1 authority policy",
+    )?;
+    let attestation = read(
+        &files.attestation,
+        iroha_data_model::offline::OFFLINE_CASH_RELEASE_ATTESTATION_MAX_BYTES_V1,
+        "Offline Cash V1 release attestation",
+    )?;
+    let profile = read(
+        &files.recursive_profile,
+        iroha_core::smartcontracts::isi::offline::OFFLINE_CASH_RECURSIVE_PROFILE_MAX_BYTES_V1,
+        "Offline Cash V1 recursive verifier profile",
+    )?;
+    let verifier =
+        iroha_core::smartcontracts::isi::offline::load_authenticated_offline_cash_v1_runtime_verifier(
+            &manifest,
+            &receipt,
+            &policy,
+            &attestation,
+            &profile,
+            &files.artifact_directory,
+        )?;
+    state.install_offline_cash_v1_runtime_verifier(verifier);
+    Ok(())
+}
+fn apply_state_runtime_config_before_snapshot_auth(
+    state: &mut State,
+    config: &Config,
+) -> Result<(), String> {
     // These fields are process-local execution policy and do not touch Kura-owned geometry.
     // Settlement must be installed before replay because historical
     // top-up/redemption transitions resolve their deterministic execution
@@ -6387,6 +6403,7 @@ fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &C
     state.set_gov(config.gov.clone());
     state.content = config.content.clone();
     state.set_settlement(config.settlement.clone());
+    install_offline_cash_v1_runtime_verifier(state, config)
 }
 fn apply_state_geometry_config_before_kura_replay(
     state: &mut State,
@@ -7701,14 +7718,6 @@ impl Iroha {
         }
         // Keep the restored state's display/configuration label aligned with this deployment.
         state.chain_id = config.common.chain.clone();
-        if emergency_fast {
-            state.set_kagemusha_release_catalog(
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
-            );
-        } else {
-            install_configured_kagemusha_release_catalog(&mut state, &config)
-                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
-        }
         if !loaded_state_from_snapshot {
             // Snapshot candidates install this at their post-decode,
             // pre-reconciliation boundary. Fresh and Kura-rebuilt state has no
@@ -7723,8 +7732,19 @@ impl Iroha {
                         "emergency Fast restored governance is incompatible with configured governance: {error}"
                     ))
                 })?;
+            install_offline_cash_v1_runtime_verifier(&mut state, &config).map_err(|error| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "failed to install the authenticated Offline Cash V1 runtime: {error}"
+                ))
+            })?;
         } else {
-            apply_state_runtime_config_before_snapshot_auth(&mut state, &config);
+            apply_state_runtime_config_before_snapshot_auth(&mut state, &config).map_err(
+                |error| {
+                    Report::new(StartError::InitKura).attach(format!(
+                        "failed to install process-local state runtime configuration: {error}"
+                    ))
+                },
+            )?;
         }
         if !emergency_fast && !provisional_imported_prefix {
             apply_state_geometry_config_before_kura_replay(&mut state, &config)?;
@@ -8204,16 +8224,17 @@ impl Iroha {
                         state.sccp_policy_hash_snapshot(),
                     )),
                 );
-            let (mode_tag, bls_domain, caps, block_cadence_ms, maximum_validator_roster_len) = consensus_caps_from_genesis(
-                effective_genesis.expect("normal startup has signed genesis metadata"),
-                &config_caps,
-                &config.sumeragi,
-            )
-            .ok_or_else(|| {
-                Report::new(StartError::InitKura).attach(
+            let (mode_tag, bls_domain, caps, block_cadence_ms, maximum_validator_roster_len) =
+                consensus_caps_from_genesis(
+                    effective_genesis.expect("normal startup has signed genesis metadata"),
+                    &config_caps,
+                    &config.sumeragi,
+                )
+                .ok_or_else(|| {
+                    Report::new(StartError::InitKura).attach(
                     "signed genesis does not contain one canonical Sumeragi v2 handshake context",
                 )
-            })?;
+                })?;
             (
                 mode_tag,
                 bls_domain,
@@ -8231,37 +8252,38 @@ impl Iroha {
                 view.sccp_registry.as_ref(),
                 height,
             );
-            let (mode_tag, bls_domain, caps, block_cadence_ms, maximum_validator_roster_len) = if snapshot_bootstrap_active {
-                let (mode_tag, bls_domain, caps) = compute_consensus_handshake_caps(
-                    view.world(),
-                    height,
-                    &config,
-                    &config_caps,
-                    signed_consensus_mode,
-                    signed_v2_genesis_context,
-                )?;
-                let maximum_validator_roster_len =
-                    authenticated_snapshot_maximum_validator_roster_len(
-                        signed_consensus_mode,
-                        authenticated_snapshot_bootstrap
-                            .as_ref()
-                            .expect("snapshot bootstrap branch has an authenticated record"),
+            let (mode_tag, bls_domain, caps, block_cadence_ms, maximum_validator_roster_len) =
+                if snapshot_bootstrap_active {
+                    let (mode_tag, bls_domain, caps) = compute_consensus_handshake_caps(
                         view.world(),
+                        height,
+                        &config,
+                        &config_caps,
+                        signed_consensus_mode,
+                        signed_v2_genesis_context,
+                    )?;
+                    let maximum_validator_roster_len =
+                        authenticated_snapshot_maximum_validator_roster_len(
+                            signed_consensus_mode,
+                            authenticated_snapshot_bootstrap
+                                .as_ref()
+                                .expect("snapshot bootstrap branch has an authenticated record"),
+                            view.world(),
+                        )
+                        .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+                    (
+                        mode_tag,
+                        bls_domain,
+                        caps,
+                        view.world()
+                            .parameters()
+                            .sumeragi()
+                            .block_cadence_ms()
+                            .get(),
+                        maximum_validator_roster_len,
                     )
-                    .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
-                (
-                    mode_tag,
-                    bls_domain,
-                    caps,
-                    view.world()
-                        .parameters()
-                        .sumeragi()
-                        .block_cadence_ms()
-                        .get(),
-                    maximum_validator_roster_len,
-                )
-            } else {
-                consensus_caps_from_genesis(
+                } else {
+                    consensus_caps_from_genesis(
                         effective_genesis.expect("normal startup has signed genesis metadata"),
                         &config_caps,
                         &config.sumeragi,
@@ -8271,7 +8293,7 @@ impl Iroha {
                             "signed genesis does not contain one canonical Sumeragi v2 handshake context",
                         )
                     })?
-            };
+                };
             (
                 mode_tag,
                 bls_domain,
@@ -8300,16 +8322,6 @@ impl Iroha {
                 state.sumeragi_block_cadence(),
                 authenticated_block_cadence,
             )));
-        }
-        if !emergency_fast {
-            kagemusha_startup::install_runtime_effective_config(
-                &config,
-                &state,
-                authenticated_snapshot_bootstrap.as_ref(),
-                authenticated_block_cadence,
-                effective_genesis,
-            )
-            .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
         }
         iroha_logger::info!(
             mode=%consensus_caps.mode.tag(),
@@ -8452,13 +8464,12 @@ impl Iroha {
                     fresh_caps,
                     fresh_block_cadence_ms,
                     fresh_maximum_validator_roster_len,
-                ) =
-                    consensus_caps_from_genesis(genesis_block, &config_caps, &config.sumeragi)
-                        .ok_or_else(|| {
-                            Report::new(StartError::InitKura).attach(
+                ) = consensus_caps_from_genesis(genesis_block, &config_caps, &config.sumeragi)
+                    .ok_or_else(|| {
+                        Report::new(StartError::InitKura).attach(
                         "fresh genesis is missing required signed Sumeragi v2 consensus metadata",
                     )
-                        })?;
+                    })?;
                 if fresh_block_cadence_ms != signed_block_cadence_ms {
                     return Err(Report::new(StartError::InitKura).attach(
                         "fresh signed genesis cadence differs from the handshake opened for bootstrap",
@@ -9145,6 +9156,9 @@ impl Iroha {
                     .map(|prepared| Arc::clone(prepared.archive())),
                 global_beacon_partial_signer: runtime_deps
                     .sumeragi_global_beacon_partial_signer
+                    .clone(),
+                offline_cash_mint_finality_authority: runtime_deps
+                    .offline_cash_mint_finality_authority
                     .clone(),
                 startup_replay_plan: v2_replay_plan,
                 startup_replay_inventory_guard,
@@ -11312,21 +11326,6 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
 pub fn read_config_and_genesis(
     args: &Args,
 ) -> ReportResult<(Config, Option<GenesisBlock>), ConfigError> {
-    read_config_and_genesis_with_kagemusha_sources(args)
-        .map(|(config, genesis, _sources)| (config, genesis))
-}
-#[allow(clippy::too_many_lines)]
-fn read_config_and_genesis_with_kagemusha_sources(
-    args: &Args,
-) -> ReportResult<
-    (
-        Config,
-        Option<GenesisBlock>,
-        kagemusha_validator_qualification::KagemushaStartupQualificationSourcesV1,
-    ),
-    ConfigError,
-> {
-    let mut flattened_toml_config_source = None;
     let mut config = if args.config.is_some() {
         ConfigReader::new().without_env()
     } else {
@@ -11375,7 +11374,6 @@ fn read_config_and_genesis_with_kagemusha_sources(
                     path.display()
                 )));
             }
-            flattened_toml_config_source = Some(raw);
             config.with_toml_source(TomlSource::new(path.clone(), table))
         } else {
             config
@@ -11518,17 +11516,12 @@ fn read_config_and_genesis_with_kagemusha_sources(
     iroha_data_model::account::address::set_chain_discriminant(
         *config.common.chain_discriminant.value(),
     );
-    let (genesis, signed_genesis_source) = read_genesis_for_snapshot_policy_with_bytes(
+    let (genesis, _) = read_genesis_for_snapshot_policy_with_bytes(
         &config.snapshot.bootstrap,
         config.genesis.file.as_ref(),
     )?;
     config.logger.terminal_colors = args.terminal_colors;
-    let sources = kagemusha_validator_qualification::KagemushaStartupQualificationSourcesV1::new(
-        config.snapshot.bootstrap.enabled,
-        flattened_toml_config_source,
-        signed_genesis_source,
-    );
-    Ok((config, genesis, sources))
+    Ok((config, genesis))
 }
 #[cfg(test)]
 fn read_genesis_for_snapshot_policy(
@@ -13683,8 +13676,8 @@ fn run_main_with_config_guard(
     // read and decode the genesis block. Without this call, decoding the
     // embedded `InstructionBox` values would panic with "instruction registry is not initialized".
     init_genesis_instruction_registry();
-    let (config, genesis, kagemusha_startup_sources) =
-        read_config_and_genesis_with_kagemusha_sources(&args)
+    let (config, genesis) =
+        read_config_and_genesis(&args)
             .change_context(MainError::Config)
             .attach_with(|| {
             args.config.as_ref().map_or_else(
@@ -13700,126 +13693,8 @@ fn run_main_with_config_guard(
             ))
         })?;
     }
-    if !emergency_fast
-        && args
-            .startup
-            .write_kagemusha_validator_qualification_seal
-            .is_none()
-    {
-        kagemusha_validator_qualification::evaluate_stock_launcher_unavailable_v1(
-            &kagemusha_startup_sources,
-            genesis.as_ref(),
-            &config.common.peer.id,
-            &config.common.key_pair,
-        )
-        .map_err(|error| {
-            Report::new(MainError::Config).attach(format!(
-                "failed to evaluate local Kagemusha validator qualification: {error}"
-            ))
-        })?;
-    }
     if args.startup.check_config {
-        let catalog_seal_target = args
-            .startup
-            .write_kagemusha_catalog_qualification_seal
-            .as_deref()
-            .map(|path| QualificationSealPublicationTarget::prepare(&config, path))
-            .transpose()
-            .map_err(|error| {
-                Report::new(MainError::Config).attach(format!(
-                    "invalid Kagemusha catalog qualification seal output: {error}"
-                ))
-            })?;
-        let validator_seal_target = args
-            .startup
-            .write_kagemusha_validator_qualification_seal
-            .as_deref()
-            .map(|path| {
-                kagemusha_validator_qualification_command::KagemushaValidatorSealPublicationTarget::prepare(
-                    &config, path,
-                )
-            })
-            .transpose()
-            .map_err(|error| {
-                Report::new(MainError::Config).attach(format!(
-                    "invalid Kagemusha validator qualification seal output: {error}"
-                ))
-            })?;
-        let trusted_promotion = validator_seal_target
-            .as_ref()
-            .map(|_| {
-                kagemusha_validator_qualification_command::read_configured_kagemusha_promotion_reservation(
-                    &config,
-                )
-            })
-            .transpose()
-            .map_err(|error| {
-                Report::new(MainError::Config).attach(format!(
-                    "failed to read the trusted Kagemusha promotion reservation: {error}"
-                ))
-            })?;
-        let existing_catalog_seal = validator_seal_target
-            .as_ref()
-            .map(|_| {
-                kagemusha_validator_qualification_command::read_configured_kagemusha_catalog_qualification_seal(
-                    &config,
-                )
-            })
-            .transpose()
-            .map_err(|error| {
-                Report::new(MainError::Config).attach(format!(
-                    "failed to read the existing Kagemusha catalog qualification seal: {error}"
-                ))
-            })?;
-        let mode = if catalog_seal_target.is_some() {
-            KagemushaCheckQualificationMode::CatalogSeal
-        } else if let (Some(trusted_promotion), Some(catalog_seal_bytes)) =
-            (trusted_promotion.as_ref(), existing_catalog_seal.as_deref())
-        {
-            KagemushaCheckQualificationMode::ValidatorSeal {
-                trusted_promotion,
-                catalog_seal_bytes,
-                sources: &kagemusha_startup_sources,
-            }
-        } else {
-            KagemushaCheckQualificationMode::None
-        };
-        let KagemushaCheckQualificationArtifacts {
-            catalog_seal,
-            validator_seal,
-        } = validate_config_for_check_mode(&config, genesis.as_ref(), mode)?;
-        if let Some(target) = catalog_seal_target {
-            let seal = catalog_seal.ok_or_else(|| {
-                Report::new(MainError::Config)
-                    .attach("Kagemusha catalog qualification completed without producing a seal")
-            })?;
-            let output_path = target.path().to_owned();
-            target.publish_and_verify(&config, &seal).map_err(|error| {
-                Report::new(MainError::Config).attach(format!(
-                    "failed to publish Kagemusha catalog qualification seal: {error}"
-                ))
-            })?;
-            println!(
-                "Published: canonical Kagemusha catalog qualification seal at {}",
-                output_path.display()
-            );
-        }
-        if let Some(target) = validator_seal_target {
-            let seal = validator_seal.ok_or_else(|| {
-                Report::new(MainError::Config)
-                    .attach("Kagemusha validator qualification completed without producing a seal")
-            })?;
-            let output_path = target.path().to_owned();
-            target.publish_and_verify(&seal).map_err(|error| {
-                Report::new(MainError::Config).attach(format!(
-                    "failed to publish Kagemusha validator qualification seal: {error}"
-                ))
-            })?;
-            println!(
-                "Published: canonical Kagemusha validator qualification seal at {}",
-                output_path.display()
-            );
-        }
+        validate_config_for_check(&config, genesis.as_ref())?;
         if genesis.is_some() {
             println!("Ready: configuration and available genesis are valid");
         } else {
@@ -13829,7 +13704,6 @@ fn run_main_with_config_guard(
         }
         return Ok(());
     }
-    drop(kagemusha_startup_sources);
     // Resolve deployment-owned executable providers only after the complete
     // static configuration has passed the same offline checks as
     // `--check-config`, and before Tokio or node-owned durable state starts.
@@ -13984,354 +13858,25 @@ fn run_main_with_config_guard(
     rt.shutdown_timeout(NODE_RUNTIME_SHUTDOWN_TIMEOUT);
     result
 }
-/// Catalog-seal adapter around the generic root-owned publisher.
-struct QualificationSealPublicationTarget {
-    inner: RootOwnedNoReplaceArtifactPublicationTarget,
-}
-
-impl QualificationSealPublicationTarget {
-    fn prepare(config: &Config, requested_path: &Path) -> Result<Self, String> {
-        let configured_path = config
-            .settlement
-            .offline
-            .kagemusha_catalog_qualification_seal_path
-            .as_deref()
-            .ok_or_else(|| {
-                "`--write-kagemusha-catalog-qualification-seal` requires settlement.offline.kagemusha_catalog_qualification_seal_path"
-                    .to_owned()
-            })?;
-        validate_canonical_absolute_path(configured_path, "configured qualification seal path")?;
-        validate_canonical_absolute_path(requested_path, "requested qualification seal path")?;
-        if requested_path != configured_path {
-            return Err(format!(
-                "requested qualification seal path `{}` does not exactly match configured path `{}`",
-                requested_path.display(),
-                configured_path.display()
-            ));
-        }
-        validate_qualification_seal_directory_separation(config, requested_path)?;
-        RootOwnedNoReplaceArtifactPublicationTarget::prepare_root_owned(
-            requested_path,
-            "qualification seal",
-        )
-        .map(|inner| Self { inner })
-        .map_err(|error| error.to_string())
-    }
-
-    #[cfg(all(test, unix))]
-    fn prepare_for_owner(path: &Path, expected_uid: u32) -> Result<Self, String> {
-        RootOwnedNoReplaceArtifactPublicationTarget::prepare_for_owner(
-            path,
-            expected_uid,
-            "qualification seal",
-        )
-        .map(|inner| Self { inner })
-        .map_err(|error| error.to_string())
-    }
-
-    #[must_use]
-    fn path(&self) -> &Path {
-        self.inner.path()
-    }
-
-    fn publish_and_verify(
-        self,
-        config: &Config,
-        seal: &iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1,
-    ) -> Result<(), String> {
-        let canonical_bytes = seal.canonical_bytes()?;
-        self.publish_bytes_and_verify(&canonical_bytes, |final_path| {
-            if final_path
-                != config
-                    .settlement
-                    .offline
-                    .kagemusha_catalog_qualification_seal_path
-                    .as_deref()
-                    .expect("publication target requires a configured seal path")
-            {
-                return Err(
-                    "published qualification seal path no longer matches configuration".to_owned(),
-                );
-            }
-            load_configured_kagemusha_release_catalog(config).map(|_| ())
-        })
-    }
-
-    fn publish_bytes_and_verify(
-        self,
-        canonical_bytes: &[u8],
-        verify_final: impl FnOnce(&Path) -> Result<(), String>,
-    ) -> Result<(), String> {
-        self.inner
-            .publish_bytes_and_verify(canonical_bytes, verify_final)
-            .map_err(|error| error.to_string())
-    }
-}
-fn validate_canonical_absolute_path(path: &Path, label: &str) -> Result<(), String> {
-    if !path.is_absolute() {
-        return Err(format!("{label} must be absolute: {}", path.display()));
-    }
-    if path.components().any(|component| {
-        matches!(
-            component,
-            std::path::Component::CurDir | std::path::Component::ParentDir
-        )
-    }) {
-        return Err(format!(
-            "{label} must not contain `.` or `..` components: {}",
-            path.display()
-        ));
-    }
-    Ok(())
-}
-fn validate_qualification_seal_directory_separation(
-    config: &Config,
-    seal_path: &Path,
-) -> Result<(), String> {
-    let seal_parent = seal_path
-        .parent()
-        .ok_or_else(|| "qualification seal path must have a parent directory".to_owned())?;
-    let policy_parent = config
-        .settlement
-        .offline
-        .kagemusha_release_policy_path
-        .as_deref()
-        .and_then(Path::parent);
-    let artifact_dir = config.settlement.offline.kagemusha_artifact_dir.as_deref();
-    let executable_parent = env::current_exe()
-        .map_err(|error| format!("failed to resolve current executable path: {error}"))?
-        .parent()
-        .map(Path::to_owned)
-        .ok_or_else(|| "current executable has no parent directory".to_owned())?;
-    for (label, source_dir) in [
-        ("release-policy parent", policy_parent),
-        ("artifact directory", artifact_dir),
-        (
-            "current-executable parent",
-            Some(executable_parent.as_path()),
-        ),
-    ] {
-        let Some(source_dir) = source_dir else {
-            continue;
-        };
-        if seal_parent.starts_with(source_dir) || source_dir.starts_with(seal_parent) {
-            return Err(format!(
-                "qualification seal directory `{}` must be separate from the Kagemusha {label} `{}` because publication changes directory identity",
-                seal_parent.display(),
-                source_dir.display()
-            ));
-        }
-    }
-    Ok(())
-}
-#[derive(Clone, Copy)]
-enum KagemushaCheckQualificationMode<'a> {
-    None,
-    CatalogSeal,
-    ValidatorSeal {
-        trusted_promotion:
-            &'a kagemusha_validator_qualification_command::TrustedKagemushaPromotionReservationV1,
-        catalog_seal_bytes: &'a [u8],
-        sources: &'a kagemusha_validator_qualification::KagemushaStartupQualificationSourcesV1,
-    },
-}
-
-#[derive(Default)]
-struct KagemushaCheckQualificationArtifacts {
-    catalog_seal:
-        Option<iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1>,
-    validator_seal: Option<iroha_data_model::offline::KagemushaV4ValidatorQualificationSealV1>,
-}
-
-#[cfg(test)]
+/// Validate configuration and any locally available genesis without mutating durable state.
 fn validate_config_for_check(
     config: &Config,
     genesis: Option<&GenesisBlock>,
-    build_kagemusha_qualification_seal: bool,
-) -> ReportResult<
-    Option<iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1>,
-    MainError,
-> {
-    let mode = if build_kagemusha_qualification_seal {
-        KagemushaCheckQualificationMode::CatalogSeal
-    } else {
-        KagemushaCheckQualificationMode::None
-    };
-    validate_config_for_check_mode(config, genesis, mode).map(|artifacts| artifacts.catalog_seal)
-}
-
-#[expect(clippy::too_many_lines, reason = "prepare, validate, then sign")]
-fn validate_config_for_check_mode(
-    config: &Config,
-    genesis: Option<&GenesisBlock>,
-    mode: KagemushaCheckQualificationMode<'_>,
-) -> ReportResult<KagemushaCheckQualificationArtifacts, MainError> {
+) -> ReportResult<(), MainError> {
     validate_config_offline(config).change_context(MainError::Config)?;
     IrohaRuntimeProviderBindingsV1::try_from_config(config)
         .map_err(Report::new)
         .change_context(MainError::Config)
         .attach("failed to validate the public runtime-provider binding catalog")?;
-    if !matches!(&mode, KagemushaCheckQualificationMode::None) && genesis.is_none() {
-        let flag = match &mode {
-            KagemushaCheckQualificationMode::CatalogSeal => {
-                "--write-kagemusha-catalog-qualification-seal"
-            }
-            KagemushaCheckQualificationMode::ValidatorSeal { .. } => {
-                "--write-kagemusha-validator-qualification-seal"
-            }
-            KagemushaCheckQualificationMode::None => unreachable!(),
-        };
-        return Err(Report::new(MainError::Config).attach(
-            format!("`{flag}` requires locally available genesis so the seal is published only after full Kagemusha release and genesis validation"),
-        ));
+    if let Some(genesis) = genesis {
+        validate_available_genesis_for_check(config, genesis)?;
     }
-    let mut artifacts = KagemushaCheckQualificationArtifacts::default();
-    let mut pending_validator_qualification = None;
-    let catalog = match mode {
-        KagemushaCheckQualificationMode::None => load_configured_kagemusha_release_catalog(config)
-            .map_err(|error| {
-                Report::new(MainError::Config).attach(format!(
-                    "failed to load the configured Kagemusha V4 release catalog: {error}"
-                ))
-            })?,
-        KagemushaCheckQualificationMode::CatalogSeal => {
-            let capture =
-                load_and_build_configured_kagemusha_validator_qualification_capture(config)
-                    .map_err(|error| {
-                        Report::new(MainError::Config).attach(format!(
-                            "failed to fully qualify the Kagemusha V4 release catalog: {error}"
-                        ))
-                    })?;
-            artifacts.catalog_seal = Some(capture.catalog_qualification_seal().clone());
-            capture.into_catalog()
-        }
-        KagemushaCheckQualificationMode::ValidatorSeal {
-            trusted_promotion,
-            catalog_seal_bytes,
-            sources,
-        } => {
-            let capture =
-                load_and_build_configured_kagemusha_validator_qualification_capture(config)
-                    .map_err(|error| {
-                        Report::new(MainError::Config).attach(format!(
-                            "failed to fully qualify the Kagemusha V4 release catalog: {error}"
-                        ))
-                    })?;
-            capture
-                .catalog_qualification_seal()
-                .verify_exact_canonical_bytes(catalog_seal_bytes)
-                .map_err(|error| {
-                    Report::new(MainError::Config).attach(format!(
-                        "configured Kagemusha catalog qualification seal is not the exact same-load seal: {error}"
-                    ))
-                })?;
-            let catalog = capture.catalog_for_validation();
-            pending_validator_qualification = Some((capture, trusted_promotion, sources));
-            catalog
-        }
-    };
-    let Some(genesis) = genesis else {
-        // Runtime startup can use an exact configured genesis hash with the
-        // canonical body in Kura or a snapshot; body validation remains pending.
-        return Ok(artifacts);
-    };
-    let full_validation = validate_available_genesis_for_check(config, genesis, catalog);
-    artifacts.validator_seal = continue_after_full_kagemusha_check(
-        full_validation,
-        |(validated_genesis, _block_cadence_ms)| {
-            let Some((capture, trusted_promotion, sources)) = pending_validator_qualification
-            else {
-                return Ok(None);
-            };
-            let runtime_effective_config = kagemusha_runtime_effective_config_projection::build_kagemusha_runtime_effective_config_projection_v1(
-                config,
-                genesis,
-                &validated_genesis,
-            )
-            .map_err(|error| {
-                Report::new(MainError::Config).attach(format!(
-                    "failed to derive Kagemusha runtime-effective config: {error}"
-                ))
-            })?;
-            let controller = config
-                .settlement
-                .offline
-                .kagemusha_promotion_controller_public_key
-                .as_ref()
-                .ok_or_else(|| {
-                    Report::new(MainError::Config).attach(
-                        "validator qualification requires a configured promotion controller",
-                    )
-                })?;
-            let catalog_revalidation_authority_key_id = config
-            .settlement
-            .offline
-            .kagemusha_catalog_revalidation_authority_key_id
-            .as_deref()
-            .ok_or_else(|| {
-                Report::new(MainError::Config).attach(
-                    "validator qualification requires a configured catalog-revalidation authority key id",
-                )
-            })?;
-            let catalog_revalidation_authority_public_key = config
-            .settlement
-            .offline
-            .kagemusha_catalog_revalidation_authority_public_key
-            .as_ref()
-            .ok_or_else(|| {
-                Report::new(MainError::Config).attach(
-                    "validator qualification requires a configured catalog-revalidation authority public key",
-                )
-            })?;
-            let promotion =
-                kagemusha_validator_qualification::KagemushaTrustedPromotionInputsV1::new(
-                    controller,
-                    trusted_promotion.exact_reservation_bytes(),
-                    trusted_promotion.catalog_revalidation_receipt_json(),
-                    catalog_revalidation_authority_key_id,
-                    catalog_revalidation_authority_public_key,
-                );
-            let outcome =
-                kagemusha_validator_qualification::try_build_kagemusha_validator_qualification_v1(
-                    sources,
-                    Some(&promotion),
-                    Some(&capture),
-                    Some(genesis),
-                    Some(&runtime_effective_config),
-                    &config.common.peer.id,
-                    Some(&config.common.key_pair),
-                )
-                .map_err(|error| {
-                    Report::new(MainError::Config).attach(format!(
-                        "failed to build the local Kagemusha validator qualification seal: {error}"
-                    ))
-                })?;
-            match outcome {
-                kagemusha_validator_qualification::KagemushaValidatorQualificationOutcomeV1::Signed(
-                    seal,
-                ) => Ok(Some(*seal)),
-                kagemusha_validator_qualification::KagemushaValidatorQualificationOutcomeV1::Unavailable(
-                    reason,
-                ) => Err(Report::new(MainError::Config).attach(format!(
-                    "Kagemusha validator qualification was explicitly unavailable: {reason:?}"
-                ))),
-            }
-        },
-    )?;
-    Ok(artifacts)
-}
-
-fn continue_after_full_kagemusha_check<T, V>(
-    full_validation: ReportResult<V, MainError>,
-    action: impl FnOnce(V) -> ReportResult<T, MainError>,
-) -> ReportResult<T, MainError> {
-    action(full_validation?)
+    Ok(())
 }
 
 fn validate_available_genesis_for_check(
     config: &Config,
     genesis: &GenesisBlock,
-    catalog: iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
 ) -> ReportResult<(iroha_core::sumeragi::GenesisV2Bootstrap, u64), MainError> {
     let configured_key = &config.genesis.public_key;
     let embedded_key =
@@ -14356,13 +13901,7 @@ fn validate_available_genesis_for_check(
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let config_caps =
         build_consensus_config_caps(&config.nexus, None, None).change_context(MainError::Config)?;
-    let (
-        mode_tag,
-        _bls_domain,
-        consensus_caps,
-        block_cadence_ms,
-        maximum_validator_roster_len,
-    ) =
+    let (mode_tag, _bls_domain, consensus_caps, block_cadence_ms, maximum_validator_roster_len) =
         consensus_caps_from_genesis(genesis, &config_caps, &config.sumeragi).ok_or_else(|| {
             Report::new(MainError::Config).attach(
                 "local genesis does not contain one valid canonical Sumeragi v2 handshake context",
@@ -14389,7 +13928,6 @@ fn validate_available_genesis_for_check(
         signed_mode,
         signed_parameters,
         block_cadence_ms,
-        catalog,
     )
     .map(|validated_genesis| (validated_genesis, block_cadence_ms))
 }
@@ -14485,7 +14023,6 @@ fn validate_genesis_execution_offline(
     signed_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
     signed_parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
     expected_block_cadence_ms: u64,
-    kagemusha_release_catalog: iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
 ) -> ReportResult<iroha_core::sumeragi::GenesisV2Bootstrap, MainError> {
     let validation_root = DisposableValidationRoot::create().map_err(|error| {
         Report::new(MainError::Config).attach(format!(
@@ -14517,16 +14054,16 @@ fn validate_genesis_execution_offline(
             "failed to initialize disposable world state for genesis validation: {error}"
         ))
     })?;
-    state.set_kagemusha_release_catalog(kagemusha_release_catalog);
     install_zk_config_before_kura_replay(&mut state, config).change_context(MainError::Config)?;
-    apply_state_runtime_config_before_snapshot_auth(&mut state, config);
+    apply_state_runtime_config_before_snapshot_auth(&mut state, config)
+        .map_err(|error| Report::new(MainError::Config).attach(error))?;
     apply_state_geometry_config_before_kura_replay(&mut state, config)
         .change_context(MainError::Config)?;
     let replay_nexus = nexus_for_runtime_surfaces(&state);
     let frozen_lane_manifests =
         freeze_lane_manifests_for_startup_replay(&replay_nexus).map_err(|error| {
             Report::new(MainError::Config).attach(format!(
-                "lane manifest registry is not ready for Kagemusha release and genesis validation: {error}"
+                "lane manifest registry is not ready for genesis validation: {error}"
             ))
         })?;
     state.install_lane_manifests(&frozen_lane_manifests);
@@ -14759,8 +14296,7 @@ fn authenticated_maximum_validator_roster_len(
                 "authenticated NPoS state is missing signed election parameters".to_owned()
             })?;
             let maximum = usize::try_from(maximum).map_err(|_| {
-                "authenticated NPoS maximum validator roster does not fit this platform"
-                    .to_owned()
+                "authenticated NPoS maximum validator roster does not fit this platform".to_owned()
             })?;
             if !iroha_data_model::block::consensus_v2::is_valid_committee_size(maximum) {
                 return Err(
@@ -15881,25 +15417,11 @@ mod tests {
         );
     }
     #[test]
-    fn emergency_fast_skips_catalog_and_confidential_registry_scans() {
+    fn emergency_fast_skips_confidential_registry_scans() {
         let startup = include_str!("main.rs")
             .split_once("pub(crate) async fn start_with_runtime_deps")
             .expect("runtime-dependency startup entry")
             .1;
-        let catalog_setup = startup
-            .split_once("state.chain_id = config.common.chain.clone();")
-            .expect("state runtime setup")
-            .1
-            .split_once("if !loaded_state_from_snapshot")
-            .expect("end of release-catalog setup")
-            .0;
-        assert!(catalog_setup.contains("if emergency_fast"));
-        assert!(catalog_setup.contains("KagemushaReleaseCatalogV4::empty()"));
-        assert!(
-            catalog_setup
-                .contains("install_configured_kagemusha_release_catalog(&mut state, &config)")
-        );
-
         let confidential_setup = startup
             .split_once(") = if emergency_fast {")
             .expect("emergency Fast confidential-feature branch")
@@ -15923,30 +15445,6 @@ mod tests {
             confidential_setup
                 .1
                 .contains("compute_confidential_feature_digest(")
-        );
-
-        let kagemusha_runtime = startup
-            .split_once("if !emergency_fast")
-            .expect("Strict-only runtime setup")
-            .1;
-        assert!(kagemusha_runtime.contains("kagemusha_startup::install_runtime_effective_config("));
-    }
-    #[test]
-    fn emergency_fast_skips_stock_kagemusha_qualification() {
-        let startup = include_str!("main.rs")
-            .split_once("let emergency_fast = config.kura.init_mode == InitMode::Fast;")
-            .expect("emergency Fast mode selection")
-            .1
-            .split_once("if args.startup.check_config")
-            .expect("configuration-only command boundary")
-            .0;
-        let qualification = startup
-            .split_once("evaluate_stock_launcher_unavailable_v1")
-            .expect("stock Kagemusha qualification")
-            .0;
-        assert!(
-            qualification.contains("if !emergency_fast"),
-            "emergency Fast must branch before stock Kagemusha qualification reads release sources"
         );
     }
     #[test]
@@ -16044,7 +15542,7 @@ mod tests {
                 .contains("ifemergency_fast{state.validate_restored_governance(&config.gov)")
         );
         assert!(compact_source.contains(
-            "}else{apply_state_runtime_config_before_snapshot_auth(&mutstate,&config);}"
+            "apply_state_runtime_config_before_snapshot_auth(&mutstate,&config).map_err"
         ));
         assert!(compact_source.contains(
             "letevents_buffer_capacity=ifemergency_fast{1}else{config.torii.events_buffer_capacity.get()};"
@@ -16817,17 +16315,18 @@ mod tests {
                     .expect("offline asset domain"),
                 "ds".parse().expect("offline asset name"),
             );
-            let offline_escrow_account_id = iroha_test_samples::ALICE_ID.clone();
-            config.settlement.offline.escrow_accounts.insert(
+            let offline_reserve_account_id = iroha_test_samples::ALICE_ID.clone();
+            config.settlement.offline.reserve_accounts.insert(
                 offline_asset_definition_id.clone(),
-                offline_escrow_account_id.clone(),
+                offline_reserve_account_id.clone(),
             );
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let mut state = State::new_for_testing(World::new(), kura, query);
             install_zk_config_before_kura_replay(&mut state, &config)
                 .expect("fresh state accepts actual ZK configuration");
-            apply_state_runtime_config_before_snapshot_auth(&mut state, &config);
+            apply_state_runtime_config_before_snapshot_auth(&mut state, &config)
+                .expect("fresh state accepts actual runtime configuration");
             let installed = state.zk_snapshot();
             assert_eq!(
                 installed.sccp.max_pending_outbound_messages,
@@ -16841,10 +16340,10 @@ mod tests {
                 state
                     .settlement()
                     .offline
-                    .escrow_accounts
+                    .reserve_accounts
                     .get(&offline_asset_definition_id),
-                Some(&offline_escrow_account_id),
-                "the exact offline escrow catalog must be installed before Kura replay",
+                Some(&offline_reserve_account_id),
+                "the exact Offline Cash reserve catalog must be installed before Kura replay",
             );
         }
     }
@@ -16944,9 +16443,9 @@ mod tests {
         use super::*;
         use iroha_core::torii_proxy::{
             TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
-            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
-            ToriiReadProxyRequestV1, ToriiRouteHintV1,
+            ToriiFanoutRouteScopeV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1,
+            ToriiProxyRequestV1, ToriiProxyResponseFormatV1, ToriiProxyResponseV1,
+            ToriiReadEndpointV1, ToriiReadProxyRequestV1, ToriiRouteHintV1,
         };
         use iroha_crypto::Hash;
         use iroha_data_model::nexus::{DataSpaceId, LaneId};
@@ -16966,6 +16465,7 @@ mod tests {
                     visited_peer_ids: Vec::new(),
                     request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                         endpoint: ToriiReadEndpointV1::AccountsList,
+                        route_scope: ToriiFanoutRouteScopeV1::AllDataspaces,
                         expected_route: route,
                         path_args: Vec::new(),
                         query_string: None,
@@ -17180,7 +16680,7 @@ mod tests {
                     phase: consensus_v2::GlobalPhase::Prepare,
                     subject: sample_v2_subject(),
                     execution_commitment:
-                        consensus_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+                        consensus_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
                             Hash::prehashed([marker; 32]),
                             Hash::prehashed([marker.wrapping_add(1); 32]),
                             Hash::prehashed([marker.wrapping_add(2); 32]),
@@ -18877,12 +18377,6 @@ mod tests {
             state.set_gov(config.gov.clone());
             state.content = config.content.clone();
             state.set_settlement(config.settlement.clone());
-            state.set_kagemusha_release_catalog(
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
-                    &config.settlement.offline,
-                )
-                .expect("test Kagemusha release policy must be valid"),
-            );
             state
                 .set_zk(config.zk.clone())
                 .expect("test ZK config must be valid");
@@ -19328,47 +18822,8 @@ mod tests {
                 fixture.mode,
                 fixture.parameters,
                 fixture.cadence_ms,
-                load_configured_kagemusha_release_catalog(&fixture.config)
-                    .expect("an omitted release cache uses an empty catalog"),
             )
             .expect("valid genesis should execute in the disposable overlay");
-        }
-        #[test]
-        fn check_config_installs_offline_catalog_before_genesis_activation() {
-            let source = include_str!("main.rs");
-            let check_path = source
-                .split_once("fn validate_genesis_execution_offline(")
-                .expect("offline genesis validator")
-                .1
-                .split_once("fn parse_confidential_registry_hash(")
-                .expect("end offline genesis validator")
-                .0;
-            let install = check_path
-                .find("state.set_kagemusha_release_catalog(kagemusha_release_catalog)")
-                .expect("check-config catalog installation");
-            let execute = check_path
-                .find("ValidBlock::validate_signed_genesis_keep_voting_block(")
-                .expect("offline genesis execution");
-            let freeze = check_path
-                .find("freeze_staged_genesis_v2(")
-                .expect("staged genesis freeze");
-            assert!(install < execute);
-            assert!(execute < freeze);
-            assert!(
-                !check_path.contains("ensure_mandatory_offline"),
-                "offline support must not introduce a genesis readiness gate"
-            );
-            let runtime_path = source
-                .split_once("pub async fn start_with_runtime_deps(")
-                .expect("runtime startup")
-                .1
-                .split_once("// Resolve the complete replay boundary")
-                .expect("end runtime catalog setup")
-                .0;
-            assert!(
-                runtime_path
-                    .contains("install_configured_kagemusha_release_catalog(&mut state, &config)")
-            );
         }
         #[test]
         fn check_config_accepts_taira_without_offline_backend_settings() {
@@ -19376,18 +18831,14 @@ mod tests {
             config.common.chain = ChainId::from("taira");
             config.confidential.enabled = true;
             config.confidential.assume_valid = false;
-            validate_config_for_check(&config, None, false)
+            validate_config_for_check(&config, None)
                 .expect("Taira has universal offline primitives without backend enablement");
         }
         #[test]
         fn check_config_qualifies_the_fixed_moderation_strict_ingress() {
             let mut exact = sample_config();
             configure_exact_moderation_strict_ingress(&mut exact);
-            assert!(
-                validate_config_for_check(&exact, None, false)
-                    .expect("exact fixed moderation ingress must pass static check-config")
-                    .is_none()
-            );
+            assert!(validate_config_for_check(&exact, None).is_ok());
             for (mutation, expected) in [
                 (0, "runtime-provider binding is substituted"),
                 (1, "runtime-provider binding is stale or revoked"),
@@ -19405,74 +18856,10 @@ mod tests {
                 } else {
                     moderation.strict_ingress_revision += 1;
                 }
-                let report = validate_config_for_check(&invalid, None, false)
+                let report = validate_config_for_check(&invalid, None)
                     .expect_err("invalid fixed ingress binding must fail check-config");
                 assert!(format!("{report:#}").contains(expected));
             }
-        }
-        #[test]
-        fn configured_kagemusha_catalog_loader_is_optional_for_every_asset() {
-            let mut config = sample_config();
-            config.settlement.offline.kagemusha_release_policy_path = None;
-            config.settlement.offline.kagemusha_artifact_dir = None;
-            assert!(
-                load_configured_kagemusha_release_catalog(&config)
-                    .expect("an omitted verifier cache uses an empty catalog")
-                    .is_empty()
-            );
-            config.settlement.offline.escrow_accounts.insert(
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    iroha_data_model::domain::DomainId::try_new("offline", "universal")
-                        .expect("offline asset domain"),
-                    "cash".parse().expect("offline asset name"),
-                ),
-                iroha_test_samples::ALICE_ID.clone(),
-            );
-            assert!(
-                load_configured_kagemusha_release_catalog(&config)
-                    .expect("runtime escrow state must not require a process-local catalog")
-                    .is_empty()
-            );
-            config.settlement.offline.kagemusha_release_policy_path =
-                Some(PathBuf::from("/tmp/policy.norito"));
-            assert!(
-                load_configured_kagemusha_release_catalog(&config)
-                    .err()
-                    .expect("catalog paths must be configured together")
-                    .contains("configured together")
-            );
-        }
-        #[test]
-        fn configured_kagemusha_catalog_loader_uses_seal_without_fallback() {
-            let mut config = sample_config();
-            config.settlement.offline.kagemusha_release_policy_path =
-                Some(PathBuf::from("/missing/policy.norito"));
-            config.settlement.offline.kagemusha_artifact_dir =
-                Some(PathBuf::from("/missing/artifacts"));
-            config
-                .settlement
-                .offline
-                .kagemusha_catalog_qualification_seal_path =
-                Some(PathBuf::from("/missing/catalog-seal.norito"));
-            let error = load_configured_kagemusha_release_catalog(&config)
-                .err()
-                .expect("configured seal must select the fail-closed sealed loader");
-            assert!(
-                error.contains("sealed Kagemusha V4 release catalog without fallback"),
-                "unexpected sealed catalog error: {error}"
-            );
-        }
-        #[test]
-        fn qualification_seal_check_requires_local_genesis() {
-            let config = sample_config();
-            let error = validate_config_for_check(&config, None, true).expect_err(
-                "seal publication must wait for full Kagemusha release and genesis validation",
-            );
-            let rendered = format!("{error:?}");
-            assert!(
-                rendered.contains("requires locally available genesis"),
-                "unexpected missing-genesis error: {rendered}"
-            );
         }
         #[test]
         fn check_config_offline_rejects_genesis_instruction_failure() {
@@ -19492,8 +18879,6 @@ mod tests {
                 fixture.mode,
                 fixture.parameters,
                 fixture.cadence_ms,
-                load_configured_kagemusha_release_catalog(&fixture.config)
-                    .expect("an omitted release cache uses an empty catalog"),
             )
             .err()
             .expect("duplicate genesis registration must fail semantic execution");
@@ -19735,8 +19120,6 @@ mod tests {
                 genesis_manifest_json: Some(manifest_path),
                 startup: StartupArgs {
                     check_config: false,
-                    write_kagemusha_catalog_qualification_seal: None,
-                    write_kagemusha_validator_qualification_seal: None,
                     trace_config: false,
                     config_blake3: None,
                 },
@@ -19759,7 +19142,6 @@ mod tests {
             assert_eq!(config.crypto.sm2_distid_default, "CN1234567812345678");
             Ok(())
         }
-        include!("main/kagemusha_runtime_effective_config_projection_tests.rs");
     }
     mod config_integration {
         #[allow(unused_imports)]
@@ -19824,7 +19206,6 @@ mod tests {
             );
             table
         }
-        include!("main/kagemusha_startup_source_tests.rs");
         fn load_config_with_overrides<F>(
             mut adjust: F,
         ) -> eyre::Result<(Config, tempfile::TempDir, PathBuf)>

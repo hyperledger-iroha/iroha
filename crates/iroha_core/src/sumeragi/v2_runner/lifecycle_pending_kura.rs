@@ -444,6 +444,7 @@ fn run_pending_active_height(
     mut activated: PendingKuraActivatedProductionLifecycleV1,
     mut active_runner: ProductionLifecycleActiveRunnerBorrowV1,
     context: &wire::HeightContext,
+    proofs_of_possession: &[Vec<u8>],
     context_store: &crate::sumeragi::v2_context_store::V2ContextStore,
     state: &Arc<State>,
     kura: &Arc<Kura>,
@@ -459,7 +460,8 @@ fn run_pending_active_height(
     control_queue_capacity: usize,
     round_timeout: Duration,
     retransmit_interval: Duration,
-) -> Result<Option<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError> {
+) -> Result<HeightRunOutcome<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError>
+{
     let mut next_recovered_decision_fetch_retransmit =
         deadline_after(Instant::now(), retransmit_interval);
     let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);
@@ -471,7 +473,7 @@ fn run_pending_active_height(
         }
         if shutdown_signal.is_sent() {
             activated.into_clean_shutdown(&mut active_runner)?;
-            return Ok(None);
+            return Ok(HeightRunOutcome::Shutdown);
         }
         liveness_watchdog.poll(Instant::now());
         activated.with_runner_runtime(
@@ -662,7 +664,7 @@ fn run_pending_active_height(
             }
             if shutdown_signal.is_sent() {
                 activated.into_clean_shutdown(&mut active_runner)?;
-                return Ok(None);
+                return Ok(HeightRunOutcome::Shutdown);
             }
             liveness_watchdog.poll(Instant::now());
             let (drained_terminal_ingress, drained_terminal_relay) = activated
@@ -713,6 +715,30 @@ fn run_pending_active_height(
         receiver
             .ensure_closed_drained_cut()
             .map_err(V2RunnerError::Service)?;
+        if context.height == u64::MAX {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |executor, _services, _lane_work| {
+                    let (receipt, artifact) = executor.durable_finality().ok_or_else(|| {
+                        V2RunnerError::Service(
+                            "terminal pending-Kura lifecycle lost its durable finality owner"
+                                .to_owned(),
+                        )
+                    })?;
+                    authenticate_terminal_complete_tip(
+                        state.as_ref(),
+                        kura.as_ref(),
+                        context,
+                        proofs_of_possession,
+                        artifact,
+                        receipt,
+                    )?;
+                    Ok::<_, V2RunnerError>(())
+                },
+            )?;
+            activated.into_clean_shutdown(&mut active_runner)?;
+            return Ok(HeightRunOutcome::Terminal);
+        }
         let (finalized, lane_work) = activated.into_finalized_rollover(&mut active_runner)?;
         let prepared_successor = {
             let (receipt, artifact) = finalized.finality();
@@ -822,7 +848,10 @@ fn run_pending_active_height(
                 "pending Kura lifecycle finalized with retained local cleanup state"
             );
         }
-        return Ok(Some((prepared_successor, retained_merge_sidecars)));
+        return Ok(HeightRunOutcome::Successor((
+            prepared_successor,
+            retained_merge_sidecars,
+        )));
     }
 }
 
@@ -843,6 +872,9 @@ pub(super) fn run_pending_kura_lifecycle_height(
     >,
     global_beacon_partial_signer: Option<
         Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
+    >,
+    offline_cash_mint_finality_authority: Option<
+        Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
     >,
     network: crate::IrohaNetwork,
     block_rx: Arc<FairV2Ingress>,
@@ -1046,7 +1078,8 @@ pub(super) fn run_pending_kura_lifecycle_height(
         Arc::clone(&block_rx),
         Arc::clone(&kura_replica_advert_refresh),
         exact_output_service_owner,
-    );
+    )
+    .with_offline_cash_mint_finality_authority(offline_cash_mint_finality_authority.clone());
     let launched = owner.launch(launch_inputs)?;
     let mut setup_runner =
         ProductionLifecyclePreActivationRunnerBorrowV1::mint_for_recovered_runner();
@@ -1116,10 +1149,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
         attempts = recovery_attempts,
         "finished lifecycle-owned interrupted-tip local Apply recovery"
     );
-    state
-        .require_committed_kagemusha_runtime_effective_config()
-        .map_err(V2RunnerError::Service)?;
-
     let (pending, control) = if emergency_fast {
         iroha_logger::warn!(
             "emergency Fast startup completed interrupted-tip Apply but deferred historical lane repair and reservation reconciliation until a Strict restart"
@@ -1192,10 +1221,11 @@ pub(super) fn run_pending_kura_lifecycle_height(
     )?;
     let activated = prepared.activate_no_clock(activation)?;
     let active_runner = ProductionLifecycleActiveRunnerBorrowV1::mint_for_recovered_runner();
-    let Some((successor, retained_merge_sidecars)) = run_pending_active_height(
+    let completed = run_pending_active_height(
         activated,
         active_runner,
         &context,
+        verified_context.proofs_of_possession(),
         &context_store,
         &state,
         &kura,
@@ -1213,9 +1243,21 @@ pub(super) fn run_pending_kura_lifecycle_height(
         control_queue_capacity,
         round_timeout,
         retransmit_interval,
-    )?
-    else {
-        return Ok(());
+    )?;
+    let (successor, retained_merge_sidecars) = match completed {
+        HeightRunOutcome::Successor(successor) => successor,
+        HeightRunOutcome::Terminal => {
+            wait_for_terminal_shutdown(
+                context.height,
+                context.id(),
+                &ingress_ready,
+                &block_rx,
+                &wake_rx,
+                &shutdown_signal,
+            );
+            return Ok(());
+        }
+        HeightRunOutcome::Shutdown => return Ok(()),
     };
 
     super::lifecycle_run_inner::run_non_pending_lifecycle_loop(
@@ -1228,6 +1270,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
         global_beacon_partial_signer,
+        offline_cash_mint_finality_authority,
         network,
         block_rx,
         lane_relay_rx,

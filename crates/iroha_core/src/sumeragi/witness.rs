@@ -5,9 +5,6 @@
 //! canonical JSON strings from `iroha_primitives::json::Json` for metadata maps.
 //!
 //! This module is internal and accessed from execution/merge paths and the actor.
-use super::smt::{
-    KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KAGEMUSHA_V4_TOPUP_DRAWDOWN_WITNESS_KEY_TAG,
-};
 use crate::state::{StateBlock, WorldReadOnly};
 use core::str::FromStr as _;
 use iroha_crypto::Hash;
@@ -17,9 +14,9 @@ use iroha_data_model::{
     block::consensus::{ExecKv, ExecWitness},
     domain::DomainId,
     fastpq::{TransferTranscript, TransferTranscriptBundle},
+    isi::{OFFLINE_CASH_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1, OfflineCashReserveReceiptV1},
     name::Name,
     nft::NftId,
-    state_path::StatePath,
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
@@ -360,33 +357,6 @@ fn key_asset_def_total(id: &AssetDefinitionId) -> Vec<u8> {
     out.extend_from_slice(id.to_string().as_bytes());
     out
 }
-/// Execution-witness tag for one composite Kagemusha terminal outcome key.
-///
-/// This is intentionally distinct from the dedicated top-up anchor tag, so
-/// lifecycle outcomes remain in the ordinary-writes commitment.
-pub(crate) const KAGEMUSHA_OPERATION_OUTCOME_WITNESS_KEY_TAG_V4: u8 = 0xD4;
-/// Return the ordinary consensus-witness key for one Kagemusha outcome record.
-pub(crate) fn kagemusha_operation_outcome_witness_key_v4(key: &StatePath) -> Vec<u8> {
-    let key = key.to_string();
-    let mut out = Vec::with_capacity(1 + key.len());
-    out.push(KAGEMUSHA_OPERATION_OUTCOME_WITNESS_KEY_TAG_V4);
-    out.extend_from_slice(key.as_bytes());
-    out
-}
-/// Return the consensus-witness key for one finalized Kagemusha V4 top-up anchor.
-pub(crate) fn kagemusha_v4_topup_anchor_witness_key(operation_id: [u8; 32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(1 + operation_id.len());
-    out.push(KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
-    out.extend_from_slice(&operation_id);
-    out
-}
-/// Return the consensus-witness key for one Kagemusha V4 anchor drawdown balance.
-pub(crate) fn kagemusha_v4_topup_drawdown_witness_key(operation_id: [u8; 32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(1 + operation_id.len());
-    out.push(KAGEMUSHA_V4_TOPUP_DRAWDOWN_WITNESS_KEY_TAG);
-    out.extend_from_slice(&operation_id);
-    out
-}
 fn bytes_from_json(j: &iroha_primitives::json::Json) -> Vec<u8> {
     j.get().as_bytes().to_vec()
 }
@@ -512,64 +482,34 @@ pub fn record_write_asset_def_total(id: &AssetDefinitionId, val: &Quantity) {
         g.writes.insert(k, v);
     });
 }
-/// Record the pre-state value (or canonical absence) of a Kagemusha V4 top-up anchor.
-pub(crate) fn record_read_kagemusha_v4_topup_anchor(operation_id: [u8; 32], value: Option<&[u8]>) {
-    let key = kagemusha_v4_topup_anchor_witness_key(operation_id);
-    let value = value.map_or_else(Vec::new, ToOwned::to_owned);
+/// Return the exact execution-witness key for one pooled Offline Cash V1 receipt.
+pub(crate) fn offline_cash_reserve_receipt_witness_key_v1(operation_id: [u8; 32]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(33);
+    key.push(OFFLINE_CASH_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
+    key.extend_from_slice(&operation_id);
+    key
+}
+/// Record the pre-state receipt bytes, or canonical absence, for one V1 operation.
+pub(crate) fn record_read_offline_cash_reserve_receipt_v1(
+    operation_id: [u8; 32],
+    canonical_receipt: Option<&[u8]>,
+) {
+    let key = offline_cash_reserve_receipt_witness_key_v1(operation_id);
+    let value = canonical_receipt.map_or_else(Vec::new, ToOwned::to_owned);
     with_active_slot(|witness| {
         witness.reads.entry(key).or_insert(value);
     });
 }
-/// Record the canonical digest written by a successful Kagemusha V4 top-up.
-pub(crate) fn record_write_kagemusha_v4_topup_anchor(
-    operation_id: [u8; 32],
-    canonical_anchor_digest: &[u8; 32],
-) {
-    let key = kagemusha_v4_topup_anchor_witness_key(operation_id);
+/// Record the canonical post-state receipt bytes for one committed V1 operation.
+pub(crate) fn record_write_offline_cash_reserve_receipt_v1(
+    receipt: &OfflineCashReserveReceiptV1,
+) -> Result<(), norito::Error> {
+    let key = offline_cash_reserve_receipt_witness_key_v1(receipt.operation_id);
+    let value = norito::encode_canonical(receipt)?;
     with_active_slot(|witness| {
-        witness.writes.insert(key, canonical_anchor_digest.to_vec());
+        witness.writes.insert(key, value);
     });
-}
-/// Record the pre-state redeemed amount (or canonical absence) for one top-up anchor.
-pub(crate) fn record_read_kagemusha_v4_topup_drawdown(
-    operation_id: [u8; 32],
-    encoded_redeemed_atomic_units: Option<&[u8]>,
-) {
-    let key = kagemusha_v4_topup_drawdown_witness_key(operation_id);
-    let value = encoded_redeemed_atomic_units.map_or_else(Vec::new, ToOwned::to_owned);
-    with_active_slot(|witness| {
-        witness.reads.entry(key).or_insert(value);
-    });
-}
-/// Record the post-state redeemed amount for one top-up anchor.
-pub(crate) fn record_write_kagemusha_v4_topup_drawdown(
-    operation_id: [u8; 32],
-    redeemed_atomic_units: u128,
-) {
-    let key = kagemusha_v4_topup_drawdown_witness_key(operation_id);
-    with_active_slot(|witness| {
-        witness
-            .writes
-            .insert(key, redeemed_atomic_units.to_le_bytes().to_vec());
-    });
-}
-/// Record the pre-state value or canonical absence of one Kagemusha outcome.
-pub(crate) fn record_read_kagemusha_operation_outcome_v4(key: &StatePath, value: Option<&[u8]>) {
-    let key = kagemusha_operation_outcome_witness_key_v4(key);
-    let value = value.map_or_else(Vec::new, ToOwned::to_owned);
-    with_active_slot(|witness| {
-        witness.reads.entry(key).or_insert(value);
-    });
-}
-/// Record the canonical post-state bytes for one Kagemusha outcome, or empty bytes for deletion.
-pub(crate) fn record_write_kagemusha_operation_outcome_v4(
-    key: &StatePath,
-    canonical_record: &[u8],
-) {
-    let key = kagemusha_operation_outcome_witness_key_v4(key);
-    with_active_slot(|witness| {
-        witness.writes.insert(key, canonical_record.to_vec());
-    });
+    Ok(())
 }
 /// Record a FASTPQ transfer transcript so `ExecWitness` consumers can replay transfers.
 pub fn record_fastpq_transcript(transcript: &TransferTranscript) {
@@ -1445,99 +1385,59 @@ mod tests {
         assert_eq!(r1, r2);
     }
     #[test]
-    fn kagemusha_v4_topup_anchor_write_has_a_dedicated_provable_witness_leaf() {
+    fn offline_cash_v1_receipt_uses_exact_canonical_witness_leaf() {
         let _guard = exec_witness_guard();
         start_block();
-        let operation_id = [0x64; 32];
-        let anchor_digest = [0xA4; 32];
-        record_read_kagemusha_v4_topup_anchor(operation_id, None);
-        record_write_kagemusha_v4_topup_anchor(operation_id, &anchor_digest);
-        let witness = drain_exec_witness();
-        let expected_key = kagemusha_v4_topup_anchor_witness_key(operation_id);
-        assert_eq!(expected_key.len(), 33);
-        assert_eq!(expected_key[0], KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
-        assert_eq!(&expected_key[1..], operation_id.as_slice());
-        assert_eq!(witness.reads.len(), 1);
-        assert_eq!(witness.reads[0].key, expected_key);
-        assert!(witness.reads[0].value.is_empty());
-        assert_eq!(witness.writes.len(), 1);
-        assert_eq!(witness.writes[0].key, expected_key);
-        assert_eq!(witness.writes[0].value.as_slice(), anchor_digest.as_slice());
-        let writes = witness
-            .writes
-            .iter()
-            .map(|entry| KvPair::new(entry.key.clone(), entry.value.clone()))
-            .collect::<Vec<_>>();
-        let target = KvPair::new(expected_key, anchor_digest.to_vec());
-        let commitment = crate::sumeragi::smt::build_kagemusha_topup_block_commitment(&writes)
-            .expect("valid V4 top-up witness")
-            .expect("V4 top-up commitment");
-        assert_eq!(commitment.leaves, vec![target.clone()]);
-        assert!(
-            crate::sumeragi::smt::verify_kagemusha_topup_write_inclusion(
-                &target,
-                &commitment.proofs[0],
-                commitment.ordinary_writes_root,
-                commitment.post_state_root,
+        let operation_id = [0x66; 32];
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"offline-cash-v1-witness"),
+        ));
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "xor".parse().expect("asset name"),
+        );
+        let asset_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+            iroha_crypto::Hash::new(b"offline-cash-v1-witness-incarnation").into(),
+        )
+        .expect("asset incarnation");
+        let receipt = OfflineCashReserveReceiptV1 {
+            version: iroha_data_model::isi::OFFLINE_CASH_CHAIN_VERSION_V1,
+            operation_id,
+            kind: iroha_data_model::isi::OfflineCashOperationKindV1::TopUp,
+            request_digest: [0x67; 32],
+            mint_statement_digest: [0x69; 32],
+            network_id,
+            liability_pool_id: iroha_data_model::offline::offline_cash_liability_pool_id_v1(
+                &network_id,
+                &asset,
+                asset_incarnation,
             )
-        );
-    }
-    #[test]
-    fn kagemusha_v4_drawdown_is_an_ordinary_exact_u128_witness_leaf() {
-        let _guard = exec_witness_guard();
-        start_block();
-        let operation_id = [0x65; 32];
-        record_read_kagemusha_v4_topup_drawdown(operation_id, Some(&11_u128.to_le_bytes()));
-        record_write_kagemusha_v4_topup_drawdown(operation_id, 29);
+            .expect("liability pool"),
+            asset,
+            asset_incarnation,
+            scale: 0,
+            amount: 9,
+            previous_pool_receipt_digest: [0; 32],
+            total_topups: 9,
+            total_redemptions: 0,
+            transaction_hash: [0x68; 32],
+            committed_at_ms: 1,
+        };
+        let key = offline_cash_reserve_receipt_witness_key_v1(operation_id);
+        assert_eq!(key.len(), 33);
+        assert_eq!(key[0], OFFLINE_CASH_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
+        assert_eq!(&key[1..], operation_id.as_slice());
+        record_read_offline_cash_reserve_receipt_v1(operation_id, None);
+        record_write_offline_cash_reserve_receipt_v1(&receipt).expect("encode receipt");
         let witness = drain_exec_witness();
-        let expected_key = kagemusha_v4_topup_drawdown_witness_key(operation_id);
-        assert_eq!(expected_key.len(), 33);
-        assert_eq!(expected_key[0], KAGEMUSHA_V4_TOPUP_DRAWDOWN_WITNESS_KEY_TAG);
-        assert_eq!(&expected_key[1..], operation_id.as_slice());
-        assert_eq!(witness.reads.len(), 1);
-        assert_eq!(witness.reads[0].key, expected_key);
-        assert_eq!(witness.reads[0].value, 11_u128.to_le_bytes());
-        assert_eq!(witness.writes.len(), 1);
-        assert_eq!(witness.writes[0].key, expected_key);
-        assert_eq!(witness.writes[0].value, 29_u128.to_le_bytes());
-    }
-    #[test]
-    fn kagemusha_operation_outcome_is_an_ordinary_exact_witness_leaf() {
-        let _guard = exec_witness_guard();
-        start_block();
-        let state_key: StatePath = "kagemusha_operation_outcome_v4_fixture_fixture"
-            .parse()
-            .expect("state key");
-        let terminal_record = vec![0xA7; 96];
-        record_read_kagemusha_operation_outcome_v4(&state_key, None);
-        record_write_kagemusha_operation_outcome_v4(&state_key, &terminal_record);
-        let witness = drain_exec_witness();
-        let expected_key = kagemusha_operation_outcome_witness_key_v4(&state_key);
-        assert_eq!(
-            expected_key[0],
-            KAGEMUSHA_OPERATION_OUTCOME_WITNESS_KEY_TAG_V4
-        );
-        assert_ne!(expected_key[0], KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
-        assert_eq!(witness.reads.len(), 1);
-        assert_eq!(witness.reads[0].key, expected_key);
+        assert_eq!(witness.reads[0].key, key);
         assert!(witness.reads[0].value.is_empty());
-        assert_eq!(witness.writes.len(), 1);
-        assert_eq!(witness.writes[0].key, expected_key);
-        assert_eq!(witness.writes[0].value, terminal_record);
-        let reads = witness
-            .reads
-            .iter()
-            .map(|entry| KvPair::new(entry.key.clone(), entry.value.clone()))
-            .collect::<Vec<_>>();
-        let writes = witness
-            .writes
-            .iter()
-            .map(|entry| KvPair::new(entry.key.clone(), entry.value.clone()))
-            .collect::<Vec<_>>();
+        assert_eq!(witness.writes[0].key, key);
         assert_eq!(
-            crate::sumeragi::smt::compute_consensus_post_state_root(&reads, &writes)
-                .expect("ordinary outcome commitment"),
-            crate::sumeragi::smt::compute_post_state_root(&reads, &writes)
+            witness.writes[0].value,
+            norito::encode_canonical(&receipt).expect("canonical receipt")
         );
     }
     #[test]

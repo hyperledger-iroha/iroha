@@ -1,10 +1,12 @@
 package org.hyperledger.iroha.android.offline;
 
-/** Stable request/payment/acknowledgement identifiers carried by IPM1. */
+/** Stable five-message Offline Cash V1 exchange identifiers carried by IPM1. */
 public enum IrohaPeerPayloadKind {
   RECEIVE_REQUEST(1),
-  PAYMENT(2),
-  ACKNOWLEDGEMENT(3);
+  ACCEPTANCE_INTENT_AUTHORIZATION(2),
+  ACCEPTANCE_TICKET(3),
+  PAYMENT(4),
+  ACKNOWLEDGEMENT(5);
 
   private final int code;
 

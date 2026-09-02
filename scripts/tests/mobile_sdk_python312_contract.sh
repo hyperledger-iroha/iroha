@@ -11,7 +11,6 @@ MOBILE_PACKAGER="$ROOT_DIR/scripts/package_mobile_sdk_artifacts.sh"
 MOBILE_CHECKER="$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh"
 MOBILE_CHECKER_TEST="$ROOT_DIR/scripts/check_mobile_sdk_artifacts_test.sh"
 ANDROID_BUILDER="$ROOT_DIR/kotlin/client-android/build.gradle.kts"
-JVM_NATIVE_GATE="$ROOT_DIR/ci/check_kagemusha_jvm_native_bridge.sh"
 MOBILE_WORKFLOW="$ROOT_DIR/.github/workflows/mobile_sdk_artifacts.yml"
 TEST_ROOT=""
 
@@ -161,16 +160,8 @@ grep -Fq '"/opt/homebrew/opt/python@3.12/bin/python3.12"' "$ANDROID_BUILDER" \
 if grep -Fq '"/opt/homebrew/bin/python3",' "$ANDROID_BUILDER"; then
   fail "Android native build logic still trusts an unversioned Homebrew Python"
 fi
-grep -Fq 'resolve_trusted_python312()' "$JVM_NATIVE_GATE" \
-  || fail "JVM native gate does not authenticate Python 3.12"
-grep -Fq 'MOBILE_SDK_PYTHON_BINARY' "$JVM_NATIVE_GATE" \
-  || fail "JVM native gate does not honor the canonical Python override"
-grep -Fq 'sys.version_info[:2] != (3, 12)' "$JVM_NATIVE_GATE" \
-  || fail "JVM native gate does not require exact Python 3.12"
-grep -Fq '"$PYTHON_BINARY" -I -S' "$JVM_NATIVE_GATE" \
-  || fail "JVM native gate does not isolate Python helpers from site packages"
-[[ "$(grep -Fc 'python-version: "3.12"' "$MOBILE_WORKFLOW")" -eq 5 ]] \
-  || fail "mobile workflow must pin Python 3.12 in exactly five jobs"
+[[ "$(grep -Fc 'python-version: "3.12"' "$MOBILE_WORKFLOW")" -eq 4 ]] \
+  || fail "mobile workflow must pin Python 3.12 in exactly four jobs"
 [[ "$(grep -Fc 'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python"' "$MOBILE_WORKFLOW")" -eq 3 ]] \
   || fail "mobile workflow must bind the canonical Python in exactly three jobs"
 [[ "$(grep -Fc 'echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path"' "$MOBILE_WORKFLOW")" -eq 1 ]] \
@@ -225,37 +216,6 @@ expect_failure_containing \
   env \
     MOBILE_SDK_PYTHON_BINARY=/bin/bash \
     /bin/bash "$MOBILE_PACKAGER" --help
-
-jvm_python="$(
-  env \
-    PATH="$TEST_ROOT/hostile-path" \
-    SDKROOT="$TEST_ROOT/forged-sdk" \
-    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
-    /bin/bash "$JVM_NATIVE_GATE" --resolve-python312-for-test
-)" || fail "JVM native gate rejected the canonical Python 3.12 override"
-[[ "$jvm_python" == "$PYTHON312" ]] \
-  || fail "JVM native gate substituted the canonical Python 3.12 override"
-
-expect_failure_containing \
-  "JVM native gate symlinked Python override" \
-  "absolute canonical regular executable" \
-  env \
-    MOBILE_SDK_PYTHON_BINARY="$TEST_ROOT/python312-link" \
-    /bin/bash "$JVM_NATIVE_GATE" --resolve-python312-for-test
-
-expect_failure_containing \
-  "JVM native gate relative Python override" \
-  "absolute canonical regular executable" \
-  env \
-    MOBILE_SDK_PYTHON_BINARY=python3.12 \
-    /bin/bash "$JVM_NATIVE_GATE" --resolve-python312-for-test
-
-expect_failure_containing \
-  "JVM native gate non-Python override" \
-  "isolated Python 3.12 executable" \
-  env \
-    MOBILE_SDK_PYTHON_BINARY=/bin/bash \
-    /bin/bash "$JVM_NATIVE_GATE" --resolve-python312-for-test
 
 APPLE_CARGO_TARGET="$TEST_ROOT/apple-cargo-target"
 APPLE_BUILD_DIR="$TEST_ROOT/apple-build"

@@ -328,8 +328,11 @@ def test_public_torii_cors_matches_runtime_policy_and_browser_sdk_headers() -> N
     )
     assert (
         "idempotency-key" in MODULE.PUBLIC_TORII_CORS_HEADERS
-    ), "browser Kagemusha top-up and redemption require Idempotency-Key"
+    ), "browser Offline Cash V1 top-up and redemption require Idempotency-Key"
     for header in (
+        "mcp-method",
+        "mcp-name",
+        "mcp-protocol-version",
         "x-iroha-account",
         "x-iroha-signature",
         "x-iroha-timestamp-ms",

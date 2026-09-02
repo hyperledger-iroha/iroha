@@ -24,123 +24,6 @@ private func encodeTestCanonicalOnboardingBody(
     return try encoder.encode(body)
 }
 
-private func kagemushaOperationRequestArchive(
-    schema: String,
-    fieldCount: Int,
-    operationIdFieldIndex: Int,
-    issuedAtMs: UInt64 = 1
-) -> Data {
-    precondition(issuedAtMs < UInt64.max)
-    let operationId = Data(hexString: try! KagemushaOperationIdentityDerivation
-        .operationID(
-            compactAuthorityPayload: kagemushaTestAuthorityPayload,
-            nonce: kagemushaTestAuthorizationNonce
-        ))!
-    var authorization = CompactNoritoWriter()
-    for index in 0..<10 {
-        let field: Data
-        switch index {
-        case 0:
-            field = kagemushaTestAuthorityPayload
-        case 1:
-            field = CompactNorito.encodeString("swift-kagemusha-fixture")
-        case 3:
-            field = operationId
-        case 4:
-            field = CompactNorito.encodeUInt64(issuedAtMs)
-        case 5:
-            field = CompactNorito.encodeUInt64(issuedAtMs + 1)
-        case 6:
-            field = kagemushaTestAuthorizationNonce
-        case 7:
-            field = Data(repeating: 0x77, count: 32)
-        case 8:
-            field = Data(repeating: 0x99, count: 32)
-        default:
-            field = Data([UInt8(index + 1)])
-        }
-        authorization.writeField(field)
-    }
-    var payload = CompactNoritoWriter()
-    for index in 0..<fieldCount {
-        let field: Data
-        if index == 0 {
-            field = CompactNorito.encodeUInt16(KagemushaRecursiveSpend.wireVersionV4)
-        } else if index == operationIdFieldIndex {
-            field = operationId
-        } else if index == fieldCount - 1 {
-            field = authorization.data
-        } else {
-            field = Data([UInt8(index + 1)])
-        }
-        payload.writeField(field)
-    }
-    return KagemushaRecursiveSpend.frameArchive(
-        schema: schema,
-        payload: payload.data
-    )
-}
-
-private func kagemushaOperationIdentity(
-    operationID: String = String(repeating: "11", count: 32),
-    requestAuthorityDigest: String = String(repeating: "33", count: 32),
-    canonicalRequestDigest: String = String(repeating: "55", count: 32),
-    kind: KagemushaOperationKind,
-    issuedAtMs: UInt64 = 1,
-    expiresAtMs: UInt64? = nil
-) throws -> KagemushaOperationIdentity {
-    try KagemushaOperationIdentity(
-        operationID: operationID,
-        requestAuthorityDigest: requestAuthorityDigest,
-        canonicalRequestDigest: canonicalRequestDigest,
-        kind: kind,
-        issuedAtMs: issuedAtMs,
-        expiresAtMs: expiresAtMs ?? issuedAtMs + 1
-    )
-}
-
-private func kagemushaOperationReference(
-    identity: KagemushaOperationIdentity,
-    transactionHash: String = String(repeating: "22", count: 31) + "23",
-) throws -> KagemushaOperationReference {
-    try KagemushaOperationReference(
-        identity: identity,
-        state: .pending,
-        transactionHash: transactionHash,
-        statusUri: "/v1/offline/operations/\(identity.operationID)"
-    )
-}
-
-private func kagemushaPendingStatusArchive(
-    identity: KagemushaOperationIdentity,
-    transactionHash: String
-) -> Data {
-    var encodedIdentity = CompactNoritoWriter()
-    encodedIdentity.writeField(CompactNorito.encodeString(identity.operationID))
-    encodedIdentity.writeField(CompactNorito.encodeString(identity.requestAuthorityDigest))
-    encodedIdentity.writeField(CompactNorito.encodeString(identity.canonicalRequestDigest))
-    encodedIdentity.writeField(CompactNorito.encodeUInt32(identity.kind == .topUp ? 0 : 1))
-    encodedIdentity.writeField(CompactNorito.encodeUInt64(identity.issuedAtMs))
-    encodedIdentity.writeField(CompactNorito.encodeUInt64(identity.expiresAtMs))
-    var status = CompactNoritoWriter()
-    status.writeUInt32LE(0)
-    status.writeField(encodedIdentity.data)
-    status.writeField(CompactNorito.encodeString(transactionHash))
-    return noritoEncode(
-        typeName: "iroha_torii_shared::offline_api::OfflineOperationStatus",
-        payload: status.data,
-        flags: NoritoHeader.compactLen,
-        payloadAlignment: 8
-    )
-}
-
-private let kagemushaTestAuthorityPayload: Data = {
-    let keypair = try! Keypair(privateKeyBytes: Data(repeating: 0x42, count: 32))
-    let address = try! AccountAddress.fromAccount(publicKey: keypair.publicKey)
-    return try! address.compactNoritoAccountControllerPayload()
-}()
-
-private let kagemushaTestAuthorizationNonce = Data(repeating: 0x51, count: 32)
 
 final class StubURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data?))?
@@ -13103,8 +12986,8 @@ final class ToriiClientTests: XCTestCase {
         let payload = """
         {
           "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 23,
-          "max_hops": 8,
+          "wire_version": 1,
+          "device_lifecycle_version": 1,
           "ready": true
         }
         """.data(using: .utf8)!
@@ -13124,22 +13007,22 @@ final class ToriiClientTests: XCTestCase {
 
         let status = try await makeClient().getOfflineCapability()
         XCTAssertEqual(status.cashHandoffCapability, "cash_handoff_v1")
-        XCTAssertEqual(status.requiredBridgeAbiVersion, 23)
-        XCTAssertEqual(status.maxHops, 8)
+        XCTAssertEqual(status.wireVersion, 1)
+        XCTAssertEqual(status.deviceLifecycleVersion, 1)
         XCTAssertTrue(status.ready)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsNonUniversalClaims() async throws {
         let invalidPayloads = [
-            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":23,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":9,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":false}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"assets":[]}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"blockers":[]}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"future":true}"#,
+            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v2","wire_version":1,"device_lifecycle_version":1,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":2,"device_lifecycle_version":1,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":2,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":false}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"assets":[]}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"blockers":[]}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"future":true}"#,
         ]
 
         for payload in invalidPayloads {
@@ -13164,7 +13047,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsDuplicateKeysInvalidUtf8AndOversizedBodies() async throws {
         let payloads = [
-            Data(#"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"ready":true}"#.utf8),
+            Data(#"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"ready":true}"#.utf8),
             Data([0xff, 0xfe, 0xfd]),
             Data(repeating: UInt8(ascii: "x"), count: 256 * 1024 + 1),
         ]
@@ -13188,747 +13071,12 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineOperationsUseCanonicalPathsAndDirectNoritoBodies() async throws {
-        let transactionHash = String(repeating: "22", count: 31) + "23"
-        let topUpRequestArchive = kagemushaOperationRequestArchive(
-            schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            fieldCount: 8,
-            operationIdFieldIndex: 6,
-            issuedAtMs: UInt64.max - 1
-        )
-        let redeemRequestArchive = kagemushaOperationRequestArchive(
-            schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            fieldCount: 10,
-            operationIdFieldIndex: 8,
-            issuedAtMs: UInt64.max - 1
-        )
-        let topUpRequest = try KagemushaTopUpRequest(noritoArchive: topUpRequestArchive)
-        let redeemRequest = try KagemushaRedeemRequest(noritoArchive: redeemRequestArchive)
-        let operationId = topUpRequest.identity.operationID
-        let topUpResponseArchive = KagemushaOperationCodec.encodeReference(
-            try kagemushaOperationReference(identity: topUpRequest.identity)
-        )
-        let redeemResponseArchive = KagemushaOperationCodec.encodeReference(
-            try kagemushaOperationReference(identity: redeemRequest.identity)
-        )
-        let pendingStatusArchive = kagemushaPendingStatusArchive(
-            identity: topUpRequest.identity,
-            transactionHash: transactionHash
-        )
-
-        StubURLProtocol.handler = { request in
-            let path = request.url?.path
-            let responseBody: Data
-            let status: Int
-            switch path {
-            case "/v1/offline/top-up":
-                status = 202
-                responseBody = topUpResponseArchive
-                XCTAssertEqual(request.httpMethod, "POST")
-                XCTAssertEqual(self.bodyData(from: request), topUpRequestArchive)
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), operationId)
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-            case "/v1/offline/redeem":
-                status = 202
-                responseBody = redeemResponseArchive
-                XCTAssertEqual(request.httpMethod, "POST")
-                XCTAssertEqual(self.bodyData(from: request), redeemRequestArchive)
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), operationId)
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-            case "/v1/offline/operations/\(operationId)":
-                status = 200
-                responseBody = pendingStatusArchive
-                XCTAssertEqual(request.httpMethod, "GET")
-            default:
-                throw ToriiClientError.invalidURL(path ?? "")
-            }
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito")
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: status,
-                httpVersion: nil,
-                headerFields: [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(operationId)",
-                    "Retry-After": "1",
-                ]
-            )!
-            return (response, responseBody)
-        }
-
-        let client = makeClient()
-        let acceptedTopUp = try await client.submitKagemushaTopUp(
-            KagemushaTopUpRequest(noritoArchive: topUpRequestArchive)
-        )
-        XCTAssertEqual(
-            acceptedTopUp,
-            try kagemushaOperationReference(identity: topUpRequest.identity)
-        )
-        let acceptedRedeem = try await client.submitKagemushaRedeem(
-            KagemushaRedeemRequest(noritoArchive: redeemRequestArchive)
-        )
-        XCTAssertEqual(
-            acceptedRedeem,
-            try kagemushaOperationReference(identity: redeemRequest.identity)
-        )
-        let operationStatus = try await client.getKagemushaOperationStatus(
-            acceptedTopUp,
-            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-        )
-        XCTAssertEqual(
-            operationStatus,
-            .pending(try .init(
-                identity: topUpRequest.identity,
-                transactionHash: transactionHash
-            ))
-        )
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineStatus404PreservesCanonicalRejectCodeFromToriiResponse() async throws {
-        let operationId = String(repeating: "11", count: 32)
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(
-                request.url?.path,
-                "/v1/offline/operations/\(operationId)"
-            )
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 404,
-                httpVersion: nil,
-                headerFields: [
-                    "Content-Type": "application/x-norito",
-                    "x-iroha-reject-code": "offline_operation_not_found",
-                ]
-            )!
-            return (response, Data([0xff, 0xfe, 0xfd]))
-        }
-
-        do {
-            _ = try await makeClient().getKagemushaOperationStatus(
-                try kagemushaOperationReference(
-                    identity: kagemushaOperationIdentity(
-                        operationID: operationId,
-                        kind: .topUp
-                    )
-                ),
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-            XCTFail("missing operation status must return typed HTTP failure")
-        } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, _, rejectCode) = error else {
-                return XCTFail("unexpected Torii failure: \(error)")
-            }
-            XCTAssertEqual(code, 404)
-            XCTAssertEqual(rejectCode, "offline_operation_not_found")
-            XCTAssertTrue(
-                KagemushaOperationFinalityCoordinator
-                    .statusResourceIsMissing(after: error)
-            )
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testBodyOnlyOfflineStatus404CannotAuthorizeSubmission() async throws {
-        let operationId = String(repeating: "11", count: 32)
-        let request = try KagemushaTopUpRequest(
-            noritoArchive: kagemushaOperationRequestArchive(
-                schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 6
-            )
-        )
-        var methods: [String] = []
-        StubURLProtocol.handler = { urlRequest in
-            methods.append(urlRequest.httpMethod ?? "")
-            XCTAssertEqual(
-                urlRequest.url?.path,
-                "/v1/offline/operations/\(operationId)"
-            )
-            let response = HTTPURLResponse(
-                url: urlRequest.url!,
-                statusCode: 404,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (
-                response,
-                Data(#"{"code":"offline_operation_not_found"}"#.utf8)
-            )
-        }
-
-        do {
-            _ = try await KagemushaOperationFinalityCoordinator.resolve(
-                operation: .topUp(request),
-                transport: makeClient(),
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
-                initialState: 0,
-                continuity: .unaccepted,
-                existingDefinitiveSubmissionFailure: { _ in nil },
-                revalidateBeforeSubmission: { _ in
-                    XCTFail("body-only 404 must not reach revalidation")
-                },
-                markSubmissionAttempt: { state in
-                    XCTFail("body-only 404 must not persist an attempt")
-                    return state
-                },
-                recordAcceptance: { _, state in state },
-                recordObservation: { _, _, state in state },
-                recordRejection: { _, _, state in state },
-                recordDefinitiveSubmissionFailure: { _, state in state }
-            )
-            XCTFail("body-only 404 must remain an ordinary HTTP failure")
-        } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, _, rejectCode) = error else {
-                return XCTFail("unexpected Torii failure: \(error)")
-            }
-            XCTAssertEqual(code, 404)
-            XCTAssertNil(rejectCode)
-            XCTAssertFalse(
-                KagemushaOperationFinalityCoordinator
-                    .statusResourceIsMissing(after: error)
-            )
-        }
-        XCTAssertEqual(methods, ["GET"])
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testBodyOnlyOfflineSubmissionCodesCannotBecomeDefinitive() async throws {
-        let request = try KagemushaTopUpRequest(
-            noritoArchive: kagemushaOperationRequestArchive(
-                schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 6
-            )
-        )
-
-        for (statusCode, bodyCode) in [
-            (400, "offline_top_up_invalid"),
-            (413, "request_payload_too_large"),
-        ] {
-            StubURLProtocol.handler = { urlRequest in
-                XCTAssertEqual(urlRequest.url?.path, "/v1/offline/top-up")
-                let response = HTTPURLResponse(
-                    url: urlRequest.url!,
-                    statusCode: statusCode,
-                    httpVersion: nil,
-                    headerFields: ["Content-Type": "application/json"]
-                )!
-                return (
-                    response,
-                    Data("{\"code\":\"\(bodyCode)\"}".utf8)
-                )
-            }
-
-            do {
-                _ = try await makeClient().submitKagemushaTopUp(request)
-                XCTFail("rejected submission must fail")
-            } catch let error as ToriiClientError {
-                guard case let .httpStatus(
-                    actualStatus,
-                    _,
-                    rejectCode
-                ) = error else {
-                    return XCTFail("unexpected Torii failure: \(error)")
-                }
-                XCTAssertEqual(actualStatus, statusCode)
-                XCTAssertNil(rejectCode)
-                XCTAssertEqual(
-                    KagemushaSubmissionFailureClassifier.classify(
-                        error,
-                        target: .offlineTopUp
-                    ),
-                    .ambiguous
-                )
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineSubmissionClassifierRequiresExactEndpointPairs() async throws {
-        let operationId = String(repeating: "11", count: 32)
-        let request = try KagemushaTopUpRequest(
-            noritoArchive: kagemushaOperationRequestArchive(
-                schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 6
-            )
-        )
-
-        let cases: [(Int, String, Bool)] = [
-            (400, "offline_top_up_invalid", true),
-            (400, "PRTRY:TX_SIGNATURE_INVALID", true),
-            (409, "operation_id_conflict", true),
-            (400, "request_norito_invalid", false),
-            (409, "PRTRY:ALREADY_ENQUEUED", false),
-            (413, "request_payload_too_large", false),
-        ]
-        for (statusCode, rejectCode, isDefinitive) in cases {
-            StubURLProtocol.handler = { urlRequest in
-                XCTAssertEqual(urlRequest.url?.path, "/v1/offline/top-up")
-                XCTAssertEqual(
-                    urlRequest.value(forHTTPHeaderField: "Idempotency-Key"),
-                    operationId
-                )
-                let response = HTTPURLResponse(
-                    url: urlRequest.url!,
-                    statusCode: statusCode,
-                    httpVersion: nil,
-                    headerFields: [
-                        "Content-Type": "application/x-norito",
-                        "x-iroha-reject-code": rejectCode,
-                    ]
-                )!
-                return (response, Data([0xff, 0xfe, 0xfd]))
-            }
-
-            do {
-                _ = try await makeClient().submitKagemushaTopUp(request)
-                XCTFail("rejected submission must fail")
-            } catch let error as ToriiClientError {
-                guard case let .httpStatus(
-                    actualStatus,
-                    _,
-                    actualRejectCode
-                ) = error else {
-                    return XCTFail("unexpected Torii failure: \(error)")
-                }
-                XCTAssertEqual(actualStatus, statusCode)
-                XCTAssertEqual(actualRejectCode, rejectCode)
-                let disposition = KagemushaSubmissionFailureClassifier.classify(
-                    error,
-                    target: .offlineTopUp
-                )
-                if isDefinitive {
-                    guard case let .definitivePreAdmission(failure) = disposition else {
-                        return XCTFail("exact endpoint pair must be definitive")
-                    }
-                    XCTAssertEqual(failure.target, .offlineTopUp)
-                    XCTAssertEqual(failure.statusCode, statusCode)
-                    XCTAssertEqual(failure.rejectCode, rejectCode)
-                    XCTAssertNil(failure.message)
-                } else {
-                    XCTAssertEqual(disposition, .ambiguous)
-                }
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineOperationResponsesAreStreamingBoundedBeforeCodecParsing() async throws {
-        let operationId = String(repeating: "11", count: 32)
-        let reference = try kagemushaOperationReference(
-            identity: kagemushaOperationIdentity(
-                operationID: operationId,
-                kind: .topUp
-            )
-        )
-
-        func install(
-            status: Int,
-            headers: [String: String],
-            body: Data
-        ) {
-            StubURLProtocol.handler = { request in
-                let response = HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: status,
-                    httpVersion: nil,
-                    headerFields: headers
-                )!
-                return (response, body)
-            }
-        }
-
-        install(
-            status: 200,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Content-Length": String(
-                    KagemushaOperationCodec.statusMaximumArchiveBytes + 1
-                ),
-            ],
-            body: Data([0x00])
-        )
-        await assertToriiInvalidPayload(contains: "declares more than") {
-            _ = try await self.makeClient().getKagemushaOperationStatus(
-                reference,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-        }
-
-        install(
-            status: 200,
-            headers: ["Content-Type": "application/x-norito"],
-            body: Data(
-                repeating: 0xa5,
-                count: KagemushaOperationCodec.statusMaximumArchiveBytes + 1
-            )
-        )
-        await assertToriiInvalidPayload(contains: "response exceeded") {
-            _ = try await self.makeClient().getKagemushaOperationStatus(
-                reference,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-        }
-
-        install(
-            status: 200,
-            headers: ["Content-Type": "application/x-norito"],
-            body: Data(
-                repeating: 0xa5,
-                count: KagemushaOperationCodec.statusMaximumArchiveBytes
-            )
-        )
-        do {
-            _ = try await makeClient().getKagemushaOperationStatus(
-                reference,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-            XCTFail("exact-limit non-Norito bytes must reach the codec")
-        } catch let error as KagemushaOperationError {
-            XCTAssertEqual(error, .invalidNoritoArchive)
-        }
-
-        install(
-            status: 404,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "x-iroha-reject-code": "offline_operation_not_found",
-            ],
-            body: Data(
-                repeating: 0xa5,
-                count: KagemushaOperationCodec.statusMaximumArchiveBytes + 1
-            )
-        )
-        do {
-            _ = try await makeClient().getKagemushaOperationStatus(
-                reference,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-            XCTFail("oversized 404 must fail before absence classification")
-        } catch let error as ToriiClientError {
-            guard case .invalidPayload = error else {
-                return XCTFail("unexpected oversized 404 error: \(error)")
-            }
-            XCTAssertFalse(
-                KagemushaOperationFinalityCoordinator
-                    .statusResourceIsMissing(after: error)
-            )
-        }
-
-        let request = try KagemushaTopUpRequest(
-            noritoArchive: kagemushaOperationRequestArchive(
-                schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 6
-            )
-        )
-
-        install(
-            status: 202,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Location": "/v1/offline/operations/\(operationId)",
-                "Content-Length": String(
-                    KagemushaOperationCodec.referenceMaximumArchiveBytes + 1
-                ),
-            ],
-            body: Data([0x00])
-        )
-        await assertToriiInvalidPayload(contains: "declares more than") {
-            _ = try await self.makeClient().submitKagemushaTopUp(request)
-        }
-
-        install(
-            status: 202,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Location": "/v1/offline/operations/\(operationId)",
-            ],
-            body: Data(
-                repeating: 0xa5,
-                count: KagemushaOperationCodec.referenceMaximumArchiveBytes + 1
-            )
-        )
-        await assertToriiInvalidPayload(contains: "response exceeded") {
-            _ = try await self.makeClient().submitKagemushaTopUp(request)
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineSubmissionRejectsUnboundReferencesMediaTypesAndLocations() async throws {
-        let otherOperationId = String(repeating: "33", count: 32)
-        let transactionHash = String(repeating: "22", count: 31) + "23"
-        let request = try KagemushaTopUpRequest(
-            noritoArchive: kagemushaOperationRequestArchive(
-                schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 6
-            )
-        )
-        let submittedOperationId = request.identity.operationID
-
-        func reference(
-            operationId: String,
-            kind: KagemushaOperationKind,
-            submittedAtMs: UInt64 = 1
-        ) throws -> Data {
-            let identity = try kagemushaOperationIdentity(
-                operationID: operationId,
-                requestAuthorityDigest: request.identity.requestAuthorityDigest,
-                canonicalRequestDigest: request.identity.canonicalRequestDigest,
-                kind: kind,
-                issuedAtMs: submittedAtMs
-            )
-            return KagemushaOperationCodec.encodeReference(
-                try kagemushaOperationReference(
-                    identity: identity,
-                    transactionHash: transactionHash
-                )
-            )
-        }
-
-        let cases: [(Data, [String: String], String)] = [
-            (
-                try reference(operationId: otherOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                    "Retry-After": "1",
-                ],
-                "does not match the signed request"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .redeem),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                    "Retry-After": "1",
-                ],
-                "does not match the signed request"
-            ),
-            (
-                try reference(
-                    operationId: submittedOperationId,
-                    kind: .topUp,
-                    submittedAtMs: 2
-                ),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                    "Retry-After": "1",
-                ],
-                "does not match the signed request"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Retry-After": "1",
-                ],
-                "Location must match"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(otherOperationId)",
-                    "Retry-After": "1",
-                ],
-                "Location must match"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/json",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                    "Retry-After": "1",
-                ],
-                "Content-Type must be application/x-norito"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                    "Retry-After": "1",
-                ],
-                "Content-Type must be application/x-norito"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                ],
-                "Retry-After"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                    "Retry-After": "0",
-                ],
-                "Retry-After"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                    "Retry-After": String(repeating: "9", count: 10_000),
-                ],
-                "Retry-After"
-            ),
-        ]
-
-        for (body, headers, expectedMessage) in cases {
-            StubURLProtocol.handler = { urlRequest in
-                let response = HTTPURLResponse(
-                    url: urlRequest.url!,
-                    statusCode: 202,
-                    httpVersion: nil,
-                    headerFields: headers
-                )!
-                return (response, body)
-            }
-            do {
-                _ = try await makeClient().submitKagemushaTopUp(request)
-                XCTFail("expected unbound Offline operation response to fail")
-            } catch {
-                XCTAssertTrue(
-                    String(describing: error).contains(expectedMessage),
-                    "expected \(expectedMessage), got \(error)"
-                )
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineStatusRejectsWrongResourceIdentityKindAndMediaType() async throws {
-        let operationId = String(repeating: "11", count: 32)
-        let otherOperationId = String(repeating: "33", count: 32)
-        let identity = try kagemushaOperationIdentity(
-            operationID: operationId,
-            kind: .topUp,
-            issuedAtMs: UInt64.max - 1
-        )
-        let wrongIdentityReference = try kagemushaOperationReference(
-            identity: kagemushaOperationIdentity(
-                operationID: otherOperationId,
-                kind: .topUp,
-                issuedAtMs: UInt64.max - 1
-            )
-        )
-        let wrongKindReference = try kagemushaOperationReference(
-            identity: kagemushaOperationIdentity(
-                operationID: operationId,
-                kind: .redeem,
-                issuedAtMs: UInt64.max - 1
-            )
-        )
-        let reference = try kagemushaOperationReference(
-            identity: identity,
-            transactionHash: String(repeating: "44", count: 31) + "45"
-        )
-        let wrongTimestampReference = try kagemushaOperationReference(
-            identity: kagemushaOperationIdentity(
-                operationID: operationId,
-                kind: .topUp,
-                issuedAtMs: UInt64.max - 2
-            )
-        )
-        let pendingStatus = kagemushaPendingStatusArchive(
-            identity: identity,
-            transactionHash: String(repeating: "22", count: 31) + "23"
-        )
-
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/x-norito"]
-            )!
-            return (response, pendingStatus)
-        }
-
-        let replacement = try await makeClient().getKagemushaOperationStatus(
-            reference,
-            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-        )
-        guard case let .pending(replacementPending) = replacement else {
-            return XCTFail("expected Pending replacement carrier")
-        }
-        XCTAssertNotEqual(replacementPending.transactionHash, reference.transactionHash)
-        XCTAssertEqual(replacementPending.identity, reference.identity)
-
-        do {
-            _ = try await makeClient().getKagemushaOperationStatus(
-                wrongTimestampReference,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-            XCTFail("Pending must retain the complete accepted identity")
-        } catch {
-            XCTAssertTrue(String(describing: error).contains("status identity"))
-        }
-        do {
-            _ = try await makeClient().getKagemushaOperationStatus(
-                wrongIdentityReference,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-            XCTFail("expected operation identity mismatch to fail")
-        } catch {
-            XCTAssertTrue(String(describing: error).contains("status identity"))
-        }
-
-        do {
-            _ = try await makeClient().getKagemushaOperationStatus(
-                wrongKindReference,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-            XCTFail("expected operation kind mismatch to fail")
-        } catch {
-            XCTAssertTrue(String(describing: error).contains("status identity"))
-        }
-
-        for headers in [
-            ["Content-Type": "application/json"],
-            [:],
-        ] {
-            StubURLProtocol.handler = { request in
-                let response = HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: 200,
-                    httpVersion: nil,
-                    headerFields: headers
-                )!
-                return (response, pendingStatus)
-            }
-            do {
-                _ = try await makeClient().getKagemushaOperationStatus(
-                    reference,
-                    chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-                )
-                XCTFail("expected invalid operation media type to fail")
-            } catch {
-                XCTAssertTrue(
-                    String(describing: error).contains(
-                        "Content-Type must be application/x-norito"
-                    )
-                )
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testOfflineCapabilityRequiresJsonResponseMediaType() async throws {
         let payload = """
         {
           "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 23,
-          "max_hops": 8,
+          "wire_version": 1,
+          "device_lifecycle_version": 1,
           "ready": true,
           "assets": [],
           "blockers": []
@@ -14595,7 +13743,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             "version": 2,
             "circuit_id": "halo2/ipa::transfer_v2",
             "owner_manifest_id": "manifest-v2",
-            "namespace": "offline_kagemusha",
+            "namespace": "offline_cash_v1",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
@@ -14629,7 +13777,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertEqual(detail.id.name, "vk main")
         XCTAssertEqual(detail.record.version, 2)
         XCTAssertEqual(detail.record.ownerManifestId, "manifest-v2")
-        XCTAssertEqual(detail.record.namespace, "offline_kagemusha")
+        XCTAssertEqual(detail.record.namespace, "offline_cash_v1")
         XCTAssertEqual(detail.record.publicInputsSchemaHashHex,
                        "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3")
         XCTAssertEqual(detail.record.inlineKey?.backend, "halo2/ipa")
@@ -14648,7 +13796,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             "version": 3,
             "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "owner_manifest_id": "confidential-v3",
-            "namespace": "offline_kagemusha",
+            "namespace": "offline_cash_v1",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -14698,7 +13846,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             "version": 3,
             "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "owner_manifest_id": "confidential-v3",
-            "namespace": "offline_kagemusha",
+            "namespace": "offline_cash_v1",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -18582,7 +17730,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
-            "topup_anchor_count": 0,
+            "offline_cash_top_up_count": 0,
             "native_amx_application_manifest_version":
                 ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
             "native_amx_application_manifest_root":
@@ -18750,7 +17898,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
-            "topup_anchor_count": 0,
+            "offline_cash_top_up_count": 0,
             "native_amx_application_manifest_version":
                 ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
             "native_amx_application_manifest_root": emptyRoot,
@@ -18789,6 +17937,47 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertThrowsError(try decode(missingRoot))
     }
 
+    func testSumeragiExecutionCommitmentAcceptsThousandOfflineCashTopUpsAndRejectsLegacyNames()
+        throws
+    {
+        let base: [String: Any] = [
+            "parent_state_root": nativeAmxTestHash(0xC1),
+            "post_state_root": nativeAmxTestHash(0xC3),
+            "ordinary_writes_root": nativeAmxTestHash(0xC5),
+            "offline_cash_top_up_root": nativeAmxTestHash(0xC9),
+            "offline_cash_top_up_count": 1_000,
+            "native_amx_application_manifest_version":
+                ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
+            "native_amx_application_manifest_root":
+                ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot,
+            "native_amx_application_manifest_count": 0,
+            "lane_finality_manifest": NSNull(),
+            "merge_carrier": NSNull(),
+            "executed_block_wire_len": 123,
+            "executed_block_wire_hash": nativeAmxTestHash(0xC7),
+        ]
+        func decode(_ value: [String: Any]) throws -> ToriiSumeragiV2ExecutionCommitment {
+            try JSONDecoder().decode(
+                ToriiSumeragiV2ExecutionCommitment.self,
+                from: JSONSerialization.data(withJSONObject: value)
+            )
+        }
+
+        let decoded = try decode(base)
+        XCTAssertEqual(decoded.offlineCashTopUpCount, 1_000)
+        XCTAssertEqual(decoded.offlineCashTopUpRoot, nativeAmxTestHash(0xC9))
+
+        for legacyField in ["topup_anchor_root", "topup_anchor_count"] {
+            var legacy = base
+            if legacyField.hasSuffix("root") {
+                legacy[legacyField] = nativeAmxTestHash(0xD1)
+            } else {
+                legacy[legacyField] = 1_000
+            }
+            XCTAssertThrowsError(try decode(legacy), legacyField)
+        }
+    }
+
     func testSumeragiExecutionCommitmentRequiresExactMergeCarrierProjection() throws {
         let emptyRoot =
             ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot
@@ -18796,7 +17985,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
-            "topup_anchor_count": 0,
+            "offline_cash_top_up_count": 0,
             "native_amx_application_manifest_version": 1,
             "native_amx_application_manifest_root": emptyRoot,
             "native_amx_application_manifest_count": 0,

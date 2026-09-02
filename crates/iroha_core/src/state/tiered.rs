@@ -2132,9 +2132,34 @@ impl TieredStateBackend {
             world.global_beacon_pulses
         );
         collect_map!(
-            TieredSegment::KagemushaReplayKeys,
-            KagemushaReplayKey,
-            world.kagemusha_replay_keys
+            TieredSegment::OfflineCashReservePools,
+            OfflineCashReservePool,
+            world.offline_cash_reserve_pools
+        );
+        collect_map!(
+            TieredSegment::OfflineCashReserveOperations,
+            OfflineCashReserveOperation,
+            world.offline_cash_reserve_operations
+        );
+        collect_map!(
+            TieredSegment::OfflineCashMintCreditOperations,
+            OfflineCashMintCreditOperation,
+            world.offline_cash_mint_credit_operations
+        );
+        collect_map!(
+            TieredSegment::OfflineCashIssuanceOperations,
+            OfflineCashIssuanceOperation,
+            world.offline_cash_issuance_operations
+        );
+        collect_map!(
+            TieredSegment::OfflineCashRedemptionIdOperations,
+            OfflineCashRedemptionIdOperation,
+            world.offline_cash_redemption_id_operations
+        );
+        collect_map!(
+            TieredSegment::OfflineCashTerminalNullifierOperations,
+            OfflineCashTerminalNullifierOperation,
+            world.offline_cash_terminal_nullifier_operations
         );
         Ok(())
     }
@@ -2640,7 +2665,12 @@ mod measured_bytes_impls {
             },
             state::{PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolStateV1},
         },
-        smartcontracts::code::ContractSubjectBinding,
+        smartcontracts::{
+            code::ContractSubjectBinding,
+            isi::offline::offline_cash_v1_reserve::{
+                OfflineCashReserveOperationRecordV1, OfflineCashReservePoolV1,
+            },
+        },
         state::{
             AssetDefinitionAliasBindingRecord, ConfidentialTreeProfile, ContractAliasBindingRecord,
             ElectionState, FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
@@ -2826,6 +2856,8 @@ mod measured_bytes_impls {
         PrivateSettlementOutputRecordV1,
         PrivateSettlementReceiptV1,
         PrivateSettlementAbortReceiptV1,
+        OfflineCashReservePoolV1,
+        OfflineCashReserveOperationRecordV1,
     );
     impl<T: MeasuredBytes, const N: usize> MeasuredBytes for [T; N] {
         fn measured_bytes(&self) -> usize {
@@ -4195,7 +4227,12 @@ enum TieredSegment {
     GlobalBeaconActiveSession,
     GlobalBeaconLatestPulse,
     GlobalBeaconPulses,
-    KagemushaReplayKeys,
+    OfflineCashReservePools,
+    OfflineCashReserveOperations,
+    OfflineCashMintCreditOperations,
+    OfflineCashIssuanceOperations,
+    OfflineCashRedemptionIdOperations,
+    OfflineCashTerminalNullifierOperations,
 }
 impl TieredSegment {
     fn dir_name(self) -> &'static str {
@@ -4272,7 +4309,16 @@ impl TieredSegment {
             TieredSegment::GlobalBeaconActiveSession => "global_beacon_active_session",
             TieredSegment::GlobalBeaconLatestPulse => "global_beacon_latest_pulse",
             TieredSegment::GlobalBeaconPulses => "global_beacon_pulses",
-            TieredSegment::KagemushaReplayKeys => "kagemusha_replay_keys",
+            TieredSegment::OfflineCashReservePools => "offline_cash_reserve_pools",
+            TieredSegment::OfflineCashReserveOperations => "offline_cash_reserve_operations",
+            TieredSegment::OfflineCashMintCreditOperations => "offline_cash_mint_credit_operations",
+            TieredSegment::OfflineCashIssuanceOperations => "offline_cash_issuance_operations",
+            TieredSegment::OfflineCashRedemptionIdOperations => {
+                "offline_cash_redemption_id_operations"
+            }
+            TieredSegment::OfflineCashTerminalNullifierOperations => {
+                "offline_cash_terminal_nullifier_operations"
+            }
         }
     }
 }
@@ -4359,7 +4405,16 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "global_beacon_active_session" => TieredSegment::GlobalBeaconActiveSession,
             "global_beacon_latest_pulse" => TieredSegment::GlobalBeaconLatestPulse,
             "global_beacon_pulses" => TieredSegment::GlobalBeaconPulses,
-            "kagemusha_replay_keys" => TieredSegment::KagemushaReplayKeys,
+            "offline_cash_reserve_pools" => TieredSegment::OfflineCashReservePools,
+            "offline_cash_reserve_operations" => TieredSegment::OfflineCashReserveOperations,
+            "offline_cash_mint_credit_operations" => TieredSegment::OfflineCashMintCreditOperations,
+            "offline_cash_issuance_operations" => TieredSegment::OfflineCashIssuanceOperations,
+            "offline_cash_redemption_id_operations" => {
+                TieredSegment::OfflineCashRedemptionIdOperations
+            }
+            "offline_cash_terminal_nullifier_operations" => {
+                TieredSegment::OfflineCashTerminalNullifierOperations
+            }
             other => {
                 return Err(norito::json::Error::InvalidField {
                     field: "segment".into(),
@@ -4579,7 +4634,12 @@ pub(crate) enum TieredKeyHandle {
     GlobalBeaconActiveSession(u64),
     GlobalBeaconLatestPulse(u64),
     GlobalBeaconPulse([u8; 32]),
-    KagemushaReplayKey(iroha_crypto::Hash),
+    OfflineCashReservePool([u8; 32]),
+    OfflineCashReserveOperation([u8; 32]),
+    OfflineCashMintCreditOperation([u8; 32]),
+    OfflineCashIssuanceOperation([u8; 32]),
+    OfflineCashRedemptionIdOperation([u8; 32]),
+    OfflineCashTerminalNullifierOperation([u8; 32]),
 }
 impl TieredKeyHandle {
     fn segment(&self) -> TieredSegment {
@@ -4672,7 +4732,22 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::GlobalBeaconLatestPulse(_) => TieredSegment::GlobalBeaconLatestPulse,
             TieredKeyHandle::GlobalBeaconPulse(_) => TieredSegment::GlobalBeaconPulses,
-            TieredKeyHandle::KagemushaReplayKey(_) => TieredSegment::KagemushaReplayKeys,
+            TieredKeyHandle::OfflineCashReservePool(_) => TieredSegment::OfflineCashReservePools,
+            TieredKeyHandle::OfflineCashReserveOperation(_) => {
+                TieredSegment::OfflineCashReserveOperations
+            }
+            TieredKeyHandle::OfflineCashMintCreditOperation(_) => {
+                TieredSegment::OfflineCashMintCreditOperations
+            }
+            TieredKeyHandle::OfflineCashIssuanceOperation(_) => {
+                TieredSegment::OfflineCashIssuanceOperations
+            }
+            TieredKeyHandle::OfflineCashRedemptionIdOperation(_) => {
+                TieredSegment::OfflineCashRedemptionIdOperations
+            }
+            TieredKeyHandle::OfflineCashTerminalNullifierOperation(_) => {
+                TieredSegment::OfflineCashTerminalNullifierOperations
+            }
         }
     }
     fn encode_key(&self) -> Result<Vec<u8>> {
@@ -4765,7 +4840,14 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::GlobalBeaconLatestPulse(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconPulse(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::KagemushaReplayKey(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::OfflineCashReservePool(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::OfflineCashReserveOperation(key)
+            | TieredKeyHandle::OfflineCashMintCreditOperation(key)
+            | TieredKeyHandle::OfflineCashIssuanceOperation(key)
+            | TieredKeyHandle::OfflineCashRedemptionIdOperation(key)
+            | TieredKeyHandle::OfflineCashTerminalNullifierOperation(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
         }
     }
     fn entry_id(&self) -> Result<(TieredEntryId, Vec<u8>)> {
@@ -4918,8 +5000,23 @@ impl TieredKeyHandle {
                 fetch!(world.global_beacon_latest_pulse, id)
             }
             TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
-            TieredKeyHandle::KagemushaReplayKey(id) => {
-                fetch!(world.kagemusha_replay_keys, id)
+            TieredKeyHandle::OfflineCashReservePool(id) => {
+                fetch!(world.offline_cash_reserve_pools, id)
+            }
+            TieredKeyHandle::OfflineCashReserveOperation(id) => {
+                fetch!(world.offline_cash_reserve_operations, id)
+            }
+            TieredKeyHandle::OfflineCashMintCreditOperation(id) => {
+                fetch!(world.offline_cash_mint_credit_operations, id)
+            }
+            TieredKeyHandle::OfflineCashIssuanceOperation(id) => {
+                fetch!(world.offline_cash_issuance_operations, id)
+            }
+            TieredKeyHandle::OfflineCashRedemptionIdOperation(id) => {
+                fetch!(world.offline_cash_redemption_id_operations, id)
+            }
+            TieredKeyHandle::OfflineCashTerminalNullifierOperation(id) => {
+                fetch!(world.offline_cash_terminal_nullifier_operations, id)
             }
         }
     }
@@ -5067,8 +5164,23 @@ impl TieredKeyHandle {
                 fetch!(world.global_beacon_latest_pulse, id)
             }
             TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
-            TieredKeyHandle::KagemushaReplayKey(id) => {
-                fetch!(world.kagemusha_replay_keys, id)
+            TieredKeyHandle::OfflineCashReservePool(id) => {
+                fetch!(world.offline_cash_reserve_pools, id)
+            }
+            TieredKeyHandle::OfflineCashReserveOperation(id) => {
+                fetch!(world.offline_cash_reserve_operations, id)
+            }
+            TieredKeyHandle::OfflineCashMintCreditOperation(id) => {
+                fetch!(world.offline_cash_mint_credit_operations, id)
+            }
+            TieredKeyHandle::OfflineCashIssuanceOperation(id) => {
+                fetch!(world.offline_cash_issuance_operations, id)
+            }
+            TieredKeyHandle::OfflineCashRedemptionIdOperation(id) => {
+                fetch!(world.offline_cash_redemption_id_operations, id)
+            }
+            TieredKeyHandle::OfflineCashTerminalNullifierOperation(id) => {
+                fetch!(world.offline_cash_terminal_nullifier_operations, id)
             }
         }
     }
@@ -5272,9 +5384,36 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::GlobalBeaconPulse(id) => {
                 write!(f, "global_beacon_pulse:{}", id.encode_hex::<String>())
             }
-            TieredKeyHandle::KagemushaReplayKey(id) => {
-                write!(f, "kagemusha_replay_key:{id}")
+            TieredKeyHandle::OfflineCashReservePool(id) => {
+                write!(f, "offline_cash_reserve_pool:{}", id.encode_hex::<String>())
             }
+            TieredKeyHandle::OfflineCashReserveOperation(id) => {
+                write!(
+                    f,
+                    "offline_cash_reserve_operation:{}",
+                    id.encode_hex::<String>()
+                )
+            }
+            TieredKeyHandle::OfflineCashMintCreditOperation(id) => write!(
+                f,
+                "offline_cash_mint_credit_operation:{}",
+                id.encode_hex::<String>()
+            ),
+            TieredKeyHandle::OfflineCashIssuanceOperation(id) => write!(
+                f,
+                "offline_cash_issuance_operation:{}",
+                id.encode_hex::<String>()
+            ),
+            TieredKeyHandle::OfflineCashRedemptionIdOperation(id) => write!(
+                f,
+                "offline_cash_redemption_id_operation:{}",
+                id.encode_hex::<String>()
+            ),
+            TieredKeyHandle::OfflineCashTerminalNullifierOperation(id) => write!(
+                f,
+                "offline_cash_terminal_nullifier_operation:{}",
+                id.encode_hex::<String>()
+            ),
         }
     }
 }

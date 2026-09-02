@@ -126,7 +126,6 @@ fn try_visit_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_sorafs_pop_registry_status(FindSorafsPopRegistryStatus),
         visit_find_sorafs_citizen_bond_by_serial_commitment(FindSorafsCitizenBondBySerialCommitment),
         visit_find_sorafs_citizen_bond_snapshot(FindSorafsCitizenBondSnapshot),
-        visit_find_sorafs_anonymous_service_escrow_by_id(FindSorafsAnonymousServiceEscrowById),
         visit_find_sorafs_pin_manifest(FindSorafsPinManifest),
         visit_find_sorafs_pin_manifests(FindSorafsPinManifests),
         visit_find_sorafs_repair_task(FindSorafsRepairTask),
@@ -141,7 +140,6 @@ fn try_visit_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_sorafs_moderation_policy(FindSorafsModerationPolicy),
         visit_find_sorafs_moderation_appeal(FindSorafsModerationAppeal),
         visit_find_sorafs_moderation_juror_eligibility(FindSorafsModerationJurorEligibility),
-        visit_find_sorafs_anonymous_juror_candidacy(FindSorafsAnonymousJurorCandidacy),
         visit_find_sorafs_moderation_case(FindSorafsModerationCase),
         visit_find_sorafs_moderation_commit(FindSorafsModerationCommit),
         visit_find_sorafs_moderation_reveal(FindSorafsModerationReveal),
@@ -452,9 +450,6 @@ macro_rules! query_visitors {
             visit_find_sorafs_citizen_bond_snapshot(
                 &$crate::query::sorafs::prelude::FindSorafsCitizenBondSnapshot
             ),
-            visit_find_sorafs_anonymous_service_escrow_by_id(
-                &$crate::query::sorafs::prelude::FindSorafsAnonymousServiceEscrowById
-            ),
             visit_find_sorafs_pin_manifest(
                 &$crate::query::sorafs::prelude::FindSorafsPinManifest
             ),
@@ -496,9 +491,6 @@ macro_rules! query_visitors {
             ),
             visit_find_sorafs_moderation_juror_eligibility(
                 &$crate::query::sorafs::prelude::FindSorafsModerationJurorEligibility
-            ),
-            visit_find_sorafs_anonymous_juror_candidacy(
-                &$crate::query::sorafs::prelude::FindSorafsAnonymousJurorCandidacy
             ),
             visit_find_sorafs_moderation_case(
                 &$crate::query::sorafs::prelude::FindSorafsModerationCase
@@ -680,7 +672,6 @@ mod tests {
             SingularQueryBox::FindSorafsPopRegistryStatus(_) => {}
             SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(_) => {}
             SingularQueryBox::FindSorafsCitizenBondSnapshot(_) => {}
-            SingularQueryBox::FindSorafsAnonymousServiceEscrowById(_) => {}
             SingularQueryBox::FindSorafsPinManifest(_) => {}
             SingularQueryBox::FindSorafsPinManifests(_) => {}
             SingularQueryBox::FindSorafsRepairTask(_) => {}
@@ -695,7 +686,6 @@ mod tests {
             SingularQueryBox::FindSorafsModerationPolicy(_) => {}
             SingularQueryBox::FindSorafsModerationAppeal(_) => {}
             SingularQueryBox::FindSorafsModerationJurorEligibility(_) => {}
-            SingularQueryBox::FindSorafsAnonymousJurorCandidacy(_) => {}
             SingularQueryBox::FindSorafsModerationCase(_) => {}
             SingularQueryBox::FindSorafsModerationCommit(_) => {}
             SingularQueryBox::FindSorafsModerationReveal(_) => {}

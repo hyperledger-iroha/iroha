@@ -1158,17 +1158,29 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertNotIn("receipt-source-secret", message)
                     self.assertNotIn(hidden, message)
 
-    def test_persisted_record_v2_party_auth_and_replay_shape_is_fail_closed(self):
+    def test_persisted_record_v3_party_auth_and_replay_shape_is_fail_closed(self):
         cases = (
             (
-                "v1-record",
-                lambda source: source.update({"version": 1}),
+                "v2-record",
+                lambda source: source.update({"version": 2}),
                 "unsupported persisted record version",
             ),
             (
                 "missing-party-field",
                 lambda source: source["parties"].pop("admitting_operator_key"),
                 "parties is missing required keys: admitting_operator_key",
+            ),
+            (
+                "missing-profile-policy-digest",
+                lambda source: source["parties"].pop("pinned_profile_policy_sha256"),
+                "parties is missing required keys: pinned_profile_policy_sha256",
+            ),
+            (
+                "invalid-profile-policy-digest",
+                lambda source: source["parties"].update(
+                    {"pinned_profile_policy_sha256": "A" * 64}
+                ),
+                "pinned_profile_policy_sha256 must be a canonical SHA-256",
             ),
             (
                 "unsupported-signature-policy",

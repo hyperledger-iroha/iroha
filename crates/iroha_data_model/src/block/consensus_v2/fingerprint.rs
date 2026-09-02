@@ -74,7 +74,7 @@ pub fn compute(params: &ConsensusGenesisParams) -> Result<[u8; 32], String> {
         mode,
         block_cadence_ms: params.block_cadence_ms,
         block_max_transactions: params.block_max_transactions,
-        context: params.v2_context,
+        context: params.v2_context.clone(),
         npos,
     };
     let mut hasher = Blake2b512::new();
@@ -94,7 +94,7 @@ mod tests {
             block_max_transactions: core::num::NonZeroU64::new(512).unwrap(),
             mode: ConsensusGenesisModeParams::Permissioned,
             protocol_version: u32::from(super::super::PROTOCOL_VERSION),
-            v2_context: SumeragiV2GenesisContextParameters::recommended(),
+            v2_context: super::super::test_genesis_context_parameters(),
         }
     }
     fn npos_params() -> ConsensusGenesisParams {

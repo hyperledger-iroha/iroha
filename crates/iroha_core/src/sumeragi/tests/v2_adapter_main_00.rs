@@ -77,8 +77,11 @@ fn context() -> wire::HeightContext {
         })
         .collect::<Vec<_>>();
     roster.sort();
+    let network_id = test_network_id(0x61);
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 1, &roster);
     wire::HeightContext {
-        network_id: test_network_id(0x61),
+        network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: 1,
@@ -89,6 +92,8 @@ fn context() -> wire::HeightContext {
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
         roster,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: wire::DataAvailabilityLayout {
@@ -158,8 +163,11 @@ fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) 
             power: 1,
         })
         .collect::<Vec<_>>();
+    let network_id = test_network_id(0x62);
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 3, &roster);
     let context = wire::HeightContext {
-        network_id: test_network_id(0x62),
+        network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: 3,
@@ -170,6 +178,8 @@ fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) 
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
         roster,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"authenticated nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: wire::DataAvailabilityLayout {
@@ -394,8 +404,17 @@ fn aggregate_verification_rejects_signer_without_aligned_pop() {
 fn boundary_context_rejects_missing_invalid_and_foreign_future_pops_before_voting() {
     let (mut context, _keys, proofs) = authenticated_context();
     context.epoch_end_height = context.height;
+    let next_epoch = context.epoch + 1;
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            context.network_id,
+            next_epoch,
+            &context.roster,
+        );
     context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
-        epoch: context.epoch + 1,
+        epoch: next_epoch,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         epoch_end_height: context.height + 10,
         mode: context.mode,
         roster: context.roster.clone(),
@@ -827,7 +846,7 @@ fn subject(byte: u8) -> wire::BlockSubject {
     }
 }
 fn execution_commitment(byte: u8) -> wire::ExecutionCommitment {
-    wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new([byte, 3]),
         Hash::new([byte, 4]),
         Hash::new([byte, 5]),

@@ -74,8 +74,13 @@ mod recovered_sign_capacity_tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id = crate::sumeragi::synthetic_network_id("v2-worker-test");
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("v2-worker-test"),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -87,6 +92,8 @@ mod recovered_sign_capacity_tests {
             quorum: wire::DualQuorum::from_roster(&roster)
                 .expect("scheduler fixture equal-vote quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"v2-worker-test-context"),
             execution_policy_hash: Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {

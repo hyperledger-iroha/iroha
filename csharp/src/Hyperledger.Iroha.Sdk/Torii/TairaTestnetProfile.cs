@@ -12,14 +12,14 @@ public static class TairaTestnetProfile
     /// <summary>Canonical I105 address discriminant for Taira.</summary>
     public const ushort I105Discriminant = 369;
 
-    /// <summary>Canonical Digital Shekel asset-definition ID used by Kagemusha on Taira.</summary>
-    public const string KagemushaAssetDefinitionId = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
+    /// <summary>Canonical Digital Shekel asset-definition ID used by Offline Cash on Taira.</summary>
+    public const string OfflineCashAssetDefinitionId = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
 
-    /// <summary>Canonical Digital Shekel alias used by Kagemusha on Taira.</summary>
-    public const string KagemushaAssetAlias = "ds#boi.is";
+    /// <summary>Canonical Digital Shekel alias used by Offline Cash on Taira.</summary>
+    public const string OfflineCashAssetAlias = "ds#boi.is";
 
-    /// <summary>Canonical Digital Shekel fixed-point scale used by Kagemusha on Taira.</summary>
-    public const uint KagemushaAssetScale = 2;
+    /// <summary>Canonical Digital Shekel fixed-point scale used by Offline Cash on Taira.</summary>
+    public const uint OfflineCashAssetScale = 2;
 
     /// <summary>Public Taira XOR asset-definition ID used for transaction fees.</summary>
     public const string XorAssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";

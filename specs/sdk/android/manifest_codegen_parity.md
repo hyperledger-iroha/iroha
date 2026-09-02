@@ -76,8 +76,8 @@ builders can stay aligned with the Rust data model.
 
 The first-release Android projection intentionally omits the generic shield,
 shielded-transfer, and unshield discriminants. Confidential movement remains on
-the typed Kagemusha top-up/redemption lifecycle; its proof artifacts are not
-generic transaction builders.
+the typed Offline Cash V1 top-up/redemption lifecycle; its proof artifacts are
+not generic transaction builders.
 
 ## 3. Fees, Manifest & Governance Payloads
 

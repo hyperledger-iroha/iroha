@@ -106,6 +106,11 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode);
         $macro!(iroha_data_model::isi::smart_contract_code::DeactivateContractInstance);
         $macro!(iroha_data_model::isi::smart_contract_code::ActivateContractInstance);
+        $macro!(iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation);
+        $macro!(iroha_data_model::isi::smart_contract_code::OfferContractOwnership);
+        $macro!(iroha_data_model::isi::smart_contract_code::AcceptContractOwnership);
+        $macro!(iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer);
+        $macro!(iroha_data_model::isi::smart_contract_code::CommitContractDeployment);
         $macro!(iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes);
         $macro!(iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk);
         $macro!(iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload);
@@ -129,6 +134,11 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::zk::FinalizeElection);
         $macro!(iroha_data_model::isi::ministry::SubmitAgendaProposal);
         $macro!(iroha_data_model::isi::governance::ProposeDeployContract);
+        $macro!(iroha_data_model::isi::governance::ProposeContractLifecycleGovernance);
+        $macro!(iroha_data_model::isi::governance::ProposeContractEmergencyHold);
+        $macro!(
+            iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance
+        );
         $macro!(iroha_data_model::isi::governance::CastZkBallot);
         $macro!(iroha_data_model::isi::governance::CastPlainBallot);
         $macro!(
@@ -977,8 +987,8 @@ mod tests {
             );
         }
         for specialized_type in [
-            std::any::type_name::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>(),
-            std::any::type_name::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(),
+            std::any::type_name::<iroha_data_model::isi::offline_cash_v1::TopUpOfflineCashV1>(),
+            std::any::type_name::<iroha_data_model::isi::offline_cash_v1::RedeemOfflineCashV1>(),
         ] {
             assert!(
                 registry.wire_id(specialized_type).is_some(),

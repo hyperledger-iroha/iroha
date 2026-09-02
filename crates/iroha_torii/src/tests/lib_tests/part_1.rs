@@ -1639,6 +1639,36 @@ fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoB
         reference_data: actual::IsoReferenceData::default(),
     }
 }
+#[test]
+fn iso_lifecycle_persistence_error_is_retryable_without_rejection() {
+    let app = mk_app_state_for_tests_with_iso_bridge(Some(sample_iso_bridge_config(
+        "DE89370400440532013000",
+        &ALICE_ID,
+    )));
+    let runtime = app.iso_bridge.as_ref().expect("ISO bridge enabled");
+    let message_id = "handler-persistence-unavailable";
+    assert!(runtime.check_and_record_message(message_id));
+
+    let error = map_iso_lifecycle_apply_error(
+        runtime,
+        message_id,
+        IsoLifecycleApplyError::PersistenceUnavailable,
+    );
+    assert!(matches!(
+        error,
+        Error::AppServiceUnavailable {
+            code: "iso_lifecycle_persistence_unavailable",
+            ..
+        }
+    ));
+    assert_eq!(
+        runtime
+            .message_status(message_id)
+            .expect("admitted lifecycle record remains retryable")
+            .status_label(),
+        "Pending"
+    );
+}
 fn local_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
     axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
 }

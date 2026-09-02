@@ -119,9 +119,16 @@ Swift uses the Norito bridge and fails closed when the XCFramework is missing:
 
 ### Ephemeral key handling
 
-- Every session uses fresh X25519 key material.
-  Swift stores it in the Keychain/Secure Enclave via `ConnectCrypto`, Android wallets default to StrongBox (falling back to TEE-backed keystores), and JS requires a secure-context WebCrypto instance or the native `iroha_js_host` plug-in.
-- Open frames include the dApp ephemeral public key plus an optional attestation bundle. Wallet approvals return the wallet public key and any hardware attestation needed for compliance flows.
+- Every session uses fresh X25519 key material. Provider-neutral software-backed
+  custody is valid on every platform. Applications may explicitly select
+  Keychain/Secure Enclave custody through `ConnectCrypto` on Swift or
+  StrongBox/TEE-backed keystores on Android; JS requires a secure-context
+  WebCrypto instance or the native `iroha_js_host` plug-in.
+- Open frames include the dApp ephemeral public key plus an optional attestation
+  bundle. Wallet approvals return the wallet public key and any hardware
+  attestation needed only when an application explicitly selects that
+  compliance profile. Hardware custody and attestation are not ordinary Connect
+  build, test, governance, deployment, or release gates.
 - Attestation payloads follow the accepted schema:
   `attestation { platform, evidence_b64, statement_hash }`.
   Browsers may omit the block; native wallets include it whenever hardware-backed keys are in use.

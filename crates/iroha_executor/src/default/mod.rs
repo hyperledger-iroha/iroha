@@ -87,13 +87,7 @@ use iroha_smart_contract::data_model::{
             RegisterVerifiedLaneRelay, StageFeeSponsorProgramRevision,
             UnenrollFeeSponsorBeneficiary, WithdrawFeeSponsorProgram,
         },
-        offline::{
-            ActivateKagemushaRecursiveReleaseV4, AuthorizeKagemushaTairaCanaryV4,
-            CancelKagemushaRecursiveReleaseV4, DeactivateKagemushaRecursiveIssuanceV4,
-            EnableKagemushaRecursiveIssuanceV4, RecordKagemushaTairaCanaryV4,
-            RedeemKagemushaRecursiveV4, RegisterOfflineDeviceAttestation,
-            SetOfflineDeviceAttestationPolicy, TopUpKagemushaRecursiveV4,
-        },
+        offline_cash_v1::{RedeemOfflineCashV1, TopUpOfflineCashV1},
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
         smart_contract_code::{
@@ -1024,37 +1018,12 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<SetContractAlias>() {
             execute!(executor, isi);
         }
-        // Core owns offline note/device validation and the exact governance permissions for
-        // attestation-policy mutations. Forward every native offline instruction so those
-        // consensus-critical checks run.
-        if let Some(isi) = any.downcast_ref::<TopUpKagemushaRecursiveV4>() {
+        // Core owns recursive-proof validation and reserve accounting. Forward both native
+        // Offline Cash V1 settlement instructions so those consensus-critical checks run.
+        if let Some(isi) = any.downcast_ref::<TopUpOfflineCashV1>() {
             execute!(executor, isi);
         }
-        if let Some(isi) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<ActivateKagemushaRecursiveReleaseV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<EnableKagemushaRecursiveIssuanceV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<CancelKagemushaRecursiveReleaseV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<DeactivateKagemushaRecursiveIssuanceV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<AuthorizeKagemushaTairaCanaryV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<RecordKagemushaTairaCanaryV4>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<RegisterOfflineDeviceAttestation>() {
-            execute!(executor, isi);
-        }
-        if let Some(isi) = any.downcast_ref::<SetOfflineDeviceAttestationPolicy>() {
+        if let Some(isi) = any.downcast_ref::<RedeemOfflineCashV1>() {
             execute!(executor, isi);
         }
         // Core owns the signature, chain/client binding, canonical policy,
@@ -1505,10 +1474,6 @@ mod core_authorization_dispatch_tests {
             settlement::{FxCorridorOracleEvidence, SettleFxCorridor},
         },
         nexus::DataSpaceId,
-        offline::{
-            KagemushaDevicePublicKeyV2, OfflineDeviceAttestationPolicy,
-            OfflineDeviceAttestationRegistration,
-        },
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         prelude::{AccountId, AssetDefinitionId, DomainId, Quantity, ValidationFail},
     };
@@ -1585,47 +1550,6 @@ mod core_authorization_dispatch_tests {
             name.parse().expect("valid FX asset name"),
         )
     }
-    fn offline_attestation_registration(
-        account_id: AccountId,
-    ) -> OfflineDeviceAttestationRegistration {
-        let public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(&[
-            0x04, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63,
-            0xa4, 0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39,
-            0x45, 0xd8, 0x98, 0xc2, 0x96, 0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e,
-            0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e,
-            0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
-        ])
-        .expect("canonical uncompressed P-256 generator point");
-        let attestation_report = b"executor-offline-attestation-report".to_vec();
-        let evidence = b"executor-offline-attestation-evidence".to_vec();
-        OfflineDeviceAttestationRegistration {
-            version: 1,
-            platform: "android-keymint".to_owned(),
-            key_id: "executor-offline-key".to_owned(),
-            device_id: "executor-offline-device".to_owned(),
-            account_id,
-            asset_definition_id: None,
-            ios_team_id: None,
-            ios_bundle_id: None,
-            ios_environment: None,
-            android_package_name: Some("org.hyperledger.iroha.executor".to_owned()),
-            android_signing_certificate_sha256: Some(vec![0x51; 32]),
-            public_key,
-            assertion_scheme: "android-keymint".to_owned(),
-            assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),
-            assertion_public_key: vec![0x52; 65],
-            assertion_usage_count_limit: Some(1),
-            one_use: true,
-            challenge_hash: Hash::new(b"executor-offline-attestation-challenge"),
-            attestation_report_hash: Hash::new(&attestation_report),
-            attestation_report,
-            evidence_hash: Hash::new(&evidence),
-            evidence,
-            recent_block_height: 42,
-            recent_block_hash: Hash::new(b"executor-offline-attestation-block"),
-            expires_at_ms: 2_000_000_000_000,
-        }
-    }
     #[test]
     fn fx_settlement_reaches_core_without_executor_permission() {
         let authority = account(0x41);
@@ -1663,59 +1587,6 @@ mod core_authorization_dispatch_tests {
             executor.verdict().is_ok(),
             "the default executor must defer FX source authorization to Core"
         );
-    }
-    #[test]
-    fn offline_attestation_instructions_reach_core_authorization() {
-        let authority = account(0x43);
-        let instructions = [
-            InstructionBox::from(RegisterOfflineDeviceAttestation::new(
-                offline_attestation_registration(authority.clone()),
-            )),
-            SetOfflineDeviceAttestationPolicy::new(OfflineDeviceAttestationPolicy {
-                version: 1,
-                trusted_roots: Vec::new(),
-                revoked_certificate_tbs_sha256: Vec::new(),
-                ios_apps: Vec::new(),
-                android_apps: Vec::new(),
-                android_status_snapshot: None,
-                require_ios_app_policy: false,
-                require_android_app_policy: false,
-            })
-            .into(),
-        ];
-        for instruction in instructions {
-            let mut executor = TestExecutor::new(authority.clone());
-            visit_instruction(&mut executor, &instruction);
-            assert!(
-                executor.verdict().is_ok(),
-                "offline instructions must reach Core authorization"
-            );
-        }
-    }
-    #[test]
-    fn default_executor_forwards_the_complete_kagemusha_canary_lifecycle() {
-        let source = include_str!("mod.rs");
-        let start = source
-            .find("// Core owns offline note/device validation")
-            .expect("Kagemusha dispatch marker");
-        let tail = &source[start..];
-        let end = tail
-            .find("// Core owns the signature, chain/client binding")
-            .expect("Kagemusha dispatch terminator");
-        let dispatch = &tail[..end];
-        for instruction in [
-            "ActivateKagemushaRecursiveReleaseV4",
-            "EnableKagemushaRecursiveIssuanceV4",
-            "CancelKagemushaRecursiveReleaseV4",
-            "DeactivateKagemushaRecursiveIssuanceV4",
-            "AuthorizeKagemushaTairaCanaryV4",
-            "RecordKagemushaTairaCanaryV4",
-        ] {
-            assert!(
-                dispatch.contains(instruction),
-                "default executor Kagemusha dispatch omitted {instruction}"
-            );
-        }
     }
     #[test]
     fn alias_lifecycle_instructions_reach_core_dispatch() {
@@ -2841,9 +2712,7 @@ pub mod domain {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineEscrow(_)
-            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
-            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
+            | AnyPermission::CanManageOfflineReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -3313,9 +3182,7 @@ pub mod account {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineEscrow(_)
-            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
-            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
+            | AnyPermission::CanManageOfflineReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -3622,9 +3489,7 @@ pub mod asset_definition {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineEscrow(_)
-            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
-            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
+            | AnyPermission::CanManageOfflineReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -5022,9 +4887,7 @@ pub mod trigger {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineEscrow(_)
-            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
-            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
+            | AnyPermission::CanManageOfflineReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)
@@ -6443,7 +6306,6 @@ pub mod permission {
         impl_execute!(executor, isi, validate_revoke, Revoke<Permission, Account>);
     }
 }
-include!("governed_offline_permission_tests.rs");
 include!("dpn_permission_tests.rs");
 /// Permission-checked visitor for executor upgrade instructions.
 pub mod executor {

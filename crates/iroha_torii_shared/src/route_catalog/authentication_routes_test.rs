@@ -45,6 +45,12 @@ const ACCOUNT_EXPENSIVE: RoutePolicyExpectation = RoutePolicyExpectation {
     effect: Some(RouteEffect::ExpensiveCompute),
     ..ACCOUNT_AUTHENTICATED
 };
+const DATASPACE_EXPENSIVE: RoutePolicyExpectation = RoutePolicyExpectation {
+    effect: Some(RouteEffect::ExpensiveCompute),
+    admission: Some(AdmissionPolicy::DataspaceVisible),
+    authentication: Some(AuthenticationPolicy::OptionalCanonicalAccountSignature),
+    ..EMPTY_POLICY
+};
 const ACCOUNT_MUTATION: RoutePolicyExpectation = RoutePolicyExpectation {
     effect: Some(RouteEffect::Mutation),
     ..ACCOUNT_AUTHENTICATED
@@ -169,28 +175,26 @@ macro_rules! named_route_policy_test {
 }
 
 named_route_policy_test!(
-    offline_receiver_lineage_requires_account_authentication_before_expensive_proof_work,
-    {
-        assert_route_policy(offline::RECIPIENT_LINEAGE, ACCOUNT_EXPENSIVE);
-    }
-);
-
-named_route_policy_test!(
     application_query_posts_authenticate_before_expensive_compute,
     {
         assert_route_policies(
             [
-                application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
-                application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
                 application_api::DOMAINS_QUERY_POST,
                 application_api::ACCOUNTS_QUERY_POST,
                 application_api::TRANSACTIONS_QUERY_POST,
-                application_api::TRANSACTIONS_VISIBLE_QUERY_POST,
-                application_api::REPO_AGREEMENTS_QUERY_POST,
-                telemetry::ASSET_HOLDERS_QUERY,
                 application_api::ASSETS_DEFINITIONS_QUERY_POST,
                 application_api::NFTS_QUERY_POST,
                 application_api::RWAS_QUERY_POST,
+                application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
+                application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
+                telemetry::ASSET_HOLDERS_QUERY,
+            ],
+            DATASPACE_EXPENSIVE,
+        );
+        assert_route_policies(
+            [
+                application_api::TRANSACTIONS_VISIBLE_QUERY_POST,
+                application_api::REPO_AGREEMENTS_QUERY_POST,
             ],
             ACCOUNT_EXPENSIVE,
         );

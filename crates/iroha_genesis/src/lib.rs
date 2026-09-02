@@ -3437,7 +3437,7 @@ impl RawGenesisTransaction {
             block_max_transactions,
             mode,
             protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
-            v2_context: self.sumeragi_v2,
+            v2_context: self.sumeragi_v2.clone(),
         };
         let Ok(fp) = compute_consensus_parameters_fingerprint_v2(&dm_params) else {
             self.consensus_fingerprint = None;
@@ -3472,7 +3472,7 @@ impl RawGenesisTransaction {
                 "consensus_fingerprint missing after normalization; call with_consensus_meta first"
             )
         })?;
-        let sumeragi_v2 = manifest.sumeragi_v2;
+        let sumeragi_v2 = manifest.sumeragi_v2.clone();
         sumeragi_v2
             .validate()
             .map_err(|error| eyre!("invalid signed Sumeragi v2 context parameters: {error}"))?;
@@ -3675,8 +3675,8 @@ impl RawGenesisTransaction {
     }
     /// Return the exact Sumeragi v2 context parameters selected by this manifest.
     #[must_use]
-    pub const fn sumeragi_v2_context_parameters(&self) -> SumeragiV2GenesisContextParameters {
-        self.sumeragi_v2
+    pub fn sumeragi_v2_context_parameters(&self) -> SumeragiV2GenesisContextParameters {
+        self.sumeragi_v2.clone()
     }
     /// Replace the Sumeragi v2 context parameters that will be fingerprinted
     /// and signed with this manifest.
@@ -3741,7 +3741,7 @@ impl RawGenesisTransaction {
             consensus_mode: self.consensus_mode,
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
-            sumeragi_v2: self.sumeragi_v2,
+            sumeragi_v2: Some(self.sumeragi_v2),
         }
     }
     /// Build and sign a resultless genesis proposal.
@@ -4162,7 +4162,7 @@ pub struct GenesisBuilder {
     consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
     wire_protocol_version: u32,
     consensus_fingerprint: Option<ConsensusFingerprint>,
-    sumeragi_v2: SumeragiV2GenesisContextParameters,
+    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
 }
 /// Domain editing mode of the [`GenesisBuilder`] to register accounts and assets under the domain.
 #[must_use]
@@ -4178,7 +4178,7 @@ pub struct GenesisDomainBuilder {
     consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
     wire_protocol_version: u32,
     consensus_fingerprint: Option<ConsensusFingerprint>,
-    sumeragi_v2: SumeragiV2GenesisContextParameters,
+    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
 }
 #[derive(Default)]
 struct GenesisTxBuilder {
@@ -4189,6 +4189,10 @@ struct GenesisTxBuilder {
 }
 impl GenesisBuilder {
     /// Construct [`GenesisBuilder`] with an executor upgrade.
+    ///
+    /// Before building, callers must provide the separately provisioned
+    /// Offline Cash V1 Pasta roster through
+    /// [`Self::with_sumeragi_v2_context_parameters`].
     pub fn new(chain: ChainId, executor: impl Into<PathBuf>, ivm_dir: impl Into<PathBuf>) -> Self {
         Self {
             chain,
@@ -4201,10 +4205,14 @@ impl GenesisBuilder {
             consensus_mode: SumeragiConsensusMode::Permissioned,
             wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+            sumeragi_v2: None,
         }
     }
     /// Construct [`GenesisBuilder`] without an executor upgrade.
+    ///
+    /// Before building, callers must provide the separately provisioned
+    /// Offline Cash V1 Pasta roster through
+    /// [`Self::with_sumeragi_v2_context_parameters`].
     pub fn new_without_executor(chain: ChainId, ivm_dir: impl Into<PathBuf>) -> Self {
         Self {
             chain,
@@ -4217,7 +4225,7 @@ impl GenesisBuilder {
             consensus_mode: SumeragiConsensusMode::Permissioned,
             wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+            sumeragi_v2: None,
         }
     }
     /// Override the cryptography snapshot advertised alongside the manifest.
@@ -4237,7 +4245,7 @@ impl GenesisBuilder {
         mut self,
         parameters: SumeragiV2GenesisContextParameters,
     ) -> Self {
-        self.sumeragi_v2 = parameters;
+        self.sumeragi_v2 = Some(parameters);
         self
     }
     /// Select the signed immutable block cadence stored by genesis.
@@ -4363,7 +4371,7 @@ impl GenesisBuilder {
     /// Fails if internal [`RawGenesisTransaction::build_and_sign`] fails.
     pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
         let da_proof_policies = self.da_proof_policies.clone();
-        self.build_raw()
+        self.build_raw()?
             .build_and_sign_with_da_proof_policies(genesis_key_pair, da_proof_policies)
     }
     /// Finish building, sign, and produce a resultless [`GenesisBlock`] proposal with a confidential policy hash.
@@ -4377,7 +4385,7 @@ impl GenesisBuilder {
         confidential_policy_hash: Option<[u8; 32]>,
     ) -> Result<GenesisBlock> {
         let da_proof_policies = self.da_proof_policies.clone();
-        self.build_raw()
+        self.build_raw()?
             .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
                 genesis_key_pair,
                 da_proof_policies,
@@ -4385,7 +4393,12 @@ impl GenesisBuilder {
             )
     }
     /// Finish building and produce a [`RawGenesisTransaction`].
-    pub fn build_raw(self) -> RawGenesisTransaction {
+    ///
+    /// # Errors
+    ///
+    /// Fails unless the separately provisioned Offline Cash V1 Pasta roster
+    /// has been supplied as part of the signed Sumeragi v2 context parameters.
+    pub fn build_raw(self) -> Result<RawGenesisTransaction> {
         let mut parameter_snapshot = Parameters::default();
         let mut source_transactions = self.transactions;
         for tx in &mut source_transactions {
@@ -4407,7 +4420,13 @@ impl GenesisBuilder {
             .first_mut()
             .expect("genesis builder always contains at least one transaction");
         first.parameters = Some(parameter_snapshot);
-        RawGenesisTransaction {
+        let sumeragi_v2 = self.sumeragi_v2.ok_or_else(|| {
+            eyre!(
+                "genesis builder requires explicit signed Sumeragi v2 context parameters, \
+                 including the Offline Cash V1 Pasta finality roster"
+            )
+        })?;
+        Ok(RawGenesisTransaction {
             chain: self.chain,
             chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: self.executor,
@@ -4416,9 +4435,9 @@ impl GenesisBuilder {
             consensus_mode: self.consensus_mode,
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
-            sumeragi_v2: self.sumeragi_v2,
+            sumeragi_v2,
             crypto: self.crypto,
-        }
+        })
     }
 }
 impl GenesisDomainBuilder {

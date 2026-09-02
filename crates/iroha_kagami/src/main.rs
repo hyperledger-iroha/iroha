@@ -22,7 +22,6 @@ mod client_configs;
 mod codec;
 mod crypto;
 mod genesis;
-mod kagemusha;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
@@ -150,8 +149,6 @@ enum Command {
     /// Commands related to genesis
     #[clap(subcommand)]
     Genesis(genesis::Args),
-    /// Verify and promote authenticated Kagemusha ABI-21/V4 artifact releases
-    Kagemusha(kagemusha::Args),
     /// Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
     PrivacyBootstrap(privacy_bootstrap::Args),
     /// Verify a genesis manifest against a preset profile
@@ -195,7 +192,6 @@ impl<T: Write> RunArgs<T> for Command {
             Docker(args) => args.run(writer),
             Keys(args) => args.run(writer),
             Genesis(args) => args.run(writer),
-            Kagemusha(args) => args.run(writer),
             PrivacyBootstrap(args) => args.run(writer),
             Verify(args) => args.run(writer),
             Advanced(args) => args.run(writer),
@@ -294,124 +290,6 @@ mod tests {
         assert!(
             parse("kagami privacy-bootstrap emit --output ./legacy.json").is_err(),
             "the first release has no compatibility command aliases"
-        );
-    }
-    #[test]
-    fn retired_kagemusha_verify_release_command_is_rejected() {
-        assert!(
-            parse("kagami kagemusha verify-release --bundle-dir ./release").is_err(),
-            "the pre-V4 release verifier must remain unavailable"
-        );
-        assert!(
-            parse(
-                "kagami kagemusha verify-release \
-                 --bundle-dir ./release \
-                 --benchmark-evidence ./benchmark.evidence \
-                 --cryptographic-review ./review.evidence"
-            )
-            .is_err(),
-            "complete evidence must not revive the retired verifier"
-        );
-        assert!(
-            parse(
-                "kagami kagemusha verify-release \
-                 --bundle-dir ./release \
-                 --benchmark-evidence ./benchmark.evidence"
-            )
-            .is_err()
-        );
-        assert!(
-            parse(
-                "kagami kagemusha verify-release \
-                 --bundle-dir ./release \
-                 --cryptographic-review ./review.evidence"
-            )
-            .is_err()
-        );
-    }
-    #[test]
-    fn kagemusha_v4_commands_are_distinct_and_require_complete_evidence() {
-        assert!(
-            parse("kagami kagemusha verify-release-v4 --bundle-dir ./release-v4").is_err(),
-            "ABI-21 verification must hash-check both independent evidence files"
-        );
-        assert!(
-            parse(
-                "kagami kagemusha verify-release-v4 \
-                 --bundle-dir ./release-v4 \
-                 --release-policy ./release-policy.norito \
-                 --benchmark-evidence ./benchmark.evidence \
-                 --cryptographic-review ./review.evidence"
-            )
-            .is_ok()
-        );
-        assert!(
-            parse(
-                "kagami kagemusha promote-release-v4 \
-                 --bundle-dir ./release-v4 \
-                 --release-policy ./release-policy.norito \
-                 --promotion-record ./promoted-v4.norito \
-                 --benchmark-evidence ./benchmark.evidence \
-                 --cryptographic-review ./review.evidence"
-            )
-            .is_ok()
-        );
-        assert!(
-            parse(
-                "kagami kagemusha promote-release-v4 \
-                 --bundle-dir ./release-v4 \
-                 --release-policy ./release-policy.norito \
-                 --promotion-record ./promoted-v4.norito \
-                 --benchmark-evidence ./benchmark.evidence"
-            )
-            .is_err()
-        );
-        assert!(
-            parse(
-                "kagami kagemusha verify-release-v4 \
-                 --bundle-dir ./release-v4 \
-                 --benchmark-evidence ./benchmark.evidence \
-                 --cryptographic-review ./review.evidence"
-            )
-            .is_err(),
-            "ABI-21 verification must receive the canonical policy explicitly"
-        );
-        assert!(
-            parse(
-                "kagami kagemusha promote-release \
-                 --bundle-dir ./release-v4 \
-                 --promotion-record ./promoted-v4.norito \
-                 --benchmark-evidence ./benchmark.evidence \
-                 --cryptographic-review ./review.evidence \
-                 --abi-version 20"
-            )
-            .is_err(),
-            "the historical V3 command must not accept a V4 alias flag"
-        );
-    }
-    #[test]
-    fn kagemusha_taira_base_genesis_rejects_pre_genesis_release_inputs() {
-        let base = "kagami kagemusha prepare-taira-testnet-base-genesis-v4 \
-             --genesis ./genesis.json \
-             --genesis-authority genesis-authority \
-             --command-authority command-authority \
-             --output ./base-genesis.json";
-        assert!(parse(base).is_ok());
-        assert!(
-            parse(&format!("{base} --release-bundle ./release")).is_err(),
-            "a NetworkId-bound release must not be accepted before genesis is signed"
-        );
-        assert!(
-            parse(
-                "kagami kagemusha prepare-taira-testnet-bootstrap-v4 \
-                 --genesis ./genesis.json \
-                 --release-bundle ./release \
-                 --genesis-authority genesis-authority \
-                 --command-authority command-authority \
-                 --output ./genesis.json"
-            )
-            .is_err(),
-            "the self-referential pre-genesis release command must remain retired"
         );
     }
     #[test]

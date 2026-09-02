@@ -452,6 +452,15 @@ pub struct RequiredParliamentBodyV1 {
     pub decision_mode: ParliamentDecisionModeV1,
 }
 
+const CONTRACT_LIFECYCLE_REQUIRED_BODIES_V1: &[ParliamentBody] = &[
+    ParliamentBody::RulesCommittee,
+    ParliamentBody::AgendaCouncil,
+    ParliamentBody::InterestPanel,
+    ParliamentBody::ReviewPanel,
+    ParliamentBody::OversightCommittee,
+    ParliamentBody::PolicyJury,
+];
+
 const SCCP_ROUTE_GOVERNANCE_REQUIRED_BODIES_V1: &[ParliamentBody] = &[
     ParliamentBody::RulesCommittee,
     ParliamentBody::AgendaCouncil,
@@ -485,19 +494,9 @@ pub(crate) fn parliament_attempt_policy_v1(
     proposal: &ProposalKind,
 ) -> (RiskTierV1, Vec<RequiredParliamentBodyV1>) {
     let bodies: &[ParliamentBody] = match proposal {
-        ProposalKind::DeployContract(_) | ProposalKind::ContractLifecycleGovernance(_) => &[
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::OversightCommittee,
-            ParliamentBody::PolicyJury,
-        ],
-        ProposalKind::ContractEmergencyHold(_) => &[
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::OversightCommittee,
-            ParliamentBody::PolicyJury,
-        ],
+        ProposalKind::DeployContract(_)
+        | ProposalKind::ContractLifecycleGovernance(_)
+        | ProposalKind::ContractEmergencyHold(_) => CONTRACT_LIFECYCLE_REQUIRED_BODIES_V1,
         ProposalKind::SccpRouteGovernance(_) => SCCP_ROUTE_GOVERNANCE_REQUIRED_BODIES_V1,
         ProposalKind::ValidationFeePolicy(_) | ProposalKind::ValidationFeePayoutLifecycle(_) => {
             VALIDATION_FEE_REQUIRED_BODIES_V1
@@ -2547,9 +2546,10 @@ pub(crate) mod tests {
         block::BlockHeader,
         domain::DomainId,
         governance::types::{
-            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
-            GovernanceExpectedHeadAbsentV1, ValidationFeePayoutLifecycleProposal,
-            ValidationFeePolicyProposal, parliament_ballot_participant_hash_v1,
+            AbiVersion, ContractAbiHash, ContractCodeHash, ContractEmergencyHoldProposalV1,
+            DeployContractProposal, GovernanceExpectedHeadAbsentV1,
+            ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+            parliament_ballot_participant_hash_v1,
         },
         name::Name,
         validation_fee::{

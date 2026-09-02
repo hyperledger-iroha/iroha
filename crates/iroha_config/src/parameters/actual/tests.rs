@@ -458,7 +458,6 @@ mod tests {
             &config.settlement,
             [0x11; 32],
             [0x22; 32],
-            Some([0x44; 32]),
         )
     }
     #[test]
@@ -545,25 +544,9 @@ mod tests {
             changed.settlement.router.epsilon_bps.saturating_add(1);
         assert_changed("settlement execution policy", changed);
         let fixed = super::sora_profile_tests::minimal_root();
-        for (label, nexus, zk, kagemusha) in [
-            (
-                "Nexus runtime policy",
-                [0x12; 32],
-                [0x22; 32],
-                Some([0x44; 32]),
-            ),
-            (
-                "ZK runtime policy",
-                [0x11; 32],
-                [0x23; 32],
-                Some([0x44; 32]),
-            ),
-            (
-                "Kagemusha release catalog",
-                [0x11; 32],
-                [0x22; 32],
-                Some([0x45; 32]),
-            ),
+        for (label, nexus, zk) in [
+            ("Nexus runtime policy", [0x12; 32], [0x22; 32]),
+            ("ZK runtime policy", [0x11; 32], [0x23; 32]),
         ] {
             assert_ne!(
                 execution_policy_digest_v1(
@@ -576,7 +559,6 @@ mod tests {
                     &fixed.settlement,
                     nexus,
                     zk,
-                    kagemusha,
                 ),
                 execution_policy_hash(&fixed),
                 "{label} must change the execution-policy identity"
@@ -690,44 +672,17 @@ mod tests {
         .expect("nonzero gateway limit");
         operational.content.pow.difficulty_bits =
             operational.content.pow.difficulty_bits.saturating_add(1);
-        operational.settlement.offline.kagemusha_release_policy_path =
-            Some(PathBuf::from("/srv/iroha/policy.norito"));
-        operational.settlement.offline.kagemusha_artifact_dir =
-            Some(PathBuf::from("/srv/iroha/artifacts"));
         assert_eq!(
             execution_policy_hash(&operational),
             expected,
-            "worker, cache, accelerator, tracing, transport, gateway, and offline cache path drift must not partition validators"
+            "worker, cache, accelerator, tracing, transport, and gateway drift must not partition validators"
         );
     }
     #[test]
     fn offline_defaults_need_no_operator_enablement_or_catalog() {
         let offline = Offline::default();
-        assert!(offline.escrow_accounts.is_empty());
-        assert!(offline.kagemusha_release_policy_path.is_none());
-        assert!(offline.kagemusha_artifact_dir.is_none());
-        assert!(offline.kagemusha_catalog_qualification_seal_path.is_none());
-        assert!(offline.kagemusha_promotion_controller_public_key.is_none());
-        assert!(
-            offline
-                .kagemusha_catalog_revalidation_authority_key_id
-                .is_none()
-        );
-        assert!(
-            offline
-                .kagemusha_catalog_revalidation_authority_public_key
-                .is_none()
-        );
-        assert!(offline.kagemusha_promotion_reservation_path.is_none());
-        assert!(
-            offline
-                .kagemusha_validator_qualification_seal_path
-                .is_none()
-        );
-        assert_eq!(
-            offline.kagemusha_max_decoded_bytes,
-            defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
-        );
+        assert!(offline.reserve_accounts.is_empty());
+        assert!(offline.proof_release.is_none());
     }
     fn default_v2_sumeragi() -> Sumeragi {
         super::sora_profile_tests::minimal_root().sumeragi

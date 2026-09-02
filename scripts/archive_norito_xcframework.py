@@ -541,11 +541,6 @@ def _validate_native_binaries(snapshot: Path, validator: object) -> None:
     nm = _pinned_native_tool("nm")
     required_symbols = set(validator.EXPECTED_REQUIRED_SYMBOLS)
     forbidden_symbols = set(validator.EXPECTED_FORBIDDEN_SYMBOLS)
-    expected_kagemusha = {
-        symbol
-        for symbol in required_symbols
-        if symbol.startswith("connect_norito_kagemusha_")
-    }
     for identifier, expected in validator.EXPECTED_SLICES.items():
         binary = snapshot / identifier / validator.LIBRARY_NAME
         architectures = _run_native_tool(lipo, ["-archs", str(binary)]).split()
@@ -565,12 +560,6 @@ def _validate_native_binaries(snapshot: Path, validator: object) -> None:
         }
         missing = sorted(required_symbols - symbols)
         forbidden = sorted(forbidden_symbols & symbols)
-        actual_kagemusha = {
-            symbol
-            for symbol in symbols
-            if symbol.startswith("connect_norito_kagemusha_")
-        }
-        retired_or_extra_kagemusha = sorted(actual_kagemusha - expected_kagemusha)
         if missing:
             fail(
                 f"XCFramework {identifier} is missing required native symbols: "
@@ -580,11 +569,6 @@ def _validate_native_binaries(snapshot: Path, validator: object) -> None:
             fail(
                 f"XCFramework {identifier} exports forbidden native symbols: "
                 + ", ".join(forbidden)
-            )
-        if retired_or_extra_kagemusha:
-            fail(
-                f"XCFramework {identifier} exports retired or unexpected Kagemusha symbols: "
-                + ", ".join(retired_or_extra_kagemusha)
             )
 
 

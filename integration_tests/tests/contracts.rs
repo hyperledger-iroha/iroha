@@ -1162,7 +1162,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
     assert_eq!(handshake.mode, SumeragiConsensusMode::Npos);
     assert_eq!(
         handshake.sumeragi_v2.da_layout,
-        SumeragiV2GenesisContextParameters::recommended().da_layout,
+        recommended_data_availability_layout(),
         "contract lifecycle gate requires the signed mandatory DA layout"
     );
     network.ensure_blocks(1).await?;
@@ -1841,7 +1841,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     );
     assert_eq!(
         handshake.sumeragi_v2.da_layout,
-        SumeragiV2GenesisContextParameters::recommended().da_layout,
+        recommended_data_availability_layout(),
         "typed-query pagination gate requires the signed mandatory DA layout"
     );
     network.ensure_blocks(1).await?;
@@ -2281,7 +2281,7 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
     );
     assert_eq!(
         handshake.sumeragi_v2.da_layout,
-        SumeragiV2GenesisContextParameters::recommended().da_layout,
+        recommended_data_availability_layout(),
         "contract V1 restart gate requires the signed mandatory DA layout"
     );
     let client = network.client();

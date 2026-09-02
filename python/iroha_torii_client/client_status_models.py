@@ -49,8 +49,8 @@ class SumeragiV2ExecutionCommitment:
     parent_state_root: str
     post_state_root: str
     ordinary_writes_root: str
-    topup_anchor_root: Optional[str]
-    topup_anchor_count: int
+    offline_cash_top_up_root: Optional[str]
+    offline_cash_top_up_count: int
     native_amx_application_manifest_version: int
     native_amx_application_manifest_root: str
     native_amx_application_manifest_count: int
@@ -230,15 +230,7 @@ class ConnectAdmissionManifest:
     extra: Dict[str, Any]
 
 
-SUMERAGI_EVIDENCE_KIND_FILTERS = {
-    "DoublePrepare",
-    "DoubleCommit",
-    "InvalidQc",
-    "InvalidProposal",
-    "Censorship",
-    "SumeragiV2Equivocation",
-}
-SUMERAGI_EVIDENCE_PHASES = {"Prepare", "Commit", "NewView"}
+SUMERAGI_EVIDENCE_KIND = "SumeragiV2Equivocation"
 SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES = {
     "proposal",
     "phase_vote",
@@ -247,71 +239,46 @@ SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES = {
 
 
 @dataclass(frozen=True)
-class SumeragiEvidenceRecordBase:
-    """Fields common to exact evidence records returned by Torii."""
+class SumeragiEvidencePenaltyDetails:
+    """Committed block height for an applied or cancelled penalty."""
 
-    kind: str
-    recorded_height: int
-    recorded_view: int
-    recorded_ms: int
-    consensus_admitted_height: Optional[int]
-
-
-@dataclass(frozen=True)
-class SumeragiDoubleVoteEvidenceRecord(SumeragiEvidenceRecordBase):
-    """Exact ``DoublePrepare`` or ``DoubleCommit`` evidence projection."""
-
-    kind: Literal["DoublePrepare", "DoubleCommit"]
-    phase: Literal["Prepare", "Commit", "NewView"]
     height: int
-    view: int
-    epoch: int
-    signer: int
-    block_hash_1: str
-    block_hash_2: str
 
 
 @dataclass(frozen=True)
-class SumeragiInvalidQcEvidenceRecord(SumeragiEvidenceRecordBase):
-    """Exact ``InvalidQc`` evidence projection."""
+class SumeragiEvidencePendingPenaltyStatus:
+    """Penalty lifecycle state for evidence awaiting a committed outcome."""
 
-    kind: Literal["InvalidQc"]
-    height: int
-    view: int
-    epoch: int
-    subject_block_hash: str
-    phase: Literal["Prepare", "Commit", "NewView"]
-    reason: str
+    status: Literal["pending"]
+    details: None
 
 
 @dataclass(frozen=True)
-class SumeragiInvalidProposalEvidenceRecord(SumeragiEvidenceRecordBase):
-    """Exact ``InvalidProposal`` evidence projection."""
+class SumeragiEvidenceAppliedPenaltyStatus:
+    """Penalty lifecycle state for evidence applied in a committed block."""
 
-    kind: Literal["InvalidProposal"]
-    height: int
-    view: int
-    epoch: int
-    subject_block_hash: str
-    payload_hash: str
-    reason: str
+    status: Literal["applied"]
+    details: SumeragiEvidencePenaltyDetails
 
 
 @dataclass(frozen=True)
-class SumeragiCensorshipEvidenceRecord(SumeragiEvidenceRecordBase):
-    """Exact ``Censorship`` evidence projection."""
+class SumeragiEvidenceCancelledPenaltyStatus:
+    """Penalty lifecycle state for evidence cancelled in a committed block."""
 
-    kind: Literal["Censorship"]
-    tx_hash: str
-    receipt_count: int
-    signers: List[str]
-    submitted_at_height_min: Optional[int]
-    submitted_at_height_max: Optional[int]
+    status: Literal["cancelled"]
+    details: SumeragiEvidencePenaltyDetails
+
+
+SumeragiEvidencePenaltyStatus = Union[
+    SumeragiEvidencePendingPenaltyStatus,
+    SumeragiEvidenceAppliedPenaltyStatus,
+    SumeragiEvidenceCancelledPenaltyStatus,
+]
 
 
 @dataclass(frozen=True)
-class SumeragiV2EquivocationEvidenceRecord(SumeragiEvidenceRecordBase):
-    """Exact ``SumeragiV2Equivocation`` evidence projection."""
+class SumeragiV2EquivocationEvidenceRecord:
+    """Exact first-release evidence projection returned by Torii."""
 
     kind: Literal["SumeragiV2Equivocation"]
     class_: Literal["proposal", "phase_vote", "timeout_vote"]
@@ -322,15 +289,14 @@ class SumeragiV2EquivocationEvidenceRecord(SumeragiEvidenceRecordBase):
     context_id: str
     artifact_hash_1: str
     artifact_hash_2: str
+    recorded_height: int
+    recorded_view: int
+    recorded_ms: int
+    consensus_admitted_height: int
+    penalty_status: SumeragiEvidencePenaltyStatus
 
 
-SumeragiEvidenceRecord = Union[
-    SumeragiDoubleVoteEvidenceRecord,
-    SumeragiInvalidQcEvidenceRecord,
-    SumeragiInvalidProposalEvidenceRecord,
-    SumeragiCensorshipEvidenceRecord,
-    SumeragiV2EquivocationEvidenceRecord,
-]
+SumeragiEvidenceRecord = SumeragiV2EquivocationEvidenceRecord
 
 
 @dataclass(frozen=True)

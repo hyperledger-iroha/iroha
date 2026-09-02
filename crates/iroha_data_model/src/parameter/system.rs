@@ -51,6 +51,69 @@ impl core::fmt::Display for ConsensusFingerprint {
         write!(formatter, "0x{}", hex::encode(self.0))
     }
 }
+/// Consensus-state staging record for the next Offline Cash V1 Pasta roster.
+///
+/// Validators read this value from the finalized world state before building
+/// an epoch-boundary height context. The old roster then authenticates the
+/// complete next roster through the boundary context and its CommitQC.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineCashMintFinalityNextEpochParameterV1 {
+    /// Full separately provisioned public roster for the next election epoch.
+    pub roster: crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1,
+}
+impl OfflineCashMintFinalityNextEpochParameterV1 {
+    /// Sole custom-parameter identity for the next roster.
+    pub const PARAMETER_ID_STR: &'static str = "offline_cash_mint_finality_next_epoch_v1";
+
+    /// Construct the canonical custom-parameter identifier.
+    #[must_use]
+    pub fn parameter_id() -> CustomParameterId {
+        Self::PARAMETER_ID_STR
+            .parse()
+            .expect("valid Offline Cash V1 next-roster parameter identifier")
+    }
+
+    /// Validate the complete public roster before it enters consensus state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the roster validation error unchanged.
+    pub fn validate(
+        &self,
+    ) -> Result<(), crate::isi::offline_cash_v1::OfflineCashIsiValidationErrorV1> {
+        self.roster.validate()
+    }
+
+    /// Convert the typed payload into its canonical custom-parameter carrier.
+    #[must_use]
+    pub fn into_custom_parameter(self) -> CustomParameter {
+        CustomParameter::new(Self::parameter_id(), Json::new(self))
+    }
+
+    /// Decode and validate the typed payload from its sole parameter identity.
+    #[must_use]
+    pub fn from_custom_parameter(custom: &CustomParameter) -> Option<Self> {
+        if custom.id != Self::parameter_id() {
+            return None;
+        }
+        let value = norito::json::from_str::<Self>(custom.payload().get()).ok()?;
+        value.validate().ok()?;
+        Some(value)
+    }
+}
 #[cfg(feature = "json")]
 impl JsonSerialize for ConsensusFingerprint {
     fn json_serialize(&self, out: &mut String) {
@@ -95,7 +158,6 @@ impl JsonDeserialize for ConsensusFingerprint {
 #[derive(
     Debug,
     Clone,
-    Copy,
     PartialEq,
     Eq,
     norito::derive::JsonSerialize,
@@ -2579,8 +2641,7 @@ mod tests {
             block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
             wire_protocol_version: u32::from(crate::block::consensus_v2::PROTOCOL_VERSION),
             consensus_fingerprint: ConsensusFingerprint::new([0xab; 32]),
-            sumeragi_v2:
-                crate::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            sumeragi_v2: crate::block::consensus_v2::test_genesis_context_parameters(),
         }
     }
     #[cfg(feature = "json")]
@@ -2600,7 +2661,7 @@ mod tests {
     fn handshake_metadata_validation_is_strict() {
         let baseline = handshake_metadata_fixture();
         baseline.validate().expect("canonical metadata");
-        let mut bad_version = baseline;
+        let mut bad_version = baseline.clone();
         bad_version.wire_protocol_version = 99;
         assert!(bad_version.validate().is_err());
         let mut bad_context = baseline;

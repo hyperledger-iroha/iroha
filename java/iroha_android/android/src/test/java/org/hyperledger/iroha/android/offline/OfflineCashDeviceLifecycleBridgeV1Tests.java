@@ -26,7 +26,7 @@ public final class OfflineCashDeviceLifecycleBridgeV1Tests {
     assertThrows(
         IllegalStateException.class,
         () -> bridge.execute(
-            OfflineCashDeviceLifecycleBridgeV1.Operation.COMMIT_INTENT_EXACT_NEXT,
+            OfflineCashDeviceLifecycleBridgeV1.Operation.PREPARE_EXACT_NEXT_TRANSITION,
             requestId,
             command));
     assertArrayEquals(fixed(0x11, 32), requestId);
@@ -35,13 +35,27 @@ public final class OfflineCashDeviceLifecycleBridgeV1Tests {
 
   @Test
   public void javaInventoryExactlyMirrorsTheKotlinContract() {
-    assertEquals(14, OfflineCashDeviceLifecycleBridgeV1.Operation.values().length);
+    assertEquals(16, OfflineCashDeviceLifecycleBridgeV1.Operation.values().length);
+    assertEquals(16, OfflineCashDeviceLifecycleBridgeV1.Capability.values().length);
     assertEquals(10, OfflineCashDeviceLifecycleBridgeV1.Status.values().length);
     assertEquals(
         Arrays.toString(
             org.hyperledger.iroha.sdk.offline.OfflineCashDeviceLifecycleBridgeV1.Operation
                 .values()),
         Arrays.toString(OfflineCashDeviceLifecycleBridgeV1.Operation.values()));
+    assertEquals(
+        Arrays.toString(
+            org.hyperledger.iroha.sdk.offline.OfflineCashDeviceLifecycleBridgeV1.Capability
+                .values()),
+        Arrays.toString(OfflineCashDeviceLifecycleBridgeV1.Capability.values()));
+    for (int index = 0; index < OfflineCashDeviceLifecycleBridgeV1.Capability.values().length;
+        index++) {
+      assertEquals(
+          org.hyperledger.iroha.sdk.offline.OfflineCashDeviceLifecycleBridgeV1.Capability.values()[
+                  index]
+              .getMask(),
+          OfflineCashDeviceLifecycleBridgeV1.Capability.values()[index].mask());
+    }
   }
 
   private static byte[] fixed(final int value, final int count) {

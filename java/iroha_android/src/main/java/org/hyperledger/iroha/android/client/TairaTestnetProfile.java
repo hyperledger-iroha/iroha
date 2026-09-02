@@ -15,14 +15,14 @@ public final class TairaTestnetProfile {
   /** Canonical I105 address discriminant for Taira. */
   public static final int I105_DISCRIMINANT = 369;
 
-  /** Canonical Digital Shekel asset-definition ID used by Kagemusha on Taira. */
-  public static final String KAGEMUSHA_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
+  /** Canonical Digital Shekel asset-definition ID used by Offline Cash V1 on Taira. */
+  public static final String OFFLINE_CASH_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
 
-  /** Canonical Digital Shekel alias used by Kagemusha on Taira. */
-  public static final String KAGEMUSHA_ASSET_ALIAS = "ds#boi.is";
+  /** Canonical Digital Shekel alias used by Offline Cash V1 on Taira. */
+  public static final String OFFLINE_CASH_ASSET_ALIAS = "ds#boi.is";
 
-  /** Canonical Digital Shekel fixed-point scale used by Kagemusha on Taira. */
-  public static final int KAGEMUSHA_ASSET_SCALE = 2;
+  /** Canonical Digital Shekel fixed-point scale used by Offline Cash V1 on Taira. */
+  public static final int OFFLINE_CASH_ASSET_SCALE = 2;
 
   /** Public Taira XOR asset-definition ID used for transaction fees. */
   public static final String XOR_ASSET_DEFINITION_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";

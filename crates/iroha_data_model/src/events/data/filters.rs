@@ -1459,6 +1459,74 @@ impl Default for GovernanceEventFilter {
         Self::new()
     }
 }
+impl DataEventFilter {
+    /// Replace every exact account selector that refers to `old` with `new`.
+    ///
+    /// Account controller changes replace the canonical [`AccountId`] while
+    /// preserving the logical account. Trigger filters are durable state, so
+    /// leaving an old selector behind would silently disable the trigger after
+    /// a legitimate controller migration.
+    pub fn replace_account_id(&mut self, old: &AccountId, new: &AccountId) -> bool {
+        if old == new {
+            return false;
+        }
+        let mut updated = false;
+        let replace_selector = |selector: &mut Option<AccountId>| {
+            if selector.as_ref() == Some(old) {
+                *selector = Some(new.clone());
+                true
+            } else {
+                false
+            }
+        };
+        match self {
+            Self::Account(filter) => {
+                updated |= replace_selector(&mut filter.id_matcher);
+            }
+            Self::Asset(filter) => {
+                if let Some(asset_id) = filter.id_matcher.as_ref()
+                    && asset_id.account() == old
+                {
+                    filter.id_matcher = Some(crate::asset::AssetId::with_scope(
+                        asset_id.definition().clone(),
+                        new.clone(),
+                        *asset_id.scope(),
+                    ));
+                    updated = true;
+                }
+                updated |= replace_selector(&mut filter.transfer_source_account_matcher);
+                updated |= replace_selector(&mut filter.transfer_destination_account_matcher);
+            }
+            Self::Escrow(filter) => {
+                updated |= replace_selector(&mut filter.seller_matcher);
+                updated |= replace_selector(&mut filter.buyer_matcher);
+            }
+            Self::Any
+            | Self::Peer(_)
+            | Self::Domain(_)
+            | Self::AssetDefinition(_)
+            | Self::Nft(_)
+            | Self::Rwa(_)
+            | Self::Trigger(_)
+            | Self::Role(_)
+            | Self::Configuration(_)
+            | Self::Executor(_)
+            | Self::Proof(_)
+            | Self::VerifyingKey(_)
+            | Self::RuntimeUpgrade(_)
+            | Self::Soradns(_)
+            | Self::Sorafs(_)
+            | Self::Musubi(_)
+            | Self::SpaceDirectory(_)
+            | Self::Oracle(_)
+            | Self::Social(_)
+            | Self::Bridge(_) => {}
+            #[cfg(feature = "governance")]
+            Self::Governance(_) => {}
+        }
+        updated
+    }
+}
 #[cfg(feature = "transparent_api")]
 impl EventFilter for DataEventFilter {
     type Event = DataEvent;
@@ -1627,6 +1695,53 @@ mod tests {
                 .into_parts()
                 .0,
         )
+    }
+
+    #[test]
+    fn data_event_filter_rekeys_every_exact_account_selector() {
+        let old = checked_random_account_id();
+        let new = checked_random_account_id();
+        let definition = crate::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("rekey_filter", "universal").expect("valid domain id"),
+            "asset".parse().expect("valid asset name"),
+        );
+
+        let mut account =
+            DataEventFilter::Account(AccountEventFilter::new().for_account(old.clone()));
+        assert!(account.replace_account_id(&old, &new));
+        let DataEventFilter::Account(account) = account else {
+            unreachable!("fixture remains an account filter")
+        };
+        assert_eq!(account.id_matcher, Some(new.clone()));
+
+        let mut asset = DataEventFilter::Asset(
+            AssetEventFilter::new()
+                .for_asset(AssetId::new(definition, old.clone()))
+                .for_transfer_source_account(old.clone())
+                .for_transfer_destination_account(old.clone()),
+        );
+        assert!(asset.replace_account_id(&old, &new));
+        let DataEventFilter::Asset(asset) = asset else {
+            unreachable!("fixture remains an asset filter")
+        };
+        assert_eq!(asset.id_matcher.as_ref().map(AssetId::account), Some(&new));
+        assert_eq!(asset.transfer_source_account_matcher, Some(new.clone()));
+        assert_eq!(
+            asset.transfer_destination_account_matcher,
+            Some(new.clone())
+        );
+
+        let mut escrow = DataEventFilter::Escrow(
+            EscrowEventFilter::new()
+                .for_seller(old.clone())
+                .for_buyer(old.clone()),
+        );
+        assert!(escrow.replace_account_id(&old, &new));
+        let DataEventFilter::Escrow(escrow) = escrow else {
+            unreachable!("fixture remains an escrow filter")
+        };
+        assert_eq!(escrow.seller_matcher, Some(new.clone()));
+        assert_eq!(escrow.buyer_matcher, Some(new));
     }
 
     #[cfg(feature = "governance")]

@@ -517,7 +517,7 @@ enum ValidationFeeAdmissionError {
         instruction_index: usize,
         instruction_wire_id: &'static str,
     },
-    InvalidKagemushaOfflineConversion {
+    InvalidOfflineCashV1Conversion {
         context_index: usize,
         instruction_index: usize,
         instruction_wire_id: &'static str,
@@ -793,13 +793,13 @@ impl fmt::Display for ValidationFeeAdmissionError {
                 f,
                 "native instruction `{instruction_wire_id}` at instruction {instruction_index} in execution context {context_index} can move the policy DS outside an explicit asset transfer; this path is disabled while the validation-fee policy is active"
             ),
-            Self::InvalidKagemushaOfflineConversion {
+            Self::InvalidOfflineCashV1Conversion {
                 context_index,
                 instruction_index,
                 instruction_wire_id,
             } => write!(
                 f,
-                "Kagemusha offline-cash conversion `{instruction_wire_id}` at instruction {instruction_index} in execution context {context_index} does not have a valid payer/recipient-signed public effect binding"
+                "Offline Cash V1 conversion `{instruction_wire_id}` at instruction {instruction_index} in execution context {context_index} does not have a valid payer/recipient-signed public effect binding"
             ),
             Self::UnclassifiedNativeInstruction {
                 context_index,
@@ -3710,7 +3710,7 @@ enum NativeInstructionDsEffectDisposition {
     /// A multisig proposal whose signed nested instructions are collected recursively.
     RecursiveMultisigProposal,
     /// A payer/recipient-signed conversion between a transparent balance and protocol escrow.
-    AuditedKagemushaOfflineConversion,
+    AuditedOfflineCashV1Conversion,
     /// Deferred execution is guarded again when the stored trigger/proposal is materialized.
     GuardedDeferredEffect,
     /// Audited not to change numeric asset balances or supply.
@@ -3847,7 +3847,7 @@ fn native_instruction_ds_effect_disposition(
     {
         return NativeInstructionDsEffectDisposition::RejectKnownDsCapable(instruction_wire_id);
     }
-    // Kagemusha does not expose an arbitrary transparent account-to-account transfer. A top-up
+    // Offline Cash V1 does not expose an arbitrary transparent account-to-account transfer. A top-up
     // can only debit the payer authenticated inside the request and reserve the exact amount in
     // protocol escrow; a redemption can only debit provenance-bound protocol escrow and credit
     // the recipient authenticated inside the request. The offline peer-to-peer value transition
@@ -3857,20 +3857,20 @@ fn native_instruction_ds_effect_disposition(
     // instructions under `PerQualifyingTransferInstruction`.
     if let Some(top_up) = instruction
         .as_any()
-        .downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>(
+        .downcast_ref::<iroha_data_model::isi::offline_cash_v1::TopUpOfflineCashV1>(
     ) {
-        return if top_up.request.asset.definition() == fee_asset_definition_id {
-            NativeInstructionDsEffectDisposition::AuditedKagemushaOfflineConversion
+        return if &top_up.request.asset == fee_asset_definition_id {
+            NativeInstructionDsEffectDisposition::AuditedOfflineCashV1Conversion
         } else {
             NativeInstructionDsEffectDisposition::AuditedNoDsEffect
         };
     }
     if let Some(redeem) = instruction
         .as_any()
-        .downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(
+        .downcast_ref::<iroha_data_model::isi::offline_cash_v1::RedeemOfflineCashV1>(
     ) {
-        return if &redeem.request.bundle.statement.asset == fee_asset_definition_id {
-            NativeInstructionDsEffectDisposition::AuditedKagemushaOfflineConversion
+        return if &redeem.request.voucher.statement.lifecycle.asset == fee_asset_definition_id {
+            NativeInstructionDsEffectDisposition::AuditedOfflineCashV1Conversion
         } else {
             NativeInstructionDsEffectDisposition::AuditedNoDsEffect
         };
@@ -4165,37 +4165,37 @@ fn collect_instruction_asset_transfers(
                     collection,
                 )?;
             }
-            NativeInstructionDsEffectDisposition::AuditedKagemushaOfflineConversion => {
+            NativeInstructionDsEffectDisposition::AuditedOfflineCashV1Conversion => {
                 let (instruction_wire_id, valid_public_binding) = if let Some(top_up) = instruction
                     .as_any()
-                    .downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>()
+                    .downcast_ref::<iroha_data_model::isi::offline_cash_v1::TopUpOfflineCashV1>()
                 {
                     (
                         core::any::type_name::<
-                            iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
+                            iroha_data_model::isi::offline_cash_v1::TopUpOfflineCashV1,
                         >(),
-                        top_up.request.validate_public_binding().is_ok(),
+                        top_up.request.validate_shape().is_ok(),
                     )
                 } else if let Some(redeem) =
                     instruction
                         .as_any()
-                        .downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(
+                        .downcast_ref::<iroha_data_model::isi::offline_cash_v1::RedeemOfflineCashV1>(
                         )
                 {
                     (
                         core::any::type_name::<
-                            iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
+                            iroha_data_model::isi::offline_cash_v1::RedeemOfflineCashV1,
                         >(),
-                        redeem.request.validate_public_binding().is_ok(),
+                        redeem.request.validate_shape().is_ok(),
                     )
                 } else {
                     unreachable!(
-                        "audited Kagemusha conversion disposition must contain a V4 top-up or redemption"
+                        "audited Offline Cash V1 conversion disposition must contain a V1 top-up or redemption"
                     );
                 };
                 if !valid_public_binding {
                     return Err(
-                        ValidationFeeAdmissionError::InvalidKagemushaOfflineConversion {
+                        ValidationFeeAdmissionError::InvalidOfflineCashV1Conversion {
                             context_index,
                             instruction_index,
                             instruction_wire_id,

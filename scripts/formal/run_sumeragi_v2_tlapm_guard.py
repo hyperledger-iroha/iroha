@@ -29,9 +29,8 @@ from typing import Callable, Iterator, Mapping, Sequence
 MAX_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 MAX_CONFIGURABLE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 SAMPLE_INTERVAL_SECONDS = 0.25
-# Generic TLAPS runs retain a slower physical-footprint cadence. The Kagemusha
-# release runner explicitly selects the RSS cadence because Darwin libproc
-# exposes physical footprint without suspending the inspected process.
+# Generic TLAPS runs retain a slower physical-footprint cadence because Darwin
+# libproc exposes physical footprint without suspending the inspected process.
 PHYSICAL_FOOTPRINT_INTERVAL_SECONDS = 5.0
 MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT = "max_rss_physical_footprint"
 MEMORY_ENFORCEMENT_PROCESS_TREE_RSS = "process_tree_rss"
@@ -77,8 +76,7 @@ PROCESS_INSPECTION_ENVIRONMENT = {
 DARWIN_LIBPROC = "/usr/lib/libproc.dylib"
 DARWIN_RUSAGE_INFO_V4 = 4
 DARWIN_PROC_PIDTBSDINFO = 3
-# The Kagemusha body is one Rayon process and TLAPS has only a small backend
-# tree. Treat reaching this fixed buffer as an accounting failure rather than
+# TLAPS has only a small backend tree. Treat reaching this fixed buffer as an accounting failure rather than
 # silently omitting a newly forked process.
 DARWIN_PROCESS_GROUP_PID_CAPACITY = 256
 DARWIN_STABLE_SNAPSHOT_ATTEMPTS = 3
@@ -925,7 +923,7 @@ def _darwin_process_group_rows(
 
 
 def _is_formal_heavy_process(row: ProcessRow) -> bool:
-    """Return whether a row is a known formal or Kagemusha heavy process."""
+    """Return whether a row is a known formal-methods heavy process."""
 
     name = Path(row.command).name.lower()
     return (
@@ -933,8 +931,6 @@ def _is_formal_heavy_process(row: ProcessRow) -> bool:
         or name == "isabelle"
         or name.startswith("isabelle-")
         or name in {"poly", "polyml", "polyml.exe"}
-        or name == "kagemusha_recursive_spend_v4_bundle"
-        or name.startswith("kagemusha_recu")
     )
 
 
@@ -1727,7 +1723,7 @@ def _run_guarded(
                     owned_process_group_id=None,
                 )
                 raise GuardError(
-                    "pre-existing TLAPM/Isabelle/Poly/Kagemusha job is outside this guard "
+                    "pre-existing TLAPM/Isabelle/Poly job is outside this guard "
                     f"(pid={first.pid}, pgid={first.process_group_id}, "
                     f"command={Path(first.command).name})"
                 )
@@ -1743,8 +1739,8 @@ def _run_guarded(
             if session.body_identity is None:
                 raise GuardError("release-owned body identity was not authenticated")
         else:
-            # Keep the stable four-argument developer hook used by the pinned
-            # Kagemusha runner. Release formal execution never uses that hook.
+            # Keep the stable four-argument developer hook. Release formal
+            # execution never uses that hook.
             session = _spawn_guarded_session(
                 list(command),
                 environment,

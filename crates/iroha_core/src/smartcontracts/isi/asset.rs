@@ -93,17 +93,27 @@ pub mod isi {
                 )
                     .into());
             }
-            let asset = self
+            let quantity = self
                 .assets
-                .get_mut(&resolved_id)
-                .ok_or_else(|| FindError::Asset(resolved_id.clone().into()))?;
-            let quantity: &mut Quantity = &mut *asset;
+                .get(&resolved_id)
+                .ok_or_else(|| FindError::Asset(resolved_id.clone().into()))?
+                .as_ref()
+                .clone();
             assert_numeric_spec_with(quantity.as_numeric(), spec)?;
             let candidate = quantity
                 .checked_sub(amount)
                 .map_err(|_| MathError::NotEnoughQuantity)?;
             assert_numeric_spec_with(candidate.as_numeric(), spec)?;
-            *quantity = candidate;
+            crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
+                self,
+                &resolved_id,
+                &candidate,
+            )?;
+            let asset = self
+                .assets
+                .get_mut(&resolved_id)
+                .expect("validated numeric asset must remain present");
+            **asset = candidate;
             if (**asset).is_zero() {
                 assert!(self.remove_asset_and_metadata(&resolved_id).is_some());
             }
@@ -430,6 +440,19 @@ pub mod isi {
     ) -> Result<(), Error> {
         world.withdraw_numeric_asset(network_id, id, amount)
     }
+    /// Replace one balance without policy checks to construct corrupt-state regressions.
+    #[cfg(test)]
+    pub(crate) fn replace_numeric_asset_balance_for_corruption_test(
+        world: &mut WorldTransaction<'_, '_>,
+        id: &AssetId,
+        value: Quantity,
+    ) {
+        let asset = world
+            .assets
+            .get_mut(id)
+            .expect("corruption fixture asset must exist");
+        **asset = value;
+    }
     /// Exercise prepared-transfer freshness without exposing the private movement plan.
     #[cfg(test)]
     pub(super) fn apply_prepared_numeric_transfer_after_source_credit_for_test(
@@ -519,16 +542,16 @@ pub mod isi {
         }
         Ok(())
     }
-    fn ensure_not_offline_escrow_source(
+    fn ensure_not_offline_reserve_source(
         state_transaction: &StateTransaction<'_, '_>,
         source_id: &AssetId,
     ) -> Result<(), Error> {
-        if crate::smartcontracts::isi::offline::is_offline_escrow_source_asset(
+        if crate::smartcontracts::isi::offline::is_offline_reserve_source_asset(
             state_transaction,
             source_id,
         )? {
             return Err(InstructionExecutionError::InvariantViolation(
-                "direct transfer from offline escrow account is not allowed; use offline settlement instructions".into(),
+                "direct transfer from Offline Cash reserve account is not allowed; use offline settlement instructions".into(),
             ));
         }
         Ok(())
@@ -1335,7 +1358,7 @@ pub mod isi {
         SccpEscrowRelease,
         FxEscrowRelease,
         FeeSponsorCustody,
-        OfflineEscrowCustody,
+        OfflineCashReserveCustody,
         OracleReward,
         OraclePenalty,
         OracleDisputeResolution,
@@ -1343,10 +1366,29 @@ pub mod isi {
         SocialEscrow,
         StakingUnbond,
         StakingSlash,
+        ModerationChallengeRefund,
+        ModerationChallengeSlash,
         GovernanceSlash,
         GovernanceRestitution,
         GovernanceUnlock,
         CitizenshipRelease,
+    }
+    impl NumericAssetTransferSourcePolicy {
+        const fn is_moderation_challenge_settlement(self) -> bool {
+            matches!(
+                self,
+                Self::ModerationChallengeRefund | Self::ModerationChallengeSlash
+            )
+        }
+
+        const fn uses_protocol_custody_precheck(self) -> bool {
+            matches!(
+                self,
+                Self::StakingSlash
+                    | Self::ModerationChallengeRefund
+                    | Self::ModerationChallengeSlash
+            )
+        }
     }
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum NumericAssetTransferScopePolicy {
@@ -1366,6 +1408,7 @@ pub mod isi {
         OracleDisputeResolution,
         StakingUnbond,
         StakingSlash,
+        ModerationChallengeSettlement,
         GovernanceSlash,
         GovernanceRestitution,
         GovernanceUnlock,
@@ -1672,7 +1715,7 @@ pub mod isi {
     enum EmbeddedNumericAssetMovementPurpose {
         /// Charge the payer while admitting an implicit account.
         AccountAdmissionFee(Vec<u8>),
-        /// Reserve an authenticated Kagemusha top-up in offline custody.
+        /// Reserve an authenticated Offline Cash V1 top-up in pooled custody.
         OfflineTopUp {
             /// Authority whose signature authorizes the source debit.
             source_authority: AccountId,
@@ -1726,7 +1769,7 @@ pub mod isi {
     /// Closed set of retained-state protocol movement purposes.
     #[derive(Debug)]
     enum RetainedNumericAssetMovementPurpose {
-        /// Release authenticated offline escrow.
+        /// Release authenticated Offline Cash reserve.
         OfflineRedemption(Vec<u8>),
         /// Pay an Oracle reward from the configured pool.
         OracleReward(Vec<u8>),
@@ -1925,7 +1968,7 @@ pub mod isi {
                 RetainedNumericAssetMovementPurpose::OfflineRedemption(binding) => (
                     "offline-redemption",
                     binding,
-                    NumericAssetTransferSourcePolicy::OfflineEscrowCustody,
+                    NumericAssetTransferSourcePolicy::OfflineCashReserveCustody,
                     NumericAssetTransferControlPolicy::OfflineRedemption,
                 ),
                 RetainedNumericAssetMovementPurpose::OracleReward(binding) => (
@@ -1949,14 +1992,14 @@ pub mod isi {
                 RetainedNumericAssetMovementPurpose::ModerationChallengeRefund(binding) => (
                     "moderation-challenge-refund",
                     binding,
-                    NumericAssetTransferSourcePolicy::GovernanceUnlock,
-                    NumericAssetTransferControlPolicy::GovernanceUnlock,
+                    NumericAssetTransferSourcePolicy::ModerationChallengeRefund,
+                    NumericAssetTransferControlPolicy::ModerationChallengeSettlement,
                 ),
                 RetainedNumericAssetMovementPurpose::ModerationChallengeSlash(binding) => (
                     "moderation-challenge-slash",
                     binding,
-                    NumericAssetTransferSourcePolicy::GovernanceSlash,
-                    NumericAssetTransferControlPolicy::GovernanceSlash,
+                    NumericAssetTransferSourcePolicy::ModerationChallengeSlash,
+                    NumericAssetTransferControlPolicy::ModerationChallengeSettlement,
                 ),
                 RetainedNumericAssetMovementPurpose::SocialReward(binding) => (
                     "social-reward",
@@ -2391,7 +2434,7 @@ pub mod isi {
                     authority,
                     &source_id,
                 )?;
-                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_offline_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
                 ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
@@ -2407,7 +2450,7 @@ pub mod isi {
                         "fee sponsor burn source does not match configured custody".into(),
                     ));
                 }
-                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_offline_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
                 ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
@@ -2601,11 +2644,9 @@ pub mod isi {
     ) -> Result<(), Error> {
         use crate::smartcontracts::isi::sorafs_moderation::{
             ModerationChallengeBondSettlementLeg, VerifiedModerationChallengeBondPurpose,
-            moderation_challenge_rejected_slash_amount, read_challenge,
+            moderation_challenge_rejected_slash_amount, read_case, read_challenge,
         };
-        use iroha_data_model::sorafs::moderation_ledger::{
-            MODERATION_CHALLENGE_BOND_AMOUNT_V1, MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
-        };
+        use iroha_data_model::sorafs::moderation_ledger::ModerationCaseStatusV1;
 
         let (purpose, source_id, destination_id, amount) = authorization.into_parts();
         let movement_authorization = match purpose {
@@ -2615,19 +2656,27 @@ pub mod isi {
                 round_id,
                 challenge_id,
             } => {
+                let case = read_case(state_transaction.world(), &case_id, &round_id)?.ok_or_else(
+                    || {
+                        InstructionExecutionError::InvariantViolation(
+                            "moderation challenge bond funding has no retained case".into(),
+                        )
+                    },
+                )?;
                 let expected_source = AssetId::new(
-                    state_transaction.gov.voting_asset_id.clone(),
+                    case.policy.challenge_voting_asset_id.clone(),
                     authority.clone(),
                 );
                 let expected_destination = AssetId::new(
-                    state_transaction.gov.voting_asset_id.clone(),
-                    state_transaction.gov.bond_escrow_account.clone(),
+                    case.policy.challenge_voting_asset_id.clone(),
+                    case.policy.challenge_escrow_account.clone(),
                 );
                 if source_id != expected_source
                     || destination_id != expected_destination
-                    || amount != Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
-                    || authority == state_transaction.gov.bond_escrow_account
-                    || authority == state_transaction.gov.slash_receiver_account
+                    || amount != case.policy.challenge_bond_amount
+                    || authority == case.policy.challenge_escrow_account
+                    || authority == case.policy.challenge_slash_receiver_account
+                    || case.status != ModerationCaseStatusV1::Open
                     || read_challenge(
                         state_transaction.world(),
                         &case_id,
@@ -2637,7 +2686,7 @@ pub mod isi {
                     .is_some()
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "moderation challenge bond funding does not match configured governance custody"
+                        "moderation challenge bond funding does not match its case-pinned governance custody"
                             .into(),
                     )
                     .into());
@@ -2683,10 +2732,17 @@ pub mod isi {
                 let numeric_spec = state_transaction
                     .numeric_spec_for(&record.bond.asset_definition_id)
                     .map_err(InstructionExecutionError::Find)?;
+                let case = read_case(state_transaction.world(), &case_id, &round_id)?.ok_or_else(
+                    || {
+                        InstructionExecutionError::InvariantViolation(
+                            "moderation challenge bond settlement has no retained case".into(),
+                        )
+                    },
+                )?;
                 let slash_amount = moderation_challenge_rejected_slash_amount(
                     &record.bond.amount,
                     numeric_spec,
-                    MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+                    case.policy.challenge_rejected_slash_bps,
                 )?;
                 let refund_amount = record
                     .bond
@@ -2933,21 +2989,21 @@ pub mod isi {
             ),
         )
     }
-    /// Consume a one-shot, signed and proof-verified offline top-up debit.
-    pub(in crate::smartcontracts::isi) fn execute_verified_offline_top_up_transfer(
+    /// Consume a one-shot Offline Cash V1 top-up capability.
+    pub(in crate::smartcontracts::isi) fn execute_verified_offline_cash_top_up_transfer_v1(
         state_transaction: &mut StateTransaction<'_, '_>,
-        authorization: crate::smartcontracts::isi::offline::VerifiedKagemushaTopUpDebit,
+        authorization: crate::smartcontracts::isi::offline::VerifiedOfflineCashTopUpDebitV1,
     ) -> Result<(), Error> {
         let (source_authority, operation_id, source_id, destination_id, amount) =
             authorization.into_parts();
         if source_id.account() != &source_authority
-            || !crate::smartcontracts::isi::offline::is_offline_escrow_source_asset(
+            || !crate::smartcontracts::isi::offline::is_offline_reserve_source_asset(
                 state_transaction,
                 &destination_id,
             )?
         {
             return Err(InstructionExecutionError::InvariantViolation(
-                "offline top-up capability does not match its signed source and configured custody"
+                "Offline Cash V1 top-up capability does not match its payer and pooled reserve"
                     .into(),
             ));
         }
@@ -2971,18 +3027,18 @@ pub mod isi {
             ),
         )
     }
-    /// Consume a one-shot, recursive-proof-verified offline redemption debit.
-    pub(in crate::smartcontracts::isi) fn execute_verified_offline_redemption_transfer(
+    /// Consume a one-shot Offline Cash V1 redemption capability.
+    pub(in crate::smartcontracts::isi) fn execute_verified_offline_cash_redemption_transfer_v1(
         state_transaction: &mut StateTransaction<'_, '_>,
-        authorization: crate::smartcontracts::isi::offline::VerifiedKagemushaRedemptionDebit,
+        authorization: crate::smartcontracts::isi::offline::VerifiedOfflineCashRedemptionDebitV1,
     ) -> Result<(), Error> {
         let (operation_id, source_id, destination_id, amount) = authorization.into_parts();
-        if !crate::smartcontracts::isi::offline::is_offline_escrow_source_asset(
+        if !crate::smartcontracts::isi::offline::is_offline_reserve_source_asset(
             state_transaction,
             &source_id,
         )? {
             return Err(InstructionExecutionError::InvariantViolation(
-                "offline redemption capability source is not configured offline custody".into(),
+                "Offline Cash V1 redemption capability source is not the pooled reserve".into(),
             ));
         }
         let transcript_authority = destination_id.account().clone();
@@ -4205,6 +4261,7 @@ pub mod isi {
                 | NumericAssetTransferControlPolicy::OracleDisputeResolution
                 | NumericAssetTransferControlPolicy::StakingUnbond
                 | NumericAssetTransferControlPolicy::StakingSlash
+                | NumericAssetTransferControlPolicy::ModerationChallengeSettlement
                 | NumericAssetTransferControlPolicy::GovernanceSlash
                 | NumericAssetTransferControlPolicy::GovernanceRestitution
                 | NumericAssetTransferControlPolicy::GovernanceUnlock
@@ -4245,24 +4302,41 @@ pub mod isi {
                 .unwrap_or_else(|| amount.as_numeric().scale());
             let normalized_amount =
                 normalized_numeric_to_u64(amount.as_numeric(), normalized_scale);
-            let prechecked_delta =
-                if source_policy == NumericAssetTransferSourcePolicy::StakingSlash {
-                    state_transaction
-                        .world
-                        .precheck_protocol_custody_transfer_delta_exact(
-                            &source_id,
-                            &destination_id,
-                            &amount,
-                        )?
+            // Exact retained staking and moderation settlement capabilities are
+            // protocol-owned after their funds have entered custody. Ordinary
+            // account blacklist/cap, availability, and holding-limit changes
+            // made later cannot veto them. The protocol precheck still binds
+            // one definition, verifies both accounts and numeric precision,
+            // performs checked balance arithmetic, and conserves the transfer.
+            let prechecked_delta = if source_policy.uses_protocol_custody_precheck() {
+                state_transaction
+                    .world
+                    .precheck_protocol_custody_transfer_delta_exact(
+                        &source_id,
+                        &destination_id,
+                        &amount,
+                    )?
+            } else {
+                state_transaction
+                    .world
+                    .precheck_numeric_asset_transfer_delta_exact(
+                        &source_id,
+                        &destination_id,
+                        &amount,
+                    )?
+            };
+            if !source_policy.is_moderation_challenge_settlement() {
+                let source_balance_after = if source_id == destination_id {
+                    &prechecked_delta.to_balance_after
                 } else {
-                    state_transaction
-                        .world
-                        .precheck_numeric_asset_transfer_delta_exact(
-                            &source_id,
-                            &destination_id,
-                            &amount,
-                        )?
+                    &prechecked_delta.from_balance_after
                 };
+                crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
+                    state_transaction.world(),
+                    &source_id,
+                    source_balance_after,
+                )?;
+            }
             Ok(Self {
                 source_id,
                 destination_id,
@@ -4520,6 +4594,26 @@ pub mod isi {
                     from_smt_witness: TransferSmtWitness::default(),
                     to_smt_witness: TransferSmtWitness::default(),
                 };
+            }
+            if !authorization
+                .source_policy
+                .is_moderation_challenge_settlement()
+            {
+                let source_ids = plans
+                    .iter()
+                    .map(|plan| plan.source_id.clone())
+                    .collect::<BTreeSet<_>>();
+                for source_id in source_ids {
+                    let balance_after = virtual_balances
+                        .get(&source_id)
+                        .cloned()
+                        .unwrap_or_else(Quantity::zero);
+                    crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
+                        state_transaction.world(),
+                        &source_id,
+                        &balance_after,
+                    )?;
+                }
             }
             let mut aggregate_outbound =
                 BTreeMap::<(AccountId, AssetDefinitionId), (AssetId, Quantity)>::new();
@@ -5100,11 +5194,13 @@ pub mod isi {
             .numeric_spec_for(source_id.definition())
             .map_err(Error::from)?;
         assert_numeric_spec_with(amount.as_numeric(), spec)?;
-        // An exact retained staking-slash capability is finality-owned protocol
-        // custody. User transfer availability, holding, issuer-usage, and
-        // unrelated custody controls cannot veto a consensus sanction after
-        // its source and sink have been bound to the staking configuration.
-        if source_policy == NumericAssetTransferSourcePolicy::StakingSlash {
+        // Exact retained staking-slash and moderation-settlement capabilities
+        // are finality-owned protocol custody. User transfer availability,
+        // holding, issuer-usage, privacy-mode, and unrelated custody controls
+        // cannot veto them after their source and sink have been bound to the
+        // retained protocol record. Definition, balance scope, and amount
+        // precision were still validated above.
+        if source_policy.uses_protocol_custody_precheck() {
             return Ok((source_id, destination_id));
         }
         ensure_transparent_allowed(
@@ -5141,12 +5237,12 @@ pub mod isi {
         }
         match source_policy {
             NumericAssetTransferSourcePolicy::User => {
-                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_offline_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
             NumericAssetTransferSourcePolicy::SccpEscrowDeposit => {
-                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_offline_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
                 if !is_sccp_custody_asset(state_transaction, &destination_id) {
@@ -5158,7 +5254,7 @@ pub mod isi {
                 }
             }
             NumericAssetTransferSourcePolicy::FxEscrowDeposit => {
-                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_offline_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
                 if !is_fx_corridor_escrow_asset(state_transaction, &destination_id)? {
@@ -5189,7 +5285,7 @@ pub mod isi {
                         "SoraFS reserve withdrawal source is not active protocol custody".into(),
                     ));
                 }
-                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_offline_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
@@ -5199,7 +5295,7 @@ pub mod isi {
                         "SCCP route escrow release source is not governed protocol custody".into(),
                     ));
                 }
-                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_offline_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
             }
             NumericAssetTransferSourcePolicy::FxEscrowRelease => {
@@ -5209,7 +5305,7 @@ pub mod isi {
                     )
                     .into());
                 }
-                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_offline_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
@@ -5226,7 +5322,7 @@ pub mod isi {
                     )
                     .into());
                 }
-                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_offline_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
@@ -5237,16 +5333,18 @@ pub mod isi {
             | NumericAssetTransferSourcePolicy::SocialEscrow
             | NumericAssetTransferSourcePolicy::StakingUnbond
             | NumericAssetTransferSourcePolicy::StakingSlash
+            | NumericAssetTransferSourcePolicy::ModerationChallengeRefund
+            | NumericAssetTransferSourcePolicy::ModerationChallengeSlash
             | NumericAssetTransferSourcePolicy::GovernanceSlash
             | NumericAssetTransferSourcePolicy::GovernanceRestitution
             | NumericAssetTransferSourcePolicy::GovernanceUnlock
             | NumericAssetTransferSourcePolicy::CitizenshipRelease => {
-                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_offline_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
-            NumericAssetTransferSourcePolicy::OfflineEscrowCustody => {
-                if !crate::smartcontracts::isi::offline::is_offline_escrow_source_asset(
+            NumericAssetTransferSourcePolicy::OfflineCashReserveCustody => {
+                if !crate::smartcontracts::isi::offline::is_offline_reserve_source_asset(
                     state_transaction,
                     &source_id,
                 )? {
@@ -5555,6 +5653,7 @@ pub mod isi {
                 )],
                 Some(&quantity),
             )?;
+            ensure_not_offline_reserve_source(state_transaction, &resolved_asset_id)?;
             ensure_not_native_escrow_source(state_transaction, &resolved_asset_id)?;
             ensure_not_sccp_custody_source(state_transaction, &resolved_asset_id)?;
             ensure_not_fx_corridor_escrow_source(state_transaction, &resolved_asset_id)?;
@@ -6067,6 +6166,16 @@ pub mod isi {
             )
             .into());
         }
+        let source_balance_after = if source_id == destination_id {
+            &delta.to_balance_after
+        } else {
+            &delta.from_balance_after
+        };
+        crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
+            state_transaction.world(),
+            &source_id,
+            source_balance_after,
+        )?;
         Ok(PreparedSccpInboundNumericAssetRelease {
             route_key: route_key.clone(),
             source_id,
@@ -7705,7 +7814,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("genesis must not create transfer controls for a missing definition");
             assert!(
-                matches!(error, InstructionExecutionError::Find(FindError::AssetDefinition(id)) if id == missing),
+                matches!(error, InstructionExecutionError::Find(FindError::AssetDefinition(ref id)) if *id == missing),
                 "unexpected missing-definition rejection: {error:?}"
             );
             assert!(

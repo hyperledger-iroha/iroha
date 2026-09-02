@@ -8,12 +8,12 @@ public enum TairaTestnetProfile {
     public static let chainId = "fc56984b-2be7-431d-840e-21514d1883f0"
     /// Canonical I105 address discriminant for Taira.
     public static let i105Discriminant: UInt16 = 369
-    /// Canonical Digital Shekel asset-definition ID used by Kagemusha on Taira.
-    public static let kagemushaAssetDefinitionId = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
-    /// Canonical Digital Shekel alias used by Kagemusha on Taira.
-    public static let kagemushaAssetAlias = "ds#boi.is"
-    /// Canonical Digital Shekel fixed-point scale used by Kagemusha on Taira.
-    public static let kagemushaAssetScale: UInt32 = 2
+    /// Canonical Digital Shekel asset-definition ID used by Offline Cash V1 on Taira.
+    public static let offlineCashAssetDefinitionId = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+    /// Canonical Digital Shekel alias used by Offline Cash V1 on Taira.
+    public static let offlineCashAssetAlias = "ds#boi.is"
+    /// Canonical Digital Shekel fixed-point scale used by Offline Cash V1 on Taira.
+    public static let offlineCashAssetScale: UInt32 = 2
     /// Public Taira XOR asset-definition ID used for transaction fees.
     public static let xorAssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
     /// Public Taira XOR alias used for transaction fees.

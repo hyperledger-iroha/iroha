@@ -2,14 +2,19 @@
 
 Current source ABI: 23. ABI 14 added
 `connect_norito_encode_transfer_instruction_box` for native multisig proposal
-instruction boxes; later additive revisions include the native Kagemusha V2
-surfaces and the bounded SoraFS Governance DAG block/head-chain reference
+instruction boxes; later additive revisions include the bounded Offline Cash V1
+wire validators and SoraFS Governance DAG block/head-chain reference
 validators consumed by the C# SDK. The ABI-23 Kotlin/JVM and Java/Android
 `NativeSignerBridge` surface additionally requires native-signer JNI contract
 revision 5. Revision 4 sealed the removal of generic `Shield`, `ZkTransfer`, and
 `Unshield` transaction encoders plus native anonymous-escrow and authority-free
 Kaigi helpers from the C and JNI surfaces. The bridge retains specialized
-Kagemusha proof and settlement helpers. `RegisterZkAsset` now carries exactly
+Offline Cash V1 raw/text validators for request, acceptance authorization,
+ticket, payment, acknowledgement, mint authorization, bound mint credit, and
+redemption voucher. The source surface also validates the authenticated
+no-commit recovery closure and the complete five-message exchange as exact
+cross-bound objects, plus fail-closed device-lifecycle probes. `RegisterZkAsset`
+now carries exactly
 `asset`, `vk_unshield`, and `vk_shield`; optional key presence enables each
 settlement role, with no mode, boolean enablement, or asset-bound transfer-key
 field. The JNI contract revision is checked separately so an artifact that is

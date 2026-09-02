@@ -72,8 +72,11 @@ on:
       - "scripts/run_sorafs_reference_sdk_release_evidence.py"
       - "scripts/check_workflow_action_pins.py"
       - "Dockerfile"
+      - "scripts/check_release_feature_graph.py"
       - "scripts/build_release_bundle.sh"
       - "scripts/build_release_image.sh"
+      - "scripts/verify_release_prebuilt_provenance.py"
+      - "scripts/run_isolated_release_tool.py"
       - "scripts/build_release_oci_archive.py"
       - "scripts/build_release_tar_gz.py"
       - "scripts/build_release_tar_zst.py"
@@ -153,6 +156,8 @@ on:
       - "scripts/tests/package_sorafs_validate_release_test.py"
       - "scripts/tests/build_release_bundle_test.py"
       - "scripts/tests/build_release_image_test.py"
+      - "scripts/tests/release_feature_graph_test.py"
+      - "scripts/tests/release_prebuilt_provenance_test.py"
       - "scripts/tests/capture_release_command_test.py"
       - "scripts/tests/release_artifact_contract_test.py"
       - "scripts/tests/validate_release_image_bases_test.py"
@@ -262,7 +267,7 @@ jobs:
         with:
           shared-key: sorafs-cli-release
       - name: Enforce reviewed shipping feature graphs
-        run: python3 scripts/check_release_feature_graph.py
+        run: python3 -I -S scripts/check_release_feature_graph.py
       - name: Install script test dependencies
         run: python3 -m pip install -r scripts/requirements.txt
       - name: Validate runtime-provider broker deployment contract

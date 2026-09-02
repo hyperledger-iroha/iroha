@@ -49,14 +49,11 @@ use core::str::FromStr;
 #[cfg(feature = "telemetry")]
 use eyre::eyre;
 use hex::ToHex;
-use iroha_config::{
-    client_api::ConfigUpdateDTO,
-    parameters::{
-        actual::{
-            LaneRoutingPolicy as ActualLaneRoutingPolicy, NexusFeeSettlementMode, TelemetryProfile,
-        },
-        defaults,
+use iroha_config::parameters::{
+    actual::{
+        LaneRoutingPolicy as ActualLaneRoutingPolicy, NexusFeeSettlementMode, TelemetryProfile,
     },
+    defaults,
 };
 #[cfg(feature = "app_api")]
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
@@ -159,6 +156,12 @@ use iroha_sccp::{
 use iroha_telemetry::metrics::Status;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyEventError, PrivacyShareError};
+use iroha_torii_shared::sumeragi_evidence_api::{
+    SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT,
+    SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_MAX_LIMIT,
+    SUMERAGI_EVIDENCE_LIST_MAX_OFFSET, SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES,
+    SumeragiEvidenceCountResponse, SumeragiEvidenceListWireResponse,
+};
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
@@ -229,12 +232,16 @@ impl DataspaceReadVisibility {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn all_for_tests() -> Self {
+    pub(crate) fn all() -> Self {
         Self {
             visible_dataspaces: BTreeSet::new(),
             can_read_all: true,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn all_for_tests() -> Self {
+        Self::all()
     }
 
     pub(crate) const fn can_read_all(&self) -> bool {
@@ -271,8 +278,11 @@ impl DataspaceReadVisibility {
             .map(|entry| entry.id)
     }
 
-    /// Return whether an account is materialized in at least one visible dataspace.
+    /// Return whether every dataspace materializing an account is visible.
     ///
+    /// Account metadata is one global record and cannot be redacted per binding.
+    /// Requiring the complete binding set prevents a public alias from exposing
+    /// metadata associated with the same account in a restricted dataspace.
     /// Account-scope derivation defaults unknown identities to the universal
     /// dataspace, so existence is checked first to keep absent and restricted
     /// selectors indistinguishable.
@@ -290,9 +300,10 @@ impl DataspaceReadVisibility {
         world
             .account_dataspaces(account_id)
             .is_ok_and(|dataspaces| {
-                dataspaces
-                    .into_iter()
-                    .any(|dataspace| self.allows_dataspace(dataspace))
+                !dataspaces.is_empty()
+                    && dataspaces
+                        .into_iter()
+                        .all(|dataspace| self.allows_dataspace(dataspace))
             })
     }
 
@@ -316,13 +327,14 @@ impl DataspaceReadVisibility {
                 .is_some_and(|domain| self.allows_domain(world, domain))
     }
 
-    /// Return whether an asset bucket belongs to a visible route.
+    /// Return whether an asset bucket and its holder belong only to visible routes.
     pub(crate) fn allows_asset(&self, world: &impl WorldReadOnly, asset_id: &AssetId) -> bool {
         if self.can_read_all {
             return true;
         }
         if world.assets().get(asset_id).is_none()
             || !self.allows_asset_definition(world, asset_id.definition())
+            || !self.allows_account(world, asset_id.account())
         {
             return false;
         }
@@ -501,11 +513,6 @@ pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -
         })
 }
 derived_items! {
-(Clone, Debug, Encode, Decode)
-struct EvidenceListWire {
-    total: u64,
-    items: Vec<EvidenceRecord>,
-}
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 struct PrfContext {
     height: u64,
@@ -579,10 +586,6 @@ pub(crate) struct PipelinePreflightResponse {
     pub pipeline: PipelinePreflightPipeline,
     pub queue: PipelinePreflightQueue,
     pub fees: PipelinePreflightFees,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-struct CountResponse {
-    count: u64,
 }
 }
 #[cfg(test)]
@@ -10073,6 +10076,37 @@ mod zk_vote_tally_response_tests {
         }
     }
 }
+fn sumeragi_evidence_response_encode_error() -> Error {
+    query_internal_error("Sumeragi evidence response encoding failed")
+}
+fn bounded_sumeragi_evidence_count_response(
+    payload: SumeragiEvidenceCountResponse,
+    format: crate::utils::ResponseFormat,
+    max_body_bytes: usize,
+) -> Result<Response> {
+    crate::utils::respond_with_format_bounded(payload, format, max_body_bytes)
+        .map_err(|_| sumeragi_evidence_response_encode_error())
+}
+fn bounded_sumeragi_evidence_list_norito_response(
+    payload: &SumeragiEvidenceListWireResponse,
+    max_body_bytes: usize,
+) -> Result<Response> {
+    let body = crate::utils::encode_norito_bounded(payload, max_body_bytes)
+        .map_err(|_| sumeragi_evidence_response_encode_error())?;
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, crate::utils::NORITO_MIME_TYPE)
+        .body(Body::from(body))
+        .expect("build bounded Sumeragi evidence Norito response"))
+}
+fn bounded_sumeragi_evidence_list_json_response(
+    payload: &Value,
+    max_body_bytes: usize,
+) -> Result<Response> {
+    let body = crate::utils::encode_json_bounded(payload, max_body_bytes)
+        .map_err(|_| sumeragi_evidence_response_encode_error())?;
+    Ok(application_json_response(body))
+}
 /// GET /v1/sumeragi/evidence/count — returns the number of unique admitted v2 proofs.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_evidence_count(
@@ -10080,20 +10114,19 @@ pub async fn handle_v1_sumeragi_evidence_count(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let world = state.world_view();
-    let n = world.consensus_evidence().iter().count() as u64;
+    let count = u64::try_from(world.consensus_evidence().iter().count()).map_err(|_| {
+        conversion_error("Sumeragi evidence count is not representable as u64".to_owned())
+    })?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
-    Ok(crate::utils::respond_with_format(
-        CountResponse { count: n },
+    bounded_sumeragi_evidence_count_response(
+        SumeragiEvidenceCountResponse { count },
         format,
-    ))
+        SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES,
+    )
 }
-/// Maximum evidence records returned by one operator page.
-const EVIDENCE_LIST_LIMIT_CAP: usize = 1_000;
-/// Maximum evidence records an operator may skip before the bounded page.
-const EVIDENCE_LIST_OFFSET_CAP: usize = 10_000;
 derived_items! {
 ( Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Optional query params for evidence listing
@@ -10155,7 +10188,7 @@ fn validate_evidence_list_kind(value: &str) -> Result<(), Error> {
 }
 fn validate_evidence_list_query(query: &EvidenceListQuery) -> Result<(), Error> {
     if let Some(limit) = query.limit
-        && !(1..=EVIDENCE_LIST_LIMIT_CAP).contains(&limit)
+        && !(1..=SUMERAGI_EVIDENCE_LIST_MAX_LIMIT as usize).contains(&limit)
     {
         return Err(invalid_evidence_list_pagination(
             "limit",
@@ -10164,7 +10197,7 @@ fn validate_evidence_list_query(query: &EvidenceListQuery) -> Result<(), Error> 
         ));
     }
     if let Some(offset) = query.offset
-        && offset > EVIDENCE_LIST_OFFSET_CAP
+        && offset > SUMERAGI_EVIDENCE_LIST_MAX_OFFSET as usize
     {
         return Err(invalid_evidence_list_pagination(
             "offset",
@@ -10211,6 +10244,12 @@ impl TryFrom<EvidenceListStringQuery> for EvidenceListQuery {
 #[cfg(test)]
 mod evidence_list_query_contract_tests {
     use super::*;
+    fn assert_safe_evidence_response_encoding_error(error: Error) {
+        let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error else {
+            panic!("bounded evidence response returned the wrong error");
+        };
+        assert_eq!(message, "Sumeragi evidence response encoding failed");
+    }
     fn raw_query(
         limit: Option<&str>,
         offset: Option<&str>,
@@ -10221,6 +10260,70 @@ mod evidence_list_query_contract_tests {
             offset: offset.map(str::to_owned),
             kind: kind.map(str::to_owned),
         }
+    }
+    routing_test! { async bounded_evidence_count_response_accepts_exact_limit_and_rejects_overflow
+        let payload = SumeragiEvidenceCountResponse { count: u64::MAX };
+        let exact = norito::json::to_json(&payload)
+            .expect("encode count fixture")
+            .len();
+        let response = bounded_sumeragi_evidence_count_response(
+            payload,
+            crate::utils::ResponseFormat::Json,
+            exact,
+        )
+        .expect("exact count response limit");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect count response");
+        assert_eq!(body.len(), exact);
+        let error = match bounded_sumeragi_evidence_count_response(
+            payload,
+            crate::utils::ResponseFormat::Json,
+            exact - 1,
+        ) {
+            Ok(_) => panic!("one byte below the exact count response must fail"),
+            Err(error) => error,
+        };
+        assert_safe_evidence_response_encoding_error(error);
+    }
+    routing_test! { async bounded_evidence_norito_list_accepts_exact_limit_and_rejects_overflow
+        let payload = SumeragiEvidenceListWireResponse {
+            total: 0,
+            items: Vec::new(),
+        };
+        let exact = norito::core::encoded_frame_len(&payload)
+            .expect("count empty evidence-list frame");
+        let response = bounded_sumeragi_evidence_list_norito_response(&payload, exact)
+            .expect("exact Norito evidence-list response limit");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect Norito evidence-list response");
+        assert_eq!(body.len(), exact);
+        let error = match bounded_sumeragi_evidence_list_norito_response(&payload, exact - 1) {
+            Ok(_) => panic!("one byte below the exact Norito list response must fail"),
+            Err(error) => error,
+        };
+        assert_safe_evidence_response_encoding_error(error);
+    }
+    routing_test! { async bounded_evidence_json_list_accepts_exact_limit_and_rejects_overflow
+        let payload = json_object(vec![
+            json_entry("total", 0_u64),
+            json_entry("items", Vec::<Value>::new()),
+        ]);
+        let exact = norito::json::to_json(&payload)
+            .expect("encode empty evidence-list JSON")
+            .len();
+        let response = bounded_sumeragi_evidence_list_json_response(&payload, exact)
+            .expect("exact JSON evidence-list response limit");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect JSON evidence-list response");
+        assert_eq!(body.len(), exact);
+        let error = match bounded_sumeragi_evidence_list_json_response(&payload, exact - 1) {
+            Ok(_) => panic!("one byte below the exact JSON list response must fail"),
+            Err(error) => error,
+        };
+        assert_safe_evidence_response_encoding_error(error);
     }
     routing_test! { sync exact_evidence_query_contract_rejects_legacy_and_normalized_spellings
         EvidenceListQuery::try_from(raw_query(
@@ -10275,19 +10378,22 @@ mod evidence_list_query_contract_tests {
     }
     routing_test! { sync evidence_offset_boundary_and_capacity_overflow_fail_before_state_scan
         let boundary = EvidenceListQuery {
-            limit: Some(EVIDENCE_LIST_LIMIT_CAP),
-            offset: Some(EVIDENCE_LIST_OFFSET_CAP),
+            limit: Some(SUMERAGI_EVIDENCE_LIST_MAX_LIMIT as usize),
+            offset: Some(SUMERAGI_EVIDENCE_LIST_MAX_OFFSET as usize),
             kind: None,
         };
         validate_evidence_list_query(&boundary).expect("bounded offset must remain valid");
         assert_eq!(
-            evidence_page_capacity(EVIDENCE_LIST_OFFSET_CAP, EVIDENCE_LIST_LIMIT_CAP)
+            evidence_page_capacity(
+                SUMERAGI_EVIDENCE_LIST_MAX_OFFSET as usize,
+                SUMERAGI_EVIDENCE_LIST_MAX_LIMIT as usize,
+            )
                 .expect("bounded page capacity"),
-            EVIDENCE_LIST_OFFSET_CAP + EVIDENCE_LIST_LIMIT_CAP
+            (SUMERAGI_EVIDENCE_LIST_MAX_OFFSET + SUMERAGI_EVIDENCE_LIST_MAX_LIMIT) as usize
         );
         let over_cap = EvidenceListQuery {
             limit: Some(1),
-            offset: Some(EVIDENCE_LIST_OFFSET_CAP + 1),
+            offset: Some(SUMERAGI_EVIDENCE_LIST_MAX_OFFSET as usize + 1),
             kind: None,
         };
         assert!(validate_evidence_list_query(&over_cap).is_err());
@@ -10303,7 +10409,9 @@ pub async fn handle_v1_sumeragi_evidence_list(
 ) -> Result<Response> {
     validate_evidence_list_query(&q)?;
     let offset = q.offset.unwrap_or(0);
-    let limit = q.limit.unwrap_or(50);
+    let limit = q
+        .limit
+        .unwrap_or(SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT as usize);
     let capacity = evidence_page_capacity(offset, limit)?;
     let world = state.world_view();
     let iter = world.consensus_evidence().iter().map(|(_, record)| {
@@ -10317,27 +10425,36 @@ pub async fn handle_v1_sumeragi_evidence_list(
         )
     });
     let (records, total) = collect_bounded_ranked_page(iter, offset, limit, capacity);
+    let total = u64::try_from(total).map_err(|_| {
+        conversion_error("Sumeragi evidence total is not representable as u64".to_owned())
+    })?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
     if matches!(format, crate::utils::ResponseFormat::Norito) {
-        let wire = EvidenceListWire {
-            total: u64::try_from(total).unwrap_or(u64::MAX),
+        // This is the sole full-record ownership copy. The page-count bound and
+        // committed evidence-table byte invariant bound it before the canonical
+        // count-first encoder makes its exact destination allocation.
+        let wire = SumeragiEvidenceListWireResponse {
+            total,
             items: records.iter().map(|record| (**record).clone()).collect(),
         };
-        return Ok(crate::NoritoBody(wire).into_response());
+        return bounded_sumeragi_evidence_list_norito_response(
+            &wire,
+            SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES,
+        );
     }
     // Map to Norito-JSON response
     let items: Vec<norito::json::Value> = records
         .iter()
         .map(|record| evidence_to_json(record))
         .collect();
-    let payload = json_object(vec![
-        json_entry("total", u64::try_from(total).unwrap_or(u64::MAX)),
-        json_entry("items", items),
-    ]);
-    pretty_json_response(&payload)
+    let payload = json_object(vec![json_entry("total", total), json_entry("items", items)]);
+    bounded_sumeragi_evidence_list_json_response(
+        &payload,
+        SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES,
+    )
 }
 #[cfg(test)]
 fn test_asset_definition_id_from_hex(hex_literal: &str) -> AssetDefinitionId {
@@ -12256,66 +12373,6 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_dur
             );
         })
 }
-pub(crate) fn push_accepted_ordinary_kagemusha_lifecycle_for_ingress_strict_durable_claim(
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
-    routing_plan: RoutingPlan,
-    expected_binding: &iroha_core::torii_proxy::OrdinaryKagemushaLifecycleAdmissionBindingV1,
-) -> Result<iroha_core::queue::QueuePlanDurableAdmissionV1> {
-    let pressure = {
-        let block_time = state.sumeragi_block_cadence();
-        queue.refresh_pressure_budget_from_block_time(block_time)
-    };
-    if pressure.saturated_by_age {
-        iroha_logger::debug!(
-            tx_hash = %accepted_tx.hash(),
-            queued = pressure.queued_tx_count,
-            tracked = pressure.tracked_tx_count,
-            capacity = pressure.capacity.get(),
-            oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
-            "local queue is latency-saturated; keeping ordinary lifecycle durable ingress open until capacity is exhausted"
-        );
-    }
-    queue
-        .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
-            accepted_tx,
-            state.as_ref(),
-            routing_plan,
-            &expected_binding.admission_context,
-        )
-        .map_err(|queue::Failure { tx, err }| {
-            if matches!(err, queue::Error::Full) {
-                iroha_logger::debug!(
-                    tx_hash = %tx.as_ref().hash(),
-                    "queue rejected ordinary lifecycle durable transaction due to backpressure"
-                );
-            } else {
-                iroha_logger::warn!(
-                    tx_hash = %tx.as_ref().hash(),
-                    ?err,
-                    "failed to durably admit an ordinary lifecycle transaction"
-                );
-            }
-            drop(tx);
-            (err, queue.current_backpressure())
-        })
-        .map_err(|(err, backpressure)| Error::PushIntoQueue {
-            source: Box::new(err),
-            backpressure,
-        })
-        .inspect(|claim| {
-            let route = claim.routing_plan.coordinator_route();
-            iroha_logger::debug!(
-                lane = route.lane_id.as_u32(),
-                dataspace = route.dataspace_id.as_u64(),
-                authority_height = claim.context.authority_height,
-                proposal_height = claim.context.proposal_height,
-                globally_bound = claim.global_admission_identity.is_some(),
-                "ordinary lifecycle transaction enqueued with a durable unbound journal claim"
-            );
-        })
-}
 enum IngressRouting {
     Derived,
     Planned(RoutingPlan),
@@ -12475,7 +12532,6 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
         })
 }
 
-const GENERIC_BATCH_ORDINARY_KAGEMUSHA_LIFECYCLE_REASON: &str = "ordinary Kagemusha lifecycle transaction batch entries require the dedicated authenticated durable submission route";
 const GENERIC_BATCH_QUEUE_PLAN_SYNCED_REASON: &str =
     "QueuePlanSynced transaction batch requires per-entry globally certified admission";
 
@@ -12488,34 +12544,10 @@ fn generic_transaction_batch_unresolved_route(queue: &Queue, reason: &str) -> Er
     }
 }
 
-pub(crate) fn ensure_generic_transaction_batch_not_ordinary_kagemusha_lifecycle(
-    queue: &Queue,
-    transaction: &SignedTransaction,
-) -> Result<()> {
-    if iroha_core::torii_proxy::validate_ordinary_kagemusha_lifecycle_signed_transaction(
-        transaction,
-    )
-    .is_ok()
-    {
-        return Err(generic_transaction_batch_unresolved_route(
-            queue,
-            GENERIC_BATCH_ORDINARY_KAGEMUSHA_LIFECYCLE_REASON,
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) fn ensure_generic_transaction_batch_entrypoint_allowed(
     queue: &Queue,
     entrypoint: &TransactionEntrypoint,
 ) -> Result<()> {
-    if iroha_core::torii_proxy::validate_ordinary_kagemusha_lifecycle_entrypoint(entrypoint).is_ok()
-    {
-        return Err(generic_transaction_batch_unresolved_route(
-            queue,
-            GENERIC_BATCH_ORDINARY_KAGEMUSHA_LIFECYCLE_REASON,
-        ));
-    }
     if entrypoint.admission_intent()
         == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
     {
@@ -29627,11 +29659,11 @@ mod vk_record_input_tests {
             withdraw_height: Some(20),
         })
         .expect("record created");
-        record.namespace = "offline_kagemusha".to_owned();
+        record.namespace = "confidential_assets".to_owned();
         record.owner_manifest_id = Some("builtin:confidential-unshield-v3".to_owned());
         let id = iroha_data_model::proof::VerifyingKeyId::new(
             "halo2/ipa",
-            "recursive-kagemusha-unshield-v3",
+            "confidential-unshield-v3",
         );
         let detail = vk_detail_to_json(&id, &record).expect("build verifier record detail");
         let detail_object = detail.as_object().expect("verifier detail JSON object");
@@ -34550,6 +34582,7 @@ struct AccountHistoryProjection {
     asset_definition_id: Option<String>,
     amount: Option<String>,
     tx_hash: Option<String>,
+    block_height: Option<u64>,
     operation_id: Option<String>,
     expires_at_ms: Option<u64>,
     finalized_at_ms: Option<u64>,
@@ -34719,9 +34752,11 @@ struct AccountHistoryTxBase {
     tx_hash: String,
     result_ok: bool,
     status: String,
+    block_height: u64,
 }
 fn account_history_tx_base(
     tx: &iroha_data_model::query::CommittedTransaction,
+    block_height: u64,
 ) -> AccountHistoryTxBase {
     let result_ok = tx.result().as_ref().is_ok();
     AccountHistoryTxBase {
@@ -34733,6 +34768,7 @@ fn account_history_tx_base(
         } else {
             "FAILED".to_owned()
         },
+        block_height,
     }
 }
 fn account_history_direction_label(
@@ -34953,9 +34989,10 @@ fn account_history_movements_from_instruction(
 fn append_account_history_projections_for_tx(
     index: &mut AccountHistoryIndex,
     tx: &iroha_data_model::query::CommittedTransaction,
+    block_height: u64,
 ) {
     use iroha_data_model::transaction::signed::TransactionEntrypoint;
-    let base = account_history_tx_base(tx);
+    let base = account_history_tx_base(tx, block_height);
     let mut sequence = 0usize;
     let mut append_for_instruction = |instruction: &iroha_data_model::isi::InstructionBox| {
         for movement in account_history_movements_from_instruction(instruction) {
@@ -34979,6 +35016,7 @@ fn append_account_history_projections_for_tx(
                     asset_definition_id: movement.asset_definition_id,
                     amount: movement.amount,
                     tx_hash: Some(base.tx_hash.clone()),
+                    block_height: Some(base.block_height),
                     operation_id: None,
                     expires_at_ms: None,
                     finalized_at_ms: None,
@@ -35025,6 +35063,7 @@ fn append_account_history_projections_for_tx(
                     asset_definition_id: None,
                     amount: None,
                     tx_hash: Some(base.tx_hash),
+                    block_height: Some(base.block_height),
                     operation_id: None,
                     expires_at_ms: None,
                     finalized_at_ms: None,
@@ -35081,7 +35120,11 @@ fn account_history_projections_for_height_range(
                 result,
                 merge_inclusion: None,
             };
-            append_account_history_projections_for_tx(&mut index, &tx);
+            append_account_history_projections_for_tx(
+                &mut index,
+                &tx,
+                u64::try_from(height).unwrap_or(u64::MAX),
+            );
         }
     }
     index.items
@@ -38553,6 +38596,28 @@ pub(crate) fn committed_transactions_snapshot(
     )
     .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
+fn committed_transaction_is_visible(
+    state: &CoreState,
+    visibility: &DataspaceReadVisibility,
+    transaction: &iroha_data_model::query::CommittedTransaction,
+) -> bool {
+    if visibility.can_read_all() {
+        return true;
+    }
+    state
+        .block_by_hash(transaction.block_hash)
+        .is_some_and(|block| {
+            committed_transaction_is_visible_in_block(visibility, transaction, &block)
+        })
+}
+fn committed_transaction_is_visible_in_block(
+    visibility: &DataspaceReadVisibility,
+    transaction: &iroha_data_model::query::CommittedTransaction,
+    block: &SignedBlock,
+) -> bool {
+    visibility.can_read_all()
+        || visibility.allows_external_entrypoint_hash(block, *transaction.entrypoint_hash())
+}
 include!("routing/committed_transaction_pagination.rs");
 app_api_items! {
 /// POST /v1/accounts/{account_id}/transactions/query
@@ -38595,6 +38660,24 @@ pub async fn handle_v1_account_transactions_with_policy(
     telemetry: MaybeTelemetry,
     allowed_asset_definition_id: Option<AssetDefinitionId>,
 ) -> Result<impl IntoResponse> {
+    handle_v1_account_transactions_with_visibility_policy(
+        state,
+        axum::extract::Path(account_id),
+        NoritoJson(envelope),
+        telemetry,
+        allowed_asset_definition_id,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_account_transactions_with_visibility_policy(
+    state: Arc<CoreState>,
+    axum::extract::Path(account_id): axum::extract::Path<String>,
+    NoritoJson(envelope): NoritoJson<QueryEnvelope>,
+    telemetry: MaybeTelemetry,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     use iroha_data_model::query::dsl::CompoundPredicate;
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
@@ -38608,6 +38691,10 @@ pub async fn handle_v1_account_transactions_with_policy(
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
     )?;
+    let subject_visible = {
+        let world = state.world_view();
+        visibility.allows_account(&world, &account_id)
+    };
     record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY);
     let limits = app_query_limits();
     let cap = app_query_page_cap(&state);
@@ -38632,13 +38719,16 @@ pub async fn handle_v1_account_transactions_with_policy(
         let _fetch_size = limits
             .clamp_fetch_size(envelope.fetch_size)
             .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
-        let predicate = envelope
-            .filter
-            .as_ref()
-            .map_or(CompoundPredicate::PASS, tx_predicate_from_filter);
-        let committed_txs = committed_transactions_indexed_snapshot(state.as_ref(), predicate)?;
+        // Visibility is the first row predicate. Do not let a user filter
+        // select restricted candidates in the index before authorization.
+        let committed_txs = committed_transactions_indexed_snapshot(
+            state.as_ref(),
+            CompoundPredicate::PASS,
+        )?;
         let rows = committed_txs
             .iter()
+            .filter(|_| subject_visible)
+            .filter(|tx| committed_transaction_is_visible(state.as_ref(), &visibility, tx))
             .filter(|tx| tx_matches_account_history_subject(tx, &account_id))
             .filter(|tx| {
                 allowed_asset_selector
@@ -38698,12 +38788,21 @@ pub async fn handle_v1_account_transactions_with_policy(
             let select_ref = &select_clone;
             collect_committed_transaction_page(
                 state.as_ref(),
-                predicate,
+                CompoundPredicate::PASS,
                 pagination,
                 fetch_size,
                 count_mode,
                 |tx| {
+                    if !subject_visible {
+                        return None;
+                    }
+                    if !committed_transaction_is_visible(state.as_ref(), &visibility, tx) {
+                        return None;
+                    }
                     if !tx_matches_account_history_subject(tx, &account_id) {
+                        return None;
+                    }
+                    if !predicate.applies(tx) {
                         return None;
                     }
                     if let Some(expected) = allowed_asset_selector.as_ref()
@@ -38729,6 +38828,12 @@ pub async fn handle_v1_account_transactions_with_policy(
             let mut projections: Vec<TxProjection> = Vec::new();
             let debug_filter = torii_debug_match_enabled();
             for tx in &committed_txs {
+                if !subject_visible {
+                    continue;
+                }
+                if !committed_transaction_is_visible(state.as_ref(), &visibility, tx) {
+                    continue;
+                }
                 if !predicate.applies(tx) {
                     continue;
                 }
@@ -38937,6 +39042,25 @@ pub async fn handle_v1_transactions_query_with_policy(
         allowed_asset_definition_id,
         ENDPOINT_TRANSACTIONS_QUERY,
         None,
+        None,
+    )
+    .await
+}
+pub(crate) async fn handle_v1_transactions_query_with_visibility_policy(
+    state: Arc<CoreState>,
+    NoritoJson(envelope): NoritoJson<QueryEnvelope>,
+    telemetry: MaybeTelemetry,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
+    handle_v1_transactions_query_scoped_with_policy(
+        state,
+        NoritoJson(envelope),
+        telemetry,
+        allowed_asset_definition_id,
+        ENDPOINT_TRANSACTIONS_QUERY,
+        None,
+        Some(visibility),
     )
     .await
 }
@@ -38956,6 +39080,7 @@ pub async fn handle_v1_transactions_visible_query_with_policy(
         allowed_asset_definition_id,
         ENDPOINT_TRANSACTIONS_VISIBLE_QUERY,
         Some(visibility),
+        None,
     )
     .await
 }
@@ -38967,6 +39092,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
     allowed_asset_definition_id: Option<AssetDefinitionId>,
     endpoint: &'static str,
     visibility: Option<TxHistoryVisibilityScope>,
+    dataspace_visibility: Option<DataspaceReadVisibility>,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::query::dsl::CompoundPredicate;
     #[cfg(feature = "telemetry")]
@@ -38997,13 +39123,19 @@ async fn handle_v1_transactions_query_scoped_with_policy(
         let _fetch_size = limits
             .clamp_fetch_size(envelope.fetch_size)
             .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
-        let predicate = envelope
-            .filter
-            .as_ref()
-            .map_or(CompoundPredicate::PASS, tx_predicate_from_filter);
-        let committed_txs = committed_transactions_indexed_snapshot(state.as_ref(), predicate)?;
+        // Materialize an authorization-neutral candidate snapshot, then apply
+        // caller visibility before the generic query engine sees any row.
+        let committed_txs = committed_transactions_indexed_snapshot(
+            state.as_ref(),
+            CompoundPredicate::PASS,
+        )?;
         let rows = committed_txs
             .iter()
+            .filter(|tx| {
+                dataspace_visibility
+                    .as_ref()
+                    .is_none_or(|scope| committed_transaction_is_visible(state.as_ref(), scope, tx))
+            })
             .filter(|tx| {
                 visibility
                     .as_ref()
@@ -39059,15 +39191,23 @@ async fn handle_v1_transactions_query_scoped_with_policy(
             let select_ref = &select_clone;
             collect_committed_transaction_page(
                 state.as_ref(),
-                predicate,
+                CompoundPredicate::PASS,
                 pagination,
                 fetch_size,
                 count_mode,
                 |tx| {
+                    if dataspace_visibility.as_ref().is_some_and(|scope| {
+                        !committed_transaction_is_visible(state.as_ref(), scope, tx)
+                    }) {
+                        return None;
+                    }
                     if visibility
                         .as_ref()
                         .is_some_and(|scope| !tx_matches_history_visibility_scope(tx, scope))
                     {
+                        return None;
+                    }
+                    if !predicate.applies(tx) {
                         return None;
                     }
                     if let Some(expected) = allowed_asset_selector.as_ref()
@@ -39140,15 +39280,23 @@ async fn handle_v1_transactions_query_scoped_with_policy(
             };
             collect_sorted_committed_transaction_page(
                 state.as_ref(),
-                predicate,
+                CompoundPredicate::PASS,
                 pagination,
                 fetch_size,
                 count_mode,
                 |tx| {
+                    if dataspace_visibility.as_ref().is_some_and(|scope| {
+                        !committed_transaction_is_visible(state.as_ref(), scope, tx)
+                    }) {
+                        return None;
+                    }
                     if visibility
                         .as_ref()
                         .is_some_and(|scope| !tx_matches_history_visibility_scope(tx, scope))
                     {
+                        return None;
+                    }
+                    if !predicate.applies(tx) {
                         return None;
                     }
                     if let Some(expected) = allowed_asset_selector.as_ref()
@@ -39218,6 +39366,24 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     telemetry: MaybeTelemetry,
     allowed_asset_definition_id: Option<AssetDefinitionId>,
 ) -> Result<impl IntoResponse> {
+    handle_v1_account_transactions_get_with_visibility_policy(
+        state,
+        axum::extract::Path(account_id),
+        crate::NoritoQuery(params),
+        telemetry,
+        allowed_asset_definition_id,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_account_transactions_get_with_visibility_policy(
+    state: Arc<CoreState>,
+    axum::extract::Path(account_id): axum::extract::Path<String>,
+    crate::NoritoQuery(params): crate::NoritoQuery<AccountTransactionsGetParams>,
+    telemetry: MaybeTelemetry,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
     #[cfg(feature = "telemetry")]
@@ -39229,10 +39395,15 @@ pub async fn handle_v1_account_transactions_get_with_policy(
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
+    let subject_visible = {
+        let world = state.world_view();
+        visibility.allows_account(&world, &account_id)
+    };
     let cap = app_query_page_cap(&state);
     let query_subject = account_id;
     let count_mode =
         app_transaction_count_mode(params.count_mode.as_deref(), ENDPOINT_ACCOUNTS_TRANSACTIONS);
+    let visibility_state = Arc::clone(&state);
     let page = {
         let limits = app_query_limits();
         let world = state.world_view();
@@ -39262,6 +39433,16 @@ pub async fn handle_v1_account_transactions_get_with_policy(
                 let query_subject = query_subject.clone();
                 let asset_filter = asset_filter.clone();
                 move |tx| {
+                    if !subject_visible {
+                        return None;
+                    }
+                    if !committed_transaction_is_visible(
+                        visibility_state.as_ref(),
+                        &visibility,
+                        tx,
+                    ) {
+                        return None;
+                    }
                     if !tx_matches_account_history_subject(tx, &query_subject) {
                         return None;
                     }
@@ -39332,6 +39513,24 @@ pub async fn handle_v1_account_history_get_with_policy(
     telemetry: MaybeTelemetry,
     allowed_asset_definition_id: Option<AssetDefinitionId>,
 ) -> Result<impl IntoResponse> {
+    handle_v1_account_history_get_with_visibility_policy(
+        state,
+        axum::extract::Path(account_id),
+        crate::NoritoQuery(params),
+        telemetry,
+        allowed_asset_definition_id,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_account_history_get_with_visibility_policy(
+    state: Arc<CoreState>,
+    axum::extract::Path(account_id): axum::extract::Path<String>,
+    crate::NoritoQuery(params): crate::NoritoQuery<AccountHistoryGetParams>,
+    telemetry: MaybeTelemetry,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
     #[cfg(feature = "telemetry")]
@@ -39343,6 +39542,10 @@ pub async fn handle_v1_account_history_get_with_policy(
         &telemetry,
         ENDPOINT_ACCOUNTS_HISTORY,
     )?;
+    let subject_visible = {
+        let world = state.world_view();
+        visibility.allows_account(&world, &account_id)
+    };
     let cap = app_query_page_cap(&state);
     let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_ACCOUNTS_HISTORY);
     let (page, snapshot) = {
@@ -39374,8 +39577,27 @@ pub async fn handle_v1_account_history_get_with_policy(
         let filtered = positions.into_iter().filter_map({
             let index = Arc::clone(&snapshot);
             let asset_filter = asset_filter.clone();
+            let state = Arc::clone(&state);
             move |position| {
+                if !subject_visible {
+                    return None;
+                }
                 let projection = index.items.get(position)?;
+                if !visibility.can_read_all()
+                    && !projection
+                        .block_height
+                        .zip(projection.tx_hash.as_deref())
+                        .is_some_and(|(height, hash)| {
+                            committed_entrypoint_is_visible(
+                                state.as_ref(),
+                                &visibility,
+                                height,
+                                hash,
+                            )
+                        })
+                {
+                    return None;
+                }
                 if asset_filter.as_ref().is_some_and(|selector| {
                     !account_history_projection_matches_asset_selector(projection, selector)
                 }) {
@@ -39450,12 +39672,11 @@ pub async fn handle_v1_transactions_history_get(
     crate::NoritoQuery(params): crate::NoritoQuery<AccountTransactionsGetParams>,
     telemetry: MaybeTelemetry,
     visibility: TxHistoryVisibilityScope,
+    dataspace_visibility: DataspaceReadVisibility,
     allowed_asset_definition_id: Option<AssetDefinitionId>,
 ) -> Result<impl IntoResponse> {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
-    #[cfg(not(feature = "telemetry"))]
-    let _ = &telemetry;
     #[cfg(not(feature = "telemetry"))]
     let _ = &telemetry;
     #[cfg(feature = "telemetry")]
@@ -39463,6 +39684,7 @@ pub async fn handle_v1_transactions_history_get(
     let cap = app_query_page_cap(&state);
     let count_mode =
         app_transaction_count_mode(params.count_mode.as_deref(), "/v1/transactions/history");
+    let visibility_state = Arc::clone(&state);
     let page = {
         let limits = app_query_limits();
         let world = state.world_view();
@@ -39486,8 +39708,17 @@ pub async fn handle_v1_transactions_history_get(
             count_mode,
             {
                 let visibility = visibility.clone();
+                let dataspace_visibility = dataspace_visibility.clone();
+                let visibility_state = Arc::clone(&visibility_state);
                 let asset_filter = asset_filter.clone();
                 move |tx| {
+                    if !committed_transaction_is_visible(
+                        visibility_state.as_ref(),
+                        &dataspace_visibility,
+                        tx,
+                    ) {
+                        return None;
+                    }
                     if let Some(expected) = asset_filter.as_ref() {
                         if !tx_matches_asset_selector(tx, expected) {
                             return None;
@@ -40771,7 +41002,7 @@ mod tx_query_filter_tests {
             ],
         );
         let mut index = AccountHistoryIndex::default();
-        append_account_history_projections_for_tx(&mut index, &tx);
+        append_account_history_projections_for_tx(&mut index, &tx, 1);
         let recipient_rows = index
             .by_account
             .get(&recipient.to_string())
@@ -40864,7 +41095,7 @@ mod tx_query_filter_tests {
             vec![dm::Mint::asset_quantity(12_u32, asset_id.clone()).into()],
         );
         let mut index = AccountHistoryIndex::default();
-        append_account_history_projections_for_tx(&mut index, &tx);
+        append_account_history_projections_for_tx(&mut index, &tx, 1);
         let account_rows = index
             .by_account
             .get(&holder.to_string())
@@ -42500,6 +42731,21 @@ mod tx_query_filter_tests {
             EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1,
             crate::explorer::EXPLORER_CURSOR_MAX_SCAN
         );
+        for error in [
+            explorer_world_cursor_error(crate::explorer::ExplorerCursorError::ScanLimitExceeded),
+            explorer_history_cursor_error(
+                crate::explorer::ExplorerCursorError::ScanLimitExceeded,
+            ),
+        ] {
+            let Error::AppServiceUnavailable { code, message } = error else {
+                panic!("scan exhaustion must use the generic capacity response");
+            };
+            assert_eq!(code, "explorer_scan_capacity_exceeded");
+            assert_eq!(
+                message,
+                "Explorer collection scan exceeded the bounded first-release capacity"
+            );
+        }
     }
 }
 #[cfg(all(test, feature = "app_api"))]
@@ -42562,6 +42808,53 @@ mod explorer_lookup_tests {
     fn build_state_with_executables(
         executables: Vec<dm::Executable>,
     ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
+        build_state_with_executables_and_route_plans(executables, None, None)
+    }
+    fn build_state_with_executables_and_mixed_scope(
+        executables: Vec<dm::Executable>,
+        mixed_scope: Option<(LaneId, DataSpaceId, LaneId, DataSpaceId)>,
+    ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
+        let route_plans = mixed_scope.map(
+            |(coordinator_lane, coordinator_dataspace, participant_lane, participant_dataspace)| {
+                vec![vec![
+                    (coordinator_lane, coordinator_dataspace),
+                    (participant_lane, participant_dataspace),
+                ]]
+            },
+        );
+        build_state_with_executables_and_route_plans(executables, route_plans, None)
+    }
+    fn build_state_with_routed_transactions(
+        instruction_batches: Vec<Vec<dm::InstructionBox>>,
+        dataspaces: Vec<DataSpaceId>,
+        creation_times_ms: Option<Vec<u64>>,
+    ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
+        assert_eq!(instruction_batches.len(), dataspaces.len());
+        let executables = instruction_batches
+            .into_iter()
+            .map(dm::Executable::from)
+            .collect();
+        let route_plans = dataspaces
+            .into_iter()
+            .enumerate()
+            .map(|(index, dataspace)| {
+                vec![(
+                    LaneId::new(u32::try_from(index).expect("test route index fits u32")),
+                    dataspace,
+                )]
+            })
+            .collect();
+        build_state_with_executables_and_route_plans(
+            executables,
+            Some(route_plans),
+            creation_times_ms,
+        )
+    }
+    fn build_state_with_executables_and_route_plans(
+        executables: Vec<dm::Executable>,
+        route_plans: Option<Vec<Vec<(LaneId, DataSpaceId)>>>,
+        creation_times_ms: Option<Vec<u64>>,
+    ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(
@@ -42573,7 +42866,13 @@ mod explorer_lookup_tests {
             checked_explorer_lookup_account(0x20, "derive explorer lookup authority fixture key");
         let mut hashes = Vec::new();
         let mut txs = Vec::new();
-        for (index, executable) in executables.into_iter().enumerate() {
+        let creation_times_ms = creation_times_ms.unwrap_or_else(|| {
+            (0..executables.len())
+                .map(|index| 1_710_000_000_000 + index as u64)
+                .collect()
+        });
+        assert_eq!(creation_times_ms.len(), executables.len());
+        for (executable, creation_time_ms) in executables.into_iter().zip(creation_times_ms) {
             let gas_limit = executable
                 .requires_transaction_gas_limit()
                 .then(|| NonZeroU64::new(10_000).expect("non-zero test gas limit"));
@@ -42581,7 +42880,7 @@ mod explorer_lookup_tests {
                 authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), gas_limit),
             );
-            builder.set_creation_time(Duration::from_millis(1_710_000_000_000 + index as u64));
+            builder.set_creation_time(Duration::from_millis(creation_time_ms));
             let signed = builder
                 .with_executable(executable)
                 .sign(authority_key.private_key());
@@ -42602,7 +42901,48 @@ mod explorer_lookup_tests {
         let valid: ValidBlock = unverified
             .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {});
-        let committed = valid.commit_unchecked().unpack(|_| {});
+        let mut committed = valid.commit_unchecked().unpack(|_| {});
+        if let Some(route_plans) = route_plans {
+            use iroha_data_model::block::{
+                BlockExecutionContextBundle, ExternalExecutionContext,
+                ExternalExecutionRouteLeg, ExternalExecutionRouteRole,
+            };
+            assert_eq!(route_plans.len(), hashes.len());
+            let contexts = hashes
+                .iter()
+                .copied()
+                .zip(route_plans)
+                .map(|(entrypoint_hash, route_plan)| {
+                    let (coordinator_lane, coordinator_dataspace) = route_plan
+                        .first()
+                        .copied()
+                        .expect("test route plan has a coordinator");
+                    let legs = route_plan
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, (lane, dataspace))| {
+                            ExternalExecutionRouteLeg::new(
+                                lane,
+                                dataspace,
+                                if index == 0 {
+                                    ExternalExecutionRouteRole::Coordinator
+                                } else {
+                                    ExternalExecutionRouteRole::Participant
+                                },
+                            )
+                        })
+                        .collect();
+                    ExternalExecutionContext::with_routing_plan(
+                        entrypoint_hash,
+                        coordinator_lane,
+                        coordinator_dataspace,
+                        Hash::new(b"explorer visibility route plan"),
+                        legs,
+                    )
+                })
+                .collect();
+            committed.set_execution_context(Some(BlockExecutionContextBundle::new(contexts)));
+        }
         crate::test_utils::finalize_committed_block(&state, state_block, committed);
         (state, hashes)
     }
@@ -42660,7 +43000,243 @@ mod explorer_lookup_tests {
         );
     }
 
-    routing_test! { sync dataspace_visibility_requires_every_committed_route_leg
+    fn mixed_binding_account_visibility_fixture(
+    ) -> (Arc<State>, dm::AccountId, DataSpaceId, DataSpaceId) {
+        let account_id = checked_explorer_lookup_account(
+            0x1f,
+            "derive mixed-binding account visibility fixture key",
+        )
+        .0;
+        let public_dataspace = DataSpaceId::new(7);
+        let restricted_dataspace = DataSpaceId::new(8);
+        let account = dm::Account::new(account_id.clone()).build(&account_id);
+        let world = World::with([], [account], []);
+        let mut state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.get_mut().dataspace_catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: public_dataspace,
+                alias: "public".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: restricted_dataspace,
+                alias: "restricted".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("mixed-binding dataspace catalog");
+        let state = Arc::new(state);
+        bind_account_alias_for_test(&state, &account_id, "mixed@public");
+        bind_account_alias_for_test(&state, &account_id, "mixed@restricted");
+        (state, account_id, public_dataspace, restricted_dataspace)
+    }
+
+    fn hidden_governance_escrow_fixture() -> (Arc<State>, DataSpaceId, AssetDefinitionId) {
+        let (owner_id, _) = checked_explorer_lookup_account(
+            0x1d,
+            "derive governance voting asset owner fixture key",
+        );
+        let (escrow_id, _) = checked_explorer_lookup_account(
+            0x1e,
+            "derive governance escrow fixture key",
+        );
+        let public_dataspace = DataSpaceId::new(7);
+        let restricted_dataspace = DataSpaceId::new(8);
+        let domain_id = DomainId::try_new("governance", "public").expect("governance domain");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "vote".parse().expect("voting asset name"),
+        );
+        let domain = dm::Domain::new(domain_id.clone()).build(&owner_id);
+        let owner = dm::Account::new(owner_id.clone()).build(&owner_id);
+        let escrow = dm::Account::new(escrow_id.clone()).build(&owner_id);
+        let mut definition = dm::AssetDefinition::numeric(
+            definition_id.clone(),
+            "Governance vote",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id),
+        )
+        .build(&owner_id);
+        definition.total_quantity = iroha_primitives::numeric::Quantity::from(100_u32);
+        let escrow_asset = dm::Asset::new(
+            dm::AssetId::new(definition_id.clone(), escrow_id.clone()),
+            iroha_primitives::numeric::Quantity::from(40_u32),
+        );
+        let world = World::with_assets(
+            [domain],
+            [owner, escrow],
+            [definition],
+            [escrow_asset],
+            [],
+        );
+        let mut state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.get_mut().dataspace_catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: public_dataspace,
+                alias: "public".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: restricted_dataspace,
+                alias: "restricted".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("governance visibility dataspace catalog");
+        state.gov.voting_asset_id = definition_id.clone();
+        state.gov.bond_escrow_account = escrow_id.clone();
+        let state = Arc::new(state);
+        bind_account_alias_for_test(&state, &escrow_id, "escrow@restricted");
+        (state, public_dataspace, definition_id)
+    }
+
+    routing_test! { sync account_metadata_requires_every_bound_dataspace
+        let (state, account_id, public_dataspace, restricted_dataspace) =
+            mixed_binding_account_visibility_fixture();
+        let world = state.world_view();
+
+        let public_only = DataspaceReadVisibility::new(
+            BTreeSet::from([DataSpaceId::UNIVERSAL, public_dataspace]),
+            false,
+        );
+        assert!(
+            !public_only.allows_account(&world, &account_id),
+            "a public binding must not disclose global account metadata while another binding is restricted",
+        );
+
+        let complete = DataspaceReadVisibility::new(
+            BTreeSet::from([
+                DataSpaceId::UNIVERSAL,
+                public_dataspace,
+                restricted_dataspace,
+            ]),
+            false,
+        );
+        assert!(complete.allows_account(&world, &account_id));
+    }
+
+    routing_test! { async same_node_list_query_and_singleton_hide_mixed_binding_account
+        let (state, account_id, public_dataspace, _) =
+            mixed_binding_account_visibility_fixture();
+        let public_only = DataspaceReadVisibility::new(
+            BTreeSet::from([DataSpaceId::UNIVERSAL, public_dataspace]),
+            false,
+        );
+
+        let list = handle_v1_accounts_with_visibility(
+            state.clone(),
+            crate::NoritoQuery(ListFilterParams::default()),
+            MaybeTelemetry::for_tests(),
+            public_only.clone(),
+        )
+        .await
+        .expect("public account list")
+        .into_response();
+        let list_body = list.into_body().collect().await.expect("list body").to_bytes();
+        let list_json: Value = norito::json::from_slice(&list_body).expect("list JSON");
+        assert!(list_json["items"].as_array().is_some_and(Vec::is_empty));
+
+        let mut exact_query = crate::filter::QueryEnvelope::default();
+        exact_query.filter = Some(crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("id".to_owned()),
+            Value::from(account_id.to_string()),
+        ));
+        let query = handle_v1_accounts_query_with_visibility(
+            state.clone(),
+            NoritoJson(exact_query),
+            MaybeTelemetry::for_tests(),
+            public_only.clone(),
+        )
+        .await
+        .expect("public account query")
+        .into_response();
+        let query_body = query.into_body().collect().await.expect("query body").to_bytes();
+        let query_json: Value = norito::json::from_slice(&query_body).expect("query JSON");
+        assert!(query_json["items"].as_array().is_some_and(Vec::is_empty));
+
+        let detail = handle_v1_explorer_account_detail(state, public_only, account_id)
+            .await
+            .expect_err("restricted mixed-binding singleton must be indistinguishable from absent");
+        assert_eq!(detail.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    routing_test! { async governance_supply_enrichment_requires_exact_escrow_asset_visibility
+        let (state, public_dataspace, definition_id) = hidden_governance_escrow_fixture();
+        let public_only =
+            DataspaceReadVisibility::new(BTreeSet::from([public_dataspace]), false);
+        let pagination = crate::explorer::ExplorerCursorQuery {
+            cursor: None,
+            limit: 10,
+        };
+
+        let list = handle_v1_explorer_asset_definitions(
+            state.clone(),
+            public_only.clone(),
+            pagination,
+            None,
+            None,
+        )
+        .await
+        .expect("public voting asset definition list");
+        let list_body = list.into_body().collect().await.expect("list body").to_bytes();
+        let list_json: Value = norito::json::from_slice(&list_body).expect("list JSON");
+        let listed = list_json["items"]
+            .as_array()
+            .and_then(|items| items.first())
+            .expect("visible voting definition");
+        assert!(listed["locked_quantity"].is_null());
+        assert!(listed["circulating_quantity"].is_null());
+
+        let detail = handle_v1_explorer_asset_definition_detail(
+            state.clone(),
+            public_only,
+            definition_id.clone(),
+        )
+        .await
+        .expect("public voting asset definition detail");
+        let detail_body = detail
+            .into_body()
+            .collect()
+            .await
+            .expect("detail body")
+            .to_bytes();
+        let detail_json: Value = norito::json::from_slice(&detail_body).expect("detail JSON");
+        assert!(detail_json["locked_quantity"].is_null());
+        assert!(detail_json["circulating_quantity"].is_null());
+
+        let global = handle_v1_explorer_asset_definition_detail(
+            state,
+            DataspaceReadVisibility::all_for_tests(),
+            definition_id,
+        )
+        .await
+        .expect("global voting asset definition detail");
+        let global_body = global
+            .into_body()
+            .collect()
+            .await
+            .expect("global detail body")
+            .to_bytes();
+        let global_json: Value = norito::json::from_slice(&global_body).expect("global JSON");
+        assert!(!global_json["locked_quantity"].is_null());
+        assert!(!global_json["circulating_quantity"].is_null());
+    }
+
+    routing_test! { sync generic_query_and_explorer_visibility_require_every_committed_route_leg
         use iroha_data_model::block::{
             BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
             ExternalExecutionRouteRole,
@@ -42669,6 +43245,11 @@ mod explorer_lookup_tests {
         let instruction: dm::InstructionBox =
             dm::Log::new(dm::Level::INFO, "visible".to_owned()).into();
         let (state, _) = build_state_with_single_transaction(vec![instruction]);
+        let transaction = committed_transactions_snapshot(state.as_ref())
+            .expect("committed transaction snapshot")
+            .into_iter()
+            .next()
+            .expect("test state contains one committed transaction");
         let height = NonZeroUsize::new(state.committed_height()).expect("committed height");
         let mut block = state
             .block_by_height(height)
@@ -42695,6 +43276,11 @@ mod explorer_lookup_tests {
             ExternalExecutionContext::new(entrypoint_hash, coordinator_lane, visible_dataspace),
         ])));
         assert!(visibility.allows_external_entrypoint(&block, 0));
+        assert!(committed_transaction_is_visible_in_block(
+            &visibility,
+            &transaction,
+            &block,
+        ));
         assert_eq!(
             crate::explorer::ExplorerBlockDto::from_block_with_visibility(&block, |index| {
                 visibility.allows_external_entrypoint(&block, index)
@@ -42723,9 +43309,86 @@ mod explorer_lookup_tests {
         );
         block.set_execution_context(Some(BlockExecutionContextBundle::new(vec![mixed_context])));
         assert!(!visibility.allows_external_entrypoint(&block, 0));
+        assert!(!committed_transaction_is_visible_in_block(
+            &visibility,
+            &transaction,
+            &block,
+        ));
         assert_eq!(
             crate::explorer::ExplorerBlockDto::from_block_with_visibility(&block, |index| {
                 visibility.allows_external_entrypoint(&block, index)
+            })
+            .transactions_total,
+            0,
+        );
+    }
+
+    routing_test! { async transaction_query_and_explorer_hide_a_committed_mixed_leg_before_filter_and_count
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "mixed".to_owned()).into();
+        let visible_dataspace = DataSpaceId::new(7);
+        let hidden_dataspace = DataSpaceId::new(8);
+        let (state, hashes) = build_state_with_executables_and_mixed_scope(
+            vec![dm::Executable::from(vec![instruction])],
+            Some((
+                LaneId::new(7),
+                visible_dataspace,
+                LaneId::new(8),
+                hidden_dataspace,
+            )),
+        );
+        let entrypoint_hash = hashes
+            .first()
+            .expect("mixed-scope test transaction hash")
+            .to_string();
+        let public_only = DataspaceReadVisibility::new(
+            BTreeSet::from([visible_dataspace]),
+            false,
+        );
+        let mut exact_query = crate::filter::QueryEnvelope::default();
+        exact_query.count_mode = Some("exact".to_owned());
+        exact_query.filter = Some(crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("entrypoint_hash".to_owned()),
+            Value::from(entrypoint_hash),
+        ));
+
+        let hidden = handle_v1_transactions_query_with_visibility_policy(
+            state.clone(),
+            NoritoJson(exact_query.clone()),
+            MaybeTelemetry::for_tests(),
+            None,
+            public_only.clone(),
+        )
+        .await
+        .expect("public-only mixed-leg query")
+        .into_response();
+        let hidden_body = hidden.into_body().collect().await.expect("hidden body").to_bytes();
+        let hidden_json: Value = norito::json::from_slice(&hidden_body).expect("hidden JSON");
+        assert!(hidden_json["items"].as_array().is_some_and(Vec::is_empty));
+        assert_eq!(hidden_json["total"].as_u64(), Some(0));
+
+        let global = handle_v1_transactions_query_with_visibility_policy(
+            state.clone(),
+            NoritoJson(exact_query),
+            MaybeTelemetry::for_tests(),
+            None,
+            DataspaceReadVisibility::all_for_tests(),
+        )
+        .await
+        .expect("global mixed-leg query")
+        .into_response();
+        let global_body = global.into_body().collect().await.expect("global body").to_bytes();
+        let global_json: Value = norito::json::from_slice(&global_body).expect("global JSON");
+        assert_eq!(global_json["items"].as_array().map(Vec::len), Some(1));
+        assert_eq!(global_json["total"].as_u64(), Some(1));
+
+        let height = NonZeroUsize::new(state.committed_height()).expect("committed height");
+        let block = state
+            .block_by_height(height)
+            .expect("mixed-scope block remains available");
+        assert_eq!(
+            crate::explorer::ExplorerBlockDto::from_block_with_visibility(&block, |index| {
+                public_only.allows_external_entrypoint(&block, index)
             })
             .transactions_total,
             0,
@@ -42833,6 +43496,250 @@ mod explorer_lookup_tests {
         kura.store_block(Arc::new(signed_block))
             .expect("store Kura-only block");
         (state, target_hash)
+    }
+    routing_test! { sync explorer_transaction_history_cursor_and_has_more_ignore_hidden_entrypoints
+        let visible_dataspace = DataSpaceId::new(7);
+        let hidden_dataspace = DataSpaceId::new(8);
+        let instruction_batches = ["visible-first", "hidden-middle", "visible-last", "hidden-tail"]
+            .into_iter()
+            .map(|message| vec![dm::Log::new(dm::Level::INFO, message.to_owned()).into()])
+            .collect();
+        let (state, hashes) = build_state_with_routed_transactions(
+            instruction_batches,
+            vec![
+                visible_dataspace,
+                hidden_dataspace,
+                visible_dataspace,
+                hidden_dataspace,
+            ],
+            None,
+        );
+        let visibility =
+            DataspaceReadVisibility::new(BTreeSet::from([visible_dataspace]), false);
+        let filters = ExplorerTransactionFilters {
+            authority: None,
+            status: None,
+            block: None,
+            asset_id: None,
+        };
+        let collection = crate::explorer::ExplorerHistoryCollection::Transactions;
+        let first_query = crate::explorer::ExplorerCursorQuery {
+            cursor: None,
+            limit: 1,
+        };
+        let (items, pagination) = collect_transaction_summaries(
+            state.as_ref(),
+            &visibility,
+            &filters,
+            &first_query,
+            collection,
+        )
+        .expect("first visible transaction page");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].hash, hashes[0].to_string());
+        assert!(pagination.has_more);
+        let cursor = pagination.next_cursor.expect("visible continuation");
+        let decoded = crate::explorer::decode_explorer_history_cursor(
+            &cursor,
+            collection,
+            transaction_history_filter_digest(collection, &filters),
+            visibility.visible_route_set_digest(),
+        )
+        .expect("decode transaction history cursor");
+        assert_eq!(decoded.position.entrypoint_hash, Some(hashes[2]));
+
+        let (items, pagination) = collect_transaction_summaries(
+            state.as_ref(),
+            &visibility,
+            &filters,
+            &crate::explorer::ExplorerCursorQuery {
+                cursor: Some(cursor),
+                limit: 1,
+            },
+            collection,
+        )
+        .expect("second visible transaction page");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].hash, hashes[2].to_string());
+        assert!(!pagination.has_more);
+        assert!(pagination.next_cursor.is_none());
+    }
+    routing_test! { sync explorer_history_resume_hash_is_stable_across_hidden_insertion
+        let visible_dataspace = DataSpaceId::new(7);
+        let hidden_dataspace = DataSpaceId::new(8);
+        let (baseline, baseline_hashes) = build_state_with_routed_transactions(
+            vec![
+                vec![dm::Log::new(dm::Level::INFO, "visible-first".to_owned()).into()],
+                vec![dm::Log::new(dm::Level::INFO, "visible-next".to_owned()).into()],
+            ],
+            vec![visible_dataspace, visible_dataspace],
+            Some(vec![1_710_000_000_000, 1_710_000_000_002]),
+        );
+        let (with_hidden, hidden_hashes) = build_state_with_routed_transactions(
+            vec![
+                vec![dm::Log::new(dm::Level::INFO, "visible-first".to_owned()).into()],
+                vec![dm::Log::new(dm::Level::INFO, "hidden".to_owned()).into()],
+                vec![dm::Log::new(dm::Level::INFO, "visible-next".to_owned()).into()],
+            ],
+            vec![visible_dataspace, hidden_dataspace, visible_dataspace],
+            Some(vec![
+                1_710_000_000_000,
+                1_710_000_000_001,
+                1_710_000_000_002,
+            ]),
+        );
+        assert_eq!(baseline_hashes[0], hidden_hashes[0]);
+        assert_eq!(baseline_hashes[1], hidden_hashes[2]);
+        let visibility =
+            DataspaceReadVisibility::new(BTreeSet::from([visible_dataspace]), false);
+        let filters = ExplorerTransactionFilters {
+            authority: None,
+            status: None,
+            block: None,
+            asset_id: None,
+        };
+        let collection = crate::explorer::ExplorerHistoryCollection::Transactions;
+        let query = crate::explorer::ExplorerCursorQuery {
+            cursor: None,
+            limit: 1,
+        };
+        let (_, baseline_page) = collect_transaction_summaries(
+            baseline.as_ref(),
+            &visibility,
+            &filters,
+            &query,
+            collection,
+        )
+        .expect("baseline transaction page");
+        let (_, hidden_page) = collect_transaction_summaries(
+            with_hidden.as_ref(),
+            &visibility,
+            &filters,
+            &query,
+            collection,
+        )
+        .expect("transaction page with hidden insertion");
+        let filter_digest = transaction_history_filter_digest(collection, &filters);
+        let baseline_cursor = crate::explorer::decode_explorer_history_cursor(
+            baseline_page.next_cursor.as_deref().expect("baseline cursor"),
+            collection,
+            filter_digest,
+            visibility.visible_route_set_digest(),
+        )
+        .expect("decode baseline cursor");
+        let hidden_cursor = crate::explorer::decode_explorer_history_cursor(
+            hidden_page.next_cursor.as_deref().expect("hidden-insertion cursor"),
+            collection,
+            filter_digest,
+            visibility.visible_route_set_digest(),
+        )
+        .expect("decode hidden-insertion cursor");
+        assert_eq!(baseline_cursor.position, hidden_cursor.position);
+        assert_eq!(
+            hidden_cursor.position.entrypoint_hash,
+            Some(hidden_hashes[2])
+        );
+
+        let height = NonZeroUsize::new(with_hidden.committed_height()).expect("committed height");
+        let block = with_hidden
+            .block_by_height(height)
+            .expect("committed routed block");
+        let hidden_probe = resolve_explorer_history_entrypoint(
+            block.as_ref(),
+            &visibility,
+            crate::explorer::ExplorerHistoryPosition::transaction(
+                u64::try_from(height.get()).expect("height fits u64"),
+                hidden_hashes[1],
+            ),
+        )
+        .expect_err("hidden resume hash must be rejected");
+        let absent_probe = resolve_explorer_history_entrypoint(
+            block.as_ref(),
+            &visibility,
+            crate::explorer::ExplorerHistoryPosition::transaction(
+                u64::try_from(height.get()).expect("height fits u64"),
+                HashOf::from_untyped_unchecked(Hash::new(b"absent explorer entrypoint")),
+            ),
+        )
+        .expect_err("absent resume hash must be rejected");
+        let duplicate_probe = resolve_unique_explorer_history_entrypoint_index(
+            [Some(hidden_hashes[1]), Some(hidden_hashes[1])],
+            hidden_hashes[1],
+        )
+        .expect_err("duplicate resume hash must be rejected");
+        assert_eq!(hidden_probe.to_string(), absent_probe.to_string());
+        assert_eq!(hidden_probe.to_string(), duplicate_probe.to_string());
+    }
+    routing_test! { sync explorer_instruction_history_cursor_and_has_more_ignore_hidden_entrypoints
+        let visible_dataspace = DataSpaceId::new(7);
+        let hidden_dataspace = DataSpaceId::new(8);
+        let instruction_batches = ["visible-first", "hidden-middle", "visible-last", "hidden-tail"]
+            .into_iter()
+            .map(|message| vec![dm::Log::new(dm::Level::INFO, message.to_owned()).into()])
+            .collect();
+        let (state, hashes) = build_state_with_routed_transactions(
+            instruction_batches,
+            vec![
+                visible_dataspace,
+                hidden_dataspace,
+                visible_dataspace,
+                hidden_dataspace,
+            ],
+            None,
+        );
+        let visibility =
+            DataspaceReadVisibility::new(BTreeSet::from([visible_dataspace]), false);
+        let filters = ExplorerInstructionFilters {
+            account: None,
+            authority: None,
+            transaction_hash: None,
+            status: None,
+            block: None,
+            kind: None,
+            asset_id: None,
+        };
+        let collection = crate::explorer::ExplorerHistoryCollection::Instructions;
+        let first_query = crate::explorer::ExplorerCursorQuery {
+            cursor: None,
+            limit: 1,
+        };
+        let (items, pagination) = collect_instruction_history(
+            state.as_ref(),
+            &visibility,
+            &filters,
+            &first_query,
+            collection,
+        )
+        .expect("first visible instruction page");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].transaction_hash, hashes[0].to_string());
+        assert!(pagination.has_more);
+        let cursor = pagination.next_cursor.expect("visible continuation");
+        let decoded = crate::explorer::decode_explorer_history_cursor(
+            &cursor,
+            collection,
+            instruction_history_filter_digest(collection, &filters),
+            visibility.visible_route_set_digest(),
+        )
+        .expect("decode instruction history cursor");
+        assert_eq!(decoded.position.entrypoint_hash, Some(hashes[2]));
+        assert_eq!(decoded.position.instruction_index, 0);
+
+        let (items, pagination) = collect_instruction_history(
+            state.as_ref(),
+            &visibility,
+            &filters,
+            &crate::explorer::ExplorerCursorQuery {
+                cursor: Some(cursor),
+                limit: 1,
+            },
+            collection,
+        )
+        .expect("second visible instruction page");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].transaction_hash, hashes[2].to_string());
+        assert!(!pagination.has_more);
+        assert!(pagination.next_cursor.is_none());
     }
     routing_test! { sync explorer_instruction_history_cursor_resumes_at_next_candidate
         let instructions = vec![
@@ -54275,30 +55182,22 @@ fn collect_projected_account_assets(
     scoped_accounts: &[AccountId],
     asset_filter: Option<&AssetDefinitionId>,
     scope_filter: Option<&AssetBalanceScope>,
+    visibility: &DataspaceReadVisibility,
 ) -> Vec<AccountAssetListItem> {
     let primary_alias = primary_alias_projection_for_account_id(state, account);
     let mut definition_cache = BTreeMap::new();
     let mut projected_assets = Vec::new();
     for scoped_account in scoped_accounts {
-        if let Some(definition_id) = asset_filter {
-            for asset in world.assets_in_account_by_definition_iter(scoped_account, definition_id) {
-                if let Some(expected_scope) = scope_filter
-                    && asset.id().scope() != expected_scope
-                {
-                    continue;
-                }
-                push_account_asset_projection(
-                    world,
-                    asset.id(),
-                    asset.value(),
-                    &primary_alias,
-                    &mut definition_cache,
-                    &mut projected_assets,
-                );
-            }
+        if !visibility.allows_account(world, scoped_account) {
             continue;
         }
         for asset in world.assets_in_account_iter(scoped_account) {
+            if !visibility.allows_asset(world, asset.id()) {
+                continue;
+            }
+            if asset_filter.is_some_and(|definition| asset.id().definition() != definition) {
+                continue;
+            }
             if let Some(expected_scope) = scope_filter
                 && asset.id().scope() != expected_scope
             {
@@ -54517,6 +55416,22 @@ pub async fn handle_v1_account_permissions_with_policy(
     crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    handle_v1_account_permissions_with_visibility(
+        state,
+        axum::extract::Path(account_id),
+        crate::NoritoQuery(p),
+        telemetry,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_account_permissions_with_visibility(
+    state: Arc<CoreState>,
+    axum::extract::Path(account_id): axum::extract::Path<String>,
+    crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
+    telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     use iroha_data_model::query::error::FindError;
     let (account, _) = parse_account_path_segment_with_state(
         state.as_ref(),
@@ -54528,7 +55443,11 @@ pub async fn handle_v1_account_permissions_with_policy(
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_PERMISSIONS)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ACCOUNTS_PERMISSIONS);
     let world = state.world_view();
-    let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &account);
+    let scoped_accounts = if visibility.allows_account(&world, &account) {
+        scoped_accounts_for_subject_sorted(&world, &account)
+    } else {
+        Vec::new()
+    };
     let mut permissions = BTreeSet::new();
     for account_id in &scoped_accounts {
         match world.account_permissions_iter(account_id) {
@@ -54604,6 +55523,22 @@ pub async fn handle_v1_account_assets_with_policy(
     crate::NoritoQuery(p): crate::NoritoQuery<AccountAssetsGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    handle_v1_account_assets_with_visibility(
+        state,
+        axum::extract::Path(account_id),
+        crate::NoritoQuery(p),
+        telemetry,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_account_assets_with_visibility(
+    state: Arc<CoreState>,
+    axum::extract::Path(account_id): axum::extract::Path<String>,
+    crate::NoritoQuery(p): crate::NoritoQuery<AccountAssetsGetParams>,
+    telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let world = state.world_view();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_ASSETS)?;
@@ -54642,6 +55577,7 @@ pub async fn handle_v1_account_assets_with_policy(
         &scoped_accounts,
         asset_filter.as_ref(),
         scope_filter.as_ref(),
+        &visibility,
     );
     let page = collect_page_streaming(
         projected_assets
@@ -55179,29 +56115,6 @@ const ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES: usize = 8 * 1024 * 1024;
 struct DomainProj {
     id: String,
 }
-enum LiveIndexedSource<I, F> {
-    Indexed(I),
-    Full(F),
-}
-impl<T, I, F> Iterator for LiveIndexedSource<I, F>
-where
-    I: Iterator<Item = T>,
-    F: Iterator<Item = T>,
-{
-    type Item = T;
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Indexed(iter) => iter.next(),
-            Self::Full(iter) => iter.next(),
-        }
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::Indexed(iter) => iter.size_hint(),
-            Self::Full(iter) => iter.size_hint(),
-        }
-    }
-}
 fn app_live_budget_error(
     endpoint: &'static str,
     code: &'static str,
@@ -55410,6 +56323,18 @@ pub async fn handle_v1_domains(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
 ) -> Result<impl IntoResponse> {
+    handle_v1_domains_with_visibility(
+        state,
+        crate::NoritoQuery(p),
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_domains_with_visibility(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_DOMAINS_LIST)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_DOMAINS_LIST);
@@ -55424,6 +56349,9 @@ pub async fn handle_v1_domains(
         DOMAINS_LIVE_MAX_RETAINED_BYTES,
         ENDPOINT_DOMAINS_LIST,
         |domain| {
+            if !visibility.allows_domain(&world, domain.id()) {
+                return None;
+            }
             let id = domain.id().to_string();
             Some((id.clone(), DomainProj { id }))
         },
@@ -55485,6 +56413,18 @@ pub async fn handle_v1_domains_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
+    handle_v1_domains_query_with_visibility(
+        state,
+        NoritoJson(envelope),
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_domains_query_with_visibility(
+    state: Arc<CoreState>,
+    NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let sort = envelope.sort.clone();
     let pagination_controls = envelope.pagination;
@@ -55509,6 +56449,9 @@ pub async fn handle_v1_domains_query(
             DOMAINS_LIVE_MAX_RETAINED_BYTES,
             ENDPOINT_DOMAINS_QUERY,
             |domain| {
+                if !visibility.allows_domain(&world, domain.id()) {
+                    return None;
+                }
                 Some(DomainProj {
                     id: domain.id().to_string(),
                 })
@@ -55529,6 +56472,7 @@ pub async fn handle_v1_domains_query(
         );
     }
     let selectors = compile_domain_sort_spec(&sort);
+    let world_ref = &world;
     let page = collect_live_page_with_budget(
         world.domains_iter(),
         pagination.offset,
@@ -55539,6 +56483,9 @@ pub async fn handle_v1_domains_query(
         DOMAINS_LIVE_MAX_RETAINED_BYTES,
         ENDPOINT_DOMAINS_QUERY,
         move |domain| {
+            if !visibility.allows_domain(world_ref, domain.id()) {
+                return None;
+            }
             let id = domain.id().to_string();
             let key = domain_sort_key(&id, &selectors);
             let projected = DomainProj { id };
@@ -56163,56 +57110,6 @@ fn collect_subject_accounts_from_iter(
         }
     }
     by_subject.into_values().collect()
-}
-fn account_filter_candidate_ids(
-    expr: Option<&crate::filter::FilterExpr>,
-) -> Option<BTreeSet<AccountId>> {
-    use crate::filter::FilterExpr as F;
-    match expr? {
-        F::And(list) => {
-            let mut selected = None;
-            for nested in list {
-                if let Some(candidates) = account_filter_candidate_ids(Some(nested)) {
-                    intersect_account_candidates(&mut selected, candidates);
-                }
-            }
-            selected
-        }
-        F::Or(list) => {
-            let mut union = BTreeSet::new();
-            for nested in list {
-                let candidates = account_filter_candidate_ids(Some(nested))?;
-                union.extend(candidates);
-            }
-            Some(union)
-        }
-        F::Eq(field, value) if field.0 == "id" => {
-            Some(account_id_from_filter_value(value).into_iter().collect())
-        }
-        F::In(field, values) if field.0 == "id" => Some(
-            values
-                .iter()
-                .filter_map(account_id_from_filter_value)
-                .collect(),
-        ),
-        _ => None,
-    }
-}
-fn collect_subject_accounts_for_filter(
-    world: &impl WorldReadOnly,
-    filter: Option<&crate::filter::FilterExpr>,
-) -> Vec<iroha_data_model::account::Account> {
-    if let Some(candidate_ids) = account_filter_candidate_ids(filter) {
-        return collect_subject_accounts_from_iter(candidate_ids.into_iter().filter_map(
-            |account_id| {
-                world
-                    .accounts()
-                    .get_key_value(&account_id)
-                    .map(|(id, value)| account_from_key_value(id, value))
-            },
-        ));
-    }
-    collect_subject_accounts(world)
 }
 #[cfg(all(test, feature = "app_api"))]
 mod account_permissions_json_tests {
@@ -59944,6 +60841,20 @@ pub async fn handle_v1_accounts(
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    handle_v1_accounts_with_visibility(
+        state,
+        crate::NoritoQuery(p),
+        telemetry,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_accounts_with_visibility(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
+    telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let world = state.world_view();
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_account_sort_spec(&sort_spec);
@@ -59964,7 +60875,10 @@ pub async fn handle_v1_accounts(
         )?;
     }
     let filter_ref = filter_expr.as_ref();
-    let accounts = collect_subject_accounts_for_filter(&world, filter_ref);
+    let accounts = collect_subject_accounts(&world)
+        .into_iter()
+        .filter(|account| visibility.allows_account(&world, account.id()))
+        .collect::<Vec<_>>();
     let catalog = state.nexus_snapshot().dataspace_catalog;
     let alias_cache = primary_alias_projection_batch_for_account_ids(
         &world,
@@ -60011,8 +60925,22 @@ pub async fn handle_v1_accounts(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_accounts_query(
     state: Arc<CoreState>,
+    NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_accounts_query_with_visibility(
+        state,
+        NoritoJson(envelope),
+        telemetry,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_accounts_query_with_visibility(
+    state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
 ) -> Result<impl IntoResponse> {
     if let Some(expr) = envelope.filter.as_mut() {
         if filter_expr_depth(expr) > 10 {
@@ -60042,7 +60970,10 @@ pub async fn handle_v1_accounts_query(
     let count_mode = app_count_mode(envelope.count_mode.as_deref(), ENDPOINT_ACCOUNTS_QUERY);
     let fetch_size = envelope.fetch_size;
     let world = state.world_view();
-    let accounts = collect_subject_accounts_for_filter(&world, filter_projection_ref);
+    let accounts = collect_subject_accounts(&world)
+        .into_iter()
+        .filter(|account| visibility.allows_account(&world, account.id()))
+        .collect::<Vec<_>>();
     let catalog = state.nexus_snapshot().dataspace_catalog;
     let alias_cache = primary_alias_projection_batch_for_account_ids(
         &world,
@@ -60131,12 +61062,48 @@ pub async fn handle_v1_accounts_portfolio(
     asset_id: Option<AssetId>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    handle_v1_accounts_portfolio_with_visibility(
+        state,
+        axum::extract::Path(raw_uaid),
+        asset_id,
+        _telemetry,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_accounts_portfolio_with_visibility(
+    state: Arc<CoreState>,
+    axum::extract::Path(raw_uaid): axum::extract::Path<String>,
+    asset_id: Option<AssetId>,
+    _telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let uaid = parse_uaid_literal(&raw_uaid)?;
     let world = state.world_view();
     let nexus = state.nexus_snapshot();
     let mut snapshot = portfolio::collect_portfolio_from_world_and_nexus(&world, &nexus, uaid);
+    snapshot
+        .dataspaces
+        .retain(|dataspace| visibility.allows_dataspace(dataspace.dataspace_id));
+    for dataspace in &mut snapshot.dataspaces {
+        for account in &mut dataspace.accounts {
+            let account_id = account.account_id.clone();
+            account.assets.retain(|asset| {
+                visibility.allows_asset(&world, &asset.asset_id)
+                    && visibility.allows_account(&world, &account_id)
+            });
+        }
+        dataspace
+            .accounts
+            .retain(|account| !account.assets.is_empty());
+    }
+    snapshot
+        .dataspaces
+        .retain(|dataspace| !dataspace.accounts.is_empty());
     if let Some(expected) = asset_id.as_ref() {
         filter_portfolio_by_asset_id(&mut snapshot, expected);
+    } else {
+        recompute_portfolio_totals(&mut snapshot);
     }
     drop(world);
     pretty_json_response(&portfolio_snapshot_to_json(&snapshot))
@@ -60168,15 +61135,9 @@ fn filter_portfolio_by_asset_id(
     snapshot: &mut iroha_data_model::nexus::portfolio::UniversalPortfolio,
     asset_id: &AssetId,
 ) {
-    let mut accounts = BTreeSet::new();
-    let mut positions = 0u64;
     for dataspace in &mut snapshot.dataspaces {
         for account in &mut dataspace.accounts {
             account.assets.retain(|asset| asset.asset_id == *asset_id);
-            if !account.assets.is_empty() {
-                accounts.insert(account.account_id.clone());
-                positions = positions.saturating_add(account.assets.len() as u64);
-            }
         }
         dataspace
             .accounts
@@ -60185,6 +61146,21 @@ fn filter_portfolio_by_asset_id(
     snapshot
         .dataspaces
         .retain(|dataspace| !dataspace.accounts.is_empty());
+    recompute_portfolio_totals(snapshot);
+}
+fn recompute_portfolio_totals(
+    snapshot: &mut iroha_data_model::nexus::portfolio::UniversalPortfolio,
+) {
+    let mut accounts = BTreeSet::new();
+    let mut positions = 0u64;
+    for dataspace in &snapshot.dataspaces {
+        for account in &dataspace.accounts {
+            if !account.assets.is_empty() {
+                accounts.insert(account.account_id.clone());
+                positions = positions.saturating_add(account.assets.len() as u64);
+            }
+        }
+    }
     snapshot.totals.accounts = u64::try_from(accounts.len()).unwrap_or(u64::MAX);
     snapshot.totals.positions = positions;
 }
@@ -60431,6 +61407,22 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
     crate::NoritoQuery(_query): crate::NoritoQuery<NexusDataspacesAccountSummaryQueryParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    handle_v1_nexus_dataspaces_account_summary_with_visibility(
+        state,
+        axum::extract::Path(raw_literal),
+        crate::NoritoQuery(_query),
+        telemetry,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
+    state: Arc<CoreState>,
+    axum::extract::Path(raw_literal): axum::extract::Path<String>,
+    crate::NoritoQuery(_query): crate::NoritoQuery<NexusDataspacesAccountSummaryQueryParams>,
+    telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let literal = raw_literal.trim();
     if literal.is_empty() {
         return Err(conversion_error(
@@ -60454,6 +61446,9 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
     let account = world
         .account(&resolved_account_id)
         .map_err(|_| explorer_not_found())?;
+    if !visibility.allows_account(&world, &resolved_account_id) {
+        return Err(explorer_not_found());
+    }
     let mut totals = Map::new();
     totals.insert("dataspaces".into(), Value::from(0_u64));
     totals.insert("accounts_bound".into(), Value::from(0_u64));
@@ -60530,6 +61525,9 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
         let mut consensus_teu_total = 0_u64;
         dataspaces_json.reserve(summaries.len());
         for (_, summary) in summaries {
+            if !visibility.allows_dataspace(summary.dataspace_id) {
+                continue;
+            }
             unique_accounts.extend(summary.accounts.iter().cloned());
             portfolio_accounts_total =
                 portfolio_accounts_total.saturating_add(summary.portfolio_accounts);
@@ -60825,6 +61823,22 @@ pub async fn handle_v1_space_directory_manifests(
     crate::NoritoQuery(query): crate::NoritoQuery<SpaceDirectoryManifestQuery>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    handle_v1_space_directory_manifests_with_visibility(
+        state,
+        axum::extract::Path(raw_uaid),
+        crate::NoritoQuery(query),
+        telemetry,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_space_directory_manifests_with_visibility(
+    state: Arc<CoreState>,
+    axum::extract::Path(raw_uaid): axum::extract::Path<String>,
+    crate::NoritoQuery(query): crate::NoritoQuery<SpaceDirectoryManifestQuery>,
+    telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let uaid = parse_uaid_literal(&raw_uaid)?;
     let filter = query.dataspace.map(DataSpaceId::new);
     let world = state.world_view();
@@ -60847,6 +61861,9 @@ pub async fn handle_v1_space_directory_manifests(
         let status_filter = status_filter;
         let iter_filter = dataspace_filter;
         let iter = set.iter().filter_map(move |(dataspace_id, record)| {
+            if !visibility.allows_dataspace(*dataspace_id) {
+                return None;
+            }
             if let Some(target) = iter_filter {
                 if *dataspace_id != target {
                     return None;
@@ -61119,6 +62136,26 @@ mod space_directory_manifest_helper_tests {
                 .clone(),
         )
     }
+    fn rebuild_space_directory_bindings_for_test(
+        state: &Arc<CoreState>,
+        uaid: UniversalAccountId,
+    ) {
+        let header = iroha_data_model::block::BlockHeader::new(
+            nonzero_ext::nonzero!(1_u64),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.rebuild_space_directory_bindings(uaid);
+        tx.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit space-directory binding rebuild");
+    }
     #[test]
     fn space_directory_manifest_status_parsing_requires_exact_lowercase_values() {
         assert_eq!(
@@ -61157,6 +62194,104 @@ mod space_directory_manifest_helper_tests {
             .is_err(),
             "manifest query must reject unknown parameters",
         );
+    }
+    routing_test! { async same_node_portfolio_and_dataspace_summary_hide_restricted_state
+        let account_id = checked_space_directory_account(
+            0xB0,
+            "derive restricted portfolio account fixture key",
+        );
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"restricted-portfolio-visibility"));
+        let public_dataspace = DataSpaceId::new(7);
+        let restricted_dataspace = DataSpaceId::new(8);
+        let domain_id = DomainId::try_new("vault", "restricted").expect("restricted domain");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "bond".parse().expect("asset name"),
+        );
+        let domain = Domain::new(domain_id.clone()).build(&account_id);
+        let account = Account::new(account_id.clone())
+            .with_uaid(Some(uaid))
+            .build(&account_id);
+        let definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "Restricted bond",
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            Some(domain_id),
+        )
+        .build(&account_id);
+        let asset_id = AssetId::with_scope(
+            definition_id,
+            account_id.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(restricted_dataspace),
+        );
+        let asset = Asset::new(asset_id, Quantity::from(5_u32));
+        let mut world = World::with_assets([domain], [account], [definition], [asset], []);
+        let mut manifests = SpaceDirectoryManifestSet::default();
+        for dataspace in [public_dataspace, restricted_dataspace] {
+            let manifest = AssetPermissionManifest {
+                version: ManifestVersion::V1,
+                uaid,
+                dataspace,
+                issued_ms: 1,
+                activation_epoch: 1,
+                expiry_epoch: None,
+                entries: Vec::new(),
+            };
+            let mut record = SpaceDirectoryManifestRecord::new(manifest);
+            record.lifecycle.mark_activated(1);
+            manifests.upsert(record);
+        }
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, manifests);
+        let catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: public_dataspace,
+                alias: "public".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: restricted_dataspace,
+                alias: "restricted".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("portfolio dataspace catalog");
+        let state = manifest_state(world, Some(catalog));
+        rebuild_space_directory_bindings_for_test(&state, uaid);
+
+        let public_only = DataspaceReadVisibility::new(
+            BTreeSet::from([DataSpaceId::UNIVERSAL, public_dataspace]),
+            false,
+        );
+        let portfolio = handle_v1_accounts_portfolio_with_visibility(
+            state.clone(),
+            axum::extract::Path(uaid.to_string()),
+            None,
+            MaybeTelemetry::disabled(),
+            public_only.clone(),
+        )
+        .await
+        .expect("filtered portfolio")
+        .into_response();
+        let portfolio = response_json(portfolio).await;
+        assert_eq!(portfolio["totals"]["accounts"].as_u64(), Some(0));
+        assert_eq!(portfolio["totals"]["positions"].as_u64(), Some(0));
+        assert!(portfolio["dataspaces"].as_array().is_some_and(Vec::is_empty));
+
+        let summary = handle_v1_nexus_dataspaces_account_summary_with_visibility(
+            state,
+            axum::extract::Path(account_id.to_string()),
+            crate::NoritoQuery(NexusDataspacesAccountSummaryQueryParams::default()),
+            MaybeTelemetry::disabled(),
+            public_only,
+        )
+        .await
+        .expect_err("mixed public/restricted account summary must be hidden");
+        assert_eq!(summary.into_response().status(), StatusCode::NOT_FOUND);
     }
     routing_test! { sync manifest_status_and_matching_cover_pending_active_expired_and_revoked_rows
         let pending = SpaceDirectoryManifestRecord::new(sample_manifest_record().manifest);
@@ -62221,6 +63356,28 @@ pub async fn handle_v1_explorer_accounts(
     domain: Option<DomainId>,
     definition: Option<AssetDefinitionId>,
 ) -> Result<AxResponse, Error> {
+    handle_v1_explorer_accounts_sync(state, visibility, pagination, domain, definition)
+}
+pub(crate) async fn handle_v1_explorer_accounts_admitted(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    domain: Option<DomainId>,
+    definition: Option<AssetDefinitionId>,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<AxResponse, Error> {
+    run_admitted_blocking(admission, "Explorer account collection worker failed", move || {
+        handle_v1_explorer_accounts_sync(state, visibility, pagination, domain, definition)
+    })
+    .await
+}
+fn handle_v1_explorer_accounts_sync(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    domain: Option<DomainId>,
+    definition: Option<AssetDefinitionId>,
+) -> Result<AxResponse, Error> {
     let world = state.world_view();
     let page = crate::explorer::accounts_page_for_filters(
         &world,
@@ -62229,10 +63386,30 @@ pub async fn handle_v1_explorer_accounts(
         &visibility,
         &pagination,
     )
-    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
+    .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
 }
 pub async fn handle_v1_explorer_domains(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    owned_by: Option<AccountId>,
+) -> Result<AxResponse, Error> {
+    handle_v1_explorer_domains_sync(state, visibility, pagination, owned_by)
+}
+pub(crate) async fn handle_v1_explorer_domains_admitted(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    owned_by: Option<AccountId>,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<AxResponse, Error> {
+    run_admitted_blocking(admission, "Explorer domain collection worker failed", move || {
+        handle_v1_explorer_domains_sync(state, visibility, pagination, owned_by)
+    })
+    .await
+}
+fn handle_v1_explorer_domains_sync(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
@@ -62245,7 +63422,7 @@ pub async fn handle_v1_explorer_domains(
         &visibility,
         &pagination,
     )
-    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
+    .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
 }
 fn explorer_circulating_quantity(
@@ -62265,6 +63442,34 @@ pub async fn handle_v1_explorer_asset_definitions(
     domain: Option<DomainId>,
     owned_by: Option<AccountId>,
 ) -> Result<AxResponse, Error> {
+    handle_v1_explorer_asset_definitions_sync(state, visibility, pagination, domain, owned_by)
+}
+pub(crate) async fn handle_v1_explorer_asset_definitions_admitted(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    domain: Option<DomainId>,
+    owned_by: Option<AccountId>,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<AxResponse, Error> {
+    run_admitted_blocking(
+        admission,
+        "Explorer asset-definition collection worker failed",
+        move || {
+            handle_v1_explorer_asset_definitions_sync(
+                state, visibility, pagination, domain, owned_by,
+            )
+        },
+    )
+    .await
+}
+fn handle_v1_explorer_asset_definitions_sync(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    domain: Option<DomainId>,
+    owned_by: Option<AccountId>,
+) -> Result<AxResponse, Error> {
     let world = state.world_view();
     let governance = state.governance_snapshot();
     let mut page = crate::explorer::asset_definitions_page_for_filters(
@@ -62274,7 +63479,7 @@ pub async fn handle_v1_explorer_asset_definitions(
         &visibility,
         &pagination,
     )
-    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
+    .map_err(explorer_world_cursor_error)?;
     // Enrich the governance voting asset definition with locked/circulating supply figures.
     // (Other assets default to null for these fields.)
     let voting_asset_id = governance.voting_asset_id.clone();
@@ -62285,26 +63490,66 @@ pub async fn handle_v1_explorer_asset_definitions(
             voting_asset_id.clone(),
             governance.bond_escrow_account.clone(),
         );
-        let locked = match world.asset(&escrow_asset_id) {
-            Ok(entry) => entry.value().as_ref().clone(),
-            Err(_) => Quantity::zero(),
-        };
-        let total = world
-            .asset_definition(&voting_asset_id)
-            .map(|def| def.total_quantity().clone())
-            .unwrap_or_else(|_| Quantity::zero());
-        let circulating = explorer_circulating_quantity(&total, &locked)?;
-        for item in &mut page.items {
-            if item.id == voting_asset_id_str {
-                item.locked_quantity = Some(locked);
-                item.circulating_quantity = Some(circulating);
-                break;
+        if visibility.allows_asset(&world, &escrow_asset_id) {
+            let locked = match world.asset(&escrow_asset_id) {
+                Ok(entry) => entry.value().as_ref().clone(),
+                Err(_) => Quantity::zero(),
+            };
+            let total = world
+                .asset_definition(&voting_asset_id)
+                .map(|def| def.total_quantity().clone())
+                .unwrap_or_else(|_| Quantity::zero());
+            let circulating = explorer_circulating_quantity(&total, &locked)?;
+            for item in &mut page.items {
+                if item.id == voting_asset_id_str {
+                    item.locked_quantity = Some(locked);
+                    item.circulating_quantity = Some(circulating);
+                    break;
+                }
             }
         }
     }
     Ok(JsonBody(page).into_response())
 }
 pub async fn handle_v1_explorer_assets(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    owned_by: Option<AccountId>,
+    definition: Option<AssetDefinitionId>,
+    asset_id: Option<AssetId>,
+) -> Result<AxResponse, Error> {
+    handle_v1_explorer_assets_sync(
+        state,
+        visibility,
+        pagination,
+        owned_by,
+        definition,
+        asset_id,
+    )
+}
+pub(crate) async fn handle_v1_explorer_assets_admitted(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    owned_by: Option<AccountId>,
+    definition: Option<AssetDefinitionId>,
+    asset_id: Option<AssetId>,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<AxResponse, Error> {
+    run_admitted_blocking(admission, "Explorer asset collection worker failed", move || {
+        handle_v1_explorer_assets_sync(
+            state,
+            visibility,
+            pagination,
+            owned_by,
+            definition,
+            asset_id,
+        )
+    })
+    .await
+}
+fn handle_v1_explorer_assets_sync(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
@@ -62321,10 +63566,32 @@ pub async fn handle_v1_explorer_assets(
         &visibility,
         &pagination,
     )
-    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
+    .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
 }
 pub async fn handle_v1_explorer_nfts(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    owned_by: Option<AccountId>,
+    domain: Option<DomainId>,
+) -> Result<AxResponse, Error> {
+    handle_v1_explorer_nfts_sync(state, visibility, pagination, owned_by, domain)
+}
+pub(crate) async fn handle_v1_explorer_nfts_admitted(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    owned_by: Option<AccountId>,
+    domain: Option<DomainId>,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<AxResponse, Error> {
+    run_admitted_blocking(admission, "Explorer NFT collection worker failed", move || {
+        handle_v1_explorer_nfts_sync(state, visibility, pagination, owned_by, domain)
+    })
+    .await
+}
+fn handle_v1_explorer_nfts_sync(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
@@ -62339,10 +63606,32 @@ pub async fn handle_v1_explorer_nfts(
         &visibility,
         &pagination,
     )
-    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
+    .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
 }
 pub async fn handle_v1_explorer_rwas(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    owned_by: Option<AccountId>,
+    domain: Option<DomainId>,
+) -> Result<AxResponse, Error> {
+    handle_v1_explorer_rwas_sync(state, visibility, pagination, owned_by, domain)
+}
+pub(crate) async fn handle_v1_explorer_rwas_admitted(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    owned_by: Option<AccountId>,
+    domain: Option<DomainId>,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<AxResponse, Error> {
+    run_admitted_blocking(admission, "Explorer RWA collection worker failed", move || {
+        handle_v1_explorer_rwas_sync(state, visibility, pagination, owned_by, domain)
+    })
+    .await
+}
+fn handle_v1_explorer_rwas_sync(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
@@ -62357,7 +63646,7 @@ pub async fn handle_v1_explorer_rwas(
         &visibility,
         &pagination,
     )
-    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
+    .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
 }
 pub async fn handle_v1_explorer_blocks(
@@ -62775,6 +64064,9 @@ fn nonzero_height(height: u64) -> Option<NonZeroUsize> {
 const EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1: usize = crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
 /// Maximum transaction or instruction candidates inspected by one cursor request.
 const EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1: usize = crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
+/// Maximum raw external entrypoints inspected while resolving caller visibility.
+const EXPLORER_HISTORY_MAX_INSPECTED_ENTRYPOINTS_V1: usize =
+    crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
 
 #[derive(Clone, Copy, Debug)]
 struct ExplorerHistoryRequestScope {
@@ -62787,7 +64079,24 @@ struct ExplorerHistoryRequestScope {
 }
 
 fn explorer_history_cursor_error(error: crate::explorer::ExplorerCursorError) -> Error {
-    conversion_error(format!("invalid Explorer history cursor request: {error}"))
+    match error {
+        crate::explorer::ExplorerCursorError::ScanLimitExceeded => explorer_scan_capacity_error(),
+        _ => conversion_error(format!("invalid Explorer history cursor request: {error}")),
+    }
+}
+
+fn explorer_world_cursor_error(error: crate::explorer::ExplorerCursorError) -> Error {
+    match error {
+        crate::explorer::ExplorerCursorError::ScanLimitExceeded => explorer_scan_capacity_error(),
+        _ => conversion_error(format!("invalid Explorer cursor request: {error}")),
+    }
+}
+
+fn explorer_scan_capacity_error() -> Error {
+    Error::AppServiceUnavailable {
+        code: "explorer_scan_capacity_exceeded",
+        message: "Explorer collection scan exceeded the bounded first-release capacity".to_owned(),
+    }
 }
 
 fn explorer_snapshot_hash(state: &CoreState, height: u64) -> Option<[u8; 32]> {
@@ -63314,6 +64623,51 @@ fn external_signed_transaction_result_at(
     let result = block.results().nth(index)?;
     Some((entrypoint_hash, signed, result))
 }
+fn resolve_explorer_history_entrypoint(
+    block: &SignedBlock,
+    visibility: &DataspaceReadVisibility,
+    position: crate::explorer::ExplorerHistoryPosition,
+) -> Result<usize, Error> {
+    let Some(target) = position.entrypoint_hash else {
+        return Ok(0);
+    };
+    let entrypoint_index = resolve_unique_explorer_history_entrypoint_index(
+        (0..block.external_entrypoint_count()).map(|entrypoint_index| {
+            block
+                .external_signed_transaction_at(entrypoint_index)
+                .map(|(entrypoint_hash, _)| entrypoint_hash)
+        }),
+        target,
+    )?;
+    if !visibility.allows_external_entrypoint(block, entrypoint_index) {
+        return Err(explorer_history_cursor_error(
+            crate::explorer::ExplorerCursorError::InvalidKey,
+        ));
+    }
+    Ok(entrypoint_index)
+}
+fn resolve_unique_explorer_history_entrypoint_index(
+    entrypoint_hashes: impl IntoIterator<Item = Option<HashOf<TransactionEntrypoint>>>,
+    target: HashOf<TransactionEntrypoint>,
+) -> Result<usize, Error> {
+    let mut matching_index = None;
+    let mut matches = 0_u8;
+    for (entrypoint_index, entrypoint_hash) in entrypoint_hashes.into_iter().enumerate() {
+        if entrypoint_index == EXPLORER_HISTORY_MAX_INSPECTED_ENTRYPOINTS_V1 {
+            return Err(explorer_scan_capacity_error());
+        }
+        if entrypoint_hash == Some(target) {
+            matches = matches.saturating_add(1);
+            matching_index.get_or_insert(entrypoint_index);
+        }
+    }
+    let Some(entrypoint_index) = matching_index.filter(|_| matches == 1) else {
+        return Err(explorer_history_cursor_error(
+            crate::explorer::ExplorerCursorError::InvalidKey,
+        ));
+    };
+    Ok(entrypoint_index)
+}
 fn collect_transaction_summaries(
     state: &CoreState,
     visibility: &DataspaceReadVisibility,
@@ -63336,12 +64690,12 @@ fn collect_transaction_summaries(
         filter_digest,
     )?;
     let initial_height = filters.block.unwrap_or(scope.snapshot_height);
-    let mut next_position = scope.resume.or_else(|| {
+    let mut scan_position = scope.resume.or_else(|| {
         (initial_height > 0 && initial_height <= scope.snapshot_height)
-            .then(|| crate::explorer::ExplorerHistoryPosition::transaction(initial_height, 0))
+            .then(|| crate::explorer::ExplorerHistoryPosition::transaction_start(initial_height))
     });
     let lower_bound = filters.block.unwrap_or(1);
-    if let (Some(expected), Some(position)) = (filters.block, next_position)
+    if let (Some(expected), Some(position)) = (filters.block, scan_position)
         && position.height != expected
     {
         return Err(explorer_history_cursor_error(
@@ -63351,13 +64705,15 @@ fn collect_transaction_summaries(
     let mut out = Vec::with_capacity(scope.limit);
     let mut scanned_blocks = 0_usize;
     let mut scanned_candidates = 0_usize;
-    while out.len() < scope.limit
-        && scanned_blocks < EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1
-        && scanned_candidates < EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1
-    {
-        let Some(position) = next_position else {
+    let mut inspected_entrypoints = 0_usize;
+    let mut next_visible_position = None;
+    'history: loop {
+        let Some(position) = scan_position else {
             break;
         };
+        if scanned_blocks == EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1 {
+            return Err(explorer_scan_capacity_error());
+        }
         let height = position.height;
         if height < lower_bound || height > scope.snapshot_height {
             return Err(explorer_history_cursor_error(
@@ -63375,40 +64731,41 @@ fn collect_transaction_summaries(
         let block_ref = block.as_ref();
         scanned_blocks = scanned_blocks.saturating_add(1);
         let external_total = block_ref.external_entrypoint_count();
-        let start_index = usize::try_from(position.entrypoint_index)
-            .expect("u32 Explorer entrypoint index fits usize");
-        if start_index > 0 && start_index >= external_total {
-            return Err(explorer_history_cursor_error(
-                crate::explorer::ExplorerCursorError::InvalidKey,
-            ));
-        }
+        let start_index = resolve_explorer_history_entrypoint(block_ref, visibility, position)?;
+        let next_block_position = height
+            .checked_sub(1)
+            .filter(|height| *height >= lower_bound)
+            .map(crate::explorer::ExplorerHistoryPosition::transaction_start);
         if external_total == 0 {
-            next_position = height
-                .checked_sub(1)
-                .filter(|height| *height >= lower_bound)
-                .map(|height| crate::explorer::ExplorerHistoryPosition::transaction(height, 0));
+            scan_position = next_block_position;
             continue;
         }
         for entrypoint_index in start_index..external_total {
-            scanned_candidates = scanned_candidates.saturating_add(1);
-            next_position = if entrypoint_index.saturating_add(1) < external_total {
-                Some(crate::explorer::ExplorerHistoryPosition::transaction(
-                    height,
-                    u32::try_from(entrypoint_index.saturating_add(1)).map_err(|_| {
-                        conversion_error("entrypoint index exceeds Explorer cursor width".into())
-                    })?,
-                ))
-            } else {
-                height
-                    .checked_sub(1)
-                    .filter(|height| *height >= lower_bound)
-                    .map(|height| {
-                        crate::explorer::ExplorerHistoryPosition::transaction(height, 0)
-                    })
+            if inspected_entrypoints == EXPLORER_HISTORY_MAX_INSPECTED_ENTRYPOINTS_V1 {
+                return Err(explorer_scan_capacity_error());
+            }
+            inspected_entrypoints = inspected_entrypoints.saturating_add(1);
+            if !visibility.allows_external_entrypoint(block_ref, entrypoint_index) {
+                continue;
+            }
+            let Some((entrypoint_hash, _)) =
+                block_ref.external_signed_transaction_at(entrypoint_index)
+            else {
+                continue;
             };
+            let candidate_position = crate::explorer::ExplorerHistoryPosition::transaction(
+                height,
+                entrypoint_hash,
+            );
+            if out.len() >= scope.limit
+                || scanned_candidates == EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1
+            {
+                next_visible_position = Some(candidate_position);
+                break 'history;
+            }
+            scanned_candidates = scanned_candidates.saturating_add(1);
             if let Some((entrypoint_hash, tx, result)) =
                 external_signed_transaction_result_at(block_ref, entrypoint_index)
-                && visibility.allows_external_entrypoint(block_ref, entrypoint_index)
                 && filters.matches(tx, height, result)
             {
                 out.push(crate::explorer::transaction_summary_dto_with_hash(
@@ -63418,14 +64775,10 @@ fn collect_transaction_summaries(
                     result,
                 ));
             }
-            if out.len() >= scope.limit
-                || scanned_candidates >= EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1
-            {
-                break;
-            }
         }
+        scan_position = next_block_position;
     }
-    let pagination = explorer_history_meta(collection, query, &scope, next_position)?;
+    let pagination = explorer_history_meta(collection, query, &scope, next_visible_position)?;
     Ok((out, pagination))
 }
 fn collect_instruction_history(
@@ -63468,12 +64821,12 @@ fn collect_instruction_history(
         .or(filters.block)
         .unwrap_or(scope.snapshot_height);
     let lower_bound = indexed_transaction_height.or(filters.block).unwrap_or(1);
-    let mut next_position = scope.resume.or_else(|| {
+    let mut scan_position = scope.resume.or_else(|| {
         (initial_height > 0 && initial_height <= scope.snapshot_height).then(|| {
-            crate::explorer::ExplorerHistoryPosition::instruction(initial_height, 0, 0)
+            crate::explorer::ExplorerHistoryPosition::instruction_start(initial_height)
         })
     });
-    if let Some(position) = next_position
+    if let Some(position) = scan_position
         && (position.height < lower_bound
             || position.height > scope.snapshot_height
             || filters.block.is_some_and(|expected| position.height != expected)
@@ -63486,13 +64839,15 @@ fn collect_instruction_history(
     let mut out = Vec::with_capacity(scope.limit);
     let mut scanned_blocks = 0_usize;
     let mut scanned_candidates = 0_usize;
-    'history: while out.len() < scope.limit
-        && scanned_blocks < EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1
-        && scanned_candidates < EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1
-    {
-        let Some(position) = next_position else {
+    let mut inspected_entrypoints = 0_usize;
+    let mut next_visible_position = None;
+    'history: loop {
+        let Some(position) = scan_position else {
             break;
         };
+        if scanned_blocks == EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1 {
+            return Err(explorer_scan_capacity_error());
+        }
         let height = position.height;
         let height_usize: usize = height
             .try_into()
@@ -63505,47 +64860,40 @@ fn collect_instruction_history(
         let block_ref = block.as_ref();
         scanned_blocks = scanned_blocks.saturating_add(1);
         let external_total = block_ref.external_entrypoint_count();
-        let start_entrypoint = usize::try_from(position.entrypoint_index)
-            .expect("u32 Explorer entrypoint index fits usize");
-        if start_entrypoint > 0 && start_entrypoint >= external_total {
-            return Err(explorer_history_cursor_error(
-                crate::explorer::ExplorerCursorError::InvalidKey,
-            ));
-        }
+        let start_entrypoint =
+            resolve_explorer_history_entrypoint(block_ref, visibility, position)?;
+        let next_block_position = height
+            .checked_sub(1)
+            .filter(|height| *height >= lower_bound)
+            .map(crate::explorer::ExplorerHistoryPosition::instruction_start);
         if external_total == 0 {
-            next_position = height
-                .checked_sub(1)
-                .filter(|height| *height >= lower_bound)
-                .map(|height| {
-                    crate::explorer::ExplorerHistoryPosition::instruction(height, 0, 0)
-                });
+            scan_position = next_block_position;
             continue;
         }
         for entrypoint_index in start_entrypoint..external_total {
-            let next_entrypoint = || -> Result<_, Error> {
-                if entrypoint_index.saturating_add(1) < external_total {
-                    Ok(Some(crate::explorer::ExplorerHistoryPosition::instruction(
-                        height,
-                        u32::try_from(entrypoint_index.saturating_add(1)).map_err(|_| {
-                            conversion_error("entrypoint index exceeds Explorer cursor width".into())
-                        })?,
-                        0,
-                    )))
-                } else {
-                    Ok(height
-                        .checked_sub(1)
-                        .filter(|height| *height >= lower_bound)
-                        .map(|height| {
-                            crate::explorer::ExplorerHistoryPosition::instruction(height, 0, 0)
-                        }))
-                }
-            };
+            if inspected_entrypoints == EXPLORER_HISTORY_MAX_INSPECTED_ENTRYPOINTS_V1 {
+                return Err(explorer_scan_capacity_error());
+            }
+            inspected_entrypoints = inspected_entrypoints.saturating_add(1);
             let start_instruction = if entrypoint_index == start_entrypoint {
                 usize::try_from(position.instruction_index)
                     .expect("u32 Explorer instruction index fits usize")
             } else {
                 0
             };
+            if !visibility.allows_external_entrypoint(block_ref, entrypoint_index) {
+                continue;
+            }
+            let Some((entrypoint_hash, _)) =
+                block_ref.external_signed_transaction_at(entrypoint_index)
+            else {
+                continue;
+            };
+            let entrypoint_position = crate::explorer::ExplorerHistoryPosition::instruction(
+                height,
+                entrypoint_hash,
+                0,
+            );
             let Some((entrypoint_hash, tx, result)) =
                 external_signed_transaction_result_at(block_ref, entrypoint_index)
             else {
@@ -63554,28 +64902,31 @@ fn collect_instruction_history(
                         crate::explorer::ExplorerCursorError::InvalidKey,
                     ));
                 }
-                scanned_candidates = scanned_candidates.saturating_add(1);
-                next_position = next_entrypoint()?;
-                if scanned_candidates >= EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1 {
+                if out.len() >= scope.limit
+                    || scanned_candidates == EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1
+                {
+                    next_visible_position = Some(entrypoint_position);
                     break 'history;
                 }
+                scanned_candidates = scanned_candidates.saturating_add(1);
                 continue;
             };
             let instruction_count = tx.instructions().explicit_instructions().count();
-            let transaction_matches = visibility
-                .allows_external_entrypoint(block_ref, entrypoint_index)
-                && filters.matches_transaction(entrypoint_hash, tx, height, result);
+            let transaction_matches =
+                filters.matches_transaction(entrypoint_hash, tx, height, result);
             if instruction_count == 0 || !transaction_matches {
                 if start_instruction != 0 {
                     return Err(explorer_history_cursor_error(
                         crate::explorer::ExplorerCursorError::InvalidKey,
                     ));
                 }
-                scanned_candidates = scanned_candidates.saturating_add(1);
-                next_position = next_entrypoint()?;
-                if scanned_candidates >= EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1 {
+                if out.len() >= scope.limit
+                    || scanned_candidates == EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1
+                {
+                    next_visible_position = Some(entrypoint_position);
                     break 'history;
                 }
+                scanned_candidates = scanned_candidates.saturating_add(1);
                 continue;
             }
             if start_instruction >= instruction_count {
@@ -63589,41 +64940,32 @@ fn collect_instruction_history(
                 .enumerate()
                 .skip(start_instruction)
             {
+                let instruction_position = crate::explorer::ExplorerHistoryPosition::instruction(
+                    height,
+                    entrypoint_hash,
+                    u32::try_from(idx).map_err(|_| {
+                        conversion_error("instruction index exceeds Explorer cursor width".into())
+                    })?,
+                );
+                if out.len() >= scope.limit
+                    || scanned_candidates == EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1
+                {
+                    next_visible_position = Some(instruction_position);
+                    break 'history;
+                }
                 scanned_candidates = scanned_candidates.saturating_add(1);
-                next_position = if idx.saturating_add(1) < instruction_count {
-                    Some(crate::explorer::ExplorerHistoryPosition::instruction(
-                        height,
-                        u32::try_from(entrypoint_index).map_err(|_| {
-                            conversion_error("entrypoint index exceeds Explorer cursor width".into())
-                        })?,
-                        u32::try_from(idx.saturating_add(1)).map_err(|_| {
-                            conversion_error("instruction index exceeds Explorer cursor width".into())
-                        })?,
-                    ))
-                } else {
-                    next_entrypoint()?
-                };
                 let kind = crate::explorer::instruction_kind(instruction);
                 if !filters.matches_instruction(kind) {
-                    if scanned_candidates >= EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1 {
-                        break 'history;
-                    }
                     continue;
                 }
                 if let Some(expected) = filters.account.as_ref()
                     && !instruction_matches_account_id(instruction, expected)
                 {
-                    if scanned_candidates >= EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1 {
-                        break 'history;
-                    }
                     continue;
                 }
                 if let Some(expected) = filters.asset_id.as_ref()
                     && !instruction_matches_asset_id(instruction, expected)
                 {
-                    if scanned_candidates >= EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1 {
-                        break 'history;
-                    }
                     continue;
                 }
                 let index = u32::try_from(idx).map_err(|_| {
@@ -63638,15 +64980,11 @@ fn collect_instruction_history(
                     kind,
                     index,
                 ));
-                if out.len() >= scope.limit
-                    || scanned_candidates >= EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1
-                {
-                    break 'history;
-                }
             }
         }
+        scan_position = next_block_position;
     }
-    let pagination = explorer_history_meta(collection, query, &scope, next_position)?;
+    let pagination = explorer_history_meta(collection, query, &scope, next_visible_position)?;
     Ok((out, pagination))
 }
 fn find_transaction_detail(
@@ -63859,13 +65197,15 @@ pub async fn handle_v1_explorer_asset_definition_detail(
             definition_id.clone(),
             governance.bond_escrow_account.clone(),
         );
-        let locked = match world.asset(&escrow_asset_id) {
-            Ok(entry) => entry.value().as_ref().clone(),
-            Err(_) => Quantity::zero(),
-        };
-        let circulating = explorer_circulating_quantity(definition.total_quantity(), &locked)?;
-        dto.locked_quantity = Some(locked);
-        dto.circulating_quantity = Some(circulating);
+        if visibility.allows_asset(&world, &escrow_asset_id) {
+            let locked = match world.asset(&escrow_asset_id) {
+                Ok(entry) => entry.value().as_ref().clone(),
+                Err(_) => Quantity::zero(),
+            };
+            let circulating = explorer_circulating_quantity(definition.total_quantity(), &locked)?;
+            dto.locked_quantity = Some(locked);
+            dto.circulating_quantity = Some(circulating);
+        }
     }
     Ok(JsonBody(dto).into_response())
 }
@@ -66026,6 +67366,18 @@ pub async fn handle_v1_assets_definitions(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
 ) -> Result<impl IntoResponse> {
+    handle_v1_assets_definitions_with_visibility(
+        state,
+        crate::NoritoQuery(p),
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_assets_definitions_with_visibility(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let world = state.world_view();
     let now_ms = asset_alias_observation_time_ms(&state);
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
@@ -66043,9 +67395,12 @@ pub async fn handle_v1_assets_definitions(
     }
     let filter_ref = filter_expr.as_ref();
     let world_ref = &world;
-    let mapped_iter = asset_definitions_for_filter(world_ref, filter_ref).filter_map({
+    let mapped_iter = asset_definitions_for_filter(world_ref, None).filter_map({
         let selectors = selectors;
         move |def| {
+            if !visibility.allows_asset_definition(world_ref, def.id()) {
+                return None;
+            }
             let alias_binding = asset_definition_alias_binding_for(world_ref, def.id(), now_ms);
             let projected = project_asset_definition_list_item(&def, alias_binding.as_ref());
             if let Some(expr) = filter_ref {
@@ -66103,6 +67458,18 @@ pub async fn handle_v1_assets_definitions_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
+    handle_v1_assets_definitions_query_with_visibility(
+        state,
+        NoritoJson(envelope),
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_assets_definitions_query_with_visibility(
+    state: Arc<CoreState>,
+    NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
     let now_ms = asset_alias_observation_time_ms(&state);
@@ -66134,7 +67501,8 @@ pub async fn handle_v1_assets_definitions_query(
     }
     if generic_mode {
         let world_ref = &world;
-        let rows = asset_definitions_for_filter(world_ref, envelope.filter.as_ref())
+        let rows = asset_definitions_for_filter(world_ref, None)
+            .filter(|def| visibility.allows_asset_definition(world_ref, def.id()))
             .map(|def| {
                 let alias_binding = asset_definition_alias_binding_for(world_ref, def.id(), now_ms);
                 let row = asset_definition_to_json_value(&def, alias_binding.as_ref())?;
@@ -66151,9 +67519,12 @@ pub async fn handle_v1_assets_definitions_query(
     }
     let filter_ref = envelope.filter.as_ref();
     let world_ref = &world;
-    let mapped_iter = asset_definitions_for_filter(world_ref, filter_ref).filter_map({
+    let mapped_iter = asset_definitions_for_filter(world_ref, None).filter_map({
         let selectors = selectors;
         move |def| {
+            if !visibility.allows_asset_definition(world_ref, def.id()) {
+                return None;
+            }
             let alias_binding = asset_definition_alias_binding_for(world_ref, def.id(), now_ms);
             let projected = project_asset_definition_list_item(&def, alias_binding.as_ref());
             if let Some(expr) = filter_ref {
@@ -67308,6 +68679,18 @@ pub async fn handle_v1_nfts(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
 ) -> Result<impl IntoResponse> {
+    handle_v1_nfts_with_visibility(
+        state,
+        crate::NoritoQuery(p),
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_nfts_with_visibility(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let world = state.world_view();
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_nft_sort_spec(&sort_spec);
@@ -67321,9 +68704,13 @@ pub async fn handle_v1_nfts(
         validate_nfts_filter_adapter(expr)?;
     }
     let filter_ref = filter_expr.as_ref();
-    let mapped_iter = nfts_for_filter(&world, filter_ref).filter_map({
+    let world_ref = &world;
+    let mapped_iter = nfts_for_filter(world_ref, None).filter_map({
         let selectors = selectors;
         move |nft| {
+            if !visibility.allows_nft(world_ref, nft.id()) {
+                return None;
+            }
             if let Some(expr) = filter_ref {
                 if !nft_filter_object(expr, &nft) {
                     return None;
@@ -67356,6 +68743,18 @@ pub async fn handle_v1_nfts_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
+    handle_v1_nfts_query_with_visibility(
+        state,
+        NoritoJson(envelope),
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_nfts_query_with_visibility(
+    state: Arc<CoreState>,
+    NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
     let selectors = compile_nft_sort_spec(&envelope.sort);
@@ -67382,8 +68781,9 @@ pub async fn handle_v1_nfts_query(
         }
     }
     if generic_mode {
-        let rows =
-            nfts_for_filter(&world, envelope.filter.as_ref()).map(|nft| nft_to_query_row(&nft));
+        let rows = nfts_for_filter(&world, None)
+            .filter(|nft| visibility.allows_nft(&world, nft.id()))
+            .map(|nft| nft_to_query_row(&nft));
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_NFTS,
@@ -67393,9 +68793,13 @@ pub async fn handle_v1_nfts_query(
         );
     }
     let filter_ref = envelope.filter.as_ref();
-    let mapped_iter = nfts_for_filter(&world, filter_ref).filter_map({
+    let world_ref = &world;
+    let mapped_iter = nfts_for_filter(world_ref, None).filter_map({
         let selectors = selectors;
         move |nft| {
+            if !visibility.allows_nft(world_ref, nft.id()) {
+                return None;
+            }
             if let Some(expr) = filter_ref {
                 if !nft_filter_object(expr, &nft) {
                     return None;
@@ -67543,6 +68947,18 @@ pub async fn handle_v1_rwas(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
 ) -> Result<impl IntoResponse> {
+    handle_v1_rwas_with_visibility(
+        state,
+        crate::NoritoQuery(p),
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_rwas_with_visibility(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let world = state.world_view();
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_rwa_sort_spec(&sort_spec);
@@ -67556,9 +68972,16 @@ pub async fn handle_v1_rwas(
         validate_rwas_filter_adapter(expr)?;
     }
     let filter_ref = filter_expr.as_ref();
-    let mapped_iter = rwas_for_filter(&world, filter_ref).filter_map({
+    let world_ref = &world;
+    let mapped_iter = rwas_for_filter(world_ref, None).filter_map({
         let selectors = selectors;
         move |item| {
+            let Ok(rwa_id) = item.id.parse::<RwaId>() else {
+                return None;
+            };
+            if !visibility.allows_rwa(world_ref, &rwa_id) {
+                return None;
+            }
             if let Some(expr) = filter_ref
                 && !rwa_filter_object(expr, &item)
             {
@@ -67582,6 +69005,18 @@ pub async fn handle_v1_rwas(
 pub async fn handle_v1_rwas_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
+) -> Result<impl IntoResponse> {
+    handle_v1_rwas_query_with_visibility(
+        state,
+        NoritoJson(envelope),
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_rwas_query_with_visibility(
+    state: Arc<CoreState>,
+    NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
+    visibility: DataspaceReadVisibility,
 ) -> Result<impl IntoResponse> {
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
@@ -67607,10 +69042,14 @@ pub async fn handle_v1_rwas_query(
         validate_rwas_filter_adapter(expr)?;
     }
     if generic_mode {
-        let rows = rwas_for_filter(&world, envelope.filter.as_ref()).map(|item| {
+        let rows = rwas_for_filter(&world, None).filter_map(|item| {
+            let rwa_id = item.id.parse::<RwaId>().ok()?;
+            if !visibility.allows_rwa(&world, &rwa_id) {
+                return None;
+            }
             let mut row = Map::new();
             row.insert("id".into(), Value::from(item.id));
-            row
+            Some(row)
         });
         return execute_generic_resource_query(
             state.as_ref(),
@@ -67621,9 +69060,16 @@ pub async fn handle_v1_rwas_query(
         );
     }
     let filter_ref = envelope.filter.as_ref();
-    let mapped_iter = rwas_for_filter(&world, filter_ref).filter_map({
+    let world_ref = &world;
+    let mapped_iter = rwas_for_filter(world_ref, None).filter_map({
         let selectors = selectors;
         move |item| {
+            let Ok(rwa_id) = item.id.parse::<RwaId>() else {
+                return None;
+            };
+            if !visibility.allows_rwa(world_ref, &rwa_id) {
+                return None;
+            }
             if let Some(expr) = filter_ref
                 && !rwa_filter_object(expr, &item)
             {
@@ -68874,6 +70320,22 @@ pub async fn handle_v1_account_assets_query_with_policy(
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    handle_v1_account_assets_query_with_visibility(
+        state,
+        axum::extract::Path(account_id),
+        NoritoJson(envelope),
+        telemetry,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_account_assets_query_with_visibility(
+    state: Arc<CoreState>,
+    axum::extract::Path(account_id): axum::extract::Path<String>,
+    NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
+    telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let generic_envelope = envelope.clone();
     let (acct, _) = parse_account_path_segment_with_state(
@@ -68891,6 +70353,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
         &scoped_accounts,
         None,
         None,
+        &visibility,
     );
     drop(world);
     let crate::filter::QueryEnvelope {
@@ -69351,6 +70814,22 @@ pub async fn handle_v1_asset_holders(
     crate::NoritoQuery(p): crate::NoritoQuery<AssetHolderGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    handle_v1_asset_holders_with_visibility(
+        state,
+        axum::extract::Path(definition_id),
+        crate::NoritoQuery(p),
+        telemetry,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+pub(crate) async fn handle_v1_asset_holders_with_visibility(
+    state: Arc<CoreState>,
+    axum::extract::Path(definition_id): axum::extract::Path<String>,
+    crate::NoritoQuery(p): crate::NoritoQuery<AssetHolderGetParams>,
+    telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
+) -> Result<impl IntoResponse> {
     let account_filter = canonicalize_query_account_literal(
         "account_id",
         p.account_id.as_deref(),
@@ -69380,17 +70859,16 @@ pub async fn handle_v1_asset_holders(
     let now_ms = asset_alias_observation_time_ms(&state);
     let world = state.world_view();
     let def_id = resolve_asset_definition_selector(&world, &definition_id, now_ms)?;
+    if !visibility.allows_asset_definition(&world, &def_id) {
+        return Err(explorer_not_found());
+    }
     let asset_alias = world
         .asset_definition(&def_id)
         .ok()
         .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
     record_account_literal_selection(&telemetry, ENDPOINT_ASSET_HOLDERS);
     let asset_literal = def_id.to_string();
-    let source = if let Some(account_id) = account_filter.as_ref() {
-        LiveIndexedSource::Indexed(world.assets_in_account_by_definition_iter(account_id, &def_id))
-    } else {
-        LiveIndexedSource::Full(world.asset_entries_by_definition_iter(&def_id))
-    };
+    let source = world.asset_entries_by_definition_iter(&def_id);
     let page = collect_live_page_with_budget(
         source,
         pagination.offset,
@@ -69401,6 +70879,15 @@ pub async fn handle_v1_asset_holders(
         ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES,
         ENDPOINT_ASSET_HOLDERS,
         |entry| {
+            if !visibility.allows_asset(&world, entry.id()) {
+                return None;
+            }
+            if account_filter
+                .as_ref()
+                .is_some_and(|account| entry.id().account() != account)
+            {
+                return None;
+            }
             if scope_filter
                 .as_ref()
                 .is_some_and(|scope| entry.id().scope() != scope)
@@ -69451,12 +70938,34 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<Response> {
+    handle_v1_asset_holders_query_with_app_visibility(
+        app,
+        state,
+        axum::extract::Path(definition_id),
+        NoritoJson(envelope),
+        telemetry,
+        DataspaceReadVisibility::all(),
+    )
+    .await
+}
+#[iroha_futures::telemetry_future]
+pub(crate) async fn handle_v1_asset_holders_query_with_app_visibility(
+    app: Option<crate::SharedAppState>,
+    state: Arc<CoreState>,
+    axum::extract::Path(definition_id): axum::extract::Path<String>,
+    NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
+    telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
+) -> Result<Response> {
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let mut generic_envelope = envelope.clone();
     let now_ms = asset_alias_observation_time_ms(&state);
     let (def_id, asset_alias) = {
         let world = state.world_view();
         let def_id = resolve_asset_definition_selector(&world, &definition_id, now_ms)?;
+        if !visibility.allows_asset_definition(&world, &def_id) {
+            return Err(explorer_not_found());
+        }
         let asset_alias = world
             .asset_definition(&def_id)
             .ok()
@@ -69526,6 +71035,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
             &def_id,
             asset_alias.as_ref(),
             None,
+            &visibility,
         )
         .await?
         {
@@ -69562,13 +71072,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     let asset_literal = def_id.to_string();
     let world_ref = &world;
     let def_id_ref = &def_id;
-    let source = if let Some(accounts) = account_candidates.as_ref() {
-        LiveIndexedSource::Indexed(accounts.iter().flat_map(move |account_id| {
-            world_ref.assets_in_account_by_definition_iter(account_id, def_id_ref)
-        }))
-    } else {
-        LiveIndexedSource::Full(world_ref.asset_entries_by_definition_iter(def_id_ref))
-    };
+    let source = world_ref.asset_entries_by_definition_iter(def_id_ref);
     if generic_mode {
         let holders = collect_live_rows_with_budget(
             source,
@@ -69576,6 +71080,9 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
             ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES,
             ENDPOINT_ASSET_HOLDERS_QUERY,
             |entry| {
+                if !visibility.allows_asset(&world, entry.id()) {
+                    return None;
+                }
                 Some(live_asset_holder_item(
                     entry.id(),
                     entry.value().as_ref(),
@@ -69609,6 +71116,9 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
         ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES,
         ENDPOINT_ASSET_HOLDERS_QUERY,
         move |entry| {
+            if !visibility.allows_asset(world_ref, entry.id()) {
+                return None;
+            }
             let projected = live_asset_holder_item(
                 entry.id(),
                 entry.value().as_ref(),
@@ -70444,6 +71954,7 @@ async fn handle_v1_asset_holders_query_aggregate(
     aggregate: Option<crate::filter::AggregateSpec>,
     sort: Vec<crate::filter::SortKey>,
     pagination: EffectivePagination,
+    visibility: DataspaceReadVisibility,
 ) -> Result<Response, Error> {
     let aggregate = aggregate.ok_or_else(|| aggregate_validation_error("aggregate is required"))?;
     validate_asset_holders_aggregate_request(&aggregate, &sort)?;
@@ -70453,6 +71964,7 @@ async fn handle_v1_asset_holders_query_aggregate(
         &def_id,
         asset_alias.as_ref(),
         filter.as_ref(),
+        &visibility,
     )
     .await?
     {
@@ -70482,6 +71994,9 @@ async fn handle_v1_asset_holders_query_aggregate(
         iroha_primitives::numeric::Quantity,
     > = BTreeMap::new();
     for asset in world.asset_entries_by_definition_iter(&def_id) {
+        if !visibility.allows_asset(&world, asset.id()) {
+            continue;
+        }
         accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value().as_ref(), None)?;
     }
     let alias_cache: BTreeMap<_, _> = map
@@ -70590,6 +72105,7 @@ async fn asset_holder_projection_query_rows(
     def_id: &AssetDefinitionId,
     endpoint_asset_alias: Option<&String>,
     filter: Option<&crate::filter::FilterExpr>,
+    visibility: &DataspaceReadVisibility,
 ) -> Result<Option<(Vec<norito::json::Map>, (u64, Option<String>), &'static str)>, Error> {
     let Some(checkpoint) = state.query_projection_checkpoint_snapshot() else {
         return Ok(None);
@@ -70610,9 +72126,10 @@ async fn asset_holder_projection_query_rows(
     let mut rows = Vec::new();
     let mut examined_rows = 0usize;
     let mut retained_bytes = 0usize;
+    let world = state.world_view();
     for shard in shards {
         let Some((archive, _source)) =
-            resolve_query_projection_archive_for_shard(app, state, &checkpoint, shard).await?
+            resolve_query_projection_archive_for_shard(app, state, &checkpoint, shard)?
         else {
             return Ok(None);
         };
@@ -70627,6 +72144,9 @@ async fn asset_holder_projection_query_rows(
             .as_deref()
             .or(endpoint_asset_alias.map(String::as_str));
         for row in rowset.rows {
+            // Charge every stored candidate before parsing, authorization, or
+            // caller filtering so a sparse hidden shard cannot evade the scan
+            // ceiling.
             examined_rows = examined_rows.checked_add(1).ok_or_else(|| {
                 app_live_budget_error(
                     ENDPOINT_ASSET_HOLDERS_QUERY,
@@ -70642,6 +72162,16 @@ async fn asset_holder_projection_query_rows(
                         "projection examined-row ceiling of {ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS} rows was exceeded"
                     ),
                 ));
+            }
+            let Ok(account_id) = AccountId::parse_encoded(&row.account_id) else {
+                continue;
+            };
+            let Ok(scope) = parse_asset_balance_scope_literal(&row.scope) else {
+                continue;
+            };
+            let asset_id = AssetId::with_scope(def_id.clone(), account_id, scope);
+            if !visibility.allows_asset(&world, &asset_id) {
+                continue;
             }
             let row_weight = core::mem::size_of::<norito::json::Map>()
                 .saturating_mul(2)
@@ -70834,7 +72364,7 @@ fn validate_query_projection_asset_holder_archive(
     }
     Ok(rowset)
 }
-async fn resolve_query_projection_archive_for_shard(
+fn resolve_query_projection_archive_for_shard(
     app: Option<&crate::SharedAppState>,
     _state: &CoreState,
     checkpoint: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpoint,
@@ -71000,14 +72530,6 @@ pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<impl IntoRespo
     // Serialize the DTO directly so new fields (e.g., SoraNet handshake/Puzzle config)
     // are exposed without hand-maintaining this JSON shape.
     Ok(infallible_pretty_json_response(&dto, "{}"))
-}
-#[iroha_futures::telemetry_future]
-pub async fn handle_post_configuration(
-    kiso: KisoHandle,
-    value: ConfigUpdateDTO,
-) -> Result<impl IntoResponse> {
-    kiso.update_with_dto(value).await?;
-    Ok((StatusCode::ACCEPTED, ()))
 }
 /// Return the exact current lane catalog and optimistic concurrency commitment.
 pub fn handle_get_nexus_lane_lifecycle(state: &CoreState) -> Result<LaneLifecycleStatusV1> {
@@ -71587,7 +73109,6 @@ pub async fn handle_status(
     accept: Option<axum::http::HeaderValue>,
     nexus_routing_policy: ActualLaneRoutingPolicy,
     authoritative_block_height: u64,
-    offline: Option<iroha_torii_shared::offline_api::OfflineStatus>,
 ) -> Result<Response> {
     iroha_logger::debug!(
         accept = ?accept,
@@ -71614,7 +73135,6 @@ pub async fn handle_status(
     status.nexus = Some(iroha_telemetry::metrics::NexusStatus::from_routing_policy(
         &nexus_routing_policy,
     ));
-    status.offline = offline;
     iroha_logger::debug!(
         blocks = status.blocks,
         blocks_non_empty = status.blocks_non_empty,

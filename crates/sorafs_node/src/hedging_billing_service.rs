@@ -8497,11 +8497,17 @@ mod tests {
             );
         }
         assert_eq!(
-            validate_hedging_billing_runtime_provider_handle("provider://sorafs/billing/dummy", true,),
+            validate_hedging_billing_runtime_provider_handle(
+                "provider://sorafs/billing/dummy",
+                true,
+            ),
             Err(HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle)
         );
         assert_eq!(
-            validate_hedging_billing_runtime_provider_handle("provider://sorafs/billing/dummy", false,),
+            validate_hedging_billing_runtime_provider_handle(
+                "provider://sorafs/billing/dummy",
+                false,
+            ),
             Err(HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle)
         );
     }

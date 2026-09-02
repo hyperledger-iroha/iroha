@@ -9,13 +9,12 @@
 //! ISI definitions can coordinate incentives deterministically. The repair module models
 //! audit-driven repair queues that tie proof failures to remediation workflows, and the
 //! transparency module defines canonical moderation ledger payloads/proofs for public SFM-4c
-//! verifiers. The `anonymity` module defines commitment-only citizen bonds and
-//! Kagemusha-backed fixed-denomination service notes. These provide economic
-//! Sybil resistance; they are explicitly not proof of personhood.
+//! verifiers. The `anonymity` module defines commitment-only citizen bonds for
+//! economic Sybil resistance; they are explicitly not proof of personhood.
 //! The `pop_registry` module retains the consensus-owned credential issuer
 //! commitments and signed root/revocation publications used by the existing
 //! moderation ledger.
-/// Commitment-only citizen bonds and anonymous Kagemusha service notes.
+/// Commitment-only citizen bonds.
 pub mod anonymity;
 /// Capacity marketplace records (provider declarations, telemetry, fees).
 pub mod capacity;
@@ -47,20 +46,9 @@ pub mod transparency;
 pub mod prelude {
     pub use super::{
         anonymity::{
-            SORAFS_ANONYMOUS_CANDIDACY_PROOF_DOMAIN_V1,
-            SORAFS_ANONYMOUS_CANDIDACY_PROOF_MAX_BYTES_V1, SORAFS_ANONYMOUS_CITIZEN_SET_MIN_V1,
-            SORAFS_ANONYMOUS_JUROR_ACTION_DOMAIN_V1, SORAFS_ANONYMOUS_JUROR_CANDIDACY_VERSION_V1,
-            SORAFS_ANONYMOUS_SERVICE_ESCROW_DOMAIN_V1,
-            SORAFS_ANONYMOUS_SERVICE_NOTE_MIN_AGE_BLOCKS_V1,
-            SORAFS_ANONYMOUS_SERVICE_NOTE_POLICY_VERSION_V1,
-            SORAFS_CITIZEN_BOND_SNAPSHOT_DOMAIN_V1, SORAFS_CITIZEN_BOND_VERSION_V1,
-            SorafsAnonymousCandidacyErrorV1, SorafsAnonymousCandidacyLedgerContextV1,
-            SorafsAnonymousEscrowErrorV1, SorafsAnonymousJurorCandidacyRecordV1,
-            SorafsAnonymousJurorCandidacyV1, SorafsAnonymousServiceEscrowStateV1,
-            SorafsAnonymousServiceEscrowV1, SorafsAnonymousServiceNotePolicyV1,
-            SorafsAnonymousServiceNoteV1, SorafsCitizenBondErrorV1, SorafsCitizenBondSnapshotV1,
+            SORAFS_CITIZEN_BOND_SNAPSHOT_DOMAIN_V1, SORAFS_CITIZEN_BOND_SNAPSHOT_MIN_V1,
+            SORAFS_CITIZEN_BOND_VERSION_V1, SorafsCitizenBondErrorV1, SorafsCitizenBondSnapshotV1,
             SorafsCitizenBondStateV1, SorafsCitizenBondV1,
-            sorafs_anonymous_candidacy_proof_digest_v1,
         },
         capacity::{
             CapacityAccrual, CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,

@@ -52,9 +52,8 @@ def test_summarize_fastpq_rollout_bundle_invokes_helper() -> None:
         ]
         assert len(calls) == 1
         command = calls[0]
-        assert command[0] == sys.executable
-        assert command[1].endswith("scripts/fastpq/rollout_manifest_summary.py")
-        assert command[2:] == [
+        assert command[0].endswith("scripts/fastpq/rollout_manifest_summary.py")
+        assert command[1:] == [
             "--manifest",
             str(manifest),
             "--bundle-dir",

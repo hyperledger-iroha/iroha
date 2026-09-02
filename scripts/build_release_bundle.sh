@@ -1,5 +1,19 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 -u BASH_XTRACEFD -u CDPATH -u GLOBIGNORE bash -p
 set -euo pipefail
+unset BASH_ENV ENV PYTHONHOME PYTHONPATH PS4 BASH_XTRACEFD CDPATH GLOBIGNORE \
+  CARGO_ENCODED_RUSTFLAGS CARGO_ENCODED_RUSTDOCFLAGS CARGO_HOME \
+  RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTDOC RUSTDOCFLAGS RUSTFLAGS
+for release_environment_name in ${!CARGO_BUILD_@}; do
+  unset "$release_environment_name"
+done
+for release_environment_name in ${!CARGO_TARGET_@}; do
+  case "$release_environment_name" in
+    *_LINKER|*_RUNNER|*_RUSTFLAGS|*_RUSTDOCFLAGS)
+      unset "$release_environment_name"
+      ;;
+  esac
+done
+export PYTHONNOUSERSITE=1
 
 usage() {
   cat <<'EOF'
@@ -7,11 +21,13 @@ Usage: build_release_bundle.sh --target <triple> --source-commit <hex> \
   --source-date-epoch <epoch> [options]
 
 Options:
-  --features <list>              Cargo features for the canonical build.
+  --features <list>              Reviewed Cargo features required by provenance.
   --target <triple>              Required reviewed Cargo target triple.
   --source-commit <hex>          Required reviewed full source commit.
   --source-date-epoch <epoch>    Required canonical release SOURCE_DATE_EPOCH.
-  --prebuilt-bin-dir <path>      Use reviewed prebuilt binaries; skips Cargo.
+  --prebuilt-bin-dir <path>      Required reviewed prebuilt binaries.
+  --trusted-prebuilt-provenance-sha256 <hex>
+                                Reviewed SHA256 of the prebuilt provenance manifest.
   --artifacts-dir <path>         Output directory (default: dist).
   --manifest-out <path>          Builder manifest output path.
   --zstd <path>                  Required exact zstd executable.
@@ -52,6 +68,7 @@ target=""
 source_commit=""
 source_date_epoch_arg=""
 prebuilt_bin_dir=""
+trusted_prebuilt_provenance_sha256=""
 artifacts_dir="dist"
 manifest_out=""
 trusted_zstd_sha256=""
@@ -82,6 +99,11 @@ while (($#)); do
     --prebuilt-bin-dir)
       require_value "$1" "${2-}"
       prebuilt_bin_dir="$2"
+      shift 2
+      ;;
+    --trusted-prebuilt-provenance-sha256)
+      require_value "$1" "${2-}"
+      trusted_prebuilt_provenance_sha256="$2"
       shift 2
       ;;
     --artifacts-dir)
@@ -131,9 +153,23 @@ if [[ ! "$source_commit" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
   printf '%s\n' '--source-commit must be a full 40- or 64-hex identifier' >&2
   exit 1
 fi
+if [[ -z "$prebuilt_bin_dir" ]]; then
+  printf '%s\n' '--prebuilt-bin-dir is required for deterministic release bundles' >&2
+  exit 1
+fi
+if [[ ! "$trusted_prebuilt_provenance_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  printf '%s\n' '--trusted-prebuilt-provenance-sha256 is required for prebuilts as 64 lowercase hex' >&2
+  exit 1
+fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+release_python=(python3 -I -S "$repo_root/scripts/run_isolated_release_tool.py")
+validate_release_source() {
+  python3 -I -S "$repo_root/scripts/check_release_feature_graph.py" \
+    --validate-source-commit "$source_commit" >/dev/null
+}
+validate_release_source
 version="$(awk -F\" '/^version *=/ { print $2; exit }' Cargo.toml)"
 safe_token "version" "$version"
 if [[ ! "$trusted_zstd_sha256" =~ ^[0-9a-f]{64}$ ]]; then
@@ -163,10 +199,9 @@ if [[ "$source_commit" != "$commit" ]]; then
 fi
 commit="$source_commit"
 source_date_epoch="$(
-  python3 - "$repo_root/scripts" "$source_date_epoch_arg" <<'EPOCH_PY'
+  "${release_python[@]}" --stdin "$repo_root/scripts" "$source_date_epoch_arg" <<'EPOCH_PY'
 import sys
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import parse_source_date_epoch
 
 print(parse_source_date_epoch(sys.argv[2]))
@@ -174,39 +209,7 @@ EPOCH_PY
 )"
 export SOURCE_DATE_EPOCH="$source_date_epoch"
 
-if [[ -z "$prebuilt_bin_dir" ]]; then
-  cargo_command=(cargo build --profile deploy --locked
-    --bin irohad --bin sorafs_governance_dag --bin iroha --bin kagami
-    --bin attachment_sanitizer)
-  if [[ "$os_tag" != "win" ]]; then
-    cargo_command+=(--bin sorafs_external_software_signer
-      --features irohad/external-software-signer-bin)
-  fi
-  if [[ -n "$target" ]]; then
-    cargo_command+=(--target "$target")
-  fi
-  if [[ -n "$features" ]]; then
-    cargo_command+=(--features "$features")
-  fi
-  log "Building canonical binaries (config=${config}, target=${target})"
-  "${cargo_command[@]}"
-  binary_root="$repo_root/target/$target/deploy"
-else
-  binary_root="$(
-    python3 - "$repo_root/scripts" "$prebuilt_bin_dir" <<'PREBUILT_DIR_PY'
-import os
-import sys
-from pathlib import Path
-
-sys.path.insert(0, sys.argv[1])
-from release_artifact_contract import scan_inventory_paths
-
-path = Path(os.path.abspath(sys.argv[2]))
-scan_inventory_paths(path)
-print(path)
-PREBUILT_DIR_PY
-  )"
-fi
+binary_root=""
 
 daemon_bin="iroha3d"
 governance_dag_bin="sorafs_governance_dag"
@@ -226,12 +229,11 @@ else
 fi
 
 artifacts_dir="$(
-  python3 - "$repo_root/scripts" "$artifacts_dir" <<'OUTPUT_DIR_PY'
+  "${release_python[@]}" --stdin "$repo_root/scripts" "$artifacts_dir" <<'OUTPUT_DIR_PY'
 import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import (
     create_fresh_directory,
     scan_inventory_paths,
@@ -252,12 +254,11 @@ if [[ -z "$manifest_out" ]]; then
   manifest_out="$artifacts_dir/${profile}-${version}-${os_tag}-${arch}-manifest.json"
 else
   manifest_out="$(
-    python3 - "$repo_root/scripts" "$manifest_out" <<'MANIFEST_PATH_PY'
+    "${release_python[@]}" --stdin "$repo_root/scripts" "$manifest_out" <<'MANIFEST_PATH_PY'
 import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import (
     create_fresh_directory,
     scan_inventory_paths,
@@ -288,6 +289,36 @@ cleanup() {
 }
 trap cleanup EXIT
 
+provenance_features="$features"
+provenance_binaries=(
+  --binary "$daemon_bin=irohad"
+  --binary "$governance_dag_bin=irohad"
+  --binary "$cli_bin=iroha_cli"
+  --binary "$utility_bin=iroha_kagami"
+  --binary "$sanitizer_bin=iroha_torii"
+)
+if [[ "$os_tag" != "win" ]]; then
+  provenance_binaries+=(--binary "$signer_bin=irohad")
+  if [[ -n "$provenance_features" ]]; then
+    provenance_features+=",irohad/external-software-signer-bin"
+  else
+    provenance_features="irohad/external-software-signer-bin"
+  fi
+fi
+binary_root="$stage_parent/prebuilt-bin"
+prebuilt_provenance_sha256="$(
+  "${release_python[@]}" "$repo_root/scripts/verify_release_prebuilt_provenance.py" \
+    --directory "$prebuilt_bin_dir" \
+    --trusted-manifest-sha256 "$trusted_prebuilt_provenance_sha256" \
+    --source-commit "$commit" \
+    --cargo-lock "$repo_root/Cargo.lock" \
+    --target "$target" \
+    --cargo-profile deploy \
+    --features "$provenance_features" \
+    "${provenance_binaries[@]}" \
+    --output-directory "$binary_root"
+)"
+
 mkdir -m 0755 "$stage_root/bin" "$stage_root/config"
 fixed_files=(
   "LICENSE"
@@ -308,7 +339,7 @@ executables=(
 stage_release_file() {
   local source="$1" relative="$2" mode="$3" executable="${4:-0}"
   mkdir -p "$(dirname "$stage_root/$relative")"
-  local command=(python3 "$repo_root/scripts/copy_release_file.py"
+  local command=("${release_python[@]}" "$repo_root/scripts/copy_release_file.py"
     --source "$source" --output "$stage_root/$relative" --mode "$mode")
   if [[ "$executable" == "1" ]]; then command+=(--require-executable); fi
   "${command[@]}"
@@ -374,14 +405,14 @@ fi
 
 tree_inventory='[]'
 for name in genesis.json client.toml config.toml; do
-  python3 "$repo_root/scripts/copy_release_file.py" \
+  "${release_python[@]}" "$repo_root/scripts/copy_release_file.py" \
     --source "$repo_root/defaults/nexus/$name" \
     --output "$stage_root/config/$name" \
     --mode 0644
   fixed_files+=("config/$name")
 done
 
-python3 - \
+"${release_python[@]}" --stdin \
   "$repo_root/scripts" \
   "$stage_root/PROFILE.toml" \
   "$profile" \
@@ -398,7 +429,6 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import exclusive_write_bytes, format_source_date_epoch
 
 (
@@ -435,7 +465,7 @@ exclusive_write_bytes(Path(profile_path), (rendered + "\n").encode("utf-8"))
 PROFILE_PY
 
 archive_command=(
-  python3 "$repo_root/scripts/build_release_tar_zst.py"
+  "${release_python[@]}" "$repo_root/scripts/build_release_tar_zst.py"
   --stage-root "$stage_root"
   --output "$archive_path"
   --prefix "${profile}-${version}-${os_tag}-${arch}"
@@ -454,12 +484,12 @@ log "Packaging deterministic bundle $archive_name"
 "${archive_command[@]}"
 
 archive_sha="$(
-  python3 "$repo_root/scripts/write_release_checksum.py" \
+  "${release_python[@]}" "$repo_root/scripts/write_release_checksum.py" \
     --artifact "$archive_path" \
     --output "$checksum_path" \
     --listed-name "$archive_name"
 )"
-python3 - \
+"${release_python[@]}" --stdin \
   "$repo_root/scripts" \
   "$manifest_out" \
   "$profile" \
@@ -474,11 +504,11 @@ python3 - \
   "$archive_path" \
   "$archive_sha" \
   "$trusted_zstd_sha256" \
+  "$prebuilt_provenance_sha256" \
   "$signer_support" <<'MANIFEST_PY'
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
 from release_artifact_contract import (
     canonical_json_bytes,
     exclusive_write_bytes,
@@ -500,6 +530,7 @@ from release_artifact_contract import (
     archive_path_raw,
     archive_sha,
     zstd_sha,
+    prebuilt_provenance_sha256,
     signer_support,
 ) = sys.argv[2:]
 epoch = int(epoch_raw)
@@ -520,6 +551,7 @@ manifest = {
     "arch": arch,
     "target": target,
     "features": features,
+    "prebuilt_provenance_sha256": prebuilt_provenance_sha256 or None,
     "external_software_signer": {
         "backend": "software" if signer_support == "software-key-qualified" else None,
         "broker_alias": "libexec/iroha-runtime-provider-broker-v1"
@@ -550,4 +582,5 @@ exclusive_write_bytes(
 )
 MANIFEST_PY
 
+validate_release_source
 printf '%s\n' "$archive_path"

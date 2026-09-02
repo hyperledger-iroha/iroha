@@ -1554,13 +1554,12 @@ def _production_liveness_release_inventory_errors(
 
     expected_data_model_modules = [
         "block::consensus_v2::finality::tests",
-        "offline::kagemusha_v4_topup_provenance_tests",
         "block::consensus_v2::tests",
     ]
     if shell_array("production_data_model_modules") != expected_data_model_modules:
         errors.append(
             f"{release_path}: production data-model routing must name the exact "
-            "finality, offline compact-QC, and context-identity modules"
+            "finality and context-identity modules"
         )
     expected_data_model_list = (
         'production_data_model_unit_list="$(run_cargo test --locked --offline '

@@ -2177,10 +2177,10 @@ pub mod torii {
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024); // 8 MiB
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
-    /// This includes SCCP submissions and Kagemusha top-up/redemption commands.
+    /// This includes SCCP submissions and Offline Cash V1 top-up/redemption commands.
     pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
     /// Absolute deadline for reading one admitted proof-bearing request body.
-    /// This includes SCCP submissions and Kagemusha top-up/redemption commands.
+    /// This includes SCCP submissions and Offline Cash V1 top-up/redemption commands.
     pub const PROOF_BODY_READ_TIMEOUT_MS: u64 = 15_000;
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
     pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(8 * 1024 * 1024); // 8 MiB/s
@@ -2526,8 +2526,8 @@ pub mod torii {
         /// Whether verified finalized global-beacon seeds are mixed into faucet challenges.
         pub const POW_BEACON_SEED_ENABLED: bool = false;
     }
-    /// Kagemusha command-submission defaults.
-    pub mod kagemusha_commands {
+    /// Offline Cash V1 command-submission defaults.
+    pub mod offline_cash_v1_commands {
         use iroha_primitives::numeric::Quantity;
         /// Maximum authorized value for one offline transaction.
         pub fn max_tx_value() -> Quantity {
@@ -4644,54 +4644,6 @@ pub mod soranet {
 }
 /// Settlement defaults.
 pub mod settlement {
-    /// Offline settlement defaults.
-    pub mod offline {
-        use std::path::PathBuf;
-        /// Maximum estimated decoded Kagemusha verifier bytes retained by one node.
-        pub const KAGEMUSHA_MAX_DECODED_BYTES: u64 = 256 * 1024 * 1024;
-        /// No Kagemusha release policy is trusted unless an operator configures one.
-        #[must_use]
-        pub const fn kagemusha_release_policy_path() -> Option<PathBuf> {
-            None
-        }
-        /// No Kagemusha artifact catalog is loaded unless an operator configures one.
-        #[must_use]
-        pub const fn kagemusha_artifact_dir() -> Option<PathBuf> {
-            None
-        }
-        /// No prequalified Kagemusha catalog is trusted unless an operator configures its seal.
-        #[must_use]
-        pub const fn kagemusha_catalog_qualification_seal_path() -> Option<PathBuf> {
-            None
-        }
-        /// No promotion controller is trusted unless an operator pins its public key.
-        #[must_use]
-        pub const fn kagemusha_promotion_controller_public_key() -> Option<iroha_crypto::PublicKey>
-        {
-            None
-        }
-        /// No catalog-revalidation authority key id is trusted unless explicitly configured.
-        #[must_use]
-        pub const fn kagemusha_catalog_revalidation_authority_key_id() -> Option<String> {
-            None
-        }
-        /// No catalog-revalidation authority key is trusted unless explicitly configured.
-        #[must_use]
-        pub const fn kagemusha_catalog_revalidation_authority_public_key()
-        -> Option<iroha_crypto::PublicKey> {
-            None
-        }
-        /// No root-custodied promotion reservation is read unless explicitly configured.
-        #[must_use]
-        pub const fn kagemusha_promotion_reservation_path() -> Option<PathBuf> {
-            None
-        }
-        /// No validator qualification seal is published unless explicitly configured.
-        #[must_use]
-        pub const fn kagemusha_validator_qualification_seal_path() -> Option<PathBuf> {
-            None
-        }
-    }
     /// Router defaults (shadow price, guard rails).
     pub mod router {
         /// Default TWAP window used for conversion quotes (seconds).

@@ -3536,6 +3536,47 @@ mod tests {
         retry.release().await;
     }
     #[tokio::test]
+    async fn panicking_upgrade_callback_releases_ws_permit_capacity() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1,
+            ws_per_ip_max_sessions: 1,
+            ws_rate_per_ip_per_min: 0,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg, test_network_id());
+        let ip: IpAddr = "192.0.2.45".parse().expect("test IP");
+        let permit = bus.pre_ws_handshake(ip).await.expect("reserve slot");
+        let result = crate::panic_recovery::catch_async_recoverable(async move {
+            let _permit = permit;
+            panic!("injected upgrade callback panic");
+        })
+        .await;
+        assert!(result.is_err());
+        timeout(Duration::from_millis(100), async {
+            while bus.status().await.sessions_total != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("panic cleanup releases the slot");
+        let mut retry = bus
+            .pre_ws_handshake(ip)
+            .await
+            .expect("capacity is reusable after a callback panic");
+        retry.release().await;
+    }
+    #[tokio::test]
     async fn cancelled_ws_reservation_cannot_leak_capacity_at_lock_boundaries() {
         let cfg = iroha_config::parameters::actual::Connect {
             enabled: true,

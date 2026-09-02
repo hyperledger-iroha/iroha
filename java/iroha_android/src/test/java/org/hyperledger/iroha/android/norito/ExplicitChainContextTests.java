@@ -27,7 +27,6 @@ import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstruction;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
-import org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProver;
 import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
@@ -54,7 +53,7 @@ public final class ExplicitChainContextTests {
         Class.forName(packageName + variant + "Instruction");
         fail("retired generic instruction class is still present: " + variant);
       } catch (ClassNotFoundException expected) {
-        // Expected: ABI V1 exposes only typed Kagemusha movement flows.
+        // Expected: ABI V1 exposes only typed first-release movement flows.
       }
       for (final Method method : NativeSignerBridge.class.getDeclaredMethods()) {
         assertFalse(method.getName().equals("encode" + variant + "SignedTransaction"));
@@ -223,29 +222,6 @@ public final class ExplicitChainContextTests {
     assertMethodHasIntParameter(
         NativeSignerBridge.class, "nativeEncodeRegisterZkAssetSignedTransaction", 2);
 
-    assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "prepareRequestAuthorization", 1);
-    assertMethodHasIntParameter(KagemushaRecursiveSpendProver.class, "prepareTopUp", 1);
-    assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "prepareRecipientPaymentRequest", 1);
-    assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "createRecipientLineageQueryV2", 1);
-    assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "buildRedeemRequestV5", 2);
-    assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "prepareRedemptionChangeV5", 3);
-    assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativePrepareAuthorizationV3", 1);
-    assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativePrepareTopUpV5", 1);
-    assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativePrepareRecipientRequestV2", 1);
-    assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativeCreateRecipientLineageQueryV2", 1);
-    assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativeBuildRedeemRequestV5", 5);
-    assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativePrepareRedemptionChangeV5", 5);
   }
 
   @Test

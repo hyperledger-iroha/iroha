@@ -714,6 +714,7 @@ fn run_lifecycle_active_height(
     mut active_runner: ProductionLifecycleActiveRunnerBorrowV1,
     mut lane_work: V2LaneWorkAdapter,
     context: &wire::HeightContext,
+    proofs_of_possession: &[Vec<u8>],
     context_store: &crate::sumeragi::v2_context_store::V2ContextStore,
     state: &Arc<State>,
     queue: &Arc<Queue>,
@@ -742,7 +743,7 @@ fn run_lifecycle_active_height(
     retransmit_interval: Duration,
     first_height_genesis: Option<&SignedBlock>,
     genesis_account: &AccountId,
-) -> Result<Option<FinalizedLifecycleHeightV1>, V2RunnerError> {
+) -> Result<HeightRunOutcome<FinalizedLifecycleHeightV1>, V2RunnerError> {
     let mut next_block_sync_attempt =
         initial_block_sync_deadline(height_started_at, round_timeout, *eager_block_sync);
     let mut next_recovered_decision_fetch_retransmit =
@@ -769,7 +770,7 @@ fn run_lifecycle_active_height(
         }
         if shutdown_signal.is_sent() {
             activated.into_clean_shutdown(&mut active_runner)?;
-            return Ok(None);
+            return Ok(HeightRunOutcome::Shutdown);
         }
         let now = Instant::now();
         liveness_watchdog.poll(now);
@@ -1685,6 +1686,29 @@ fn run_lifecycle_active_height(
         }
 
         if rollover_ready {
+            if context.height == u64::MAX {
+                activated.with_runner_runtime(
+                    &mut active_runner,
+                    |_owner, executor, _services, _local_proposal| {
+                        let (receipt, artifact) = executor.durable_finality().ok_or_else(|| {
+                            V2RunnerError::Service(
+                                "terminal lifecycle lost its durable finality owner".to_owned(),
+                            )
+                        })?;
+                        authenticate_terminal_complete_tip(
+                            state.as_ref(),
+                            kura.as_ref(),
+                            context,
+                            proofs_of_possession,
+                            artifact,
+                            receipt,
+                        )?;
+                        Ok::<_, V2RunnerError>(())
+                    },
+                )?;
+                activated.into_clean_shutdown(&mut active_runner)?;
+                return Ok(HeightRunOutcome::Terminal);
+            }
             let (prepared_successor, retained_merge_sidecars, cleanup) = finalize_lifecycle_height(
                 activated,
                 &mut active_runner,
@@ -1801,7 +1825,7 @@ fn run_lifecycle_active_height(
                 );
             }
             *eager_block_sync = retain_eager_block_sync(false, admitted_discovered_commit_qc);
-            return Ok(Some(FinalizedLifecycleHeightV1 {
+            return Ok(HeightRunOutcome::Successor(FinalizedLifecycleHeightV1 {
                 verified_context: prepared_successor.verified_context,
                 lifecycle_storage_authority: prepared_successor.lifecycle_storage_authority,
                 pending_successor_activation: prepared_successor.pending_activation,
@@ -1836,6 +1860,9 @@ pub(super) fn run_non_pending_lifecycle_loop(
     >,
     global_beacon_partial_signer: Option<
         Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
+    >,
+    offline_cash_mint_finality_authority: Option<
+        Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
     >,
     network: crate::IrohaNetwork,
     block_rx: Arc<FairV2Ingress>,
@@ -2040,7 +2067,8 @@ pub(super) fn run_non_pending_lifecycle_loop(
             Arc::clone(&block_rx),
             Arc::clone(&kura_replica_advert_refresh),
             exact_output_service_owner,
-        );
+        )
+        .with_offline_cash_mint_finality_authority(offline_cash_mint_finality_authority.clone());
         let mut preactivation = launch_non_pending_lifecycle_height(
             owner,
             launch_inputs,
@@ -2338,6 +2366,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
             active_runner,
             lane_work,
             &context,
+            verified_context.proofs_of_possession(),
             &context_store,
             &state,
             &queue,
@@ -2369,8 +2398,20 @@ pub(super) fn run_non_pending_lifecycle_loop(
             first_height_genesis.as_ref(),
             &genesis_account,
         )?;
-        let Some(finalized) = finalized else {
-            return Ok(());
+        let finalized = match finalized {
+            HeightRunOutcome::Successor(finalized) => finalized,
+            HeightRunOutcome::Terminal => {
+                wait_for_terminal_shutdown(
+                    context.height,
+                    context.id(),
+                    &ingress_ready,
+                    &block_rx,
+                    &wake_rx,
+                    &shutdown_signal,
+                );
+                return Ok(());
+            }
+            HeightRunOutcome::Shutdown => return Ok(()),
         };
         verified_context = finalized.verified_context;
         lifecycle_storage_authority = finalized.lifecycle_storage_authority;

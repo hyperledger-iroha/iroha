@@ -748,11 +748,7 @@ enum NativeBridgeError: Error, Equatable {
     case offlineSerialize
     case offlineCommitment
     case offlineBlinding
-    case kagemushaProve
-    case kagemushaRecursiveSpendV4Unavailable
-    case kagemushaRecursiveSpendV4Artifact
-    case kagemushaBusy
-    case invalidKagemushaVerifierOutput
+    case offlineCashV1
     case unsupportedAlgorithm
     case metadataTarget
     case metadataKey
@@ -817,10 +813,7 @@ enum NativeBridgeError: Error, Equatable {
         case -304: return .offlineSerialize
         case -305: return .offlineCommitment
         case -306: return .offlineBlinding
-        case -311: return .kagemushaProve
-        case -316: return .kagemushaRecursiveSpendV4Unavailable
-        case -317: return .kagemushaRecursiveSpendV4Artifact
-        case -318: return .kagemushaBusy
+        case -311: return .offlineCashV1
         case -402: return .multisigSpec
         case -406: return .identifierReceipt
         case -408: return .accountOnboardingBody
@@ -866,7 +859,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         processHandle ?? currentHandle
     }
 
-    func resolveKagemushaV2Symbol<T>(_ symbol: String, as type: T.Type) -> T? {
+    func resolveNativeSymbol<T>(_ symbol: String, as type: T.Type) -> T? {
         #if canImport(Darwin)
         guard let bridgeHandle, let address = dlsym(bridgeHandle, symbol) else { return nil }
         return unsafeBitCast(address, to: type)
@@ -877,24 +870,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    static func copyKagemushaNativeArchiveOutput(
-        pointer: UnsafeMutablePointer<UInt8>?,
-        length: CUnsignedLong,
-        free: (UnsafeMutablePointer<UInt8>?) -> Void
-    ) throws -> Data {
-        guard let pointer else {
-            throw NativeBridgeError.nullPointer
-        }
-        defer {
-            free(pointer)
-        }
-        guard length <= CUnsignedLong(
-            KagemushaRecursiveSpend.artifactMaximumInMemoryArchiveBytes
-        ) else {
-            throw NativeBridgeError.kagemushaProve
-        }
-        return Data(bytes: pointer, count: Int(length))
-    }
     #endif
 
     static let privacyCompiledProfileCatalogArchiveMaxBytes = 256 * 1024
@@ -3747,20 +3722,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             && sorafsReferenceBuildOrderbookSettlementReceiptFn != nil
             && sorafsReferenceDeriveOrderbookOrderIdFn != nil
             && freeFn != nil
-        #else
-        return false
-        #endif
-    }
-
-    /// Whether ABI 23 exposes the complete selector-free V4 Kagemusha surface.
-    public var isKagemushaRecursiveSpendBridgeAvailable: Bool {
-        #if canImport(Darwin)
-        guard bridgeEnabledForRuntime else { return false }
-        return loadedBridgeAbiVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
-            && kagemushaNativeContractRevision() == KagemushaRecursiveSpend.nativeContractRevision
-            && hasKagemushaRecursiveSpendV4Symbols(
-                KagemushaRecursiveSpend.requiredNativeSymbols + ["connect_norito_free"]
-            )
         #else
         return false
         #endif

@@ -115,8 +115,9 @@ pub fn compute_consensus_handshake_caps_from_world(
             iroha_data_model::block::consensus_v2::NPOS_BLS_DOMAIN.to_string(),
         ),
     };
-    let canon = consensus_genesis_params_from_parameters(frozen_mode, s_params, signed_v2_context)
-        .map_err(str::to_owned)?;
+    let canon =
+        consensus_genesis_params_from_parameters(frozen_mode, s_params, signed_v2_context.clone())
+            .map_err(str::to_owned)?;
     let fingerprint = compute_consensus_parameters_fingerprint(&canon)?;
     let mut config_caps = *config_caps;
     config_caps.execution_policy_hash = signed_v2_context.execution_policy_hash;
@@ -233,8 +234,7 @@ mod tests {
                 .expect("test block bound must be non-zero"),
             mode: ConsensusGenesisModeParams::Permissioned,
             protocol_version: PROTO_VERSION,
-            v2_context:
-                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            v2_context: crate::offline_cash_v1_test_fixtures::genesis_context_parameters(),
         }
     }
     #[test]
@@ -278,7 +278,7 @@ mod tests {
                 activation_lag_blocks: 1,
                 slashing_delay_blocks: 9,
             }),
-            ..permissioned_params
+            ..permissioned_params.clone()
         };
         let fp_permissioned = compute_consensus_parameters_fingerprint(&permissioned_params)
             .expect("permissioned fixture must fingerprint");

@@ -2359,36 +2359,6 @@ fn push_into_queue_error_sets_reject_code_header() {
     );
 }
 #[test]
-fn push_into_queue_confidential_policy_rejection_maps_to_forbidden() {
-    use nonzero_ext::nonzero;
-    let err = super::Error::PushIntoQueue {
-        source: Box::new(queue::Error::ConfidentialPolicyAdmissionRejected {
-            reason: TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-                "shield not permitted by policy".to_owned(),
-            )),
-            detail: "shield not permitted by policy".to_owned(),
-        }),
-        backpressure: queue::BackpressureState::Healthy {
-            queued: 0,
-            capacity: nonzero!(1_usize),
-        },
-    };
-    let response = err.into_response();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert_eq!(
-        torii_response_header(&response, "x-iroha-reject-code"),
-        Some("PRTRY:CONFIDENTIAL_POLICY_REJECTED")
-    );
-    let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
-        .expect("response body")
-        .to_bytes();
-    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&body).expect("queue error envelope");
-    assert_eq!(payload.code, "queue_confidential_policy_rejected");
-    let details = payload.details.expect("queue error details");
-    assert_eq!(details.retry_after_seconds, None);
-    assert_eq!(details.queue.expect("queue snapshot").state, "healthy");
-}
-#[test]
 fn push_into_queue_unresolved_route_maps_to_bad_request() {
     use nonzero_ext::nonzero;
     let err = super::Error::PushIntoQueue {

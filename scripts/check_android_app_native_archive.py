@@ -230,7 +230,6 @@ def strict_provenance(payload: bytes) -> dict[str, object]:
         "cargo_locked",
         "privacy_production_enabled",
         "cargo_features",
-        "kagemusha_production_authorization_sha256",
         "build_environment",
         "source_commit",
         "source_tree_dirty",
@@ -252,13 +251,6 @@ def strict_provenance(payload: bytes) -> dict[str, object]:
         or decoded["cargo_features"] != ["privacy-production-enabled"]
     ):
         fail("native provenance does not bind the production ABI-23 release")
-    authorization = decoded["kagemusha_production_authorization_sha256"]
-    if authorization is not None and (
-        not isinstance(authorization, str)
-        or re.fullmatch(r"[0-9a-f]{64}", authorization) is None
-        or authorization == "0" * 64
-    ):
-        fail("native provenance Kagemusha production authorization is invalid")
     if decoded["android_ndk_revision"] != ANDROID_NDK_BASE_REVISION:
         fail("native provenance Android NDK base revision is not exact")
     build_environment = decoded["build_environment"]

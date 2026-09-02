@@ -176,7 +176,24 @@ async fn router_builds_under_current_features() {
         StatusCode::NOT_FOUND,
         "the extensionless OpenAPI compatibility alias must remain absent"
     );
-    // A couple of smoke GETs that are present regardless of features
+    // These operator reads are present regardless of telemetry features.
+    let evidence_list = app
+        .clone()
+        .oneshot(fixtures::operator_signed_request(
+            &cfg.common.key_pair,
+            Request::builder()
+                .uri(Uri::from_static("/v1/sumeragi/evidence"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+            &[],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        evidence_list.status(),
+        StatusCode::OK,
+        "the committed evidence list must not depend on developer telemetry"
+    );
     let resp1 = app
         .clone()
         .oneshot(fixtures::operator_signed_request(
@@ -395,7 +412,7 @@ async fn router_builds_under_current_features() {
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
-async fn router_exposes_status_with_operator_telemetry_profile() {
+async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
     // Build with telemetry enabled
     let cfg = mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -432,6 +449,8 @@ async fn router_exposes_status_with_operator_telemetry_profile() {
         )
         .0
     };
+    let telemetry_profile = iroha_config::parameters::actual::TelemetryProfile::Operator;
+    assert!(!telemetry_profile.developer_outputs_enabled());
     let torii = iroha_torii::Torii::new_with_handle(
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
@@ -445,10 +464,7 @@ async fn router_exposes_status_with_operator_telemetry_profile() {
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::MaybeTelemetry::from_profile(
-            Some(telemetry),
-            iroha_config::parameters::actual::TelemetryProfile::Operator,
-        ),
+        iroha_torii::MaybeTelemetry::from_profile(Some(telemetry), telemetry_profile),
     )
     .expect("valid Torii route-matrix fixture");
     let runtime = torii
@@ -478,6 +494,84 @@ async fn router_exposes_status_with_operator_telemetry_profile() {
                 StatusCode::OK | StatusCode::TOO_MANY_REQUESTS | StatusCode::INTERNAL_SERVER_ERROR
             ),
             "path={path}"
+        );
+    }
+
+    let evidence_count = app
+        .clone()
+        .oneshot(fixtures::operator_signed_request(
+            &cfg.common.key_pair,
+            Request::builder()
+                .uri(Uri::from_static("/v1/sumeragi/evidence/count"))
+                .header(axum::http::header::ACCEPT, "application/json")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+            &[],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(evidence_count.status(), StatusCode::OK);
+    let evidence_count: json::Value = json::from_slice(
+        &http_body_util::BodyExt::collect(evidence_count.into_body())
+            .await
+            .unwrap()
+            .to_bytes(),
+    )
+    .unwrap();
+    let count = evidence_count
+        .get("count")
+        .and_then(json::Value::as_u64)
+        .expect("evidence count response exposes a numeric count");
+
+    let evidence_list = app
+        .clone()
+        .oneshot(fixtures::operator_signed_request(
+            &cfg.common.key_pair,
+            Request::builder()
+                .uri(Uri::from_static("/v1/sumeragi/evidence"))
+                .header(axum::http::header::ACCEPT, "application/json")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+            &[],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        evidence_list.status(),
+        StatusCode::OK,
+        "committed evidence is operator state, not a developer telemetry output"
+    );
+    let evidence_list: json::Value = json::from_slice(
+        &http_body_util::BodyExt::collect(evidence_list.into_body())
+            .await
+            .unwrap()
+            .to_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        evidence_list.get("total").and_then(json::Value::as_u64),
+        Some(count),
+        "evidence list and count must expose the same committed snapshot cardinality"
+    );
+
+    for query in ["limit=1&limit=2", "unknown=1"] {
+        let uri = format!("/v1/sumeragi/evidence?{query}");
+        let response = app
+            .clone()
+            .oneshot(fixtures::operator_signed_request(
+                &cfg.common.key_pair,
+                Request::builder()
+                    .uri(uri.as_str())
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+                &[],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "operator-authenticated evidence query `{query}` must fail closed"
         );
     }
 

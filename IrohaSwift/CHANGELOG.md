@@ -12,9 +12,12 @@ All notable changes to `IrohaSwift` are documented in this file.
   contract activity/event reads plus the generic event SSE feed now use the
   client's default canonical request signer when configured, while remaining
   anonymous for public dataspaces.
-- Removed generic shield, shielded-transfer, and unshield request/encoder/native
-  signer surfaces from ABI V1. Typed Kagemusha top-up/redemption and their
-  underlying proof codecs remain available.
+- Added the aggregate-balance `OfflineCashV1` wire, `oc1:` text, device-lifecycle
+  surface, and fail-closed wallet orchestration. The wallet supports concurrent
+  head-independent requests, durable idempotent staging and acknowledgements,
+  unbounded inbox-prefix folding, immediately usable send successors,
+  byte-identical retries, partial/full redemption, and offline epoch-local counter
+  rollover without a software fallback.
 - Replaced the governance mutation boundary with closed public-only request
   types. Deploy proposals no longer expose ignored limits and now use typed
   manifest provenance; ZK public inputs are exact and shared across legacy,

@@ -485,8 +485,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let network_id = test_network_id();
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         wire::HeightContext {
-            network_id: test_network_id(),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 2,
             epoch: 0,
@@ -497,6 +502,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -511,8 +518,13 @@ mod tests {
         }
     }
     fn parent_qc(roster: &[wire::ValidatorPower]) -> wire::QuorumCertificate {
+        let network_id = test_network_id();
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, roster,
+            );
         let parent_context = wire::HeightContext {
-            network_id: test_network_id(),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -523,6 +535,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(roster).expect("quorum"),
             roster: roster.to_vec(),
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -553,13 +567,14 @@ mod tests {
             },
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"chunk fixture parent state"),
-                Hash::new(b"chunk fixture post state"),
-                Hash::new(b"chunk fixture ordinary writes"),
-                1,
-                Hash::new(b"chunk fixture executed block wire"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new(b"chunk fixture parent state"),
+                    Hash::new(b"chunk fixture post state"),
+                    Hash::new(b"chunk fixture ordinary writes"),
+                    1,
+                    Hash::new(b"chunk fixture executed block wire"),
+                ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xA5; 48],
         }
@@ -883,6 +898,55 @@ mod tests {
             session.payload_allocation_attempts(),
             1,
             "a later unique shard cannot allocate another payload"
+        );
+    }
+    #[test]
+    fn noncanonical_systematic_padding_terminally_poisoned() {
+        let payload = b"payload whose final systematic shard has trailing padding";
+        let (context, encoded) = encode_fixture(payload);
+        let chunk_size = usize::try_from(context.da_layout.chunk_size_bytes).expect("chunk size");
+        let data_shards = usize::from(context.da_layout.data_shards);
+        let stripe_width =
+            usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
+        let padding_offset = payload.len() % chunk_size;
+        assert_ne!(
+            padding_offset, 0,
+            "fixture must leave trailing zero padding"
+        );
+        let payload_chunk_index = (payload.len() - 1) / chunk_size;
+        let manifest_index =
+            (payload_chunk_index / data_shards) * stripe_width + payload_chunk_index % data_shards;
+
+        let mut noncanonical_chunks = encoded.chunks.clone();
+        noncanonical_chunks[manifest_index][padding_offset] ^= 0x80;
+        let manifest = wire::PayloadManifest::derive(
+            &context,
+            encoded.manifest.round,
+            encoded.manifest.subject,
+            encoded.manifest.payload_size_bytes,
+            &noncanonical_chunks,
+        )
+        .expect("derive a manifest committing only noncanonical trailing padding");
+        let mut session = V2ChunkSession::open(&context, manifest).expect("open session");
+        for (index, chunk) in noncanonical_chunks.iter().enumerate() {
+            if index % stripe_width >= data_shards {
+                continue;
+            }
+            session
+                .admit_bytes(u32::try_from(index).expect("index"), chunk)
+                .expect("buffer committed systematic shard");
+        }
+
+        assert!(matches!(
+            session.reconstruct(),
+            Err(V2ChunkError::NoncanonicalCodeword)
+        ));
+        assert_eq!(session.reconstruction_attempts(), 1);
+        assert_eq!(session.payload_allocation_attempts(), 1);
+        assert!(session.is_terminally_failed());
+        assert!(
+            session.chunks.is_empty(),
+            "poisoning releases systematic shard buffers"
         );
     }
     #[test]

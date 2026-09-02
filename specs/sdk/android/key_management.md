@@ -51,7 +51,7 @@ lookup/generation.
 
 | Preference | Behaviour | Typical Use |
 |------------|-----------|-------------|
-| `STRONGBOX_REQUIRED` | Rejects the call unless a StrongBox-backed provider exists and can satisfy the alias. | Production governance keys when StrongBox inventory is guaranteed. |
+| `STRONGBOX_REQUIRED` | Rejects the call unless a StrongBox-backed provider exists and can satisfy the alias. | An explicitly selected StrongBox qualification profile only. |
 | `STRONGBOX_PREFERRED` | Tries StrongBox first, then other hardware providers, ends with software only if downgrades are allowed. | Shared builds that must prefer StrongBox but continue functioning when devices lack it. |
 | `HARDWARE_REQUIRED` / `HARDWARE_PREFERRED` | Enforces/Prefers any hardware-backed provider (TEE or StrongBox) before falling back to software. | Standard device fleets where StrongBox coverage is mixed. |
 | `SOFTWARE_ONLY` | Bypasses hardware providers entirely; always uses the deterministic software implementation. | Production software custody, emulator automation, offline recovery tools, and CI fixtures. |

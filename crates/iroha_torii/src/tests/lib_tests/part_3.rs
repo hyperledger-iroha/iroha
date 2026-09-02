@@ -1861,6 +1861,10 @@ async fn asset_definition_get_returns_full_definition_by_base58_id() {
     bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
     let response = handler_asset_definition_get(
         State(app),
+        axum::http::Method::GET,
+        format!("/v1/assets/definitions/{definition_id}")
+            .parse()
+            .expect("valid asset definition uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(definition_id.to_string()),
@@ -1970,6 +1974,10 @@ async fn asset_definition_get_reports_expired_pending_cleanup_status_after_grace
     record_latest_committed_header_for_test(&app, 2, after_grace);
     let response = handler_asset_definition_get(
         State(app),
+        axum::http::Method::GET,
+        format!("/v1/assets/definitions/{definition_id}")
+            .parse()
+            .expect("valid asset definition uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(definition_id.to_string()),
@@ -2339,7 +2347,7 @@ async fn proof_record_get_advertises_cache_and_304() {
     assert_eq!(wildcard.status(), StatusCode::NOT_MODIFIED);
 }
 #[tokio::test]
-async fn proof_record_get_reports_fanout_headers_when_dataspaces_are_configured() {
+async fn public_proof_record_get_reads_global_protocol_artifacts_across_dataspaces() {
     let mut app = mk_app_state_for_tests();
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let id = seed_proof_record(&app, "debug-proof", [0xCD; 32]);

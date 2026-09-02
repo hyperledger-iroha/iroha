@@ -340,8 +340,13 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             height,
             "fixture finality must form one contiguous chain",
         );
+        let network_id = *state.network_id_ref();
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = HeightContext {
-            network_id: *state.network_id_ref(),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
@@ -352,6 +357,8 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid finality quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"state merge finality nexus context"),
             execution_policy_hash: Hash::new(b"state merge finality execution policy"),
             da_layout: DataAvailabilityLayout {

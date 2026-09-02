@@ -19,6 +19,9 @@ Responses can be negotiated with the `Accept` header
 URL encoding and a strict string extractor: unknown keys, duplicate keys,
 whitespace, signs, leading zeroes, non-decimal integers, and non-canonical kind
 spellings are rejected.
+An omitted `Accept` selects canonical Norito. Unacceptable or malformed
+negotiation returns a JSON `406` error, and negotiated responses declare
+`Vary: Accept`.
 
 ### `GET /v1/sumeragi/evidence/count`
 
@@ -32,8 +35,11 @@ spellings are rejected.
 }
 ```
 
-- Binary parity: `CountResponse` (`norito::derive::NoritoSerialize`) is sent
-  when `Accept: application/x-norito` is supplied.【crates/iroha_torii/src/routing.rs:263】【crates/iroha_torii/src/routing.rs:2855】
+- Binary parity: `SumeragiEvidenceCountResponse` under stable schema
+  `iroha.torii.v1.sumeragi.evidence.count.response` is sent when
+  `Accept: application/x-norito` is supplied.
+- JSON and Norito count bodies are measured and limited to 1 KiB before their
+  exact-size allocation.
 
 ### `GET /v1/sumeragi/evidence`
 
@@ -78,8 +84,15 @@ Response JSON is a Norito JSON object:
 ```
 
 The fixed keys mirror the JSON produced by `evidence_to_json`. When
-`Accept: application/x-norito` the response is a binary
-`EvidenceListWire` payload (`total: u64`, `items: Vec<EvidenceRecord>`).【crates/iroha_torii/src/routing.rs:2915】【crates/iroha_torii/src/routing.rs:2954】
+`Accept: application/x-norito` the response is the shared binary
+`SumeragiEvidenceListWireResponse` payload (`total: u64`,
+`items: Vec<EvidenceRecord>`).
+
+The closed JSON projection has a 1 MiB response ceiling. The full-proof Norito
+response has a 17 MiB ceiling: canonical proof payloads retained in WSV are
+jointly limited to 16 MiB, leaving bounded envelope headroom. Both formats use
+count-first bounded encoders, so an oversized body is rejected without first
+materializing an unbounded response.
 
 `SumeragiV2Equivocation` JSON includes `class`, `height`, `view`, `epoch`,
 `signer`, `context_id`, and canonical hashes of both retained signed artifacts.
@@ -98,7 +111,9 @@ penalty booleans and nullable terminal-height fields are not emitted. Candidate
 blocks carry at most eight proofs and 4 MiB of encoded evidence in canonical
 key order; every follower anchors the embedded context to immutable committed
 v2 context history, revalidates the self-contained proof, and only permits
-penalties to consume an admission from a prior committed block.
+penalties to consume an admission from a prior committed block. The committed
+table additionally holds at most 124 records and 16 MiB of canonical proof
+payloads after deterministic stale-terminal reclamation.
 
 Evidence mutation is deliberately absent from Torii. Evidence is admitted only
 through the authenticated consensus peer path and signed-block proof batches;
@@ -115,9 +130,8 @@ threshold-beacon protocol.
 
 ## Proof & Pipeline SSE (`GET /v1/events/sse`)
 
-The SSE handler and DTO live at
-`crates/iroha_torii/src/routing.rs:14376-14571` and expose the shared
-`EventsSender` broadcast stream.【crates/iroha_torii/src/routing.rs:14376】【crates/iroha_torii/src/lib.rs:6602】
+The SSE handler and DTO live in `crates/iroha_torii/src/routing.rs` and expose
+the shared `EventsSender` broadcast stream.
 
 - Endpoint: `GET /v1/events/sse`
 - Protocol: `text/event-stream`; each `data:` line is a single JSON document.

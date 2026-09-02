@@ -4824,8 +4824,60 @@ class ExplorerRwasPage:
 
 
 @dataclass(frozen=True)
+class IsoStatusHistoryRecord:
+    """One immutable transition retained in an ISO schema-V3 record."""
+
+    status: str
+    pacs002_code: str
+    updated_at_ms: Optional[int]
+    detail: Optional[str]
+    reason_code: Optional[str]
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> "IsoStatusHistoryRecord":
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be a JSON object")
+        status = _normalize_iso_status(payload.get("status"), f"{context}.status")
+        pacs002_code = _normalize_pacs002_code(
+            payload.get("pacs002_code"),
+            f"{context}.pacs002_code",
+        )
+        if pacs002_code is None:
+            raise ValueError(f"{context}.pacs002_code must be present")
+        updated_at_field = payload.get("updated_at_ms")
+        updated_at_ms = (
+            None
+            if updated_at_field is None
+            else _normalize_positive_int(
+                updated_at_field,
+                f"{context}.updated_at_ms",
+                allow_zero=True,
+            )
+        )
+        return cls(
+            status=status,
+            pacs002_code=pacs002_code,
+            updated_at_ms=updated_at_ms,
+            detail=_normalize_iso_optional_string(
+                payload.get("detail"),
+                f"{context}.detail",
+                allow_empty=True,
+            ),
+            reason_code=_normalize_iso_optional_string(
+                payload.get("reason_code"),
+                f"{context}.reason_code",
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class IsoSubmissionRecord:
-    """Normalized ISO record with immutable V2 participant and policy provenance.
+    """Normalized ISO record with immutable V3 replay and policy provenance.
 
     Torii returns the record only to its original parties or to a separately
     configured read-only ISO audit administrator.
@@ -4835,12 +4887,21 @@ class IsoSubmissionRecord:
     status: str
     pacs002_code: Optional[str]
     transaction_hash: Optional[str]
+    profile_id: Optional[str]
+    message_type: Optional[str]
+    business_service: Optional[str]
+    business_message_id: Optional[str]
+    uetr: Optional[str]
+    payload_hash: Optional[str]
+    reference_snapshot_id: Optional[str]
+    embedded_signature_detected: bool
     originator_participant_id: Optional[str]
     counterparty_participant_id: Optional[str]
     admitting_participant_id: Optional[str]
     admitting_operator_key: Optional[str]
     pinned_profile_id: Optional[str]
     pinned_signature_policy: Optional[str]
+    status_history: Tuple[IsoStatusHistoryRecord, ...]
     hold_reason_code: Optional[str]
     change_reason_codes: Tuple[str, ...]
     rejection_reason_code: Optional[str]
@@ -4851,6 +4912,26 @@ class IsoSubmissionRecord:
     target_account_address: Optional[str]
     asset_definition_id: Optional[str]
     asset_id: Optional[str]
+    settlement_amount: Optional[str]
+    settlement_currency: Optional[str]
+    settlement_date: Optional[str]
+    settlement_quantity: Optional[str]
+    settlement_movement_type: Optional[str]
+    settlement_payment_type: Optional[str]
+    security_instrument_id: Optional[str]
+    collateral_obligation_id: Optional[str]
+    collateral_original_amount: Optional[str]
+    collateral_original_currency: Optional[str]
+    collateral_original_instrument_id: Optional[str]
+    collateral_substitute_amount: Optional[str]
+    collateral_substitute_currency: Optional[str]
+    collateral_substitute_instrument_id: Optional[str]
+    collateral_effective_date: Optional[str]
+    collateral_substitution_type: Optional[str]
+    collateral_haircut: Optional[str]
+    collateral_reason_code: Optional[str]
+    plan_execution_order: Optional[str]
+    plan_atomicity: Optional[str]
     detail: Optional[str]
     updated_at_ms: Optional[int]
 
@@ -4873,6 +4954,34 @@ class IsoSubmissionRecord:
             record.get("transaction_hash"),
             f"{context}.transaction_hash",
         )
+        profile_id = _normalize_iso_optional_string(
+            record.get("profile_id"),
+            f"{context}.profile_id",
+        )
+        message_type = _normalize_iso_optional_string(
+            record.get("message_type"),
+            f"{context}.message_type",
+        )
+        business_service = _normalize_iso_optional_string(
+            record.get("business_service"),
+            f"{context}.business_service",
+        )
+        business_message_id = _normalize_iso_optional_string(
+            record.get("business_message_id"),
+            f"{context}.business_message_id",
+        )
+        uetr = _normalize_iso_optional_string(record.get("uetr"), f"{context}.uetr")
+        payload_hash = _normalize_iso_optional_string(
+            record.get("payload_hash"),
+            f"{context}.payload_hash",
+        )
+        reference_snapshot_id = _normalize_iso_optional_string(
+            record.get("reference_snapshot_id"),
+            f"{context}.reference_snapshot_id",
+        )
+        embedded_signature_detected = record.get("embedded_signature_detected", False)
+        if not isinstance(embedded_signature_detected, bool):
+            raise TypeError(f"{context}.embedded_signature_detected must be a boolean")
         originator_participant_id = _normalize_iso_optional_string(
             record.get("originator_participant_id"),
             f"{context}.originator_participant_id",
@@ -4897,6 +5006,19 @@ class IsoSubmissionRecord:
             record.get("pinned_signature_policy"),
             f"{context}.pinned_signature_policy",
         )
+        status_history_field = record.get("status_history")
+        if status_history_field is None:
+            status_history: Tuple[IsoStatusHistoryRecord, ...] = ()
+        elif isinstance(status_history_field, list):
+            status_history = tuple(
+                IsoStatusHistoryRecord.from_payload(
+                    entry,
+                    context=f"{context}.status_history[{index}]",
+                )
+                for index, entry in enumerate(status_history_field)
+            )
+        else:
+            raise TypeError(f"{context}.status_history must be an array")
         hold_reason_code = _normalize_iso_optional_string(
             record.get("hold_reason_code"),
             f"{context}.hold_reason_code",
@@ -4931,6 +5053,34 @@ class IsoSubmissionRecord:
             f"{context}.asset_definition_id",
         )
         asset_id = _normalize_iso_optional_string(record.get("asset_id"), f"{context}.asset_id")
+        v3_status_fields = {
+            field_name: _normalize_iso_optional_string(
+                record.get(field_name),
+                f"{context}.{field_name}",
+            )
+            for field_name in (
+                "settlement_amount",
+                "settlement_currency",
+                "settlement_date",
+                "settlement_quantity",
+                "settlement_movement_type",
+                "settlement_payment_type",
+                "security_instrument_id",
+                "collateral_obligation_id",
+                "collateral_original_amount",
+                "collateral_original_currency",
+                "collateral_original_instrument_id",
+                "collateral_substitute_amount",
+                "collateral_substitute_currency",
+                "collateral_substitute_instrument_id",
+                "collateral_effective_date",
+                "collateral_substitution_type",
+                "collateral_haircut",
+                "collateral_reason_code",
+                "plan_execution_order",
+                "plan_atomicity",
+            )
+        }
         detail = _normalize_iso_optional_string(
             record.get("detail"),
             f"{context}.detail",
@@ -4950,12 +5100,21 @@ class IsoSubmissionRecord:
             status=status,
             pacs002_code=pacs002_code,
             transaction_hash=transaction_hash,
+            profile_id=profile_id,
+            message_type=message_type,
+            business_service=business_service,
+            business_message_id=business_message_id,
+            uetr=uetr,
+            payload_hash=payload_hash,
+            reference_snapshot_id=reference_snapshot_id,
+            embedded_signature_detected=embedded_signature_detected,
             originator_participant_id=originator_participant_id,
             counterparty_participant_id=counterparty_participant_id,
             admitting_participant_id=admitting_participant_id,
             admitting_operator_key=admitting_operator_key,
             pinned_profile_id=pinned_profile_id,
             pinned_signature_policy=pinned_signature_policy,
+            status_history=status_history,
             hold_reason_code=hold_reason_code,
             change_reason_codes=change_reason_codes,
             rejection_reason_code=rejection_reason_code,
@@ -4966,6 +5125,7 @@ class IsoSubmissionRecord:
             target_account_address=target_account_address,
             asset_definition_id=asset_definition_id,
             asset_id=asset_id,
+            **v3_status_fields,
             detail=detail,
             updated_at_ms=updated_at_ms,
         )
@@ -5490,14 +5650,6 @@ def _configuration_snapshot_to_dict(snapshot: ConfigurationSnapshot) -> Dict[str
         if transport_payload:
             result["transport"] = transport_payload
     return result
-
-
-def _configuration_update_payload(snapshot: ConfigurationSnapshot) -> Dict[str, Any]:
-    payload = _configuration_snapshot_to_dict(snapshot)
-    payload.pop("public_key", None)
-    payload.pop("transport", None)
-    payload.pop("confidential_gas", None)
-    return payload
 
 
 @dataclass(frozen=True)
@@ -9504,46 +9656,187 @@ class TriggerCompletionList:
 
 
 @dataclass(frozen=True)
-class SumeragiEvidenceRecord:
-    """Evidence record returned by `/v1/sumeragi/evidence`."""
+class SumeragiEvidencePenaltyDetails:
+    """Committed block height for an applied or cancelled penalty."""
 
-    kind: str
+    height: int
+
+
+@dataclass(frozen=True)
+class SumeragiEvidencePendingPenaltyStatus:
+    """Penalty lifecycle state for evidence awaiting a committed outcome."""
+
+    status: Literal["pending"]
+    details: None
+
+
+@dataclass(frozen=True)
+class SumeragiEvidenceAppliedPenaltyStatus:
+    """Penalty lifecycle state for evidence applied in a committed block."""
+
+    status: Literal["applied"]
+    details: SumeragiEvidencePenaltyDetails
+
+
+@dataclass(frozen=True)
+class SumeragiEvidenceCancelledPenaltyStatus:
+    """Penalty lifecycle state for evidence cancelled in a committed block."""
+
+    status: Literal["cancelled"]
+    details: SumeragiEvidencePenaltyDetails
+
+
+SumeragiEvidencePenaltyStatus = Union[
+    SumeragiEvidencePendingPenaltyStatus,
+    SumeragiEvidenceAppliedPenaltyStatus,
+    SumeragiEvidenceCancelledPenaltyStatus,
+]
+
+
+def _parse_sumeragi_evidence_penalty_status(
+    payload: Any,
+) -> SumeragiEvidencePenaltyStatus:
+    context = "sumeragi evidence penalty_status"
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"{context} must be an object")
+    _require_wire_fields(
+        payload,
+        required=("status", "details"),
+        context=context,
+    )
+    status = payload["status"]
+    if not isinstance(status, str):
+        raise TypeError(f"{context}.status must be a string")
+    if status == "pending":
+        if payload["details"] is not None:
+            raise TypeError(f"{context}.details must be null when status is pending")
+        return SumeragiEvidencePendingPenaltyStatus(status="pending", details=None)
+    if status not in {"applied", "cancelled"}:
+        raise ValueError(f"{context}.status must be pending, applied, or cancelled")
+    details = payload["details"]
+    if not isinstance(details, Mapping):
+        raise TypeError(f"{context}.details must be an object")
+    _require_wire_fields(
+        details,
+        required=("height",),
+        context=f"{context}.details",
+    )
+    typed_details = SumeragiEvidencePenaltyDetails(
+        height=_require_u64(details["height"], f"{context}.details.height")
+    )
+    if status == "applied":
+        return SumeragiEvidenceAppliedPenaltyStatus(
+            status="applied",
+            details=typed_details,
+        )
+    return SumeragiEvidenceCancelledPenaltyStatus(
+        status="cancelled",
+        details=typed_details,
+    )
+
+
+@dataclass(frozen=True)
+class SumeragiEvidenceRecord:
+    """Exact first-release evidence record returned by `/v1/sumeragi/evidence`."""
+
+    kind: Literal["SumeragiV2Equivocation"]
+    class_: Literal["proposal", "phase_vote", "timeout_vote"]
+    height: int
+    view: int
+    epoch: int
+    signer: int
+    context_id: str
+    artifact_hash_1: str
+    artifact_hash_2: str
     recorded_height: int
     recorded_view: int
     recorded_ms: int
-    data: Dict[str, Any]
-    raw: Dict[str, Any]
+    consensus_admitted_height: int
+    penalty_status: SumeragiEvidencePenaltyStatus
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiEvidenceRecord":
         if not isinstance(payload, Mapping):
             raise TypeError("sumeragi evidence record must be an object")
-        kind = payload.get("kind")
-        if not isinstance(kind, str):
-            raise TypeError("sumeragi evidence record missing string `kind` field")
-        height_raw = payload.get("recorded_height")
-        view_raw = payload.get("recorded_view")
-        recorded_ms_raw = payload.get("recorded_ms")
-        if height_raw is None or view_raw is None or recorded_ms_raw is None:
-            raise TypeError("sumeragi evidence record missing timing fields")
-        try:
-            recorded_height = int(height_raw)
-            recorded_view = int(view_raw)
-            recorded_ms = int(recorded_ms_raw)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("sumeragi evidence timing fields must be numeric") from exc
-        extras = {
-            key: value
-            for key, value in payload.items()
-            if key not in {"kind", "recorded_height", "recorded_view", "recorded_ms"}
-        }
+        required_fields = (
+            "kind",
+            "class",
+            "height",
+            "view",
+            "epoch",
+            "signer",
+            "context_id",
+            "artifact_hash_1",
+            "artifact_hash_2",
+            "recorded_height",
+            "recorded_view",
+            "recorded_ms",
+            "consensus_admitted_height",
+            "penalty_status",
+        )
+        _require_wire_fields(
+            payload,
+            required=required_fields,
+            context="sumeragi evidence record",
+        )
+        if payload["kind"] != "SumeragiV2Equivocation":
+            raise ValueError(
+                "sumeragi evidence record.kind must be SumeragiV2Equivocation"
+            )
+        evidence_class = payload["class"]
+        if not isinstance(evidence_class, str) or evidence_class not in {
+            "proposal",
+            "phase_vote",
+            "timeout_vote",
+        }:
+            raise ValueError(
+                "sumeragi evidence record.class must be proposal, phase_vote, or timeout_vote"
+            )
+
+        def hash32(field_name: str) -> str:
+            value = payload[field_name]
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise ValueError(
+                    f"sumeragi evidence record.{field_name} must be exactly 32 lowercase hexadecimal bytes"
+                )
+            return value
+
+        artifact_hash_1 = hash32("artifact_hash_1")
+        artifact_hash_2 = hash32("artifact_hash_2")
+        if artifact_hash_1 == artifact_hash_2:
+            raise ValueError(
+                "sumeragi evidence record artifact hashes must identify distinct artifacts"
+            )
         return cls(
-            kind=kind,
-            recorded_height=recorded_height,
-            recorded_view=recorded_view,
-            recorded_ms=recorded_ms,
-            data=extras,
-            raw=dict(payload),
+            kind="SumeragiV2Equivocation",
+            class_=evidence_class,
+            height=_require_u64(payload["height"], "sumeragi evidence record.height"),
+            view=_require_u64(payload["view"], "sumeragi evidence record.view"),
+            epoch=_require_u64(payload["epoch"], "sumeragi evidence record.epoch"),
+            signer=_sumeragi_v2_uint(
+                payload["signer"],
+                "sumeragi evidence record.signer",
+                maximum=(1 << 32) - 1,
+            ),
+            context_id=hash32("context_id"),
+            artifact_hash_1=artifact_hash_1,
+            artifact_hash_2=artifact_hash_2,
+            recorded_height=_require_u64(
+                payload["recorded_height"], "sumeragi evidence record.recorded_height"
+            ),
+            recorded_view=_require_u64(
+                payload["recorded_view"], "sumeragi evidence record.recorded_view"
+            ),
+            recorded_ms=_require_u64(
+                payload["recorded_ms"], "sumeragi evidence record.recorded_ms"
+            ),
+            consensus_admitted_height=_require_u64(
+                payload["consensus_admitted_height"],
+                "sumeragi evidence record.consensus_admitted_height",
+            ),
+            penalty_status=_parse_sumeragi_evidence_penalty_status(
+                payload["penalty_status"]
+            ),
         )
 
 
@@ -9555,19 +9848,37 @@ class SumeragiEvidenceListPage:
     total: int
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiEvidenceListPage":
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> "SumeragiEvidenceListPage":
         if not isinstance(payload, Mapping):
             raise TypeError("sumeragi evidence payload must be an object")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
+        _require_wire_fields(
+            payload,
+            required=("total", "items"),
+            context="sumeragi evidence payload",
+        )
+        items_payload = payload["items"]
         if not isinstance(items_payload, list):
             raise TypeError("sumeragi evidence `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_payload)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("sumeragi evidence `total` must be numeric") from exc
+        total = _require_u64(payload["total"], "sumeragi evidence payload.total")
         items = [SumeragiEvidenceRecord.from_payload(entry) for entry in items_payload]
+        if len(items) > limit:
+            raise ValueError(
+                f"sumeragi evidence payload.items must contain at most {limit} records"
+            )
+        if total < len(items):
+            raise ValueError(
+                "sumeragi evidence payload.total must cover the returned items"
+            )
+        if items and total < offset + len(items):
+            raise ValueError(
+                "sumeragi evidence payload.total must cover offset plus returned items"
+            )
         return cls(items=items, total=total)
 
 
@@ -10773,6 +11084,8 @@ _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
 _SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES = 1024
 _SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
+_SUMERAGI_EVIDENCE_COUNT_JSON_MAX_BYTES = 1 * 1024
+_SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES = 1 * 1024 * 1024
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
 )
@@ -10920,8 +11233,8 @@ class SumeragiV2ExecutionCommitment:
     parent_state_root: str
     post_state_root: str
     ordinary_writes_root: str
-    topup_anchor_root: Optional[str]
-    topup_anchor_count: int
+    offline_cash_top_up_root: Optional[str]
+    offline_cash_top_up_count: int
     native_amx_application_manifest_version: int
     native_amx_application_manifest_root: str
     native_amx_application_manifest_count: int
@@ -10940,8 +11253,8 @@ class SumeragiV2ExecutionCommitment:
                 "parent_state_root",
                 "post_state_root",
                 "ordinary_writes_root",
-                "topup_anchor_root",
-                "topup_anchor_count",
+                "offline_cash_top_up_root",
+                "offline_cash_top_up_count",
                 "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root",
                 "native_amx_application_manifest_count",
@@ -10955,21 +11268,24 @@ class SumeragiV2ExecutionCommitment:
         for field_name in ("lane_finality_manifest", "merge_carrier"):
             if field_name not in payload:
                 raise TypeError(f"{context}.{field_name} is required")
-        topup_anchor_count = _sumeragi_v2_uint(
-            payload.get("topup_anchor_count"),
-            f"{context}.topup_anchor_count",
-            maximum=16,
+        offline_cash_top_up_count = _sumeragi_v2_uint(
+            payload.get("offline_cash_top_up_count"),
+            f"{context}.offline_cash_top_up_count",
+            maximum=(1 << 32) - 1,
         )
-        topup_anchor_root_value = payload.get("topup_anchor_root")
-        topup_anchor_root = (
+        offline_cash_top_up_root_value = payload.get("offline_cash_top_up_root")
+        offline_cash_top_up_root = (
             None
-            if topup_anchor_root_value is None
-            else _sumeragi_v2_string(topup_anchor_root_value, f"{context}.topup_anchor_root")
+            if offline_cash_top_up_root_value is None
+            else _sumeragi_v2_string(
+                offline_cash_top_up_root_value,
+                f"{context}.offline_cash_top_up_root",
+            )
         )
-        if (topup_anchor_count == 0) != (topup_anchor_root is None):
+        if (offline_cash_top_up_count == 0) != (offline_cash_top_up_root is None):
             raise ValueError(
-                f"{context}.topup_anchor_root must be present exactly when "
-                "topup_anchor_count is positive"
+                f"{context}.offline_cash_top_up_root must be present exactly when "
+                "offline_cash_top_up_count is positive"
             )
         native_manifest_version = _sumeragi_v2_uint(
             payload.get("native_amx_application_manifest_version"),
@@ -11035,8 +11351,8 @@ class SumeragiV2ExecutionCommitment:
                 payload.get("ordinary_writes_root"),
                 f"{context}.ordinary_writes_root",
             ),
-            topup_anchor_root=topup_anchor_root,
-            topup_anchor_count=topup_anchor_count,
+            offline_cash_top_up_root=offline_cash_top_up_root,
+            offline_cash_top_up_count=offline_cash_top_up_count,
             native_amx_application_manifest_version=native_manifest_version,
             native_amx_application_manifest_root=native_manifest_root,
             native_amx_application_manifest_count=native_manifest_count,
@@ -11176,8 +11492,8 @@ class SumeragiStatusSnapshot:
             parent_state_root=execution_commitment.parent_state_root,
             post_state_root=execution_commitment.post_state_root,
             ordinary_writes_root=execution_commitment.ordinary_writes_root,
-            topup_anchor_root=execution_commitment.topup_anchor_root,
-            topup_anchor_count=execution_commitment.topup_anchor_count,
+            offline_cash_top_up_root=execution_commitment.offline_cash_top_up_root,
+            offline_cash_top_up_count=execution_commitment.offline_cash_top_up_count,
             native_amx_application_manifest_version=(
                 execution_commitment.native_amx_application_manifest_version
             ),
@@ -11463,11 +11779,14 @@ class SumeragiEvidenceCount:
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiEvidenceCount":
         if not isinstance(payload, Mapping):
             raise TypeError("evidence count payload must be an object")
-        try:
-            count = int(payload.get("count", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("evidence count must be numeric") from exc
-        return cls(count=count)
+        _require_wire_fields(
+            payload,
+            required=("count",),
+            context="sumeragi evidence count payload",
+        )
+        return cls(
+            count=_require_u64(payload["count"], "sumeragi evidence count payload.count")
+        )
 
 
 @dataclass(frozen=True)
@@ -13257,6 +13576,7 @@ __all__ = [
     "ExplorerMetricsSnapshot",
     "ExplorerAccountQrSnapshot",
     "IsoSubmissionRecord",
+    "IsoStatusHistoryRecord",
     "IsoMessageTimeoutError",
     "AccountAsset",
     "AccountAssetsPage",
@@ -13280,6 +13600,11 @@ __all__ = [
     "SubscriptionListItem",
     "SubscriptionListPage",
     "SubscriptionActionResult",
+    "SumeragiEvidencePenaltyDetails",
+    "SumeragiEvidencePendingPenaltyStatus",
+    "SumeragiEvidenceAppliedPenaltyStatus",
+    "SumeragiEvidenceCancelledPenaltyStatus",
+    "SumeragiEvidencePenaltyStatus",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
     "SumeragiPrfStatus",
@@ -17151,59 +17476,6 @@ class ToriiClient(
 
         snapshot = self.get_configuration()
         return snapshot.confidential_gas
-
-    def set_network_gossip_config(
-        self,
-        *,
-        block_gossip_size: int,
-        block_gossip_period_ms: int,
-        transaction_gossip_size: int,
-        transaction_gossip_period_ms: int,
-    ) -> Mapping[str, Any]:
-        """Update Torii gossip fan-out and interval parameters.
-
-        The helper fetches the latest configuration, preserves the mutable logger/queue sections,
-        and posts the updated `network` payload so PY6 admin-surface evidence can remain deterministic.
-        """
-
-        snapshot = self.get_configuration()
-        payload = _configuration_update_payload(snapshot)
-        payload["network"] = {
-            "block_gossip_size": _normalize_positive_int(
-                block_gossip_size, "network.block_gossip_size", allow_zero=False
-            ),
-            "block_gossip_period_ms": _normalize_positive_int(
-                block_gossip_period_ms, "network.block_gossip_period_ms", allow_zero=False
-            ),
-            "transaction_gossip_size": _normalize_positive_int(
-                transaction_gossip_size, "network.transaction_gossip_size", allow_zero=False
-            ),
-            "transaction_gossip_period_ms": _normalize_positive_int(
-                transaction_gossip_period_ms,
-                "network.transaction_gossip_period_ms",
-                allow_zero=False,
-            ),
-        }
-        return self.update_configuration(payload)
-
-    def set_queue_capacity(self, *, capacity: int) -> Mapping[str, Any]:
-        """Update the transaction queue capacity exposed by `/v1/configuration`.
-
-        The payload reuses the current mutable logger/network configuration so the queue change
-        mirrors the node's existing state. Confidential gas is startup-only and is omitted.
-        """
-
-        snapshot = self.get_configuration()
-        payload = _configuration_update_payload(snapshot)
-        payload["queue"] = {
-            "capacity": _normalize_positive_int(capacity, "queue.capacity", allow_zero=False)
-        }
-        return self.update_configuration(payload)
-
-    def update_configuration(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Update mutable node configuration (`POST /v1/configuration`)."""
-
-        return super().update_configuration(payload)
 
     def get_metrics(self, *, as_text: bool = False) -> Optional[Any]:
         """Fetch Torii metrics (`GET /v1/metrics`)."""
@@ -22483,20 +22755,15 @@ class ToriiClient(
             raise TypeError("leader response must be a JSON object")
         return SumeragiLeaderSnapshot.from_payload(payload)
 
-    def get_sumeragi_evidence_count(self) -> Optional[Any]:
-        """Return total persisted evidence records (`GET /v1/sumeragi/evidence/count`)."""
+    def get_sumeragi_evidence_count(self) -> SumeragiEvidenceCount:
+        """Return the exact committed evidence count."""
 
-        return self._sumeragi_operator_json(
+        payload = self._get_sumeragi_operator_json_object(
             "/v1/sumeragi/evidence/count",
             context="sumeragi evidence count",
+            maximum_body_bytes=_SUMERAGI_EVIDENCE_COUNT_JSON_MAX_BYTES,
+            parser=parse_sumeragi_json_object,
         )
-
-    def get_sumeragi_evidence_count_typed(self) -> SumeragiEvidenceCount:
-        """Typed wrapper for :meth:`get_sumeragi_evidence_count`."""
-
-        payload = self.get_sumeragi_evidence_count()
-        if not isinstance(payload, Mapping):
-            raise TypeError("evidence count response must be a JSON object")
         return SumeragiEvidenceCount.from_payload(payload)
 
     def list_sumeragi_evidence(
@@ -22505,39 +22772,44 @@ class ToriiClient(
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         kind: Optional[str] = None,
-    ) -> Optional[Any]:
-        """List evidence records with optional filters (`GET /v1/sumeragi/evidence`)."""
+    ) -> SumeragiEvidenceListPage:
+        """List the exact first-release evidence records."""
 
         params: Dict[str, Any] = {}
+        page_limit = 50
+        page_offset = 0
         if limit is not None:
-            params["limit"] = int(limit)
+            if isinstance(limit, bool) or not isinstance(limit, int):
+                raise TypeError("sumeragi evidence limit must be an integer")
+            if not 1 <= limit <= 1_000:
+                raise ValueError("sumeragi evidence limit must be in 1..=1000")
+            params["limit"] = limit
+            page_limit = limit
         if offset is not None:
-            params["offset"] = int(offset)
+            if isinstance(offset, bool) or not isinstance(offset, int):
+                raise TypeError("sumeragi evidence offset must be an integer")
+            if not 0 <= offset <= 10_000:
+                raise ValueError("sumeragi evidence offset must be in 0..=10000")
+            params["offset"] = offset
+            page_offset = offset
         if kind is not None:
-            params["kind"] = str(kind)
-        target = "/v1/sumeragi/evidence"
-        if params:
-            target = f"{target}?{urlencode(sorted(params.items()))}"
-        return self._sumeragi_operator_json(
-            target,
+            if kind != "SumeragiV2Equivocation":
+                raise ValueError(
+                    "sumeragi evidence kind must be SumeragiV2Equivocation"
+                )
+            params["kind"] = kind
+        payload = self._get_sumeragi_operator_json_object(
+            "/v1/sumeragi/evidence",
             context="sumeragi evidence list",
+            params=params or None,
+            maximum_body_bytes=_SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES,
+            parser=parse_sumeragi_json_object,
         )
-
-    def list_sumeragi_evidence_typed(
-        self,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        kind: Optional[str] = None,
-    ) -> SumeragiEvidenceListPage:
-        """Typed wrapper for :meth:`list_sumeragi_evidence`."""
-
-        payload = self.list_sumeragi_evidence(limit=limit, offset=offset, kind=kind)
-        if payload is None:
-            return SumeragiEvidenceListPage(items=[], total=0)
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("sumeragi evidence endpoint returned non-object payload")
-        return SumeragiEvidenceListPage.from_payload(payload)
+        return SumeragiEvidenceListPage.from_payload(
+            payload,
+            limit=page_limit,
+            offset=page_offset,
+        )
 
     def get_sumeragi_params(self) -> Optional[Any]:
         """Fetch operator-authenticated on-chain Sumeragi parameters."""

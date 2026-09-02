@@ -11,6 +11,9 @@ python3 -I -S scripts/check_build_efficiency_provenance.py
 echo "[sorafs-release] source-file budget check"
 python3 scripts/check_source_file_budget.py --require-objective
 
+echo "[sorafs-release] reviewed shipping feature graph check"
+python3 -I -S scripts/check_release_feature_graph.py
+
 export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-never}"
 export CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${repo_root}/.target}"
@@ -124,6 +127,8 @@ python3 -m pytest -q \
   scripts/tests/package_sorafs_cli_candidate_test.py \
   scripts/tests/build_release_bundle_test.py \
   scripts/tests/build_release_image_test.py \
+  scripts/tests/release_feature_graph_test.py \
+  scripts/tests/release_prebuilt_provenance_test.py \
   scripts/tests/package_sorafs_validate_release_test.py \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_production_readiness_aggregate_gate_is_documented \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_pdp_provider_protocol_and_chain_repair_boundary_are_documented \

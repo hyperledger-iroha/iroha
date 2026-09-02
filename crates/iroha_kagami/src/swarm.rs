@@ -1063,7 +1063,6 @@ fn execution_policy_projection(config: &actual::Root) -> [u8; 32] {
         &config.settlement,
         [0x11; 32],
         [0x22; 32],
-        Some([0x44; 32]),
     )
 }
 fn validate_runtime_projection_policy(
@@ -1727,7 +1726,6 @@ fn project_prepared_runtime_config(
     const LANE_POLICY_TARGET: &str = "/config/runtime/lane-policies";
     const SORAFS_ADMISSION_TARGET: &str = "/config/runtime/sorafs-admission";
     const SORAFS_SALT_TARGET: &str = "/config/runtime/sorafs-salt-schedule";
-    const KAGEMUSHA_ARTIFACT_TARGET: &str = "/config/runtime/kagemusha-artifacts";
     const SITE_BINDINGS_TARGET: &str = "/config/runtime/sorafs_sites.json";
     let source_table = crate::secret_toml::Table::new((*table).clone());
     let (effective_source, source_requires_sora) =
@@ -2187,39 +2185,6 @@ fn project_prepared_runtime_config(
             captured_validation_paths.push(captured);
         }
     }
-    let offline = &source.settlement.offline;
-    if let Some(path) = offline.kagemusha_release_policy_path.as_deref() {
-        let (file, captured) = capture_prepared_runtime_file(
-            &mut table,
-            projection_root,
-            path,
-            "kagemusha-release-policy",
-            "release_policy.norito",
-            "/config/runtime/kagemusha-release-policy.norito",
-            "Kagemusha release policy",
-            64 * 1024 * 1024,
-            &["settlement", "offline"],
-            "kagemusha_release_policy_path",
-        )?;
-        runtime_files.push(file);
-        captured_validation_paths.push(captured);
-    }
-    if let Some(path) = offline.kagemusha_catalog_qualification_seal_path.as_deref() {
-        let (file, captured) = capture_prepared_runtime_file(
-            &mut table,
-            projection_root,
-            path,
-            "kagemusha-catalog-seal",
-            "catalog_seal.norito",
-            "/config/runtime/kagemusha-catalog-seal.norito",
-            "Kagemusha catalog qualification seal",
-            64 * 1024 * 1024,
-            &["settlement", "offline"],
-            "kagemusha_catalog_qualification_seal_path",
-        )?;
-        runtime_files.push(file);
-        captured_validation_paths.push(captured);
-    }
     let captured_manifest_directory =
         if let Some(manifest_directory) = source.nexus.registry.manifest_directory.as_deref() {
             let (files, validation_directory) = collect_runtime_directory(
@@ -2322,27 +2287,6 @@ fn project_prepared_runtime_config(
         captured_validation_paths.push(CapturedValidationPath {
             table_path: &["sorafs", "gateway"],
             key: "salt_schedule_dir",
-            source: validation_directory,
-        });
-    }
-    if let Some(artifact_directory) = offline.kagemusha_artifact_dir.as_deref() {
-        let (files, validation_directory) = collect_runtime_directory(
-            artifact_directory,
-            projection_root,
-            "kagemusha-artifacts",
-            KAGEMUSHA_ARTIFACT_TARGET,
-            "Kagemusha release artifact",
-        )?;
-        runtime_files.extend(files);
-        set_toml_string(
-            &mut table,
-            &["settlement", "offline"],
-            "kagemusha_artifact_dir",
-            KAGEMUSHA_ARTIFACT_TARGET,
-        )?;
-        captured_validation_paths.push(CapturedValidationPath {
-            table_path: &["settlement", "offline"],
-            key: "kagemusha_artifact_dir",
             source: validation_directory,
         });
     }

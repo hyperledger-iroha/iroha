@@ -11,8 +11,7 @@ import re
 import secrets
 import time
 import unicodedata
-from dataclasses import dataclass
-from dataclasses import field as dataclass_field
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import (
     Any,
@@ -76,6 +75,7 @@ from .canonical_request_v1 import (
 from .canonical_transport import (
     OPERATOR_FORBIDDEN_AUTH_HEADERS as _OPERATOR_FORBIDDEN_AUTH_HEADERS,
 )
+from .norito_frame import decode_norito_frame_payload
 from .canonical_transport import (
     CanonicalRequestHeaderPlan as _CanonicalRequestHeaderPlan,
 )
@@ -88,8 +88,7 @@ from .canonical_transport import (
 from .client_status_models import (
     _KAIGI_HEALTH_STATUSES,
     SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES,
-    SUMERAGI_EVIDENCE_KIND_FILTERS,
-    SUMERAGI_EVIDENCE_PHASES,
+    SUMERAGI_EVIDENCE_KIND,
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
     ConnectAdmissionManifest,
@@ -114,13 +113,13 @@ from .client_status_models import (
     PeerTelemetryInfo,
     PeerTelemetryLocation,
     QueueConfig,
-    SumeragiCensorshipEvidenceRecord,
-    SumeragiDoubleVoteEvidenceRecord,
+    SumeragiEvidenceAppliedPenaltyStatus,
+    SumeragiEvidenceCancelledPenaltyStatus,
     SumeragiEvidenceListPage,
+    SumeragiEvidencePenaltyDetails,
+    SumeragiEvidencePenaltyStatus,
+    SumeragiEvidencePendingPenaltyStatus,
     SumeragiEvidenceRecord,
-    SumeragiEvidenceRecordBase,
-    SumeragiInvalidProposalEvidenceRecord,
-    SumeragiInvalidQcEvidenceRecord,
     SumeragiLeaderSnapshot,
     SumeragiParamsSnapshot,
     SumeragiPrfContext,
@@ -138,9 +137,6 @@ from .client_status_models import (
 from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
 from .governance_proposals import _contract_address as _canonical_contract_address
-from .kagemusha_native import (
-    validate_offline_operation_status_json_v2 as _validate_kagemusha_operation_status_json_v2,
-)
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
 from .native_amx import (
     _hash_bytes as _iroha_hash_bytes,
@@ -153,57 +149,8 @@ from .native_amx import (
     validate_bls_normal_validator_set,
 )
 from .norito_frame import (
-    decode_norito_frame_payload,
-    encode_norito_frame,
     schema_hash_for_type_name,
     validate_norito_frame,
-)
-from .offline_models import (
-    KagemushaArtifactBindingV4Json,
-    OfflineAndroidKeyMintAssertionJson,
-    OfflineAndroidKeyMintHardwareAssertionVariantJson,
-    OfflineAssetScale,
-    OfflineAuthorizationJson,
-    OfflineBranchClaimJson,
-    OfflineBranchPathJson,
-    OfflineDeviceSignatureJson,
-    OfflineHardwareAssertionJson,
-    OfflineIosAppAttestAssertionJson,
-    OfflineIosAppAttestHardwareAssertionVariantJson,
-    OfflineLanePrivacyMerkleVariantJson,
-    OfflineLanePrivacyMerkleWitnessJson,
-    OfflineLanePrivacyProofJson,
-    OfflineMerkleProofJson,
-    OfflinePastaCycleProofEnvelopeV4Json,
-    OfflinePeerSplitTransitionJson,
-    OfflinePeerSplitTransitionVariantJson,
-    OfflineProofAttachmentJson,
-    OfflineProofBackend,
-    OfflineProofBoxJson,
-    OfflineRecursiveOperationVectorV4Json,
-    OfflineRecursiveSpendBundleJson,
-    OfflineRecursiveSpendProofJson,
-    OfflineRecursiveSpendStatementJson,
-    OfflineRecursiveSpendTransitionJson,
-    OfflineRecursiveStateBoundaryV5Json,
-    OfflineRedeemChangeJson,
-    OfflineRedemptionChangeTransitionJson,
-    OfflineRedemptionChangeTransitionVariantJson,
-    OfflineRedemptionIntentJson,
-    OfflineScaledAmountJson,
-    OfflineSpendableNoteJson,
-    OfflineSpendBranchJson,
-    OfflineTopUpAnchorReferenceJson,
-    OfflineTopUpShieldEvidenceJson,
-    OfflineUnshieldPublicInputsJson,
-    OfflineVerifiedFoldBundleJson,
-    OfflineVerifiedFoldRecordBundleJson,
-    OfflineVerifiedFoldStepJson,
-    OfflineVerifiedFoldVerifierRecordJson,
-    OfflineVerifierKeyIdJson,
-    OfflineVerifierStatus,
-    OfflineVerifyingKeyJson,
-    OfflineVerifyingKeyRecordJson,
 )
 from .orderbook_submission import (
     SorafsOrderbookSubmissionAmbiguousError,
@@ -292,9 +239,9 @@ class TairaTestnetProfile:
     torii_base_url: str = "https://taira.sora.org"
     chain_id: str = "fc56984b-2be7-431d-840e-21514d1883f0"
     i105_discriminant: int = 369
-    kagemusha_asset_definition_id: str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
-    kagemusha_asset_alias: str = "ds#boi.is"
-    kagemusha_asset_scale: int = 2
+    offline_cash_asset_definition_id: str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+    offline_cash_asset_alias: str = "ds#boi.is"
+    offline_cash_asset_scale: int = 2
     xor_asset_definition_id: str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
     xor_asset_alias: str = "xor#universal"
     xor_asset_scale: int = 9
@@ -891,11 +838,11 @@ __all__ = [
     "PipelinePreflightQueue",
     "PipelinePreflightFees",
     "PipelinePreflight",
-    "SumeragiEvidenceRecordBase",
-    "SumeragiDoubleVoteEvidenceRecord",
-    "SumeragiInvalidQcEvidenceRecord",
-    "SumeragiInvalidProposalEvidenceRecord",
-    "SumeragiCensorshipEvidenceRecord",
+    "SumeragiEvidencePenaltyDetails",
+    "SumeragiEvidencePenaltyStatus",
+    "SumeragiEvidencePendingPenaltyStatus",
+    "SumeragiEvidenceAppliedPenaltyStatus",
+    "SumeragiEvidenceCancelledPenaltyStatus",
     "SumeragiV2EquivocationEvidenceRecord",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
@@ -905,95 +852,9 @@ __all__ = [
     "KaigiRelayDomainMetrics",
     "KaigiRelayDetail",
     "KaigiRelayHealthSnapshot",
-    "OfflineStatus",
-    "OfflineAssetScale",
-    "OfflineScaledAmountJson",
-    "OfflineSpendableNoteJson",
-    "OfflineDeviceSignatureJson",
-    "OfflineAndroidKeyMintAssertionJson",
-    "OfflineIosAppAttestAssertionJson",
-    "OfflineAndroidKeyMintHardwareAssertionVariantJson",
-    "OfflineIosAppAttestHardwareAssertionVariantJson",
-    "OfflineHardwareAssertionJson",
-    "OfflineAuthorizationJson",
-    "OfflineVerifierKeyIdJson",
-    "OfflineProofBoxJson",
-    "OfflineVerifyingKeyJson",
-    "OfflineProofBackend",
-    "OfflineVerifierStatus",
-    "OfflineVerifyingKeyRecordJson",
-    "OfflineMerkleProofJson",
-    "OfflineLanePrivacyMerkleWitnessJson",
-    "OfflineLanePrivacyMerkleVariantJson",
-    "OfflineLanePrivacyProofJson",
-    "OfflineVerifiedFoldStepJson",
-    "OfflineVerifiedFoldBundleJson",
-    "OfflineVerifiedFoldVerifierRecordJson",
-    "OfflineVerifiedFoldRecordBundleJson",
-    "OfflineProofAttachmentJson",
-    "OfflineTopUpShieldEvidenceJson",
-    "OfflineRecursiveOperationVectorV4Json",
-    "OfflineRecursiveStateBoundaryV5Json",
-    "OfflinePastaCycleProofEnvelopeV4Json",
-    "OfflineRecursiveSpendBundleJson",
-    "OfflineTopUpAnchorReferenceJson",
-    "OfflineBranchPathJson",
-    "OfflineBranchClaimJson",
-    "OfflineSpendBranchJson",
-    "KagemushaArtifactBindingV4Json",
-    "OfflinePeerSplitTransitionJson",
-    "OfflineRedemptionChangeTransitionJson",
-    "OfflinePeerSplitTransitionVariantJson",
-    "OfflineRedemptionChangeTransitionVariantJson",
-    "OfflineRecursiveSpendTransitionJson",
-    "OfflineRecursiveSpendStatementJson",
-    "OfflineRecursiveSpendProofJson",
-    "OfflineUnshieldPublicInputsJson",
-    "OfflineRedemptionIntentJson",
-    "OfflineRedeemChangeJson",
-    "KagemushaTopUpRequestV4",
-    "KagemushaRedeemRequestV4",
-    "OfflineOperationKind",
-    "OfflineOperationIdentity",
-    "OfflinePendingState",
-    "OfflineOperationReference",
-    "OfflineScaledAmount",
-    "OfflineSpendableNote",
-    "OfflineVerifierKeyId",
-    "KagemushaArtifactBindingV4",
-    "OfflineTopUpAnchor",
-    "OfflineTopUpFinalityProofAnchor",
-    "OfflineTopUpFinalityConsensusMode",
-    "OfflineTopUpFinalityPayloadEncoding",
-    "OfflineTopUpFinalityGlobalPhase",
-    "OfflineTopUpFinalityDataAvailabilityLayout",
-    "OfflineTopUpFinalityHeightContextId",
-    "OfflineTopUpFinalityConsensusRound",
-    "OfflineTopUpFinalityBlockSubject",
-    "OfflineTopUpFinalityMergeCarrierCommitment",
-    "OfflineTopUpFinalityExecutionCommitment",
-    "OfflineTopUpFinalityQuorumCertificate",
-    "OfflineTopUpFinalityValidatorPower",
-    "OfflineTopUpFinalityDualQuorum",
-    "OfflineTopUpFinalityNextEpochSnapshot",
-    "OfflineTopUpFinalitySnapshotBootstrapAnchor",
-    "OfflineTopUpFinalityHeightContext",
-    "OfflineTopUpFinalityCompactQc",
-    "OfflineTopUpAnchorMerkleProof",
-    "OfflineTopUpFinalityProof",
-    "OfflineTopUpResult",
-    "OfflineRedeemResult",
-    "OfflineTopUpOperationResult",
-    "OfflineRedeemOperationResult",
-    "OfflineAppliedResult",
-    "OfflineQueueErrorDetails",
-    "OfflineAxtErrorDetails",
-    "OfflineErrorDetails",
-    "OfflineErrorEnvelope",
-    "OfflinePendingOperation",
-    "OfflineAppliedOperation",
-    "OfflineRejectedOperation",
-    "OfflineOperationStatus",
+    "OfflineCashReadinessV1",
+    "OfflineCashOperationRejectionV1",
+    "UnverifiedOfflineCashOperationStatusV1",
     "AppApiTransactionDraft",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
@@ -1915,154 +1776,36 @@ class RuntimeUpgradeTxResponse:
     tx_instructions: List[TransactionInstruction]
 
 
-@dataclass(frozen=True)
-class OfflineOperationKind:
-    """Tagged Offline command kind from the public JSON contract."""
-
-    kind: Literal["top_up", "redeem"]
-    value: None = None
-
-
-@dataclass(frozen=True)
-class OfflineOperationIdentity:
-    """Complete immutable identity of one authorized Kagemusha operation."""
-
-    operation_id: str
-    request_authority_digest: str
-    canonical_request_digest: str
-    kind: OfflineOperationKind
-    issued_at_ms: int
-    expires_at_ms: int
-
-    def __post_init__(self) -> None:
-        _require_offline_operation_id(
-            self.operation_id, "OfflineOperationIdentity.operation_id"
-        )
-        _offline_transaction_hash(
-            self.request_authority_digest,
-            "OfflineOperationIdentity.request_authority_digest",
-        )
-        _offline_transaction_hash(
-            self.canonical_request_digest,
-            "OfflineOperationIdentity.canonical_request_digest",
-        )
-        if (
-            type(self.kind) is not OfflineOperationKind
-            or self.kind.kind not in ("top_up", "redeem")
-            or self.kind.value is not None
-        ):
-            raise ValueError(
-                "OfflineOperationIdentity.kind must be an exact top_up or redeem unit tag"
-            )
-        issued = _offline_unsigned(
-            self.issued_at_ms,
-            "OfflineOperationIdentity.issued_at_ms",
-            _OFFLINE_MAX_U64,
-            positive=True,
-        )
-        expires = _offline_unsigned(
-            self.expires_at_ms,
-            "OfflineOperationIdentity.expires_at_ms",
-            _OFFLINE_MAX_U64,
-            positive=True,
-        )
-        if expires <= issued or expires - issued > 300_000:
-            raise ValueError(
-                "OfflineOperationIdentity expiry must follow issue time by at most 300000ms"
-            )
-
-
-@dataclass(frozen=True)
-class KagemushaTopUpRequestV4:
-    """Canonical ABI-23/V4 top-up with archive-derived operation identity."""
-
-    norito: bytes
-    identity: OfflineOperationIdentity = dataclass_field(init=False)
-
-    def __post_init__(self) -> None:
-        identity = _validate_kagemusha_norito_request(
-            self.norito,
-            _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES,
-            "KagemushaTopUpRequestV4.norito",
-            _OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
-            field_count=8,
-            operation_id_field_index=6,
-        )
-        object.__setattr__(self, "norito", bytes(self.norito))
-        object.__setattr__(self, "identity", identity)
-
-
-@dataclass(frozen=True)
-class KagemushaRedeemRequestV4:
-    """Canonical ABI-23/V4 redeem with archive-derived operation identity."""
-
-    norito: bytes
-    identity: OfflineOperationIdentity = dataclass_field(init=False)
-
-    def __post_init__(self) -> None:
-        identity = _validate_kagemusha_norito_request(
-            self.norito,
-            _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES,
-            "KagemushaRedeemRequestV4.norito",
-            _OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
-            field_count=10,
-            operation_id_field_index=8,
-        )
-        object.__setattr__(self, "norito", bytes(self.norito))
-        object.__setattr__(self, "identity", identity)
-
 
 _OFFLINE_CAPABILITY_PATH = "/v1/offline/readiness"
 _OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"
 _OFFLINE_REDEEM_PATH = "/v1/offline/redeem"
-_OFFLINE_OPERATIONS_PATH = "/v1/offline/operations"
-_OFFLINE_OPERATION_ID_RE = re.compile(r"^[0-9a-f]{63}[13579bdf]$")
-_OFFLINE_TRANSACTION_HASH_RE = re.compile(r"^[0-9a-f]{63}[13579bdf]$")
-_OFFLINE_ERROR_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
+_OFFLINE_OPERATION_PATH_PREFIX = "/v1/offline/operations/"
 _OFFLINE_ASSET_DEFINITION_ID_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{28}$")
-_OFFLINE_VERIFYING_KEY_ID_FIELD_RE = re.compile(
-    r"^[a-z0-9](?:[a-z0-9._:/_-]*[a-z0-9])?$"
-)
 _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
-_OFFLINE_MAX_ASSET_SCALE = 28
-_OFFLINE_TOP_UP_SHIELD_TREE_CAPACITY = 1 << 16
-_OFFLINE_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS = 64 + 8
-_OFFLINE_TOP_UP_SHIELD_INSERTION_CAPACITY = (
-    _OFFLINE_TOP_UP_SHIELD_TREE_CAPACITY
-    - _OFFLINE_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS
-    - 1
-)
-_OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS = 4096
-_OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16
-_OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS = 4
-_OFFLINE_SUMERAGI_PROTOCOL_VERSION = 4
 _SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
 _SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES = 1024
+_SUMERAGI_EVIDENCE_COUNT_JSON_MAX_BYTES = 1 * 1024
+_SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES = 1 * 1024 * 1024
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
 )
-_OFFLINE_BLS_PROOF_BYTES = 96
 _OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
-_OFFLINE_BLS_VALIDATOR_ID_RE = re.compile(r"^ea0130[0-9A-F]{96}$")
 _OFFLINE_MAX_JSON_DEPTH = 128
-_OFFLINE_STATUS_MAX_BYTES = 4 * 1024
-_OFFLINE_OPERATION_REFERENCE_MAX_BYTES = 4 * 1024
-_OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES = 16 * 1024 * 1024
-_KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES = 512 * 1024
-_KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
-_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 23
-_KAGEMUSHA_MAX_HOPS = 8
-_KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1"
-_OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request"
-_OFFLINE_REDEEM_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request"
-_KAGEMUSHA_REQUEST_WIRE_VERSION = 4
+_OFFLINE_CASH_READINESS_MAX_BYTES_V1 = 4 * 1024
+_OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1 = 4 * 1024
+_OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1 = 8 * 1024
+_OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1 = 16 * 1024 * 1024
+_OFFLINE_CASH_WIRE_VERSION = 1
+_OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION = 1
+_OFFLINE_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1"
 
 
-def _kagemusha_request_timeout(value: Optional[float], context: str) -> Optional[float]:
+def _offline_cash_request_timeout(value: Optional[float], context: str) -> Optional[float]:
     if value is not None and (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
@@ -2073,180 +1816,6 @@ def _kagemusha_request_timeout(value: Optional[float], context: str) -> Optional
     return value
 
 
-def _validate_kagemusha_norito_request(
-    value: Any,
-    maximum_bytes: int,
-    context: str,
-    expected_type_name: str,
-    *,
-    field_count: int,
-    operation_id_field_index: int,
-) -> OfflineOperationIdentity:
-    if type(value) is not bytes:
-        raise TypeError(f"{context} must be immutable bytes")
-    if not value:
-        raise ValueError(f"{context} must not be empty")
-    if len(value) > maximum_bytes:
-        raise ValueError(
-            f"{context} exceeds {maximum_bytes} bytes"
-        )
-    payload = decode_norito_frame_payload(
-        value,
-        context=context,
-        expected_type_name=expected_type_name,
-        expected_padding_length=8,
-        expected_flags=0x02,
-    )
-    fields = _decode_kagemusha_compact_fields(payload, field_count, context)
-    if (
-        len(fields[0]) != 2
-        or int.from_bytes(fields[0], "little") != _KAGEMUSHA_REQUEST_WIRE_VERSION
-    ):
-        raise ValueError(
-            f"{context} must carry wire version {_KAGEMUSHA_REQUEST_WIRE_VERSION}"
-        )
-    operation_id = fields[operation_id_field_index]
-    if len(operation_id) != 32 or not any(operation_id):
-        raise ValueError(
-            f"{context} operation_id field must be exactly 32 non-zero bytes"
-        )
-
-    authorization_context = f"{context} authorization"
-    authorization_fields = _decode_kagemusha_compact_fields(
-        fields[-1],
-        10,
-        authorization_context,
-    )
-    authorization_operation_id = authorization_fields[3]
-    authority_archive = encode_norito_frame(
-        authorization_fields[0],
-        type_name="iroha_data_model::account::model::AccountId",
-        flags=0x02,
-        payload_alignment=1,
-    )
-    validate_norito_frame(
-        authority_archive,
-        context=f"{authorization_context} authority",
-        expected_type_name="iroha_data_model::account::model::AccountId",
-        expected_padding_length=0,
-        expected_flags=0x02,
-    )
-    nonce = authorization_fields[6]
-    if len(nonce) != 32 or not any(nonce):
-        raise ValueError(
-            f"{authorization_context} nonce must be exactly 32 non-zero bytes"
-        )
-    derived_operation_id = _offline_iroha_blake2b_hash(
-        b"iroha:offline:kagemusha:operation-id:v4\0",
-        len(authority_archive).to_bytes(8, "little"),
-        authority_archive,
-        nonce,
-    )
-    if (
-        authorization_operation_id != operation_id
-        or derived_operation_id != operation_id
-    ):
-        raise ValueError(
-            f"{authorization_context} operation_id must equal the canonical "
-            "authority-and-nonce derivation"
-        )
-    issued_at_ms_bytes = authorization_fields[4]
-    if len(issued_at_ms_bytes) != 8:
-        raise ValueError(f"{authorization_context} issued_at_ms must be exactly 8 bytes")
-    issued_at_ms = int.from_bytes(issued_at_ms_bytes, "little")
-    if issued_at_ms == 0:
-        raise ValueError(f"{authorization_context} issued_at_ms must be positive")
-    expires_at_ms_bytes = authorization_fields[5]
-    if len(expires_at_ms_bytes) != 8:
-        raise ValueError(f"{authorization_context} expires_at_ms must be exactly 8 bytes")
-    expires_at_ms = int.from_bytes(expires_at_ms_bytes, "little")
-    request_kind: Literal["top_up", "redeem"] = (
-        "top_up"
-        if expected_type_name == _OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME
-        else "redeem"
-    )
-    request_authority_digest = _offline_iroha_blake2b_hash(
-        b"iroha:offline:kagemusha:operation-outcome-authority:v4\0",
-        len(authority_archive).to_bytes(8, "little"),
-        authority_archive,
-    )
-    canonical_request_digest = _offline_iroha_blake2b_hash(
-        b"iroha:offline:kagemusha:operation-request:v4\0",
-        request_kind.encode("ascii"),
-        len(value).to_bytes(8, "little"),
-        value,
-    )
-    return OfflineOperationIdentity(
-        operation_id=derived_operation_id.hex(),
-        request_authority_digest=request_authority_digest.hex(),
-        canonical_request_digest=canonical_request_digest.hex(),
-        kind=OfflineOperationKind(kind=request_kind),
-        issued_at_ms=issued_at_ms,
-        expires_at_ms=expires_at_ms,
-    )
-
-
-def _decode_kagemusha_compact_fields(
-    payload: bytes,
-    field_count: int,
-    context: str,
-) -> List[bytes]:
-    fields: List[bytes] = []
-    cursor = 0
-    for field_index in range(field_count):
-        field_length, cursor = _decode_kagemusha_compact_length(
-            payload,
-            cursor,
-            f"{context} field {field_index}",
-        )
-        if field_length > len(payload) - cursor:
-            raise ValueError(f"{context} contains a truncated field {field_index}")
-        field_end = cursor + field_length
-        fields.append(payload[cursor:field_end])
-        cursor = field_end
-    if cursor != len(payload):
-        raise ValueError(
-            f"{context} must contain exactly {field_count} compact-length fields"
-        )
-    canonical_payload = b"".join(
-        _encode_kagemusha_compact_length(len(field_value)) + field_value
-        for field_value in fields
-    )
-    if canonical_payload != payload:
-        raise ValueError(f"{context} must use canonical compact-length field framing")
-    return fields
-
-
-def _decode_kagemusha_compact_length(
-    payload: bytes,
-    cursor: int,
-    context: str,
-) -> Tuple[int, int]:
-    value = 0
-    shift = 0
-    for byte_count in range(1, 11):
-        if cursor >= len(payload):
-            raise ValueError(f"{context} compact length is truncated")
-        byte = payload[cursor]
-        cursor += 1
-        if shift == 63 and byte & 0x7E:
-            raise ValueError(f"{context} compact length overflows u64")
-        value |= (byte & 0x7F) << shift
-        if byte & 0x80 == 0:
-            if byte_count > 1 and byte == 0:
-                raise ValueError(f"{context} compact length is non-canonical")
-            return value, cursor
-        shift += 7
-    raise ValueError(f"{context} compact length overflows u64")
-
-
-def _encode_kagemusha_compact_length(value: int) -> bytes:
-    encoded = bytearray()
-    while value >= 0x80:
-        encoded.append((value & 0x7F) | 0x80)
-        value >>= 7
-    encoded.append(value)
-    return bytes(encoded)
 
 
 def _offline_exact_string(value: Any, context: str, *, non_empty: bool = True) -> str:
@@ -2444,34 +2013,6 @@ def _offline_reject_json_constant(token: str) -> Any:
     raise ValueError(f"non-finite JSON number `{token}` is not allowed")
 
 
-def _offline_byte_array(value: Any, context: str, exact_length: Optional[int] = None) -> List[int]:
-    if not isinstance(value, list):
-        raise RuntimeError(f"{context} must be a JSON byte array")
-    if exact_length is not None and len(value) != exact_length:
-        raise RuntimeError(f"{context} must contain exactly {exact_length} bytes")
-    for index, byte in enumerate(value):
-        if isinstance(byte, bool) or not isinstance(byte, int) or not 0 <= byte <= 255:
-            raise RuntimeError(f"{context}[{index}] must be an integer byte")
-    return value
-
-
-def _require_offline_operation_id(value: Any, context: str = "operation_id") -> str:
-    if not isinstance(value, str) or _OFFLINE_OPERATION_ID_RE.fullmatch(value) is None:
-        raise RuntimeError(
-            f"{context} must be marker-bearing lowercase 64-character hexadecimal"
-        )
-    return value
-
-
-def _offline_transaction_hash(value: Any, context: str) -> str:
-    if not isinstance(value, str) or _OFFLINE_TRANSACTION_HASH_RE.fullmatch(value) is None:
-        raise RuntimeError(
-            f"{context} must match [0-9a-f]{{63}}[13579bdf] with the canonical "
-            "Iroha HashOf marker"
-        )
-    return value
-
-
 def _offline_crc16_ccitt_false(value: bytes) -> int:
     crc = 0xFFFF
     for byte in value:
@@ -2502,1112 +2043,6 @@ def _offline_hash_literal(value: Any, context: str) -> str:
     return value
 
 
-def _offline_hash_literal_bytes(value: Any, context: str) -> bytes:
-    canonical = _offline_hash_literal(value, context)
-    match = _OFFLINE_HASH_LITERAL_RE.fullmatch(canonical)
-    if match is None:  # The canonical validator above already rejected this shape.
-        raise AssertionError("validated offline hash literal did not match its grammar")
-    return bytes.fromhex(match.group(1))
-
-
-def _offline_iroha_blake2b_hash(*chunks: bytes) -> bytes:
-    digest = bytearray(hashlib.blake2b(b"".join(chunks), digest_size=32).digest())
-    digest[-1] |= 1
-    return bytes(digest)
-
-
-def _validate_offline_top_up_anchor_inclusion(
-    operation_id: str,
-    anchor_digest: Tuple[int, ...],
-    path: "OfflineTopUpAnchorMerkleProof",
-    commitment: "OfflineTopUpFinalityExecutionCommitment",
-    context: str,
-) -> None:
-    if commitment.topup_anchor_root is None:
-        raise RuntimeError(f"{context} requires a committed top-up root")
-    key_hash = _offline_iroha_blake2b_hash(b"\xd2" + bytes.fromhex(operation_id))
-    value_hash = _offline_iroha_blake2b_hash(bytes(anchor_digest))
-    current = _offline_iroha_blake2b_hash(b"\x00", key_hash, value_hash)
-    index = path.leaf_index
-    node_domain = b"iroha:kagemusha:v2:topup-node\x00"
-    for level, raw_sibling in enumerate(path.siblings):
-        sibling = bytes(raw_sibling)
-        if sibling[-1] & 1 == 0:
-            raise RuntimeError(
-                f"{context}.anchor_path.siblings[{level}] must set the Iroha hash marker bit"
-            )
-        level_bytes = level.to_bytes(2, "little")
-        if index & 1 == 0:
-            current = _offline_iroha_blake2b_hash(
-                node_domain, level_bytes, current, sibling
-            )
-        else:
-            current = _offline_iroha_blake2b_hash(
-                node_domain, level_bytes, sibling, current
-            )
-        index //= 2
-    expected_root = _offline_hash_literal_bytes(
-        commitment.topup_anchor_root, f"{context}.commit_qc.certificate.execution_commitment.topup_anchor_root"
-    )
-    if current != expected_root:
-        raise RuntimeError(f"{context}.anchor_path does not authenticate the top-up anchor")
-
-    ordinary_root = _offline_hash_literal_bytes(
-        commitment.ordinary_writes_root,
-        f"{context}.commit_qc.certificate.execution_commitment.ordinary_writes_root",
-    )
-    expected_post_root = _offline_iroha_blake2b_hash(
-        b"iroha:kagemusha:v2:post-state-root\x00",
-        path.leaf_count.to_bytes(4, "little"),
-        ordinary_root,
-        expected_root,
-    )
-    actual_post_root = _offline_hash_literal_bytes(
-        commitment.post_state_root,
-        f"{context}.commit_qc.certificate.execution_commitment.post_state_root",
-    )
-    if actual_post_root != expected_post_root:
-        raise RuntimeError(
-            f"{context}.commit_qc.certificate.execution_commitment.post_state_root "
-            "does not authenticate the top-up projection"
-        )
-
-
-def taira_local_signing_context(deployed_network_id: str) -> ToriiLocalSigningContext:
-    """Bind Taira metadata to the caller-supplied genesis-derived NetworkId."""
-
-    return ToriiLocalSigningContext(
-        network_id=_offline_hash_literal(
-            deployed_network_id,
-            "taira_local_signing_context.deployed_network_id",
-        )
-    )
-
-
-@dataclass(frozen=True)
-class OfflineStatus:
-    """Universal, asset-neutral offline cash-handoff capability."""
-
-    cash_handoff_capability: str
-    required_bridge_abi_version: int
-    max_hops: int
-    ready: bool
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineStatus":
-        """Decode the exact universally compiled capability projection."""
-
-        context = "offline capability response"
-        record = _offline_mapping(payload, context)
-        _offline_exact_object_fields(
-            record,
-            context,
-            required=(
-                "cash_handoff_capability",
-                "required_bridge_abi_version",
-                "max_hops",
-                "ready",
-            ),
-        )
-        capability = _offline_exact_string(
-            _offline_required(record, "cash_handoff_capability", context),
-            f"{context}.cash_handoff_capability",
-        )
-        if capability != _KAGEMUSHA_CASH_HANDOFF_CAPABILITY:
-            raise RuntimeError(
-                f"{context}.cash_handoff_capability must be "
-                f"{_KAGEMUSHA_CASH_HANDOFF_CAPABILITY}"
-            )
-        abi = _offline_unsigned(
-            _offline_required(record, "required_bridge_abi_version", context),
-            f"{context}.required_bridge_abi_version",
-            _OFFLINE_MAX_U32,
-            positive=True,
-        )
-        if abi != _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION:
-            raise RuntimeError(
-                f"{context}.required_bridge_abi_version must be "
-                f"{_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION}"
-            )
-        max_hops = _offline_unsigned(
-            _offline_required(record, "max_hops", context),
-            f"{context}.max_hops",
-            _OFFLINE_MAX_U32,
-            positive=True,
-        )
-        if max_hops != _KAGEMUSHA_MAX_HOPS:
-            raise RuntimeError(f"{context}.max_hops must be {_KAGEMUSHA_MAX_HOPS}")
-        ready = _offline_required(record, "ready", context)
-        if ready is not True:
-            raise RuntimeError(f"{context}.ready must be true")
-        return cls(
-            cash_handoff_capability=_KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
-            required_bridge_abi_version=_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
-            max_hops=_KAGEMUSHA_MAX_HOPS,
-            ready=True,
-        )
-
-
-@dataclass(frozen=True)
-class OfflinePendingState:
-    """Tagged initial state returned by a successful command submission."""
-
-    state: Literal["pending"] = "pending"
-    value: None = None
-
-
-@dataclass(frozen=True)
-class OfflineOperationReference:
-    """Reference returned by an accepted asynchronous Offline command."""
-
-    identity: OfflineOperationIdentity
-    state: OfflinePendingState
-    transaction_hash: str
-    status_uri: str
-
-
-@dataclass(frozen=True)
-class OfflineScaledAmount:
-    """Lossless positive amount at the authoritative Offline asset scale."""
-
-    atomic_units: int
-    scale: OfflineAssetScale
-
-
-@dataclass(frozen=True)
-class OfflineSpendableNote:
-    """Typed note descriptor embedded in a finalized top-up anchor."""
-
-    network_id: str
-    asset: str
-    note_commitment: Tuple[int, ...]
-    spend_nullifier: Tuple[int, ...]
-    amount: OfflineScaledAmount
-
-
-@dataclass(frozen=True)
-class OfflineVerifierKeyId:
-    """Backend and registry name of a verifier selected at finalization."""
-
-    backend: str
-    name: str
-
-
-@dataclass(frozen=True)
-class KagemushaArtifactBindingV4:
-    """Content-addressed ABI-21/V4 recursive proof release."""
-
-    version: Literal[4]
-    generation: str
-    manifest_sha256: Tuple[int, ...]
-
-
-@dataclass(frozen=True)
-class OfflineTopUpAnchor:
-    """Closed, cross-checked finalized receipt returned by an applied top-up."""
-
-    version: Literal[4]
-    network_id: str
-    payer: str
-    asset: str
-    asset_scale: OfflineAssetScale
-    amount: OfflineScaledAmount
-    initial_root: Tuple[int, ...]
-    finalized_root: Tuple[int, ...]
-    shield_leaf_index: int
-    current_note: OfflineSpendableNote
-    topup_operation_id: Tuple[int, ...]
-    shield_verifier_id: OfflineVerifierKeyId
-    shield_verifier_commitment: Tuple[int, ...]
-    artifact_binding: KagemushaArtifactBindingV4
-    finalized_height: int
-    finalized_tx_hash: Tuple[int, ...]
-    anchor_digest: Tuple[int, ...]
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityProofAnchor:
-    """Exact top-up identity authenticated by a finality proof."""
-
-    topup_operation_id: Tuple[int, ...]
-    anchor_digest: Tuple[int, ...]
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityConsensusMode:
-    """Adjacent-tag Sumeragi-v2 consensus mode."""
-
-    mode: Literal["permissioned", "npos"]
-    details: None = None
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityPayloadEncoding:
-    """Adjacent-tag data-availability payload encoding."""
-
-    encoding: Literal["reed_solomon16"]
-    details: None = None
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityGlobalPhase:
-    """Adjacent-tag Sumeragi-v2 voting phase."""
-
-    phase: Literal["prepare", "commit"]
-    details: None = None
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityDataAvailabilityLayout:
-    """Frozen data-availability layout in a finality height context."""
-
-    encoding: OfflineTopUpFinalityPayloadEncoding
-    chunk_size_bytes: int
-    data_shards: int
-    parity_shards: int
-    max_payload_size_bytes: int
-    max_chunk_count: int
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityHeightContextId:
-    """Typed hash of one complete immutable Sumeragi-v2 height context."""
-
-    hash: str
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityConsensusRound:
-    """Height-context-bound Sumeragi-v2 round."""
-
-    context_id: OfflineTopUpFinalityHeightContextId
-    height: int
-    view: int
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityBlockSubject:
-    """Exact parent, block, and payload hashes certified by a QC."""
-
-    parent_block_hash: Optional[str]
-    block_hash: str
-    payload_hash: str
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityMergeCarrierCommitment:
-    """Exact merge-ledger entry identity authenticated by finality."""
-
-    version: Literal[1]
-    entry_hash: str
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityExecutionCommitment:
-    """Deterministic state transition authenticated by a QC."""
-
-    parent_state_root: str
-    post_state_root: str
-    ordinary_writes_root: str
-    topup_anchor_root: Optional[str]
-    topup_anchor_count: int
-    native_amx_application_manifest_version: int
-    native_amx_application_manifest_root: str
-    native_amx_application_manifest_count: int
-    lane_finality_manifest: Optional[SumeragiV2LaneFinalityManifestCommitment]
-    merge_carrier: Optional[OfflineTopUpFinalityMergeCarrierCommitment]
-    executed_block_wire_len: int
-    executed_block_wire_hash: str
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityQuorumCertificate:
-    """Closed structural representation of a Sumeragi-v2 QC."""
-
-    round: OfflineTopUpFinalityConsensusRound
-    proposal_round: OfflineTopUpFinalityConsensusRound
-    phase: OfflineTopUpFinalityGlobalPhase
-    subject: OfflineTopUpFinalityBlockSubject
-    execution_commitment: OfflineTopUpFinalityExecutionCommitment
-    signers: Tuple[int, ...]
-    aggregate_signature: Tuple[int, ...]
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityValidatorPower:
-    """One BLS validator identity and its frozen positive voting power."""
-
-    validator: str
-    power: int
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityDualQuorum:
-    """Canonical count-and-power quorum derived from a frozen roster."""
-
-    min_signers: int
-    total_power: int
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityNextEpochSnapshot:
-    """Parent-authenticated complete next-epoch election snapshot."""
-
-    epoch: int
-    epoch_end_height: int
-    mode: OfflineTopUpFinalityConsensusMode
-    roster: Tuple[OfflineTopUpFinalityValidatorPower, ...]
-    validator_set_pops: Tuple[Tuple[int, ...], ...]
-    quorum: OfflineTopUpFinalityDualQuorum
-    leader_seed: Tuple[int, ...]
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalitySnapshotBootstrapAnchor:
-    """Audited snapshot authority replacing an unavailable parent CommitQC."""
-
-    snapshot_height: int
-    snapshot_block_hash: str
-    snapshot_block_creation_time_ms: int
-    snapshot_state_hash: str
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityHeightContext:
-    """Bounded projection of the immutable finality height context."""
-
-    context_id: OfflineTopUpFinalityHeightContextId
-    network_id: str
-    protocol_version: Literal[4]
-    height: int
-    epoch: int
-    epoch_end_height: int
-    next_epoch_snapshot: Optional[OfflineTopUpFinalityNextEpochSnapshot]
-    mode: OfflineTopUpFinalityConsensusMode
-    parent_commit_qc: Optional[OfflineTopUpFinalityQuorumCertificate]
-    snapshot_bootstrap: Optional[OfflineTopUpFinalitySnapshotBootstrapAnchor]
-    nexus_amx_context_hash: str
-    execution_policy_hash: str
-    da_layout: OfflineTopUpFinalityDataAvailabilityLayout
-    leader_seed: Tuple[int, ...]
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityCompactQc:
-    """Projected height context and its exact persisted Commit certificate."""
-
-    height_context: OfflineTopUpFinalityHeightContext
-    certificate: OfflineTopUpFinalityQuorumCertificate
-
-
-@dataclass(frozen=True)
-class OfflineTopUpAnchorMerkleProof:
-    """Canonical balanced-Merkle inclusion path for one top-up anchor."""
-
-    leaf_index: int
-    leaf_count: int
-    siblings: Tuple[Tuple[int, ...], ...]
-
-
-@dataclass(frozen=True)
-class OfflineTopUpFinalityProof:
-    """Closed typed Sumeragi-v2 finality proof for one applied top-up."""
-
-    version: Literal[1]
-    anchor: OfflineTopUpFinalityProofAnchor
-    commit_qc: OfflineTopUpFinalityCompactQc
-    anchor_path: OfflineTopUpAnchorMerkleProof
-
-
-@dataclass(frozen=True)
-class OfflineTopUpResult:
-    """Terminal result of an applied top-up."""
-
-    transaction_hash: str
-    finalized_block_height: int
-    anchor: OfflineTopUpAnchor
-    finality_proof: OfflineTopUpFinalityProof
-
-
-@dataclass(frozen=True)
-class OfflineRedeemResult:
-    """Terminal result of an applied redemption."""
-
-    transaction_hash: str
-    finalized_block_height: int
-
-
-@dataclass(frozen=True)
-class OfflineTopUpOperationResult:
-    """Tagged applied top-up result."""
-
-    result: OfflineTopUpResult
-    kind: Literal["top_up"] = "top_up"
-
-
-@dataclass(frozen=True)
-class OfflineRedeemOperationResult:
-    """Tagged applied redemption result."""
-
-    result: OfflineRedeemResult
-    kind: Literal["redeem"] = "redeem"
-
-
-OfflineAppliedResult = Union[OfflineTopUpOperationResult, OfflineRedeemOperationResult]
-
-
-@dataclass(frozen=True)
-class OfflineQueueErrorDetails:
-    """Queue-pressure metadata attached to an Offline rejection."""
-
-    state: str
-    queued: int
-    capacity: int
-    saturated: bool
-
-
-@dataclass(frozen=True)
-class OfflineAxtErrorDetails:
-    """Closed AXT policy metadata attached to an Offline rejection."""
-
-    code: Optional[str] = None
-    reason: Optional[str] = None
-    snapshot_version: Optional[int] = None
-    dataspace: Optional[int] = None
-    lane: Optional[int] = None
-    active_handle_era: Optional[int] = None
-    next_handle_counter: Optional[int] = None
-
-
-@dataclass(frozen=True)
-class OfflineErrorDetails:
-    """Closed structured metadata carried by an Offline error envelope."""
-
-    layer: Optional[str] = None
-    reject_code: Optional[str] = None
-    queue: Optional[OfflineQueueErrorDetails] = None
-    retry_after_seconds: Optional[int] = None
-    endpoint: Optional[str] = None
-    field: Optional[str] = None
-    expected: Optional[str] = None
-    actual: Optional[str] = None
-    profile: Optional[str] = None
-    chain_discriminant: Optional[int] = None
-    entrypoint_hash: Optional[str] = None
-    tx_hash: Optional[str] = None
-    last_status: Optional[str] = None
-    hint: Optional[str] = None
-    axt: Optional[OfflineAxtErrorDetails] = None
-
-
-@dataclass(frozen=True)
-class OfflineErrorEnvelope:
-    """Stable typed error attached to a rejected Offline operation."""
-
-    code: str
-    message: str
-    details: Optional[OfflineErrorDetails] = None
-
-
-@dataclass(frozen=True)
-class OfflinePendingOperation:
-    """Non-terminal Offline operation state."""
-
-    identity: OfflineOperationIdentity
-    transaction_hash: str
-    state: Literal["pending"] = "pending"
-
-
-@dataclass(frozen=True)
-class OfflineAppliedOperation:
-    """Applied terminal Offline operation state."""
-
-    identity: OfflineOperationIdentity
-    result: OfflineAppliedResult
-    state: Literal["applied"] = "applied"
-
-
-@dataclass(frozen=True)
-class OfflineRejectedOperation:
-    """One rejected carrier attempt for a still-retryable Offline operation."""
-
-    identity: OfflineOperationIdentity
-    transaction_hash: str
-    error: OfflineErrorEnvelope
-    state: Literal["rejected"] = "rejected"
-
-
-OfflineOperationStatus = Union[
-    OfflinePendingOperation,
-    OfflineAppliedOperation,
-    OfflineRejectedOperation,
-]
-
-
-def _offline_operation_kind(value: Any, context: str) -> OfflineOperationKind:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(record, context, required=("kind", "value"))
-    kind = _offline_required(record, "kind", context)
-    if kind not in ("top_up", "redeem"):
-        raise RuntimeError(f"{context}.kind must be top_up or redeem")
-    if record["value"] is not None:
-        raise RuntimeError(f"{context}.value must be null")
-    return OfflineOperationKind(kind=kind)
-
-
-def _offline_operation_identity(value: Any, context: str) -> OfflineOperationIdentity:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "operation_id",
-            "request_authority_digest",
-            "canonical_request_digest",
-            "kind",
-            "issued_at_ms",
-            "expires_at_ms",
-        ),
-    )
-    return OfflineOperationIdentity(
-        operation_id=_require_offline_operation_id(
-            _offline_required(record, "operation_id", context),
-            f"{context}.operation_id",
-        ),
-        request_authority_digest=_offline_transaction_hash(
-            _offline_required(record, "request_authority_digest", context),
-            f"{context}.request_authority_digest",
-        ),
-        canonical_request_digest=_offline_transaction_hash(
-            _offline_required(record, "canonical_request_digest", context),
-            f"{context}.canonical_request_digest",
-        ),
-        kind=_offline_operation_kind(
-            _offline_required(record, "kind", context), f"{context}.kind"
-        ),
-        issued_at_ms=_offline_unsigned(
-            _offline_required(record, "issued_at_ms", context),
-            f"{context}.issued_at_ms",
-            _OFFLINE_MAX_U64,
-            positive=True,
-        ),
-        expires_at_ms=_offline_unsigned(
-            _offline_required(record, "expires_at_ms", context),
-            f"{context}.expires_at_ms",
-            _OFFLINE_MAX_U64,
-            positive=True,
-        ),
-    )
-
-
-def _offline_status_uri(operation_id: str) -> str:
-    return f"{_OFFLINE_OPERATIONS_PATH}/{operation_id}"
-
-
-def _offline_retry_after(value: Any, context: str) -> int:
-    if (
-        not isinstance(value, str)
-        or len(value) > 20
-        or re.fullmatch(r"[0-9]+", value) is None
-    ):
-        raise RuntimeError(f"{context} must be a positive decimal number of seconds")
-    seconds = int(value)
-    if seconds == 0 or seconds > _OFFLINE_MAX_U64:
-        raise RuntimeError(f"{context} must be between 1 and {_OFFLINE_MAX_U64}")
-    return seconds
-
-
-def _offline_operation_reference(
-    payload: Mapping[str, Any],
-    *,
-    expected_identity: OfflineOperationIdentity,
-    location: Optional[str],
-    retry_after: Optional[str],
-) -> OfflineOperationReference:
-    context = "offline operation reference"
-    record = _offline_mapping(payload, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "identity",
-            "state",
-            "transaction_hash",
-            "status_uri",
-        ),
-    )
-    identity = _offline_operation_identity(
-        _offline_required(record, "identity", context), f"{context}.identity"
-    )
-    if identity != expected_identity:
-        raise RuntimeError(f"{context}.identity does not match the submitted request")
-    raw_state = _offline_mapping(_offline_required(record, "state", context), f"{context}.state")
-    _offline_exact_object_fields(
-        raw_state, f"{context}.state", required=("state", "value")
-    )
-    if _offline_required(raw_state, "state", f"{context}.state") != "pending":
-        raise RuntimeError(f"{context}.state.state must be pending")
-    if raw_state["value"] is not None:
-        raise RuntimeError(f"{context}.state.value must be null")
-    status_uri = _offline_required(record, "status_uri", context)
-    expected_uri = _offline_status_uri(identity.operation_id)
-    if status_uri != expected_uri:
-        raise RuntimeError(f"{context}.status_uri must equal {expected_uri}")
-    if location != expected_uri:
-        raise RuntimeError(f"Location header must equal {expected_uri}")
-    _offline_retry_after(retry_after, "Retry-After header")
-    return OfflineOperationReference(
-        identity=identity,
-        state=OfflinePendingState(),
-        transaction_hash=_offline_transaction_hash(
-            _offline_required(record, "transaction_hash", context),
-            f"{context}.transaction_hash",
-        ),
-        status_uri=status_uri,
-    )
-
-
-def _validated_offline_operation_reference(
-    value: Any,
-    context: str = "accepted offline operation reference",
-) -> OfflineOperationReference:
-    if type(value) is not OfflineOperationReference:
-        raise TypeError(f"{context} must be an OfflineOperationReference")
-    if type(value.identity) is not OfflineOperationIdentity:
-        raise RuntimeError(f"{context}.identity must be an OfflineOperationIdentity")
-    identity = value.identity
-    identity.__post_init__()
-    if (
-        type(value.state) is not OfflinePendingState
-        or value.state.state != "pending"
-        or value.state.value is not None
-    ):
-        raise RuntimeError(f"{context}.state must be the exact pending unit tag")
-    _offline_transaction_hash(value.transaction_hash, f"{context}.transaction_hash")
-    expected_uri = _offline_status_uri(identity.operation_id)
-    if value.status_uri != expected_uri:
-        raise RuntimeError(f"{context}.status_uri must equal {expected_uri}")
-    return value
-
-
-def _offline_optional_error_string(
-    record: Mapping[str, Any], field: str, context: str
-) -> Optional[str]:
-    value = record.get(field)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise RuntimeError(f"{context}.{field} must be a string")
-    return _offline_exact_string(value, f"{context}.{field}", non_empty=False)
-
-
-def _offline_optional_error_unsigned(
-    record: Mapping[str, Any], field: str, context: str, maximum: int
-) -> Optional[int]:
-    value = record.get(field)
-    if value is None:
-        return None
-    return _offline_unsigned(value, f"{context}.{field}", maximum)
-
-
-def _offline_queue_error_details(value: Any, context: str) -> OfflineQueueErrorDetails:
-    record = _offline_mapping(value, context)
-    state = _offline_exact_string(
-        _offline_required(record, "state", context), f"{context}.state"
-    )
-    saturated = _offline_required(record, "saturated", context)
-    if type(saturated) is not bool:
-        raise RuntimeError(f"{context}.saturated must be a boolean")
-    return OfflineQueueErrorDetails(
-        state=state,
-        queued=_offline_unsigned(
-            _offline_required(record, "queued", context),
-            f"{context}.queued",
-            _OFFLINE_MAX_U64,
-        ),
-        capacity=_offline_unsigned(
-            _offline_required(record, "capacity", context),
-            f"{context}.capacity",
-            _OFFLINE_MAX_U64,
-        ),
-        saturated=saturated,
-    )
-
-
-def _offline_axt_error_details(value: Any, context: str) -> OfflineAxtErrorDetails:
-    record = _offline_mapping(value, context)
-    retired_fields = {"next_min_handle_era", "next_min_sub_nonce"}.intersection(record)
-    if retired_fields:
-        retired = ", ".join(sorted(retired_fields))
-        raise RuntimeError(f"{context} uses retired AXT fields: {retired}")
-    return OfflineAxtErrorDetails(
-        code=_offline_optional_error_string(record, "code", context),
-        reason=_offline_optional_error_string(record, "reason", context),
-        snapshot_version=_offline_optional_error_unsigned(
-            record, "snapshot_version", context, _OFFLINE_MAX_U64
-        ),
-        dataspace=_offline_optional_error_unsigned(
-            record, "dataspace", context, _OFFLINE_MAX_U64
-        ),
-        lane=_offline_optional_error_unsigned(record, "lane", context, _OFFLINE_MAX_U32),
-        active_handle_era=_offline_optional_error_unsigned(
-            record, "active_handle_era", context, _OFFLINE_MAX_U64
-        ),
-        next_handle_counter=_offline_optional_error_unsigned(
-            record, "next_handle_counter", context, _OFFLINE_MAX_U64
-        ),
-    )
-
-
-def _offline_error_details(value: Any, context: str) -> OfflineErrorDetails:
-    record = _offline_mapping(value, context)
-    queue = None
-    if record.get("queue") is not None:
-        queue = _offline_queue_error_details(record["queue"], f"{context}.queue")
-    axt = None
-    if record.get("axt") is not None:
-        axt = _offline_axt_error_details(record["axt"], f"{context}.axt")
-    return OfflineErrorDetails(
-        layer=_offline_optional_error_string(record, "layer", context),
-        reject_code=_offline_optional_error_string(record, "reject_code", context),
-        queue=queue,
-        retry_after_seconds=_offline_optional_error_unsigned(
-            record, "retry_after_seconds", context, _OFFLINE_MAX_U64
-        ),
-        endpoint=_offline_optional_error_string(record, "endpoint", context),
-        field=_offline_optional_error_string(record, "field", context),
-        expected=_offline_optional_error_string(record, "expected", context),
-        actual=_offline_optional_error_string(record, "actual", context),
-        profile=_offline_optional_error_string(record, "profile", context),
-        chain_discriminant=_offline_optional_error_unsigned(
-            record, "chain_discriminant", context, (1 << 16) - 1
-        ),
-        entrypoint_hash=_offline_optional_error_string(record, "entrypoint_hash", context),
-        tx_hash=_offline_optional_error_string(record, "tx_hash", context),
-        last_status=_offline_optional_error_string(record, "last_status", context),
-        hint=_offline_optional_error_string(record, "hint", context),
-        axt=axt,
-    )
-
-
-def _offline_error(value: Any, context: str) -> OfflineErrorEnvelope:
-    record = _offline_mapping(value, context)
-    code = _offline_exact_string(_offline_required(record, "code", context), f"{context}.code")
-    if _OFFLINE_ERROR_CODE_RE.fullmatch(code) is None:
-        raise RuntimeError(
-            f"{context}.code must be a stable lowercase code of 1 to 64 characters"
-        )
-    message = _offline_exact_string(
-        _offline_required(record, "message", context), f"{context}.message"
-    )
-    if len(message) > 1024 or len(message.encode("utf-8")) > 4096:
-        raise RuntimeError(
-            f"{context}.message exceeds the canonical 1024-character/4096-byte bound"
-        )
-    details = None
-    if record.get("details") is not None:
-        details = _offline_error_details(record["details"], f"{context}.details")
-    return OfflineErrorEnvelope(code=code, message=message, details=details)
-
-
-def _offline_fixed_bytes(
-    value: Any,
-    context: str,
-    *,
-    non_zero: bool = False,
-) -> Tuple[int, ...]:
-    raw = _offline_byte_array(value, context, 32)
-    if non_zero and not any(raw):
-        raise RuntimeError(f"{context} must not be all zero")
-    return tuple(raw)
-
-
-def _offline_scaled_amount_model(value: Any, context: str) -> OfflineScaledAmount:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("atomic_units", "scale"),
-    )
-    return OfflineScaledAmount(
-        atomic_units=_offline_unsigned(
-            _offline_required(record, "atomic_units", context),
-            f"{context}.atomic_units",
-            _OFFLINE_MAX_U128,
-            positive=True,
-        ),
-        scale=cast(
-            OfflineAssetScale,
-            _offline_unsigned(
-                _offline_required(record, "scale", context),
-                f"{context}.scale",
-                _OFFLINE_MAX_ASSET_SCALE,
-            ),
-        ),
-    )
-
-
-def _offline_spendable_note(value: Any, context: str) -> OfflineSpendableNote:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "network_id",
-            "asset",
-            "note_commitment",
-            "spend_nullifier",
-            "amount",
-        ),
-    )
-    note_commitment = _offline_fixed_bytes(
-        _offline_required(record, "note_commitment", context),
-        f"{context}.note_commitment",
-        non_zero=True,
-    )
-    spend_nullifier = _offline_fixed_bytes(
-        _offline_required(record, "spend_nullifier", context),
-        f"{context}.spend_nullifier",
-        non_zero=True,
-    )
-    if spend_nullifier == note_commitment:
-        raise RuntimeError(f"{context}.spend_nullifier must differ from note_commitment")
-    return OfflineSpendableNote(
-        network_id=_offline_hash_literal(
-            _offline_required(record, "network_id", context), f"{context}.network_id"
-        ),
-        asset=_offline_canonical_asset_definition_id(
-            _offline_required(record, "asset", context), f"{context}.asset"
-        ),
-        note_commitment=note_commitment,
-        spend_nullifier=spend_nullifier,
-        amount=_offline_scaled_amount_model(
-            _offline_required(record, "amount", context), f"{context}.amount"
-        ),
-    )
-
-
-def _offline_verifier_key_id(value: Any, context: str) -> OfflineVerifierKeyId:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("backend", "name"),
-    )
-    backend = _offline_exact_string(
-        _offline_required(record, "backend", context), f"{context}.backend"
-    )
-    name = _offline_exact_string(
-        _offline_required(record, "name", context), f"{context}.name"
-    )
-    if backend != "halo2/ipa":
-        raise RuntimeError(f"{context}.backend must be halo2/ipa")
-    for field_name, field_value in (("backend", backend), ("name", name)):
-        if (
-            len(field_value.encode("utf-8")) > 256
-            or _OFFLINE_VERIFYING_KEY_ID_FIELD_RE.fullmatch(field_value) is None
-            or any(
-                separator in field_value
-                for separator in (
-                    "..",
-                    "//",
-                    ":::",
-                    "/:",
-                    ":/",
-                    "/.",
-                    "./",
-                    ":.",
-                    ".:",
-                )
-            )
-        ):
-            raise RuntimeError(
-                f"{context}.{field_name} must use the portable verifier-key registry grammar"
-            )
-    return OfflineVerifierKeyId(
-        backend=backend,
-        name=name,
-    )
-
-
-def _offline_top_up_finality_height_context_id(
-    value: Any, context: str
-) -> OfflineTopUpFinalityHeightContextId:
-    if not isinstance(value, list) or len(value) != 1:
-        raise RuntimeError(f"{context} must be a one-element typed-hash array")
-    return OfflineTopUpFinalityHeightContextId(
-        hash=_offline_hash_literal(value[0], f"{context}[0]")
-    )
-
-
-def _offline_top_up_finality_consensus_mode(
-    value: Any, context: str
-) -> OfflineTopUpFinalityConsensusMode:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("mode", "details"),
-    )
-    mode = _offline_required(record, "mode", context)
-    if mode not in ("permissioned", "npos"):
-        raise RuntimeError(f"{context}.mode must be permissioned or npos")
-    if _offline_required(record, "details", context) is not None:
-        raise RuntimeError(f"{context}.details must be null for a unit variant")
-    return OfflineTopUpFinalityConsensusMode(mode=mode, details=None)
-
-
-def _offline_top_up_finality_payload_encoding(
-    value: Any, context: str
-) -> OfflineTopUpFinalityPayloadEncoding:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("encoding", "details"),
-    )
-    encoding = _offline_required(record, "encoding", context)
-    if encoding != "reed_solomon16":
-        raise RuntimeError(f"{context}.encoding must be reed_solomon16")
-    if _offline_required(record, "details", context) is not None:
-        raise RuntimeError(f"{context}.details must be null for a unit variant")
-    return OfflineTopUpFinalityPayloadEncoding(encoding=encoding, details=None)
-
-
-def _offline_top_up_finality_phase(
-    value: Any, context: str
-) -> OfflineTopUpFinalityGlobalPhase:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("phase", "details"),
-    )
-    phase = _offline_required(record, "phase", context)
-    if phase not in ("prepare", "commit"):
-        raise RuntimeError(f"{context}.phase must be prepare or commit")
-    if _offline_required(record, "details", context) is not None:
-        raise RuntimeError(f"{context}.details must be null for a unit variant")
-    return OfflineTopUpFinalityGlobalPhase(phase=phase, details=None)
-
-
-def _offline_top_up_finality_da_layout(
-    value: Any, context: str
-) -> OfflineTopUpFinalityDataAvailabilityLayout:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "encoding",
-            "chunk_size_bytes",
-            "data_shards",
-            "parity_shards",
-            "max_payload_size_bytes",
-            "max_chunk_count",
-        ),
-    )
-    encoding = _offline_top_up_finality_payload_encoding(
-        _offline_required(record, "encoding", context), f"{context}.encoding"
-    )
-    chunk_size_bytes = _offline_unsigned(
-        _offline_required(record, "chunk_size_bytes", context),
-        f"{context}.chunk_size_bytes",
-        _OFFLINE_MAX_U32,
-        positive=True,
-    )
-    data_shards = _offline_unsigned(
-        _offline_required(record, "data_shards", context),
-        f"{context}.data_shards",
-        (1 << 16) - 1,
-        positive=True,
-    )
-    parity_shards = _offline_unsigned(
-        _offline_required(record, "parity_shards", context),
-        f"{context}.parity_shards",
-        (1 << 16) - 1,
-        positive=True,
-    )
-    return OfflineTopUpFinalityDataAvailabilityLayout(
-        encoding=encoding,
-        chunk_size_bytes=chunk_size_bytes,
-        data_shards=data_shards,
-        parity_shards=parity_shards,
-        max_payload_size_bytes=_offline_unsigned(
-            _offline_required(record, "max_payload_size_bytes", context),
-            f"{context}.max_payload_size_bytes",
-            _OFFLINE_MAX_U64,
-            positive=True,
-        ),
-        max_chunk_count=_offline_unsigned(
-            _offline_required(record, "max_chunk_count", context),
-            f"{context}.max_chunk_count",
-            _OFFLINE_MAX_U32,
-            positive=True,
-        ),
-    )
-
-
-def _offline_top_up_finality_round(
-    value: Any, context: str
-) -> OfflineTopUpFinalityConsensusRound:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("context_id", "height", "view"),
-    )
-    return OfflineTopUpFinalityConsensusRound(
-        context_id=_offline_top_up_finality_height_context_id(
-            _offline_required(record, "context_id", context), f"{context}.context_id"
-        ),
-        height=_offline_unsigned(
-            _offline_required(record, "height", context),
-            f"{context}.height",
-            _OFFLINE_MAX_U64,
-            positive=True,
-        ),
-        view=_offline_unsigned(
-            _offline_required(record, "view", context),
-            f"{context}.view",
-            _OFFLINE_MAX_U64,
-        ),
-    )
-
-
-def _offline_top_up_finality_subject(
-    value: Any,
-    context: str,
-    *,
-    round_height: int,
-) -> OfflineTopUpFinalityBlockSubject:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("parent_block_hash", "block_hash", "payload_hash"),
-    )
-    raw_parent = _offline_required(record, "parent_block_hash", context)
-    parent_block_hash = (
-        None
-        if raw_parent is None
-        else _offline_hash_literal(raw_parent, f"{context}.parent_block_hash")
-    )
-    if (round_height == 1) != (parent_block_hash is None):
-        raise RuntimeError(
-            f"{context}.parent_block_hash must be absent only at genesis height"
-        )
-    return OfflineTopUpFinalityBlockSubject(
-        parent_block_hash=parent_block_hash,
-        block_hash=_offline_hash_literal(
-            _offline_required(record, "block_hash", context), f"{context}.block_hash"
-        ),
-        payload_hash=_offline_hash_literal(
-            _offline_required(record, "payload_hash", context), f"{context}.payload_hash"
-        ),
-    )
-
-
 def _lane_finality_manifest_commitment(
     value: Any, context: str
 ) -> Optional[SumeragiV2LaneFinalityManifestCommitment]:
@@ -3628,1046 +2063,267 @@ def _lane_finality_manifest_commitment(
     )
 
 
-def _offline_top_up_finality_execution_commitment(
-    value: Any,
-    context: str,
-    *,
-    require_topup: bool,
-) -> OfflineTopUpFinalityExecutionCommitment:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "parent_state_root",
-            "post_state_root",
-            "ordinary_writes_root",
-            "topup_anchor_root",
-            "topup_anchor_count",
-            "native_amx_application_manifest_version",
-            "native_amx_application_manifest_root",
-            "native_amx_application_manifest_count",
-            "lane_finality_manifest",
-            "merge_carrier",
-            "executed_block_wire_len",
-            "executed_block_wire_hash",
-        ),
-    )
-    topup_anchor_count = _offline_unsigned(
-        _offline_required(record, "topup_anchor_count", context),
-        f"{context}.topup_anchor_count",
-        _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK,
-    )
-    raw_topup_root = _offline_required(record, "topup_anchor_root", context)
-    topup_anchor_root = (
-        None
-        if raw_topup_root is None
-        else _offline_hash_literal(raw_topup_root, f"{context}.topup_anchor_root")
-    )
-    if (topup_anchor_count == 0) != (topup_anchor_root is None):
-        raise RuntimeError(
-            f"{context}.topup_anchor_root must be present exactly when topup_anchor_count is positive"
+def taira_local_signing_context(deployed_network_id: str) -> ToriiLocalSigningContext:
+    """Bind Taira metadata to the caller-supplied genesis-derived NetworkId."""
+
+    return ToriiLocalSigningContext(
+        network_id=_offline_hash_literal(
+            deployed_network_id,
+            "taira_local_signing_context.deployed_network_id",
         )
-    if require_topup and topup_anchor_count == 0:
-        raise RuntimeError(
-            f"{context}.topup_anchor_count must be positive for a top-up finality proof"
-        )
-    native_manifest_version = _offline_unsigned(
-        _offline_required(
-            record, "native_amx_application_manifest_version", context
-        ),
-        f"{context}.native_amx_application_manifest_version",
-        (1 << 16) - 1,
     )
-    if native_manifest_version != _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION:
-        raise RuntimeError(
-            f"{context}.native_amx_application_manifest_version must equal "
-            f"{_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION}"
-        )
-    native_manifest_root = _offline_hash_literal(
-        _offline_required(record, "native_amx_application_manifest_root", context),
-        f"{context}.native_amx_application_manifest_root",
-    )
-    native_manifest_count = _offline_unsigned(
-        _offline_required(record, "native_amx_application_manifest_count", context),
-        f"{context}.native_amx_application_manifest_count",
-        _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES,
-    )
-    if (native_manifest_count == 0) != (
-        native_manifest_root
-        == _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
-    ):
-        raise RuntimeError(
-            f"{context}.native_amx_application_manifest_count must be zero exactly "
-            "for the canonical empty root"
-        )
-    lane_finality_manifest = _lane_finality_manifest_commitment(
-        _offline_required(record, "lane_finality_manifest", context),
-        f"{context}.lane_finality_manifest",
-    )
-    raw_merge_carrier = _offline_required(record, "merge_carrier", context)
-    merge_carrier: Optional[OfflineTopUpFinalityMergeCarrierCommitment]
-    if raw_merge_carrier is None:
-        merge_carrier = None
-    else:
-        merge_context = f"{context}.merge_carrier"
-        merge_record = _offline_mapping(raw_merge_carrier, merge_context)
+
+
+@dataclass(frozen=True)
+class OfflineCashReadinessV1:
+    """Closed Offline Cash V1 readiness response."""
+
+    cash_handoff_capability: str
+    wire_version: int
+    device_lifecycle_version: int
+    ready: bool
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineCashReadinessV1":
+        """Decode the exact universally compiled capability projection."""
+
+        context = "offline capability response"
+        record = _offline_mapping(payload, context)
         _offline_exact_object_fields(
-            merge_record,
-            merge_context,
-            required=("version", "entry_hash"),
-        )
-        merge_version = _offline_unsigned(
-            _offline_required(merge_record, "version", merge_context),
-            f"{merge_context}.version",
-            (1 << 16) - 1,
-        )
-        if merge_version != _SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION:
-            raise RuntimeError(
-                f"{merge_context}.version must be "
-                f"{_SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION}"
-            )
-        merge_carrier = OfflineTopUpFinalityMergeCarrierCommitment(
-            version=1,
-            entry_hash=_offline_hash_literal(
-                _offline_required(merge_record, "entry_hash", merge_context),
-                f"{merge_context}.entry_hash",
+            record,
+            context,
+            required=(
+                "cash_handoff_capability",
+                "wire_version",
+                "device_lifecycle_version",
+                "ready",
             ),
         )
-    return OfflineTopUpFinalityExecutionCommitment(
-        parent_state_root=_offline_hash_literal(
-            _offline_required(record, "parent_state_root", context),
-            f"{context}.parent_state_root",
-        ),
-        post_state_root=_offline_hash_literal(
-            _offline_required(record, "post_state_root", context),
-            f"{context}.post_state_root",
-        ),
-        ordinary_writes_root=_offline_hash_literal(
-            _offline_required(record, "ordinary_writes_root", context),
-            f"{context}.ordinary_writes_root",
-        ),
-        topup_anchor_root=topup_anchor_root,
-        topup_anchor_count=topup_anchor_count,
-        native_amx_application_manifest_version=native_manifest_version,
-        native_amx_application_manifest_root=native_manifest_root,
-        native_amx_application_manifest_count=native_manifest_count,
-        lane_finality_manifest=lane_finality_manifest,
-        merge_carrier=merge_carrier,
-        executed_block_wire_len=_offline_unsigned(
-            _offline_required(record, "executed_block_wire_len", context),
-            f"{context}.executed_block_wire_len",
-            _OFFLINE_MAX_U64,
-            positive=True,
-        ),
-        executed_block_wire_hash=_offline_hash_literal(
-            _offline_required(record, "executed_block_wire_hash", context),
-            f"{context}.executed_block_wire_hash",
-        ),
-    )
-
-
-def _offline_top_up_finality_qc(
-    value: Any,
-    context: str,
-    *,
-    require_topup: bool,
-) -> OfflineTopUpFinalityQuorumCertificate:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "round",
-            "proposal_round",
-            "phase",
-            "subject",
-            "execution_commitment",
-            "signers",
-            "aggregate_signature",
-        ),
-    )
-    round_ = _offline_top_up_finality_round(
-        _offline_required(record, "round", context), f"{context}.round"
-    )
-    proposal_round = _offline_top_up_finality_round(
-        _offline_required(record, "proposal_round", context),
-        f"{context}.proposal_round",
-    )
-    if proposal_round != round_:
-        raise RuntimeError(f"{context}.proposal_round must equal round")
-    phase = _offline_top_up_finality_phase(
-        _offline_required(record, "phase", context), f"{context}.phase"
-    )
-    if phase.phase != "commit":
-        raise RuntimeError(f"{context}.phase must be commit in finality evidence")
-    raw_signers = _offline_required(record, "signers", context)
-    if not isinstance(raw_signers, list) or not (
-        1 <= len(raw_signers) <= _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS
-    ):
-        raise RuntimeError(
-            f"{context}.signers must contain between 1 and "
-            f"{_OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS} indices"
+        capability = _offline_exact_string(
+            _offline_required(record, "cash_handoff_capability", context),
+            f"{context}.cash_handoff_capability",
         )
-    signers = tuple(
-        _offline_unsigned(raw, f"{context}.signers[{index}]", _OFFLINE_MAX_U32)
-        for index, raw in enumerate(raw_signers)
-    )
-    if any(left >= right for left, right in zip(signers, signers[1:])):
-        raise RuntimeError(f"{context}.signers must be strictly increasing and unique")
-    aggregate_signature = tuple(
-        _offline_byte_array(
-            _offline_required(record, "aggregate_signature", context),
-            f"{context}.aggregate_signature",
-            _OFFLINE_BLS_PROOF_BYTES,
-        )
-    )
-    if not any(aggregate_signature):
-        raise RuntimeError(f"{context}.aggregate_signature must not be all zero")
-    return OfflineTopUpFinalityQuorumCertificate(
-        round=round_,
-        proposal_round=proposal_round,
-        phase=phase,
-        subject=_offline_top_up_finality_subject(
-            _offline_required(record, "subject", context),
-            f"{context}.subject",
-            round_height=round_.height,
-        ),
-        execution_commitment=_offline_top_up_finality_execution_commitment(
-            _offline_required(record, "execution_commitment", context),
-            f"{context}.execution_commitment",
-            require_topup=require_topup,
-        ),
-        signers=signers,
-        aggregate_signature=aggregate_signature,
-    )
-
-
-def _offline_top_up_finality_validator_power(
-    value: Any, context: str
-) -> OfflineTopUpFinalityValidatorPower:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("validator", "power"),
-    )
-    validator = _offline_exact_string(
-        _offline_required(record, "validator", context), f"{context}.validator"
-    )
-    if _OFFLINE_BLS_VALIDATOR_ID_RE.fullmatch(validator) is None:
-        raise RuntimeError(
-            f"{context}.validator must be a canonical uppercase BLS-normal peer id"
-        )
-    return OfflineTopUpFinalityValidatorPower(
-        validator=validator,
-        power=_offline_unsigned(
-            _offline_required(record, "power", context),
-            f"{context}.power",
-            _OFFLINE_MAX_U64,
-            positive=True,
-        ),
-    )
-
-
-def _offline_top_up_finality_quorum(
-    value: Any,
-    context: str,
-    roster: Tuple[OfflineTopUpFinalityValidatorPower, ...],
-) -> OfflineTopUpFinalityDualQuorum:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("min_signers", "total_power"),
-    )
-    quorum = OfflineTopUpFinalityDualQuorum(
-        min_signers=_offline_unsigned(
-            _offline_required(record, "min_signers", context),
-            f"{context}.min_signers",
-            _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS,
-            positive=True,
-        ),
-        total_power=_offline_unsigned(
-            _offline_required(record, "total_power", context),
-            f"{context}.total_power",
-            _OFFLINE_MAX_U64,
-            positive=True,
-        ),
-    )
-    expected_min_signers = len(roster) * 2 // 3 + 1
-    expected_total_power = sum(entry.power for entry in roster)
-    if expected_total_power > _OFFLINE_MAX_U64:
-        raise RuntimeError(f"{context}.total_power overflows uint64")
-    if quorum.min_signers != expected_min_signers:
-        raise RuntimeError(f"{context}.min_signers is not canonical for its roster")
-    if quorum.total_power != expected_total_power:
-        raise RuntimeError(f"{context}.total_power does not equal its roster power")
-    return quorum
-
-
-def _offline_top_up_finality_next_epoch_snapshot(
-    value: Any,
-    context: str,
-    *,
-    current_epoch: int,
-    successor_height: int,
-    current_mode: OfflineTopUpFinalityConsensusMode,
-) -> OfflineTopUpFinalityNextEpochSnapshot:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "epoch",
-            "epoch_end_height",
-            "mode",
-            "roster",
-            "validator_set_pops",
-            "quorum",
-            "leader_seed",
-        ),
-    )
-    epoch = _offline_unsigned(
-        _offline_required(record, "epoch", context),
-        f"{context}.epoch",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    if current_epoch == _OFFLINE_MAX_U64 or epoch != current_epoch + 1:
-        raise RuntimeError(f"{context}.epoch must immediately follow the current epoch")
-    epoch_end_height = _offline_unsigned(
-        _offline_required(record, "epoch_end_height", context),
-        f"{context}.epoch_end_height",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    if epoch_end_height < successor_height:
-        raise RuntimeError(f"{context}.epoch_end_height precedes the successor height")
-    mode = _offline_top_up_finality_consensus_mode(
-        _offline_required(record, "mode", context), f"{context}.mode"
-    )
-    if mode != current_mode:
-        raise RuntimeError(f"{context}.mode must equal the current consensus mode")
-    raw_roster = _offline_required(record, "roster", context)
-    if not isinstance(raw_roster, list) or not (
-        1 <= len(raw_roster) <= _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS
-    ):
-        raise RuntimeError(
-            f"{context}.roster must contain between 1 and "
-            f"{_OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS} validators"
-        )
-    roster = tuple(
-        _offline_top_up_finality_validator_power(raw, f"{context}.roster[{index}]")
-        for index, raw in enumerate(raw_roster)
-    )
-    if any(
-        left.validator >= right.validator for left, right in zip(roster, roster[1:])
-    ):
-        raise RuntimeError(
-            f"{context}.roster must be strictly ordered by unique validator id"
-        )
-    if mode.mode == "permissioned" and any(entry.power != 1 for entry in roster):
-        raise RuntimeError(f"{context}.roster permissioned voting powers must all be one")
-    raw_pops = _offline_required(record, "validator_set_pops", context)
-    if not isinstance(raw_pops, list) or len(raw_pops) != len(roster):
-        raise RuntimeError(
-            f"{context}.validator_set_pops must align one-for-one with roster"
-        )
-    validator_set_pops = tuple(
-        tuple(
-            _offline_byte_array(
-                raw,
-                f"{context}.validator_set_pops[{index}]",
-                _OFFLINE_BLS_PROOF_BYTES,
+        if capability != _OFFLINE_CASH_HANDOFF_CAPABILITY:
+            raise RuntimeError(
+                f"{context}.cash_handoff_capability must be "
+                f"{_OFFLINE_CASH_HANDOFF_CAPABILITY}"
             )
-        )
-        for index, raw in enumerate(raw_pops)
-    )
-    if any(not any(proof) for proof in validator_set_pops):
-        raise RuntimeError(f"{context}.validator_set_pops must not contain zero proofs")
-    return OfflineTopUpFinalityNextEpochSnapshot(
-        epoch=epoch,
-        epoch_end_height=epoch_end_height,
-        mode=mode,
-        roster=roster,
-        validator_set_pops=validator_set_pops,
-        quorum=_offline_top_up_finality_quorum(
-            _offline_required(record, "quorum", context), f"{context}.quorum", roster
-        ),
-        leader_seed=_offline_fixed_bytes(
-            _offline_required(record, "leader_seed", context), f"{context}.leader_seed"
-        ),
-    )
-
-
-def _offline_top_up_finality_snapshot_bootstrap_anchor(
-    value: Any, context: str
-) -> OfflineTopUpFinalitySnapshotBootstrapAnchor:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "snapshot_height",
-            "snapshot_block_hash",
-            "snapshot_block_creation_time_ms",
-            "snapshot_state_hash",
-        ),
-    )
-    return OfflineTopUpFinalitySnapshotBootstrapAnchor(
-        snapshot_height=_offline_unsigned(
-            _offline_required(record, "snapshot_height", context),
-            f"{context}.snapshot_height",
-            _OFFLINE_MAX_U64,
+        wire_version = _offline_unsigned(
+            _offline_required(record, "wire_version", context),
+            f"{context}.wire_version",
+            _OFFLINE_MAX_U32,
             positive=True,
-        ),
-        snapshot_block_hash=_offline_hash_literal(
-            _offline_required(record, "snapshot_block_hash", context),
-            f"{context}.snapshot_block_hash",
-        ),
-        snapshot_block_creation_time_ms=_offline_unsigned(
-            _offline_required(record, "snapshot_block_creation_time_ms", context),
-            f"{context}.snapshot_block_creation_time_ms",
-            _OFFLINE_MAX_U64,
-        ),
-        snapshot_state_hash=_offline_hash_literal(
-            _offline_required(record, "snapshot_state_hash", context),
-            f"{context}.snapshot_state_hash",
-        ),
-    )
+        )
+        if wire_version != _OFFLINE_CASH_WIRE_VERSION:
+            raise RuntimeError(
+                f"{context}.wire_version must be "
+                f"{_OFFLINE_CASH_WIRE_VERSION}"
+            )
+        device_lifecycle_version = _offline_unsigned(
+            _offline_required(record, "device_lifecycle_version", context),
+            f"{context}.device_lifecycle_version",
+            _OFFLINE_MAX_U32,
+            positive=True,
+        )
+        if device_lifecycle_version != _OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION:
+            raise RuntimeError(
+                f"{context}.device_lifecycle_version must be "
+                f"{_OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION}"
+            )
+        ready = _offline_required(record, "ready", context)
+        if type(ready) is not bool:
+            raise RuntimeError(f"{context}.ready must be a boolean")
+        return cls(
+            cash_handoff_capability=_OFFLINE_CASH_HANDOFF_CAPABILITY,
+            wire_version=_OFFLINE_CASH_WIRE_VERSION,
+            device_lifecycle_version=_OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION,
+            ready=ready,
+        )
 
 
-def _offline_top_up_finality_height_context(
-    value: Any,
-    context: str,
-    *,
-    expected_finalized_height: int,
-) -> OfflineTopUpFinalityHeightContext:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "context_id",
-            "network_id",
-            "protocol_version",
-            "height",
-            "epoch",
-            "epoch_end_height",
-            "next_epoch_snapshot",
-            "mode",
-            "parent_commit_qc",
-            "snapshot_bootstrap",
-            "nexus_amx_context_hash",
-            "execution_policy_hash",
-            "da_layout",
-            "leader_seed",
-        ),
+_OFFLINE_OPERATION_KINDS = frozenset(("top_up", "redemption"))
+_OFFLINE_OPERATION_STATES = frozenset(("pending", "applied", "rejected"))
+_OFFLINE_REJECTION_CODES = frozenset(
+    (
+        "invalid_request",
+        "unauthorized",
+        "insufficient_online_balance",
+        "invalid_proof",
+        "hardware_policy_rejected",
+        "identity_conflict",
+        "reserve_underflow",
+        "arithmetic_overflow",
+        "internal_failure",
     )
-    context_id = _offline_top_up_finality_height_context_id(
-        _offline_required(record, "context_id", context), f"{context}.context_id"
-    )
-    network_id = _offline_hash_literal(
-        _offline_required(record, "network_id", context), f"{context}.network_id"
-    )
-    protocol_version = _offline_unsigned(
-        _offline_required(record, "protocol_version", context),
-        f"{context}.protocol_version",
-        (1 << 16) - 1,
-    )
-    if protocol_version != _OFFLINE_SUMERAGI_PROTOCOL_VERSION:
-        raise RuntimeError(
-            f"{context}.protocol_version must be {_OFFLINE_SUMERAGI_PROTOCOL_VERSION}"
+)
+
+
+@dataclass(frozen=True)
+class OfflineCashOperationRejectionV1:
+    """Stable terminal failure metadata without free-form diagnostics."""
+
+    code: str
+    detail_digest: bytes
+
+
+@dataclass(frozen=True)
+class UnverifiedOfflineCashOperationStatusV1:
+    """Structurally valid status whose applied monetary result remains private."""
+
+    operation_id: bytes
+    kind: str
+    state: str
+    rejection: Optional[OfflineCashOperationRejectionV1]
+    _source: Mapping[str, Any] = field(repr=False, compare=False)
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> "UnverifiedOfflineCashOperationStatusV1":
+        """Validate the closed outer operation envelope without trusting finality."""
+
+        context = "Offline Cash V1 operation status"
+        source = _snapshot_offline_json(payload, context)
+        record = _offline_mapping(source, context)
+        _offline_exact_object_fields(
+            record,
+            context,
+            required=("version", "operation_id", "kind", "state", "result", "rejection"),
         )
-    height = _offline_unsigned(
-        _offline_required(record, "height", context),
-        f"{context}.height",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    if height != expected_finalized_height:
-        raise RuntimeError(
-            f"{context}.height does not match finalized_block_height"
+        if _offline_unsigned(record["version"], f"{context}.version", _OFFLINE_MAX_U32) != 1:
+            raise RuntimeError(f"{context}.version must be 1")
+        operation_id = _offline_fixed_bytes(record["operation_id"], f"{context}.operation_id")
+        kind = _offline_tagged_unit(
+            record["kind"], "kind", _OFFLINE_OPERATION_KINDS, f"{context}.kind"
         )
-    epoch = _offline_unsigned(
-        _offline_required(record, "epoch", context), f"{context}.epoch", _OFFLINE_MAX_U64
-    )
-    epoch_end_height = _offline_unsigned(
-        _offline_required(record, "epoch_end_height", context),
-        f"{context}.epoch_end_height",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    if epoch_end_height < height:
-        raise RuntimeError(f"{context}.epoch_end_height must not precede height")
-    mode = _offline_top_up_finality_consensus_mode(
-        _offline_required(record, "mode", context), f"{context}.mode"
-    )
-    raw_next_snapshot = _offline_required(record, "next_epoch_snapshot", context)
-    if raw_next_snapshot is None:
-        next_epoch_snapshot = None
-    else:
-        if height == _OFFLINE_MAX_U64:
-            raise RuntimeError(f"{context}.height has no representable successor")
-        next_epoch_snapshot = _offline_top_up_finality_next_epoch_snapshot(
-            raw_next_snapshot,
-            f"{context}.next_epoch_snapshot",
-            current_epoch=epoch,
-            successor_height=height + 1,
-            current_mode=mode,
+        state = _offline_tagged_unit(
+            record["state"], "state", _OFFLINE_OPERATION_STATES, f"{context}.state"
         )
-    raw_parent_qc = _offline_required(record, "parent_commit_qc", context)
-    parent_commit_qc = (
-        None
-        if raw_parent_qc is None
-        else _offline_top_up_finality_qc(
-            raw_parent_qc,
-            f"{context}.parent_commit_qc",
-            require_topup=False,
-        )
-    )
-    if parent_commit_qc is not None and parent_commit_qc.round.height + 1 != height:
-        raise RuntimeError(
-            f"{context}.parent_commit_qc.round.height must immediately precede height"
-        )
-    raw_snapshot_bootstrap = _offline_required(record, "snapshot_bootstrap", context)
-    snapshot_bootstrap = (
-        None
-        if raw_snapshot_bootstrap is None
-        else _offline_top_up_finality_snapshot_bootstrap_anchor(
-            raw_snapshot_bootstrap,
-            f"{context}.snapshot_bootstrap",
-        )
-    )
-    if parent_commit_qc is not None and snapshot_bootstrap is not None:
-        raise RuntimeError(
-            f"{context}.parent_commit_qc and snapshot_bootstrap are mutually exclusive"
-        )
+        rejection: Optional[OfflineCashOperationRejectionV1] = None
+        if state == "pending":
+            if record["result"] is not None or record["rejection"] is not None:
+                raise RuntimeError(f"{context} pending state cannot contain a result or rejection")
+        elif state == "applied":
+            if not isinstance(record["result"], Mapping) or record["rejection"] is not None:
+                raise RuntimeError(f"{context} applied state has an invalid terminal envelope")
+        else:
+            if record["result"] is not None:
+                raise RuntimeError(f"{context} rejected state cannot contain a result")
+            rejected = _offline_mapping(record["rejection"], f"{context}.rejection")
+            _offline_exact_object_fields(
+                rejected,
+                f"{context}.rejection",
+                required=("code", "detail_digest"),
+            )
+            rejection = OfflineCashOperationRejectionV1(
+                code=_offline_tagged_unit(
+                    rejected["code"],
+                    "code",
+                    _OFFLINE_REJECTION_CODES,
+                    f"{context}.rejection.code",
+                ),
+                detail_digest=_offline_fixed_bytes(
+                    rejected["detail_digest"], f"{context}.rejection.detail_digest"
+                ),
+            )
+        return cls(operation_id, kind, state, rejection, record)
+
+    def verify_against(
+        self,
+        trust_anchor: object,
+        verifier: Callable[[Mapping[str, Any], object], Any],
+    ) -> Any:
+        """Release the full status only through a caller-pinned finality verifier."""
+
+        if trust_anchor is None:
+            raise TypeError("Offline Cash V1 finality trust anchor is required")
+        if not callable(verifier):
+            raise TypeError("Offline Cash V1 finality verifier must be callable")
+        return verifier(_snapshot_offline_json(self._source, "operation status"), trust_anchor)
+
+
+def _offline_fixed_bytes(value: Any, context: str) -> bytes:
     if (
-        snapshot_bootstrap is not None
-        and snapshot_bootstrap.snapshot_height + 1 != height
+        not isinstance(value, list)
+        or len(value) != 32
+        or any(isinstance(item, bool) or not isinstance(item, int) or item < 0 or item > 255 for item in value)
+        or not any(value)
     ):
-        raise RuntimeError(
-            f"{context}.snapshot_bootstrap.snapshot_height must immediately precede height"
-        )
-    return OfflineTopUpFinalityHeightContext(
-        context_id=context_id,
-        network_id=network_id,
-        protocol_version=4,
-        height=height,
-        epoch=epoch,
-        epoch_end_height=epoch_end_height,
-        next_epoch_snapshot=next_epoch_snapshot,
-        mode=mode,
-        parent_commit_qc=parent_commit_qc,
-        snapshot_bootstrap=snapshot_bootstrap,
-        nexus_amx_context_hash=_offline_hash_literal(
-            _offline_required(record, "nexus_amx_context_hash", context),
-            f"{context}.nexus_amx_context_hash",
-        ),
-        execution_policy_hash=_offline_hash_literal(
-            _offline_required(record, "execution_policy_hash", context),
-            f"{context}.execution_policy_hash",
-        ),
-        da_layout=_offline_top_up_finality_da_layout(
-            _offline_required(record, "da_layout", context), f"{context}.da_layout"
-        ),
-        leader_seed=_offline_fixed_bytes(
-            _offline_required(record, "leader_seed", context), f"{context}.leader_seed"
-        ),
-    )
+        raise RuntimeError(f"{context} must be one nonzero 32-byte array")
+    return bytes(value)
 
 
-def _offline_top_up_anchor_merkle_proof(
-    value: Any,
-    context: str,
+def _offline_tagged_unit(
+    value: Any, tag: str, allowed: frozenset[str], context: str
+) -> str:
+    record = _offline_mapping(value, context)
+    _offline_exact_object_fields(record, context, required=(tag, "value"))
+    selected = record[tag]
+    if not isinstance(selected, str) or selected not in allowed or record["value"] is not None:
+        raise RuntimeError(f"{context} is invalid")
+    return selected
+
+
+def _offline_operation_id_hex(value: Union[str, bytes, bytearray, memoryview]) -> str:
+    if isinstance(value, str):
+        if re.fullmatch(r"[0-9a-f]{64}", value) is None or value == "0" * 64:
+            raise ValueError("Offline Cash V1 operation ID must be 64 lowercase hexadecimal characters")
+        return value
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise TypeError("Offline Cash V1 operation ID must be bytes-like or lowercase hexadecimal")
+    raw = bytes(value)
+    if len(raw) != 32 or not any(raw):
+        raise ValueError("Offline Cash V1 operation ID must be one nonzero 32-byte value")
+    return raw.hex()
+
+
+def _offline_compact_field(payload: bytes, offset: int, context: str) -> Tuple[bytes, int]:
+    length = 0
+    shift = 0
+    for index in range(10):
+        if offset >= len(payload):
+            raise ValueError(f"{context} is truncated")
+        byte = payload[offset]
+        offset += 1
+        if index == 9 and byte & 0xFE:
+            raise ValueError(f"{context} length exceeds u64")
+        length |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            if index and byte == 0:
+                raise ValueError(f"{context} length is not minimally encoded")
+            end = offset + length
+            if end > len(payload):
+                raise ValueError(f"{context} length exceeds the request body")
+            return payload[offset:end], end
+        shift += 7
+    raise ValueError(f"{context} length exceeds u64")
+
+
+def _offline_command_body(
+    value: Union[bytes, bytearray, memoryview],
     *,
-    expected_leaf_count: int,
-) -> OfflineTopUpAnchorMerkleProof:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("leaf_index", "leaf_count", "siblings"),
-    )
-    leaf_count = _offline_unsigned(
-        _offline_required(record, "leaf_count", context),
-        f"{context}.leaf_count",
-        _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK,
-        positive=True,
-    )
-    if leaf_count != expected_leaf_count:
-        raise RuntimeError(
-            f"{context}.leaf_count must equal commit_qc certificate topup_anchor_count"
-        )
-    leaf_index = _offline_unsigned(
-        _offline_required(record, "leaf_index", context),
-        f"{context}.leaf_index",
-        _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK - 1,
-    )
-    if leaf_index >= leaf_count:
-        raise RuntimeError(f"{context}.leaf_index must be less than leaf_count")
-    raw_siblings = _offline_required(record, "siblings", context)
-    if not isinstance(raw_siblings, list):
-        raise RuntimeError(f"{context}.siblings must be an array")
-    expected_depth = (leaf_count - 1).bit_length()
-    if len(raw_siblings) != expected_depth or len(raw_siblings) > _OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS:
-        raise RuntimeError(
-            f"{context}.siblings must contain the canonical {expected_depth}-level path"
-        )
-    siblings = tuple(
-        _offline_fixed_bytes(raw, f"{context}.siblings[{index}]", non_zero=True)
-        for index, raw in enumerate(raw_siblings)
-    )
-    return OfflineTopUpAnchorMerkleProof(
-        leaf_index=leaf_index,
-        leaf_count=leaf_count,
-        siblings=siblings,
-    )
-
-
-def _offline_top_up_anchor(
-    value: Any,
+    schema: str,
+    maximum: int,
     context: str,
-    *,
-    expected_operation_id: str,
-    expected_transaction_hash: str,
-    expected_finalized_height: int,
-) -> OfflineTopUpAnchor:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "version",
-            "network_id",
-            "payer",
-            "asset",
-            "asset_scale",
-            "amount",
-            "initial_root",
-            "finalized_root",
-            "shield_leaf_index",
-            "current_note",
-            "topup_operation_id",
-            "shield_verifier_id",
-            "shield_verifier_commitment",
-            "artifact_binding",
-            "finalized_height",
-            "finalized_tx_hash",
-            "anchor_digest",
-        ),
+) -> Tuple[bytes, str]:
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise TypeError(f"{context} must be canonical Norito bytes")
+    body = bytes(value)
+    if not body or len(body) > maximum:
+        raise ValueError(f"{context} exceeds its {maximum}-byte protocol bound")
+    payload = decode_norito_frame_payload(
+        body,
+        context=context,
+        expected_type_name=schema,
+        expected_padding_length=8,
+        expected_flags=0x02,
     )
-    version = _offline_unsigned(
-        _offline_required(record, "version", context), f"{context}.version", (1 << 16) - 1
-    )
-    if version != 4:
-        raise RuntimeError(f"{context}.version must be 4")
-    amount = _offline_scaled_amount_model(
-        _offline_required(record, "amount", context), f"{context}.amount"
-    )
-    asset_scale = cast(
-        OfflineAssetScale,
-        _offline_unsigned(
-            _offline_required(record, "asset_scale", context),
-            f"{context}.asset_scale",
-            _OFFLINE_MAX_ASSET_SCALE,
-        ),
-    )
-    if asset_scale != amount.scale:
-        raise RuntimeError(f"{context}.asset_scale must equal amount.scale")
+    version, offset = _offline_compact_field(payload, 0, f"{context}.version")
+    operation_id, _offset = _offline_compact_field(payload, offset, f"{context}.operation_id")
+    if version != b"\x01\x00":
+        raise ValueError(f"{context} version must be 1")
+    return body, _offline_operation_id_hex(operation_id)
 
-    initial_root = _offline_fixed_bytes(
-        _offline_required(record, "initial_root", context),
-        f"{context}.initial_root",
-        non_zero=True,
-    )
-    finalized_root = _offline_fixed_bytes(
-        _offline_required(record, "finalized_root", context),
-        f"{context}.finalized_root",
-        non_zero=True,
-    )
-    if initial_root == finalized_root:
-        raise RuntimeError(f"{context}.finalized_root must differ from initial_root")
-
-    shield_leaf_index = _offline_unsigned(
-        _offline_required(record, "shield_leaf_index", context),
-        f"{context}.shield_leaf_index",
-        _OFFLINE_TOP_UP_SHIELD_INSERTION_CAPACITY - 1,
-    )
-
-    current_note = _offline_spendable_note(
-        _offline_required(record, "current_note", context), f"{context}.current_note"
-    )
-    network_id = _offline_hash_literal(
-        _offline_required(record, "network_id", context), f"{context}.network_id"
-    )
-    if current_note.network_id != network_id:
-        raise RuntimeError(f"{context}.current_note.network_id must equal network_id")
-    if current_note.amount != amount:
-        raise RuntimeError(f"{context}.current_note.amount must equal amount")
-    asset = _offline_exact_string(
-        _offline_required(record, "asset", context), f"{context}.asset"
-    )
-    asset_definition, asset_account = _offline_asset_id_components(
-        asset, f"{context}.asset"
-    )
-    payer = _offline_exact_string(
-        _offline_required(record, "payer", context), f"{context}.payer"
-    )
-    payer_account = _offline_canonical_account_id_bytes(payer, f"{context}.payer")
-    if not secrets.compare_digest(asset_account, payer_account):
-        raise RuntimeError(f"{context}.asset account must equal payer")
-    if current_note.asset != asset_definition:
-        raise RuntimeError(
-            f"{context}.current_note.asset must equal asset.definition"
-        )
-
-    topup_operation_id = _offline_fixed_bytes(
-        _offline_required(record, "topup_operation_id", context),
-        f"{context}.topup_operation_id",
-        non_zero=True,
-    )
-    if bytes(topup_operation_id).hex() != expected_operation_id:
-        raise RuntimeError(f"{context}.topup_operation_id does not match the operation")
-    finalized_height = _offline_unsigned(
-        _offline_required(record, "finalized_height", context),
-        f"{context}.finalized_height",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    if finalized_height != expected_finalized_height:
-        raise RuntimeError(
-            f"{context}.finalized_height does not match finalized_block_height"
-        )
-    finalized_tx_hash = _offline_fixed_bytes(
-        _offline_required(record, "finalized_tx_hash", context),
-        f"{context}.finalized_tx_hash",
-        non_zero=True,
-    )
-    if bytes(finalized_tx_hash).hex() != expected_transaction_hash:
-        raise RuntimeError(f"{context}.finalized_tx_hash does not match transaction_hash")
-    artifact_context = f"{context}.artifact_binding"
-    artifact_record = _offline_mapping(
-        _offline_required(record, "artifact_binding", context), artifact_context
-    )
-    _offline_exact_object_fields(
-        artifact_record,
-        artifact_context,
-        required=("version", "generation", "manifest_sha256"),
-    )
-    artifact_version = _offline_unsigned(
-        _offline_required(artifact_record, "version", artifact_context),
-        f"{artifact_context}.version",
-        (1 << 16) - 1,
-    )
-    if artifact_version != 4:
-        raise RuntimeError(f"{artifact_context}.version must be 4")
-    artifact_generation = _offline_exact_string(
-        _offline_required(artifact_record, "generation", artifact_context),
-        f"{artifact_context}.generation",
-    )
-    if len(artifact_generation.encode("utf-8")) > 128:
-        raise RuntimeError(
-            f"{artifact_context}.generation must contain at most 128 UTF-8 bytes"
-        )
-    artifact_binding = KagemushaArtifactBindingV4(
-        version=4,
-        generation=artifact_generation,
-        manifest_sha256=_offline_fixed_bytes(
-            _offline_required(artifact_record, "manifest_sha256", artifact_context),
-            f"{artifact_context}.manifest_sha256",
-            non_zero=True,
-        ),
-    )
-
-    return OfflineTopUpAnchor(
-        version=4,
-        network_id=network_id,
-        payer=payer,
-        asset=asset,
-        asset_scale=asset_scale,
-        amount=amount,
-        initial_root=initial_root,
-        finalized_root=finalized_root,
-        shield_leaf_index=shield_leaf_index,
-        current_note=current_note,
-        topup_operation_id=topup_operation_id,
-        shield_verifier_id=_offline_verifier_key_id(
-            _offline_required(record, "shield_verifier_id", context),
-            f"{context}.shield_verifier_id",
-        ),
-        shield_verifier_commitment=_offline_fixed_bytes(
-            _offline_required(record, "shield_verifier_commitment", context),
-            f"{context}.shield_verifier_commitment",
-            non_zero=True,
-        ),
-        artifact_binding=artifact_binding,
-        finalized_height=finalized_height,
-        finalized_tx_hash=finalized_tx_hash,
-        anchor_digest=_offline_fixed_bytes(
-            _offline_required(record, "anchor_digest", context),
-            f"{context}.anchor_digest",
-            non_zero=True,
-        ),
-    )
-
-
-def _offline_top_up_finality_proof(
-    value: Any,
-    context: str,
-    *,
-    expected_operation_id: str,
-    expected_anchor_digest: Tuple[int, ...],
-    expected_finalized_height: int,
-) -> OfflineTopUpFinalityProof:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("version", "anchor", "commit_qc", "anchor_path"),
-    )
-    version = _offline_unsigned(
-        _offline_required(record, "version", context),
-        f"{context}.version",
-        (1 << 16) - 1,
-    )
-    if version != 1:
-        raise RuntimeError(f"{context}.version must be 1")
-
-    anchor_context = f"{context}.anchor"
-    raw_anchor = _offline_mapping(
-        _offline_required(record, "anchor", context), anchor_context
-    )
-    _offline_exact_object_fields(
-        raw_anchor,
-        anchor_context,
-        required=("topup_operation_id", "anchor_digest"),
-    )
-    topup_operation_id = _offline_fixed_bytes(
-        _offline_required(raw_anchor, "topup_operation_id", anchor_context),
-        f"{anchor_context}.topup_operation_id",
-        non_zero=True,
-    )
-    if bytes(topup_operation_id).hex() != expected_operation_id:
-        raise RuntimeError(
-            f"{anchor_context}.topup_operation_id does not match the operation"
-        )
-    anchor_digest = _offline_fixed_bytes(
-        _offline_required(raw_anchor, "anchor_digest", anchor_context),
-        f"{anchor_context}.anchor_digest",
-        non_zero=True,
-    )
-    if anchor_digest != expected_anchor_digest:
-        raise RuntimeError(
-            f"{anchor_context}.anchor_digest does not match the finalized anchor"
-        )
-
-    commit_qc_context = f"{context}.commit_qc"
-    commit_qc = _offline_mapping(
-        _offline_required(record, "commit_qc", context), commit_qc_context
-    )
-    _offline_exact_object_fields(
-        commit_qc,
-        commit_qc_context,
-        required=("height_context", "certificate"),
-    )
-    height_context_context = f"{commit_qc_context}.height_context"
-    height_context = _offline_top_up_finality_height_context(
-        _offline_required(commit_qc, "height_context", commit_qc_context),
-        height_context_context,
-        expected_finalized_height=expected_finalized_height,
-    )
-
-    certificate_context = f"{commit_qc_context}.certificate"
-    certificate = _offline_top_up_finality_qc(
-        _offline_required(commit_qc, "certificate", commit_qc_context),
-        certificate_context,
-        require_topup=True,
-    )
-    if certificate.round.context_id != height_context.context_id:
-        raise RuntimeError(
-            f"{certificate_context}.round.context_id does not match height_context.context_id"
-        )
-    if certificate.round.height != height_context.height:
-        raise RuntimeError(
-            f"{certificate_context}.round.height does not match height_context.height"
-        )
-
-    anchor_path_context = f"{context}.anchor_path"
-    anchor_path = _offline_top_up_anchor_merkle_proof(
-        _offline_required(record, "anchor_path", context),
-        anchor_path_context,
-        expected_leaf_count=certificate.execution_commitment.topup_anchor_count,
-    )
-    _validate_offline_top_up_anchor_inclusion(
-        expected_operation_id,
-        anchor_digest,
-        anchor_path,
-        certificate.execution_commitment,
-        context,
-    )
-    return OfflineTopUpFinalityProof(
-        version=1,
-        anchor=OfflineTopUpFinalityProofAnchor(
-            topup_operation_id=topup_operation_id,
-            anchor_digest=anchor_digest,
-        ),
-        commit_qc=OfflineTopUpFinalityCompactQc(
-            height_context=height_context,
-            certificate=certificate,
-        ),
-        anchor_path=anchor_path,
-    )
-
-
-def _offline_applied_result(
-    value: Any, context: str, operation_id: str
-) -> OfflineAppliedResult:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(record, context, required=("kind", "result"))
-    kind = _offline_required(record, "kind", context)
-    if kind not in ("top_up", "redeem"):
-        raise RuntimeError(f"{context}.kind must be top_up or redeem")
-    result_context = f"{context}.result"
-    result = _offline_mapping(_offline_required(record, "result", context), result_context)
-    if kind == "top_up":
-        _offline_exact_object_fields(
-            result,
-            result_context,
-            required=(
-                "transaction_hash",
-                "finalized_block_height",
-                "anchor",
-                "finality_proof",
-            ),
-        )
-    else:
-        _offline_exact_object_fields(
-            result,
-            result_context,
-            required=(
-                "transaction_hash",
-                "finalized_block_height",
-            ),
-        )
-    transaction_hash = _offline_transaction_hash(
-        _offline_required(result, "transaction_hash", result_context),
-        f"{result_context}.transaction_hash",
-    )
-    finalized_block_height = _offline_unsigned(
-        _offline_required(result, "finalized_block_height", result_context),
-        f"{result_context}.finalized_block_height",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    if kind == "top_up":
-        anchor = _offline_top_up_anchor(
-            _offline_required(result, "anchor", result_context),
-            f"{result_context}.anchor",
-            expected_operation_id=operation_id,
-            expected_transaction_hash=transaction_hash,
-            expected_finalized_height=finalized_block_height,
-        )
-        finality_proof = _offline_top_up_finality_proof(
-            _offline_required(result, "finality_proof", result_context),
-            f"{result_context}.finality_proof",
-            expected_operation_id=operation_id,
-            expected_anchor_digest=anchor.anchor_digest,
-            expected_finalized_height=finalized_block_height,
-        )
-        return OfflineTopUpOperationResult(
-            OfflineTopUpResult(
-                transaction_hash=transaction_hash,
-                finalized_block_height=finalized_block_height,
-                anchor=anchor,
-                finality_proof=finality_proof,
-            )
-        )
-    for top_up_only_field in ("anchor", "finality_proof"):
-        if top_up_only_field in result:
-            raise RuntimeError(
-                f"{result_context}.{top_up_only_field} is invalid for a redeem result"
-            )
-    return OfflineRedeemOperationResult(
-        OfflineRedeemResult(
-            transaction_hash=transaction_hash,
-            finalized_block_height=finalized_block_height,
-        )
-    )
-
-
-def _offline_operation_status(
-    payload: Mapping[str, Any], accepted_reference: OfflineOperationReference
-) -> OfflineOperationStatus:
-    accepted = _validated_offline_operation_reference(accepted_reference)
-    context = "offline operation status"
-    record = _offline_mapping(payload, context)
-    _offline_exact_object_fields(record, context, required=("state", "value"))
-    state = _offline_required(record, "state", context)
-    if state not in ("pending", "applied", "rejected"):
-        raise RuntimeError(f"{context}.state must be pending, applied, or rejected")
-    value_context = f"{context}.value"
-    value = _offline_mapping(_offline_required(record, "value", context), value_context)
-    if state == "pending":
-        _offline_exact_object_fields(
-            value,
-            value_context,
-            required=("identity", "transaction_hash"),
-        )
-    elif state == "applied":
-        _offline_exact_object_fields(
-            value, value_context, required=("identity", "result")
-        )
-    else:
-        _offline_exact_object_fields(
-            value,
-            value_context,
-            required=("identity", "transaction_hash", "error"),
-        )
-    # Establish the entire immutable identity before accepting any retry cursor
-    # or terminal payload from the response.
-    identity = _offline_operation_identity(
-        _offline_required(value, "identity", value_context),
-        f"{value_context}.identity",
-    )
-    if identity != accepted.identity:
-        raise RuntimeError(
-            f"{value_context}.identity does not match the accepted operation"
-        )
-    if state == "pending":
-        return OfflinePendingOperation(
-            identity=identity,
-            transaction_hash=_offline_transaction_hash(
-                _offline_required(value, "transaction_hash", value_context),
-                f"{value_context}.transaction_hash",
-            ),
-        )
-    if state == "applied":
-        status = OfflineAppliedOperation(
-            identity=identity,
-            result=_offline_applied_result(
-                _offline_required(value, "result", value_context),
-                f"{value_context}.result",
-                identity.operation_id,
-            ),
-        )
-        if status.result.kind != identity.kind.kind:
-            raise RuntimeError(
-                f"{value_context}.result does not match the accepted operation kind"
-            )
-        return status
-    return OfflineRejectedOperation(
-        identity=identity,
-        transaction_hash=_offline_transaction_hash(
-            _offline_required(value, "transaction_hash", value_context),
-            f"{value_context}.transaction_hash",
-        ),
-        error=_offline_error(
-            _offline_required(value, "error", value_context), f"{value_context}.error"
-        ),
-    )
 
 
 def _multisig_norito_compact_length(value: int) -> bytes:
@@ -7620,8 +5276,8 @@ class _SumeragiV2StatusParser:
             "parent_state_root",
             "post_state_root",
             "ordinary_writes_root",
-            "topup_anchor_root",
-            "topup_anchor_count",
+            "offline_cash_top_up_root",
+            "offline_cash_top_up_count",
             "native_amx_application_manifest_version",
             "native_amx_application_manifest_root",
             "native_amx_application_manifest_count",
@@ -7636,20 +5292,24 @@ class _SumeragiV2StatusParser:
         for required_field in ("lane_finality_manifest", "merge_carrier"):
             if required_field not in record:
                 raise RuntimeError(f"{context}.{required_field} is required")
-        topup_count = cls._unsigned(
-            record.get("topup_anchor_count"),
-            f"{context}.topup_anchor_count",
+        offline_cash_top_up_count = cls._unsigned(
+            record.get("offline_cash_top_up_count"),
+            f"{context}.offline_cash_top_up_count",
             maximum=16,
         )
-        raw_topup_root = record.get("topup_anchor_root")
-        topup_root = (
+        raw_offline_cash_top_up_root = record.get("offline_cash_top_up_root")
+        offline_cash_top_up_root = (
             None
-            if raw_topup_root is None
-            else cls._hash(raw_topup_root, f"{context}.topup_anchor_root")
+            if raw_offline_cash_top_up_root is None
+            else cls._hash(
+                raw_offline_cash_top_up_root,
+                f"{context}.offline_cash_top_up_root",
+            )
         )
-        if (topup_count == 0) != (topup_root is None):
+        if (offline_cash_top_up_count == 0) != (offline_cash_top_up_root is None):
             raise RuntimeError(
-                f"{context}.topup_anchor_root must be present exactly when topup_anchor_count is positive"
+                f"{context}.offline_cash_top_up_root must be present exactly when "
+                "offline_cash_top_up_count is positive"
             )
         native_manifest_version = cls._unsigned(
             record.get("native_amx_application_manifest_version"),
@@ -7726,8 +5386,8 @@ class _SumeragiV2StatusParser:
                 record.get("ordinary_writes_root"),
                 f"{context}.ordinary_writes_root",
             ),
-            topup_anchor_root=topup_root,
-            topup_anchor_count=topup_count,
+            offline_cash_top_up_root=offline_cash_top_up_root,
+            offline_cash_top_up_count=offline_cash_top_up_count,
             native_amx_application_manifest_version=native_manifest_version,
             native_amx_application_manifest_root=native_manifest_root,
             native_amx_application_manifest_count=native_manifest_count,
@@ -10485,29 +8145,6 @@ class ToriiClient(
         mapping = self._ensure_mapping(payload, "configuration response")
         return ConfigurationSnapshot.from_payload(mapping)
 
-    def update_configuration(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Update mutable node configuration (`POST /v1/configuration`).
-
-        Confidential gas is consensus-relevant startup state and is rejected here.
-        """
-
-        if "confidential_gas" in payload:
-            raise ValueError(
-                "confidential_gas is read-only runtime state; change the startup "
-                "configuration and restart the node"
-            )
-        response = self._request(
-            "POST",
-            "/v1/configuration",
-            headers={"Content-Type": "application/json"},
-            data=json.dumps(dict(payload)).encode("utf-8"),
-        )
-        self._expect_status(response, {200, 202})
-        if not response.content:
-            return {}
-        body = response.json()
-        return self._ensure_mapping(body, "configuration update response")
-
     def get_confidential_gas_schedule(self) -> Optional[ConfidentialGasSchedule]:
         """Return the read-only confidential verification gas schedule."""
 
@@ -11724,10 +9361,12 @@ class ToriiClient(
         return self._parse_uaid_manifests_response(mapping, context="uaid manifests response")
 
     # ------------------------------------------------------------------
-    # First-release Kagemusha API
+    # Offline Cash V1 readiness
     # ------------------------------------------------------------------
-    def get_offline_capability(self, *, timeout: Optional[float] = None) -> OfflineStatus:
-        """Fetch the universal offline capability with an optional request timeout."""
+    def get_offline_cash_readiness(
+        self, *, timeout: Optional[float] = None
+    ) -> OfflineCashReadinessV1:
+        """Fetch the exact Offline Cash V1 readiness response."""
 
         response = self._request(
             "GET",
@@ -11735,138 +9374,139 @@ class ToriiClient(
             headers={"Accept": "application/json"},
             stream=True,
             allow_redirects=False,
-            timeout=_kagemusha_request_timeout(timeout, "get_offline_capability"),
+            timeout=_offline_cash_request_timeout(timeout, "get_offline_cash_readiness"),
         )
         self._expect_status(
             response,
             {200},
-            maximum_body_bytes=_OFFLINE_STATUS_MAX_BYTES,
-            context="offline capability",
+            maximum_body_bytes=_OFFLINE_CASH_READINESS_MAX_BYTES_V1,
+            context="Offline Cash V1 readiness",
         )
         payload = self._offline_json_response(
             response,
-            "offline capability response",
-            maximum_body_bytes=_OFFLINE_STATUS_MAX_BYTES,
+            "Offline Cash V1 readiness response",
+            maximum_body_bytes=_OFFLINE_CASH_READINESS_MAX_BYTES_V1,
         )
-        return OfflineStatus.from_payload(payload)
+        return OfflineCashReadinessV1.from_payload(payload)
 
-    def submit_kagemusha_top_up(
+    def submit_offline_cash_top_up(
         self,
-        request: KagemushaTopUpRequestV4,
+        request: Union[bytes, bytearray, memoryview],
         *,
         timeout: Optional[float] = None,
-    ) -> OfflineOperationReference:
-        """Submit one canonical typed Norito Kagemusha top-up request with an optional timeout."""
+    ) -> UnverifiedOfflineCashOperationStatusV1:
+        """Submit one exact canonical Offline Cash V1 top-up intent."""
 
-        if not isinstance(request, KagemushaTopUpRequestV4):
-            raise TypeError("request must be KagemushaTopUpRequestV4")
-        return self._submit_kagemusha_command(
+        body, operation_id = _offline_command_body(
+            request,
+            schema="iroha.torii.v1.offline_cash.top_up.request",
+            maximum=_OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1,
+            context="Offline Cash V1 top-up request",
+        )
+        return self._submit_offline_cash_operation(
             _OFFLINE_TOP_UP_PATH,
-            request.norito,
-            request.identity,
-            timeout=_kagemusha_request_timeout(timeout, "submit_kagemusha_top_up"),
+            "top_up",
+            body,
+            operation_id,
+            timeout=timeout,
         )
 
-    def submit_kagemusha_redeem(
+    def submit_offline_cash_redemption(
         self,
-        request: KagemushaRedeemRequestV4,
+        request: Union[bytes, bytearray, memoryview],
         *,
         timeout: Optional[float] = None,
-    ) -> OfflineOperationReference:
-        """Submit one canonical typed Norito Kagemusha redemption request with an optional timeout."""
+    ) -> UnverifiedOfflineCashOperationStatusV1:
+        """Submit one exact canonical Offline Cash V1 full or partial redemption intent."""
 
-        if not isinstance(request, KagemushaRedeemRequestV4):
-            raise TypeError("request must be KagemushaRedeemRequestV4")
-        return self._submit_kagemusha_command(
+        body, operation_id = _offline_command_body(
+            request,
+            schema="iroha.torii.v1.offline_cash.redeem.request",
+            maximum=_OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1,
+            context="Offline Cash V1 redemption request",
+        )
+        return self._submit_offline_cash_operation(
             _OFFLINE_REDEEM_PATH,
-            request.norito,
-            request.identity,
-            timeout=_kagemusha_request_timeout(timeout, "submit_kagemusha_redeem"),
+            "redemption",
+            body,
+            operation_id,
+            timeout=timeout,
         )
 
-    def get_kagemusha_operation_status(
+    def get_offline_cash_operation(
         self,
-        accepted_reference: OfflineOperationReference,
+        operation_id: Union[str, bytes, bytearray, memoryview],
         *,
         timeout: Optional[float] = None,
-    ) -> OfflineOperationStatus:
-        """Fetch status bound to an accepted Kagemusha operation identity.
+    ) -> UnverifiedOfflineCashOperationStatusV1:
+        """Read one operation while withholding any unverified monetary result."""
 
-        Exact retries may advance the active transaction hash while the
-        complete nested identity stays fixed. Persist the returned Pending
-        carrier hash without replacing the accepted identity.
-        """
-
-        accepted = _validated_offline_operation_reference(accepted_reference)
+        expected_id = _offline_operation_id_hex(operation_id)
         response = self._request(
             "GET",
-            accepted.status_uri,
+            f"{_OFFLINE_OPERATION_PATH_PREFIX}{expected_id}",
             headers={"Accept": "application/json"},
             stream=True,
+            allow_retry=False,
             allow_redirects=False,
-            timeout=_kagemusha_request_timeout(
-                timeout,
-                "get_kagemusha_operation_status",
-            ),
+            timeout=_offline_cash_request_timeout(timeout, "get_offline_cash_operation"),
         )
         self._expect_status(
             response,
             {200},
-            maximum_body_bytes=_OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
-            context="offline operation status",
+            maximum_body_bytes=_OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+            context="Offline Cash V1 operation response",
         )
-        payload, status_json = self._offline_json_response_with_bytes(
-            response,
-            "offline operation status response",
-            maximum_body_bytes=_OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
+        status = UnverifiedOfflineCashOperationStatusV1.from_payload(
+            self._offline_json_response(
+                response,
+                "Offline Cash V1 operation response",
+                maximum_body_bytes=_OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+            )
         )
-        status = _offline_operation_status(payload, accepted)
-        if (
-            isinstance(status, OfflineAppliedOperation)
-            and isinstance(status.result, OfflineTopUpOperationResult)
-        ):
-            _validate_kagemusha_operation_status_json_v2(status_json)
+        if status.operation_id.hex() != expected_id:
+            raise RuntimeError("Offline Cash V1 response operation ID does not match the resource")
         return status
 
-    def _submit_kagemusha_command(
+    def _submit_offline_cash_operation(
         self,
         path: str,
+        kind: str,
         body: bytes,
-        identity: OfflineOperationIdentity,
+        operation_id: str,
         *,
         timeout: Optional[float],
-    ) -> OfflineOperationReference:
+    ) -> UnverifiedOfflineCashOperationStatusV1:
         response = self._request(
             "POST",
             path,
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/x-norito",
-                "Idempotency-Key": identity.operation_id,
+                "Idempotency-Key": operation_id,
             },
             data=body,
             stream=True,
             allow_retry=False,
             allow_redirects=False,
-            timeout=timeout,
+            timeout=_offline_cash_request_timeout(timeout, "submit_offline_cash_operation"),
         )
         self._expect_status(
             response,
-            {202},
-            maximum_body_bytes=_OFFLINE_OPERATION_REFERENCE_MAX_BYTES,
-            context="offline operation reference",
+            {200, 202},
+            maximum_body_bytes=_OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+            context="Offline Cash V1 operation response",
         )
-        payload = self._offline_json_response(
-            response,
-            "offline operation reference response",
-            maximum_body_bytes=_OFFLINE_OPERATION_REFERENCE_MAX_BYTES,
+        status = UnverifiedOfflineCashOperationStatusV1.from_payload(
+            self._offline_json_response(
+                response,
+                "Offline Cash V1 operation response",
+                maximum_body_bytes=_OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+            )
         )
-        return _offline_operation_reference(
-            payload,
-            expected_identity=identity,
-            location=response.headers.get("Location"),
-            retry_after=response.headers.get("Retry-After"),
-        )
+        if status.operation_id.hex() != operation_id or status.kind != kind:
+            raise RuntimeError("Offline Cash V1 response does not match the submitted operation")
+        return status
 
     @staticmethod
     def _offline_json_response_with_bytes(
@@ -12065,43 +9705,80 @@ class ToriiClient(
         offset: Optional[Any] = None,
         kind: Optional[str] = None,
     ) -> SumeragiEvidenceListPage:
-        """List recorded consensus evidence (`GET /v1/sumeragi/evidence`)."""
+        """List committed consensus evidence (`GET /v1/sumeragi/evidence`)."""
 
         params: Dict[str, Any] = {}
+        page_limit = 50
+        page_offset = 0
         if limit is not None:
-            normalized_limit = self._coerce_unsigned(limit, "sumeragi evidence limit")
-            if normalized_limit <= 0:
-                raise RuntimeError("sumeragi evidence limit must be positive")
-            if normalized_limit > 1000:
-                raise RuntimeError("sumeragi evidence limit must be <= 1000")
-            params["limit"] = normalized_limit
+            if type(limit) is not int:
+                raise RuntimeError("sumeragi evidence limit must be an integer")
+            if not 1 <= limit <= 1_000:
+                raise RuntimeError("sumeragi evidence limit must be in 1..=1000")
+            params["limit"] = limit
+            page_limit = limit
         if offset is not None:
-            params["offset"] = self._coerce_unsigned(offset, "sumeragi evidence offset")
+            if type(offset) is not int:
+                raise RuntimeError("sumeragi evidence offset must be an integer")
+            if not 0 <= offset <= 10_000:
+                raise RuntimeError("sumeragi evidence offset must be in 0..=10000")
+            params["offset"] = offset
+            page_offset = offset
         if kind is not None:
             literal = self._require_non_empty_string(kind, "sumeragi evidence kind")
-            if literal not in SUMERAGI_EVIDENCE_KIND_FILTERS:
-                allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_KIND_FILTERS))
-                raise RuntimeError(f"sumeragi evidence kind must be one of: {allowed}")
+            if literal != kind or literal != SUMERAGI_EVIDENCE_KIND:
+                raise RuntimeError(
+                    "sumeragi evidence kind must be SumeragiV2Equivocation"
+                )
             params["kind"] = literal
-        response = self._operator_get(
+        payload = self._get_sumeragi_operator_json_object(
             "/v1/sumeragi/evidence",
             params=params or None,
+            context="sumeragi evidence listing",
+            maximum_body_bytes=_SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES,
+            parser=parse_sumeragi_json_object,
         )
-        self._expect_status(response, {200})
-        payload = self._ensure_mapping(
-            response.json(),
-            "sumeragi evidence listing",
+        return self._parse_sumeragi_evidence_page(
+            payload,
+            context="sumeragi evidence listing",
+            limit=page_limit,
+            offset=page_offset,
         )
-        return self._parse_sumeragi_evidence_page(payload, context="sumeragi evidence listing")
 
     def get_sumeragi_evidence_count(self) -> int:
-        """Return number of evidence entries observed by the node (`GET /v1/sumeragi/evidence/count`)."""
+        """Return the committed evidence count (`GET /v1/sumeragi/evidence/count`)."""
 
-        payload = self._ensure_mapping(
-            self._operator_get("/v1/sumeragi/evidence/count").json(),
-            "sumeragi evidence count",
+        payload = self._get_sumeragi_operator_json_object(
+            "/v1/sumeragi/evidence/count",
+            context="sumeragi evidence count",
+            maximum_body_bytes=_SUMERAGI_EVIDENCE_COUNT_JSON_MAX_BYTES,
+            parser=parse_sumeragi_json_object,
         )
-        return self._coerce_unsigned(payload.get("count"), "sumeragi evidence count.count")
+        actual_fields = set(payload)
+        if actual_fields != {"count"}:
+            missing = {"count"} - actual_fields
+            unexpected = actual_fields - {"count"}
+            details = []
+            if missing:
+                details.append("missing count")
+            if unexpected:
+                details.append(
+                    "unexpected " + ", ".join(sorted(str(field) for field in unexpected))
+                )
+            raise RuntimeError(
+                "sumeragi evidence count must use the exact server fields "
+                f"({'; '.join(details)})"
+            )
+        count = payload["count"]
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or not 0 <= count <= 0xFFFFFFFFFFFFFFFF
+        ):
+            raise RuntimeError(
+                "sumeragi evidence count.count must be a non-negative JSON u64"
+            )
+        return count
 
     # ------------------------------------------------------------------
     # Contract, governance, and Parliament helpers
@@ -17293,24 +14970,49 @@ class ToriiClient(
         )
 
     @staticmethod
-    def _parse_sumeragi_evidence_page(payload: Mapping[str, Any], *, context: str) -> SumeragiEvidenceListPage:
+    def _parse_sumeragi_evidence_page(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> SumeragiEvidenceListPage:
         record = ToriiClient._ensure_mapping(payload, context)
-        raw_items = record.get("items", [])
-        if raw_items is None:
-            raw_items = []
+        actual_fields = set(record)
+        expected_fields = {"total", "items"}
+        missing = sorted(expected_fields - actual_fields)
+        unexpected = sorted(str(field) for field in actual_fields - expected_fields)
+        if missing or unexpected:
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if unexpected:
+                details.append(f"unexpected {', '.join(unexpected)}")
+            raise RuntimeError(
+                f"{context} must use the exact server fields ({'; '.join(details)})"
+            )
+        raw_items = record["items"]
         if not isinstance(raw_items, list):
             raise RuntimeError(f"{context}.items must be a list")
         items = [
             ToriiClient._parse_sumeragi_evidence_record(entry, context=f"{context}.items[{index}]")
             for index, entry in enumerate(raw_items)
         ]
-        total_value = record.get("total", len(items))
-        try:
-            total = int(total_value)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(f"{context}.total must be numeric") from exc
-        if total < 0:
-            raise RuntimeError(f"{context}.total must be non-negative")
+        if len(items) > limit:
+            raise RuntimeError(
+                f"{context}.items must contain at most {limit} records"
+            )
+        total = record["total"]
+        if isinstance(total, bool) or not isinstance(total, int) or not 0 <= total <= 0xFFFFFFFFFFFFFFFF:
+            raise RuntimeError(f"{context}.total must be a non-negative JSON u64")
+        if total < len(items):
+            raise RuntimeError(
+                f"{context}.total must cover the returned items"
+            )
+        if items and total < offset + len(items):
+            raise RuntimeError(
+                f"{context}.total must cover offset plus returned items"
+            )
         return SumeragiEvidenceListPage(items=items, total=total)
 
     @staticmethod
@@ -17319,71 +15021,29 @@ class ToriiClient(
 
         kind_value = record.get("kind")
         kind = ToriiClient._require_non_empty_string(kind_value, f"{context}.kind")
-        if kind != kind_value:
-            raise RuntimeError(f"{context}.kind must not contain surrounding whitespace")
-        common_fields = {
+        if kind != kind_value or kind != SUMERAGI_EVIDENCE_KIND:
+            raise RuntimeError(
+                f"{context}.kind must be SumeragiV2Equivocation"
+            )
+        required_fields = {
             "kind",
+            "class",
+            "height",
+            "view",
+            "epoch",
+            "signer",
+            "context_id",
+            "artifact_hash_1",
+            "artifact_hash_2",
             "recorded_height",
             "recorded_view",
             "recorded_ms",
             "consensus_admitted_height",
+            "penalty_status",
         }
-        required_variant_fields: set[str]
-        optional_variant_fields: set[str] = set()
-        if kind in {"DoublePrepare", "DoubleCommit"}:
-            required_variant_fields = {
-                "phase",
-                "height",
-                "view",
-                "epoch",
-                "signer",
-                "block_hash_1",
-                "block_hash_2",
-            }
-        elif kind == "InvalidQc":
-            required_variant_fields = {
-                "height",
-                "view",
-                "epoch",
-                "subject_block_hash",
-                "phase",
-                "reason",
-            }
-        elif kind == "InvalidProposal":
-            required_variant_fields = {
-                "height",
-                "view",
-                "epoch",
-                "subject_block_hash",
-                "payload_hash",
-                "reason",
-            }
-        elif kind == "Censorship":
-            required_variant_fields = {"tx_hash", "receipt_count", "signers"}
-            optional_variant_fields = {
-                "submitted_at_height_min",
-                "submitted_at_height_max",
-            }
-        elif kind == "SumeragiV2Equivocation":
-            required_variant_fields = {
-                "class",
-                "height",
-                "view",
-                "epoch",
-                "signer",
-                "context_id",
-                "artifact_hash_1",
-                "artifact_hash_2",
-            }
-        else:
-            allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_KIND_FILTERS))
-            raise RuntimeError(f"{context}.kind must be one of: {allowed}")
-
-        required_fields = common_fields | required_variant_fields
-        allowed_fields = required_fields | optional_variant_fields
         actual_fields = set(record)
         missing = sorted(required_fields - actual_fields)
-        unexpected = sorted(str(field) for field in actual_fields - allowed_fields)
+        unexpected = sorted(str(field) for field in actual_fields - required_fields)
         if missing or unexpected:
             details = []
             if missing:
@@ -17394,11 +15054,13 @@ class ToriiClient(
                 f"{context} must use the exact server fields ({'; '.join(details)})"
             )
 
-        def json_unsigned(field: str, *, maximum: Optional[int] = None) -> int:
+        def json_unsigned(
+            field: str, *, maximum: int = 0xFFFFFFFFFFFFFFFF
+        ) -> int:
             value = record[field]
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise RuntimeError(f"{context}.{field} must be a non-negative JSON integer")
-            if maximum is not None and value > maximum:
+            if value > maximum:
                 raise RuntimeError(f"{context}.{field} must be <= {maximum}")
             return value
 
@@ -17422,111 +15084,6 @@ class ToriiClient(
                 record[field], f"{context}.{field}"
             )
 
-        admitted_value = record["consensus_admitted_height"]
-        consensus_admitted_height = (
-            None
-            if admitted_value is None
-            else json_unsigned("consensus_admitted_height")
-        )
-        common: Dict[str, Any] = {
-            "kind": kind,
-            "recorded_height": json_unsigned("recorded_height"),
-            "recorded_view": json_unsigned("recorded_view"),
-            "recorded_ms": json_unsigned("recorded_ms"),
-            "consensus_admitted_height": consensus_admitted_height,
-        }
-
-        if kind in {"DoublePrepare", "DoubleCommit"}:
-            phase = exact_non_empty_string("phase")
-            if phase not in SUMERAGI_EVIDENCE_PHASES:
-                allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_PHASES))
-                raise RuntimeError(f"{context}.phase must be one of: {allowed}")
-            block_hash_1 = evidence_hash("block_hash_1")
-            block_hash_2 = evidence_hash("block_hash_2")
-            if block_hash_1 == block_hash_2:
-                raise RuntimeError(f"{context} block hashes must identify distinct blocks")
-            return SumeragiDoubleVoteEvidenceRecord(
-                **common,
-                phase=cast(Literal["Prepare", "Commit", "NewView"], phase),
-                height=json_unsigned("height"),
-                view=json_unsigned("view"),
-                epoch=json_unsigned("epoch"),
-                signer=json_unsigned("signer", maximum=0xFFFFFFFF),
-                block_hash_1=block_hash_1,
-                block_hash_2=block_hash_2,
-            )
-        if kind == "InvalidQc":
-            phase = exact_non_empty_string("phase")
-            if phase not in SUMERAGI_EVIDENCE_PHASES:
-                allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_PHASES))
-                raise RuntimeError(f"{context}.phase must be one of: {allowed}")
-            return SumeragiInvalidQcEvidenceRecord(
-                **common,
-                height=json_unsigned("height"),
-                view=json_unsigned("view"),
-                epoch=json_unsigned("epoch"),
-                subject_block_hash=evidence_hash("subject_block_hash"),
-                phase=cast(Literal["Prepare", "Commit", "NewView"], phase),
-                reason=exact_non_empty_string("reason"),
-            )
-        if kind == "InvalidProposal":
-            return SumeragiInvalidProposalEvidenceRecord(
-                **common,
-                height=json_unsigned("height"),
-                view=json_unsigned("view"),
-                epoch=json_unsigned("epoch"),
-                subject_block_hash=evidence_hash("subject_block_hash"),
-                payload_hash=evidence_hash("payload_hash"),
-                reason=exact_non_empty_string("reason"),
-            )
-        if kind == "Censorship":
-            signers_value = record["signers"]
-            if not isinstance(signers_value, list):
-                raise RuntimeError(f"{context}.signers must be a JSON array")
-            signers = [
-                exact_non_empty_string_for_value(
-                    signer, f"{context}.signers[{index}]"
-                )
-                for index, signer in enumerate(signers_value)
-            ]
-            receipt_count = json_unsigned("receipt_count")
-            if receipt_count != len(signers):
-                raise RuntimeError(f"{context}.receipt_count must equal len(signers)")
-            has_min = "submitted_at_height_min" in record
-            has_max = "submitted_at_height_max" in record
-            if (
-                has_min != has_max
-                or (receipt_count > 0 and not has_min)
-                or (receipt_count == 0 and has_min)
-            ):
-                raise RuntimeError(
-                    f"{context} must include both submitted_at_height bounds "
-                    "exactly when receipts are present"
-                )
-            submitted_at_height_min = (
-                json_unsigned("submitted_at_height_min") if has_min else None
-            )
-            submitted_at_height_max = (
-                json_unsigned("submitted_at_height_max") if has_max else None
-            )
-            if (
-                submitted_at_height_min is not None
-                and submitted_at_height_max is not None
-                and submitted_at_height_min > submitted_at_height_max
-            ):
-                raise RuntimeError(
-                    f"{context}.submitted_at_height_min must be <= "
-                    "submitted_at_height_max"
-                )
-            return SumeragiCensorshipEvidenceRecord(
-                **common,
-                tx_hash=evidence_hash("tx_hash"),
-                receipt_count=receipt_count,
-                signers=signers,
-                submitted_at_height_min=submitted_at_height_min,
-                submitted_at_height_max=submitted_at_height_max,
-            )
-
         evidence_class = exact_non_empty_string("class")
         if evidence_class not in SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES:
             allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES))
@@ -17535,8 +15092,72 @@ class ToriiClient(
         artifact_hash_2 = evidence_hash("artifact_hash_2")
         if artifact_hash_1 == artifact_hash_2:
             raise RuntimeError(f"{context} artifact hashes must identify distinct artifacts")
+        penalty = ToriiClient._ensure_mapping(
+            record["penalty_status"], f"{context}.penalty_status"
+        )
+        penalty_fields = set(penalty)
+        if penalty_fields != {"status", "details"}:
+            missing = sorted({"status", "details"} - penalty_fields)
+            unexpected = sorted(
+                str(field) for field in penalty_fields - {"status", "details"}
+            )
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if unexpected:
+                details.append(f"unexpected {', '.join(unexpected)}")
+            raise RuntimeError(
+                f"{context}.penalty_status must use the exact server fields "
+                f"({'; '.join(details)})"
+            )
+        penalty_literal = exact_non_empty_string_for_value(
+            penalty["status"], f"{context}.penalty_status.status"
+        )
+        if penalty_literal == "pending":
+            if penalty["details"] is not None:
+                raise RuntimeError(
+                    f"{context}.penalty_status.details must be null when status is pending"
+                )
+            penalty_status: SumeragiEvidencePenaltyStatus = (
+                SumeragiEvidencePendingPenaltyStatus(
+                    status="pending",
+                    details=None,
+                )
+            )
+        elif penalty_literal in {"applied", "cancelled"}:
+            penalty_details = ToriiClient._ensure_mapping(
+                penalty["details"], f"{context}.penalty_status.details"
+            )
+            if set(penalty_details) != {"height"}:
+                raise RuntimeError(
+                    f"{context}.penalty_status.details must contain exactly height"
+                )
+            penalty_height = penalty_details["height"]
+            if (
+                isinstance(penalty_height, bool)
+                or not isinstance(penalty_height, int)
+                or not 0 <= penalty_height <= 0xFFFFFFFFFFFFFFFF
+            ):
+                raise RuntimeError(
+                    f"{context}.penalty_status.details.height must be a non-negative JSON u64"
+                )
+            typed_details = SumeragiEvidencePenaltyDetails(height=penalty_height)
+            if penalty_literal == "applied":
+                penalty_status = SumeragiEvidenceAppliedPenaltyStatus(
+                    status="applied",
+                    details=typed_details,
+                )
+            else:
+                penalty_status = SumeragiEvidenceCancelledPenaltyStatus(
+                    status="cancelled",
+                    details=typed_details,
+                )
+        else:
+            raise RuntimeError(
+                f"{context}.penalty_status.status must be pending, applied, or cancelled"
+            )
         return SumeragiV2EquivocationEvidenceRecord(
-            **common,
+            kind="SumeragiV2Equivocation",
             class_=cast(
                 Literal["proposal", "phase_vote", "timeout_vote"], evidence_class
             ),
@@ -17547,6 +15168,11 @@ class ToriiClient(
             context_id=evidence_hash("context_id"),
             artifact_hash_1=artifact_hash_1,
             artifact_hash_2=artifact_hash_2,
+            recorded_height=json_unsigned("recorded_height"),
+            recorded_view=json_unsigned("recorded_view"),
+            recorded_ms=json_unsigned("recorded_ms"),
+            consensus_admitted_height=json_unsigned("consensus_admitted_height"),
+            penalty_status=penalty_status,
         )
 
     @staticmethod

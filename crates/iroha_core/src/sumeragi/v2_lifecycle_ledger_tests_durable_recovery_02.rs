@@ -203,7 +203,7 @@ fn standalone_validate_record(
                     .unwrap_or_else(|_| panic!("project standalone remote Validate pre-admission")),
                 StandaloneValidateOriginFixture::RefinedRemoteProposal { phase, corrupt_qc } => {
                     let execution_commitment =
-                        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
                             Hash::new([marker, 0xA1]),
                             Hash::new([marker, 0xA2]),
                             Hash::new([marker, 0xA3]),
@@ -637,7 +637,7 @@ fn cold_broadcast_output_fixture(
         )),
         payload_hash: Hash::new(b"source-retained cold Broadcast payload"),
     };
-    let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"source-retained cold Broadcast parent state"),
         Hash::new(b"source-retained cold Broadcast post state"),
         Hash::new(b"source-retained cold Broadcast writes"),
@@ -1380,7 +1380,7 @@ fn fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast() {
         block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new([0x82, 0xA1])),
         payload_hash: Hash::new([0x82, 0xA2]),
     };
-    let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new([0x82, 0xB1]),
         Hash::new([0x82, 0xB2]),
         Hash::new([0x82, 0xB3]),

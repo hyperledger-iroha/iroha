@@ -148,7 +148,6 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "sc/",
     "da_ingest_quota_v1/",
     "faucet_claim_consumed_v1/",
-    crate::kagemusha_operation::KAGEMUSHA_OPERATION_OUTCOME_STATE_PREFIX_V4,
     "merge_execution_batch_applied_",
     "merge_execution_lane_applied_",
     "merge_lane_frontier_v1_",
@@ -166,8 +165,6 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
 // reads/enumeration remain supported; mutation must go through the validating
 // native instructions that own the records.
 const READ_ONLY_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
-    "offline_device_attestation_policy/",
-    "kagemusha",
     "pkdeploy_verified_lane_relay_",
     "pkdeploy_verified_nexus_fee_budget_",
     VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
@@ -819,7 +816,7 @@ impl<'state> QueryStateSource for StateBlock<'state> {
         QueryStateRef::Block(self)
     }
     fn block_height_hint(&self) -> Option<u64> {
-        Some(u64::try_from(self.height()).unwrap_or(u64::MAX))
+        Some(self._curr_block.height().get())
     }
 }
 impl<'block, 'state> QueryStateSource for StateTransaction<'block, 'state>
@@ -1346,11 +1343,11 @@ pub trait QueryStateRefOps {
         entrypoint: &str,
         permission: Option<&str>,
     ) -> Result<(), ValidationFail>;
-    /// Validate that a nested target is not awaiting a lifecycle hook.
+    /// Validate that a nested target is executable and not awaiting a lifecycle hook.
     ///
     /// # Errors
-    /// Returns [`ValidationFail`] when the live binding changed or `hajimari`/`始まり` or
-    /// `kaizen`/`改善` is still pending.
+    /// Returns [`ValidationFail`] while a Parliament hold is active, when the live binding
+    /// changed, or when `hajimari`/`始まり` or `kaizen`/`改善` is still pending.
     fn ensure_contract_entrypoint_lifecycle(
         &self,
         contract_address: &ContractAddress,
@@ -2078,39 +2075,55 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
         code_hash: Hash,
         kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
     ) -> Result<(), ValidationFail> {
+        fn ensure_allowed_lifecycle(
+            world: &impl WorldReadOnly,
+            contract_address: &ContractAddress,
+            code_hash: Hash,
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
+            execution_height: u64,
+        ) -> Result<(), ValidationFail> {
+            crate::smartcontracts::code::ensure_contract_execution_allowed(
+                world,
+                contract_address,
+                execution_height,
+            )
+            .map_err(ValidationFail::NotPermitted)?;
+            crate::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
+                world,
+                contract_address,
+                code_hash,
+                kind,
+            )
+        }
         match *self {
-            QueryStateRef::View(view) => {
-                crate::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
-                    view.world(),
-                    contract_address,
-                    code_hash,
-                    kind,
-                )
-            }
-            QueryStateRef::QueryView(view) => {
-                crate::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
-                    view.world(),
-                    contract_address,
-                    code_hash,
-                    kind,
-                )
-            }
-            QueryStateRef::Block(block) => {
-                crate::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
-                    block.world(),
-                    contract_address,
-                    code_hash,
-                    kind,
-                )
-            }
-            QueryStateRef::Transaction(tx) => {
-                crate::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
-                    tx.world(),
-                    contract_address,
-                    code_hash,
-                    kind,
-                )
-            }
+            QueryStateRef::View(view) => ensure_allowed_lifecycle(
+                view.world(),
+                contract_address,
+                code_hash,
+                kind,
+                u64::try_from(view.height()).unwrap_or(u64::MAX),
+            ),
+            QueryStateRef::QueryView(view) => ensure_allowed_lifecycle(
+                view.world(),
+                contract_address,
+                code_hash,
+                kind,
+                u64::try_from(view.height()).unwrap_or(u64::MAX),
+            ),
+            QueryStateRef::Block(block) => ensure_allowed_lifecycle(
+                block.world(),
+                contract_address,
+                code_hash,
+                kind,
+                block._curr_block.height().get(),
+            ),
+            QueryStateRef::Transaction(tx) => ensure_allowed_lifecycle(
+                tx.world(),
+                contract_address,
+                code_hash,
+                kind,
+                tx.block_height(),
+            ),
         }
     }
     fn durable_state_get(&self, key: &StatePath) -> Option<Vec<u8>> {
@@ -4228,18 +4241,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .map(|(asset_id, state)| (asset_id.clone(), state.clone()))
                 .collect(),
         )?;
-        let native_kagemusha_v4_ids =
-            crate::smartcontracts::isi::offline::exact_kagemusha_v4_native_verifier_ids_for_hydration(
-                world,
-            )
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        let mut vks = BTreeMap::new();
-        for (id, rec) in world.verifying_keys().iter() {
-            if native_kagemusha_v4_ids.contains(id) {
-                continue;
-            }
-            vks.insert(id.clone(), rec.clone());
-        }
+        let vks = world
+            .verifying_keys()
+            .iter()
+            .map(|(id, rec)| (id.clone(), rec.clone()))
+            .collect();
         self.set_verifying_keys(vks)?;
         self.set_zk_tree_roots_history_len(zk_cfg.tree_roots_history_len);
         self.zk_roots = roots;
@@ -21559,6 +21565,82 @@ seiyaku AwaitingHajimari {
         assert!(durable_state_overlay.is_empty());
     }
     #[test]
+    fn call_contract_syscall_rejects_held_callee_before_argument_decode() {
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  view fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku HeldCallee {
+  view fn value(int input) -> int { return input; }
+}
+"#,
+            1,
+        );
+        state
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .commit_empty_block_for_testing()
+            .expect("commit the execution-height bootstrap block");
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        {
+            let mut tx = block.transaction();
+            let binding = tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&callee_contract)
+                .expect("callee lifecycle binding");
+            binding.lifecycle.emergency_hold =
+                Some(iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+                    incident_digest: [0xC1; 32],
+                    proposal_content_id: [0xC2; 32],
+                    governance_attempt_id: [0xC3; 32],
+                    reason: "contain nested callee execution".to_owned(),
+                    imposed_at_height: 1,
+                    expires_at_height: 2,
+                });
+            binding.lifecycle.revision = binding
+                .lifecycle
+                .revision
+                .checked_add(1)
+                .expect("test lifecycle revision advances");
+            tx.apply();
+        }
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit the emergency hold without advancing height");
+        ivm::reset_argument_record_decode_count();
+        let (result, _, durable_state_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &caller_contract,
+            &callee_contract,
+            "value",
+            Json::from(norito::json!({ "input": "42" })),
+        );
+        let error = result.expect_err("nested calls must reject an actively held callee");
+        assert!(matches!(
+            error.as_unmetered(),
+            ivm::VMError::PermissionDenied
+        ));
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "nested hold validation must precede callee argument decoding"
+        );
+        assert!(durable_state_overlay.is_empty());
+    }
+    #[test]
     fn call_contract_syscall_sets_nested_authority_to_caller_contract_subject() {
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
@@ -23532,193 +23614,6 @@ seiyaku DurableOwner {
             .expect("keyless record should use the registry backend label");
     }
     #[test]
-    fn zk_snapshot_hydration_separates_exact_native_kagemusha_v4_pairs_from_open_verify() {
-        for cancelled in [false, true] {
-            let (world, native_ids, generic_id, generic_commitment) =
-                world_with_native_kagemusha_v4_pair_and_generic_vk(cancelled);
-            {
-                let verifying_keys = world.verifying_keys.view();
-                for id in &native_ids {
-                    let record = verifying_keys.get(id).expect("native verifier fixture");
-                    if cancelled {
-                        assert_eq!(
-                            record.status,
-                            iroha_data_model::confidential::ConfidentialStatus::Withdrawn
-                        );
-                        assert_eq!(record.activation_height, None);
-                        assert_eq!(record.withdraw_height, Some(19));
-                        assert!(record.key.is_none());
-                        assert_eq!(record.vk_len, 0);
-                    } else {
-                        assert_eq!(
-                            record.status,
-                            iroha_data_model::confidential::ConfidentialStatus::Active
-                        );
-                        assert_eq!(record.activation_height, Some(20));
-                        assert_eq!(record.withdraw_height, None);
-                        assert!(record.key.is_some());
-                        assert!(record.vk_len > 0);
-                    }
-                }
-            }
-            let state = State::new_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let view = state.view();
-            let mut host = CoreHost::new(fixture_account("alice"));
-            host.set_zk_snapshots_from_world(view.world(), &view.zk)
-                .expect("native Kagemusha and generic OpenVerify snapshots must coexist");
-            assert!(host.verifying_keys.contains_key(&generic_id));
-            assert!(
-                host.prepared_verifying_keys
-                    .contains_key(&generic_commitment)
-            );
-            for id in &native_ids {
-                assert!(!host.verifying_keys.contains_key(id));
-                let record = view
-                    .world()
-                    .verifying_keys()
-                    .get(id)
-                    .expect("native verifier remains in world storage");
-                assert!(
-                    !host
-                        .prepared_verifying_keys
-                        .contains_key(&record.commitment)
-                );
-            }
-
-            let direct_map = native_ids
-                .iter()
-                .map(|id| {
-                    (
-                        id.clone(),
-                        view.world()
-                            .verifying_keys()
-                            .get(id)
-                            .expect("native verifier remains stored")
-                            .clone(),
-                    )
-                })
-                .collect();
-            let mut direct_host = CoreHost::new(fixture_account("alice"));
-            assert_eq!(
-                direct_host.set_verifying_keys(direct_map),
-                Err(ivm::VMError::NoritoInvalid),
-                "direct generic hydration must not admit native Kagemusha records"
-            );
-            assert!(direct_host.verifying_keys.is_empty());
-            assert!(direct_host.prepared_verifying_keys.is_empty());
-        }
-    }
-    #[test]
-    fn zk_snapshot_hydration_rejects_malformed_kagemusha_v4_near_matches() {
-        for corruption in ["metadata", "missing_ep", "misindexed"] {
-            let (mut world, native_ids, generic_id, _) =
-                world_with_native_kagemusha_v4_pair_and_generic_vk(false);
-            match corruption {
-                "metadata" => {
-                    let mut record = world
-                        .verifying_keys
-                        .view()
-                        .get(&native_ids[0])
-                        .expect("Eq verifier fixture")
-                        .clone();
-                    record.namespace = "offline_kagemusha_near_match".to_owned();
-                    world.verifying_keys.insert(native_ids[0].clone(), record);
-                }
-                "missing_ep" => {
-                    let record = {
-                        let mut block = world.verifying_keys.block();
-                        let record = block
-                            .remove(native_ids[1].clone())
-                            .expect("remove Ep verifier fixture");
-                        block.commit();
-                        record
-                    };
-                    let mut block = world.verifying_keys_by_circuit.block();
-                    block.remove((record.circuit_id, record.version));
-                    block.commit();
-                }
-                "misindexed" => {
-                    let record = world
-                        .verifying_keys
-                        .view()
-                        .get(&native_ids[0])
-                        .expect("Eq verifier fixture")
-                        .clone();
-                    world
-                        .verifying_keys_by_circuit
-                        .insert((record.circuit_id, record.version), native_ids[1].clone());
-                }
-                _ => unreachable!("fixed corruption fixture"),
-            }
-            let state = State::new_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let view = state.view();
-            let mut host = CoreHost::new(fixture_account("alice"));
-            assert_eq!(
-                host.set_zk_snapshots_from_world(view.world(), &view.zk),
-                Err(ivm::VMError::NoritoInvalid),
-                "{corruption} native verifier corruption must fail closed"
-            );
-            assert!(!host.verifying_keys.contains_key(&generic_id));
-            assert!(host.verifying_keys.is_empty());
-            assert!(host.prepared_verifying_keys.is_empty());
-        }
-    }
-    #[test]
-    fn zk_snapshot_hydration_does_not_exempt_allowed_same_backend_lookalike() {
-        let backend = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4;
-        let lookalike_id = VerifyingKeyId::new(
-            backend,
-            format!(
-                "unrelated-{}-not-a-release-digest",
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
-            ),
-        );
-        let mut record = active_vk_record(
-            [0x81; 32],
-            [0x82; 32],
-            backend,
-            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
-            "core",
-            Vec::new(),
-        );
-        record.key = None;
-        let mut world = World::new();
-        world.verifying_keys_by_circuit.insert(
-            (record.circuit_id.clone(), record.version),
-            lookalike_id.clone(),
-        );
-        world.verifying_keys.insert(lookalike_id, record);
-
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let view = state.view();
-        let excluded = crate::smartcontracts::isi::offline::exact_kagemusha_v4_native_verifier_ids_for_hydration(
-            view.world(),
-        )
-        .expect("a malformed-digest lookalike is outside the V4 ownership boundary");
-        assert!(excluded.is_empty());
-
-        let mut host = CoreHost::new(fixture_account("alice"));
-        assert_eq!(
-            host.set_zk_snapshots_from_world(view.world(), &view.zk),
-            Err(ivm::VMError::NoritoInvalid),
-            "the allowed WSV lookalike must reach, and be rejected by, generic OpenVerify hydration"
-        );
-        assert!(host.verifying_keys.is_empty());
-        assert!(host.prepared_verifying_keys.is_empty());
-    }
-    #[test]
     fn load_vk_record_any_namespace_uses_keyless_registry_backend() {
         let mut host = CoreHost::new(fixture_account("alice"));
         let commitment = [0x78; 32];
@@ -24486,8 +24381,6 @@ seiyaku DurableOwner {
             "da_ingest_quota_v1/authority/deadbeef",
             "faucet_claim_consumed_v1",
             "faucet_claim_consumed_v1/deadbeef",
-            "kagemusha_operation_outcome_v4",
-            "kagemusha_operation_outcome_v4_deadbeef_cafebabe",
             "merge_execution_batch_applied_1_deadbeef",
             "merge_execution_lane_applied_1_2_3_deadbeef",
             "merge_lane_frontier_v1",
@@ -24508,9 +24401,6 @@ seiyaku DurableOwner {
             );
         }
         for key in [
-            "offline_device_attestation_policy",
-            "offline_device_attestation_policy/platform-roots",
-            "kagemusha_release_lifecycle_v4_deadbeef",
             "pkdeploy_verified_lane_relay",
             "pkdeploy_verified_lane_relay_1_2_3_deadbeef",
             "pkdeploy_verified_nexus_fee_budget_deadbeef",
@@ -24539,9 +24429,6 @@ seiyaku DurableOwner {
             "queue_plan_pending_route_member_v1x",
             "queue_plan_pending_signed_alias_member_v1x",
             "queue_plan_signed_alias_terminal_v1x",
-            "kagemusha_operation_outcome_v4x",
-            "offline_device_attestation_policyx",
-            "kagemushax",
             "pkdeploy_verified_lane_relayx",
             "pkdeploy_verified_fee_sponsor_vault_allocationx",
             "pkdeploy_fee_sponsor_vault_allocation_usagex",
@@ -27367,94 +27254,6 @@ seiyaku DurableOwner {
         rec.vk_len = u32::try_from(vk_bytes.len()).expect("test verifying key length fits u32");
         rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes));
         rec
-    }
-    fn world_with_native_kagemusha_v4_pair_and_generic_vk(
-        cancelled: bool,
-    ) -> (World, [VerifyingKeyId; 2], VerifyingKeyId, [u8; 32]) {
-        let manifest_sha256 = [0xA5; 32];
-        let owner =
-            iroha_data_model::offline::kagemusha_recursive_spend_verifier_owner_manifest_id_v4(
-                manifest_sha256,
-            );
-        let mut world = World::new();
-        let mut native_ids = Vec::with_capacity(2);
-        for (parity, circuit_id, curve, key_byte, schema_byte) in [
-            (
-                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
-                0x41,
-                0x51,
-            ),
-            (
-                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
-                0x42,
-                0x52,
-            ),
-        ] {
-            let id = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
-                parity,
-                manifest_sha256,
-            );
-            let key = VerifyingKeyBox::new(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
-                    .to_owned(),
-                vec![key_byte; 32],
-            );
-            let mut record = VerifyingKeyRecord::new_with_owner(
-                7,
-                circuit_id,
-                Some(owner.clone()),
-                iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE,
-                BackendTag::Halo2IpaPasta,
-                curve,
-                [schema_byte; 32],
-                crate::zk::hash_vk(&key),
-            );
-            record.vk_len = u32::try_from(key.bytes.len()).expect("bounded verifier fixture");
-            record.max_proof_bytes = 65_536;
-            if cancelled {
-                record.activation_height = None;
-                record.withdraw_height = Some(19);
-                record.key = None;
-                record.vk_len = 0;
-                record.status = iroha_data_model::confidential::ConfidentialStatus::Withdrawn;
-            } else {
-                record.activation_height = Some(20);
-                record.key = Some(key);
-                record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
-            }
-            world
-                .verifying_keys_by_circuit
-                .insert((record.circuit_id.clone(), record.version), id.clone());
-            world.verifying_keys.insert(id.clone(), record);
-            native_ids.push(id);
-        }
-        let native_ids: [VerifyingKeyId; 2] = native_ids
-            .try_into()
-            .expect("fixture installs one Eq/Ep pair");
-
-        let generic_commitment = [0x77; 32];
-        let generic_id = VerifyingKeyId::new("halo2/ipa", "ivm-execution-keyless-hydration");
-        let mut generic_record = active_vk_record(
-            generic_commitment,
-            [0x78; 32],
-            "halo2/ipa",
-            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
-            "core",
-            Vec::new(),
-        );
-        generic_record.key = None;
-        world.verifying_keys_by_circuit.insert(
-            (generic_record.circuit_id.clone(), generic_record.version),
-            generic_id.clone(),
-        );
-        world
-            .verifying_keys
-            .insert(generic_id.clone(), generic_record);
-        (world, native_ids, generic_id, generic_commitment)
     }
     #[cfg(feature = "zk-halo2-ipa")]
     fn enable_halo2_batch_verifier(host: &mut CoreHost, verifier_max_batch: u32, max_k: u32) {

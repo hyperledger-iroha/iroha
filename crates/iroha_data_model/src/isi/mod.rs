@@ -361,10 +361,6 @@ impl_direct_instruction_box!(crate::isi::sorafs::PublishSorafsPopRevocationList)
 impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsCitizenBond);
 impl_direct_instruction_box!(crate::isi::sorafs::RotateSorafsCitizenBondAuthorization);
 impl_direct_instruction_box!(crate::isi::sorafs::RequestSorafsCitizenBondExit);
-impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsAnonymousServiceNote);
-impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsAnonymousJurorCandidacy);
-impl_direct_instruction_box!(crate::isi::sorafs::RefundSorafsAnonymousServiceEscrow);
-impl_direct_instruction_box!(crate::isi::sorafs::SlashSorafsAnonymousServiceEscrow);
 impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsModerationPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationAppeal);
 impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsModerationJurorEligibility);
@@ -426,16 +422,8 @@ impl_musubi_instruction_box!(
     SetMusubiRegistryPolicyV1,
     AssertMusubiReleaseDigestV1,
 );
-impl_direct_instruction_box!(crate::isi::offline::TopUpKagemushaRecursiveV4);
-impl_direct_instruction_box!(crate::isi::offline::RedeemKagemushaRecursiveV4);
-impl_direct_instruction_box!(crate::isi::offline::ActivateKagemushaRecursiveReleaseV4);
-impl_direct_instruction_box!(crate::isi::offline::EnableKagemushaRecursiveIssuanceV4);
-impl_direct_instruction_box!(crate::isi::offline::CancelKagemushaRecursiveReleaseV4);
-impl_direct_instruction_box!(crate::isi::offline::DeactivateKagemushaRecursiveIssuanceV4);
-impl_direct_instruction_box!(crate::isi::offline::RecordKagemushaTairaCanaryV4);
-impl_direct_instruction_box!(crate::isi::offline::AuthorizeKagemushaTairaCanaryV4);
-impl_direct_instruction_box!(crate::isi::offline::RegisterOfflineDeviceAttestation);
-impl_direct_instruction_box!(crate::isi::offline::SetOfflineDeviceAttestationPolicy);
+impl_direct_instruction_box!(crate::isi::offline_cash_v1::TopUpOfflineCashV1);
+impl_direct_instruction_box!(crate::isi::offline_cash_v1::RedeemOfflineCashV1);
 // Allow direct boxing of oracle feed instructions.
 impl_direct_instruction_box!(crate::isi::oracle::RegisterOracleFeed);
 impl_direct_instruction_box!(crate::isi::oracle::SubmitOracleObservation);
@@ -1842,8 +1830,8 @@ pub mod mint_burn;
 pub mod musubi;
 /// Nexus lane governance instructions.
 pub mod nexus;
-/// Offline allowance settlement instructions.
-pub mod offline;
+/// Clean-slate pooled-reserve Offline Cash V1 instructions and operation records.
+pub mod offline_cash_v1;
 /// Oracle feed registration and aggregation instructions.
 pub mod oracle;
 /// First-release privacy governance and proof-admission instructions.
@@ -1898,7 +1886,7 @@ pub use kaigi::*;
 pub use ministry::*;
 pub use mint_burn::*;
 pub use nexus::*;
-pub use offline::*;
+pub use offline_cash_v1::*;
 pub use oracle::*;
 pub use privacy::*;
 pub use ram_lfe::*;
@@ -2776,20 +2764,19 @@ pub mod prelude {
             FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
             MaintainSorafsOrderbook, MatchSorafsOrderbook, PublishSorafsPopRevocationList,
             RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
-            RecordSorafsOrderbookSettlementReceipt, RefundSorafsAnonymousServiceEscrow,
-            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-            RegisterSorafsAnonymousJurorCandidacy, RegisterSorafsAnonymousServiceNote,
-            RegisterSorafsCitizenBond, RegisterSorafsModerationJurorEligibility,
-            RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsCitizenBondExit,
-            RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-            ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
-            RevokeProviderIngestCompletionAuthority, RotateSorafsCitizenBondAuthorization,
-            SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
+            RegisterCapacityDispute, RegisterPinManifest, RegisterSorafsCitizenBond,
+            RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
+            RepaySorafsReserveCredit, RequestSorafsCitizenBondExit, RequestSorafsReserveMovement,
+            ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
+            ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
+            RotateSorafsCitizenBondAuthorization, SetPricingSchedule,
+            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
             SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
-            SlashSorafsAnonymousServiceEscrow, SubmitSorafsModerationAppeal,
-            SubmitSorafsModerationCommit, SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder,
-            SubmitSorafsReserveAppeal, UpsertProviderCredit,
+            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+            SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsReserveAppeal,
+            UpsertProviderCredit,
         },
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,

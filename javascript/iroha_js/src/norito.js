@@ -580,7 +580,7 @@ function rejectRetiredGenericZkInstruction(instruction) {
   for (const variant of RETIRED_GENERIC_ZK_VARIANTS) {
     if (Object.prototype.hasOwnProperty.call(instruction.zk, variant)) {
       throw new TypeError(
-        `zk.${variant} is retired in ABI V1; use the typed Kagemusha flow`,
+        `zk.${variant} is retired in ABI V1; use the typed OfflineCashV1 flow`,
       );
     }
   }

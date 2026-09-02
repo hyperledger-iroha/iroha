@@ -451,7 +451,7 @@ pub(in crate::sumeragi) fn durable_finality_fixture(
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"finalized worker block")),
         payload_hash: Hash::new(b"finalized worker payload"),
     };
-    let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"worker parent state"),
         Hash::new(b"worker post state"),
         Hash::new(b"worker ordinary writes"),

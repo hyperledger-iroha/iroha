@@ -54,10 +54,13 @@ fn tool_registry_skips_ws_and_sse_routes() {
     let cfg = iroha_config::parameters::actual::ToriiMcp::default();
     let tools = build_tool_specs(&cfg);
     assert!(!tools.is_empty(), "tool registry must not be empty");
-    assert!(tools.iter().all(|tool| {
-        tool.path_template != iroha_torii_shared::uri::SUBSCRIPTION
-            && tool.path_template != iroha_torii_shared::uri::BLOCKS_STREAM
-            && !tool.path_template.ends_with("/sse")
+    assert!(tools.iter().all(|tool| match tool.route_backing() {
+        Some((_, _, path_template)) => {
+            path_template != iroha_torii_shared::uri::SUBSCRIPTION
+                && path_template != iroha_torii_shared::uri::BLOCKS_STREAM
+                && !path_template.ends_with("/sse")
+        }
+        None => true,
     }));
     assert!(tools.iter().all(|tool| !tool.name.starts_with("connect.")));
     assert!(
@@ -317,7 +320,10 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .iter()
             .find(|tool| tool.name == name)
             .expect("governance ballot tool exists");
-        assert_eq!(tool.effect, ToolEffect::Read);
+        let (effect, _, _) = tool
+            .route_backing()
+            .expect("governance ballot tool must be route-backed");
+        assert_eq!(effect, ToolEffect::Read);
     }
     assert!(
         tools
@@ -484,9 +490,12 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .iter()
             .find(|tool| tool.name == definition.name)
             .unwrap_or_else(|| panic!("missing Musubi V1 tool `{}`", definition.name));
-        assert_eq!(tool.method, Method::POST);
-        assert_eq!(tool.path_template, definition.path);
-        assert_eq!(tool.effect, definition.effect);
+        let (effect, method, path_template) = tool
+            .route_backing()
+            .expect("Musubi V1 tool must be route-backed");
+        assert_eq!(method, &Method::POST);
+        assert_eq!(path_template, definition.path);
+        assert_eq!(effect, definition.effect);
     }
     assert!(!tools.iter().any(|tool| {
         matches!(
@@ -806,8 +815,11 @@ fn find_tool_spec_by_name_accepts_only_listed_exact_names() {
     assert!(find_tool_spec_by_name(&tools, "torii.healthCheck").is_none());
     let tool = find_tool_spec_by_name(&tools, "torii.get_health")
         .expect("the exact tools/list name should resolve to the health tool");
-    assert_eq!(tool.path_template, "/health");
-    assert_eq!(tool.method, Method::GET);
+    let (_, method, path_template) = tool
+        .route_backing()
+        .expect("health tool must be route-backed");
+    assert_eq!(path_template, "/health");
+    assert_eq!(method, &Method::GET);
 }
 #[test]
 fn find_tool_spec_by_name_rejects_removed_post_transaction_alias() {
@@ -816,8 +828,11 @@ fn find_tool_spec_by_name_rejects_removed_post_transaction_alias() {
     assert!(find_tool_spec_by_name(&tools, "torii.post_transaction").is_none());
     let tool = find_tool_spec_by_name(&tools, "iroha.transactions.submit")
         .expect("canonical transaction submit tool must remain available");
-    assert_eq!(tool.path_template, iroha_torii_shared::uri::TRANSACTION);
-    assert_eq!(tool.method, Method::POST);
+    let (_, method, path_template) = tool
+        .route_backing()
+        .expect("transaction submit tool must be route-backed");
+    assert_eq!(path_template, iroha_torii_shared::uri::TRANSACTION);
+    assert_eq!(method, &Method::POST);
 }
 #[tokio::test]
 async fn dispatch_route_preserves_inbound_remote_addr_for_internal_allowlist_checks() {
@@ -1579,10 +1594,22 @@ fn connect_management_authorization_requires_canonical_token() {
 fn vpn_tool_factories_expose_expected_names_and_routes() {
     let profile = iroha_vpn_profile_tool();
     assert_eq!(profile.name, "iroha.vpn.profile");
-    assert_eq!(profile.path_template, "/v1/vpn/profile");
+    assert_eq!(
+        profile
+            .route_backing()
+            .expect("VPN profile tool must be route-backed")
+            .2,
+        "/v1/vpn/profile"
+    );
     let quote = iroha_vpn_quotes_create_tool();
     assert_eq!(quote.name, "iroha.vpn.quotes.create");
-    assert_eq!(quote.path_template, "/v1/vpn/quotes");
+    assert_eq!(
+        quote
+            .route_backing()
+            .expect("VPN quote tool must be route-backed")
+            .2,
+        "/v1/vpn/quotes"
+    );
     let quote_schema = quote.input_schema.as_object().expect("quote schema");
     let quote_properties = quote_schema
         .get("properties")
@@ -1631,10 +1658,21 @@ fn vpn_tool_factories_expose_expected_names_and_routes() {
     assert!(!quote_body_description.contains("tx_instructions"));
     let create = iroha_vpn_sessions_create_tool();
     assert_eq!(create.name, "iroha.vpn.sessions.create");
-    assert_eq!(create.path_template, "/v1/vpn/sessions");
+    assert_eq!(
+        create
+            .route_backing()
+            .expect("VPN session-create tool must be route-backed")
+            .2,
+        "/v1/vpn/sessions"
+    );
     let get = iroha_vpn_sessions_get_tool();
     assert_eq!(get.name, "iroha.vpn.sessions.get");
-    assert_eq!(get.path_template, "/v1/vpn/sessions/{session_id}");
+    assert_eq!(
+        get.route_backing()
+            .expect("VPN session-get tool must be route-backed")
+            .2,
+        "/v1/vpn/sessions/{session_id}"
+    );
     let get_schema = get.input_schema.as_object().expect("session get schema");
     let get_properties = get_schema
         .get("properties")
@@ -1654,10 +1692,22 @@ fn vpn_tool_factories_expose_expected_names_and_routes() {
     );
     let receipts = iroha_vpn_receipts_list_tool();
     assert_eq!(receipts.name, "iroha.vpn.receipts.list");
-    assert_eq!(receipts.path_template, "/v1/vpn/receipts");
+    assert_eq!(
+        receipts
+            .route_backing()
+            .expect("VPN receipt-list tool must be route-backed")
+            .2,
+        "/v1/vpn/receipts"
+    );
     let receipt_submit = iroha_vpn_receipts_submit_tool();
     assert_eq!(receipt_submit.name, "iroha.vpn.receipts.submit");
-    assert_eq!(receipt_submit.path_template, "/v1/vpn/receipts");
+    assert_eq!(
+        receipt_submit
+            .route_backing()
+            .expect("VPN receipt-submit tool must be route-backed")
+            .2,
+        "/v1/vpn/receipts"
+    );
     let schema = receipt_submit
         .input_schema
         .as_object()
@@ -2265,9 +2315,12 @@ fn parliament_mcp_catalog_exposes_authenticated_draft_and_read_tools() {
             .iter()
             .find(|tool| tool.name == name)
             .unwrap_or_else(|| panic!("missing Parliament MCP tool `{name}`"));
-        assert_eq!(tool.method, method);
-        assert_eq!(tool.path_template, path);
-        assert_eq!(tool.effect, effect);
+        let (actual_effect, actual_method, actual_path) = tool
+            .route_backing()
+            .expect("Parliament MCP tool must be route-backed");
+        assert_eq!(actual_method, &method);
+        assert_eq!(actual_path, path);
+        assert_eq!(actual_effect, effect);
         let schema = sanitize_tool_input_schema(&tool.input_schema);
         assert_eq!(
             schema.get("additionalProperties").and_then(Value::as_bool),
@@ -2359,8 +2412,11 @@ fn parliament_tle_partial_release_mcp_is_strict_zero_body_write() {
         .iter()
         .find(|tool| tool.name == "iroha.gov.parliament.ballots.tle_partial_release.create")
         .expect("partial-release MCP tool");
-    assert_eq!(tool.effect, ToolEffect::Write);
-    assert_eq!(tool.method, Method::POST);
+    let (effect, method, _) = tool
+        .route_backing()
+        .expect("partial-release MCP tool must be route-backed");
+    assert_eq!(effect, ToolEffect::Write);
+    assert_eq!(method, &Method::POST);
     let properties = tool
         .input_schema
         .get("properties")
@@ -2543,15 +2599,18 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
 fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
     let cfg = iroha_config::parameters::actual::ToriiMcp::default();
     let tools = build_tool_specs(&cfg);
-    for path in ["/v1/zk/vote/tally"] {
+    for target_path in ["/v1/zk/vote/tally"] {
         let tool = tools
             .iter()
             .find(|tool| {
                 tool.name.starts_with("torii.")
-                    && tool.method == Method::POST
-                    && tool.path_template == path
+                    && tool
+                        .route_backing()
+                        .is_some_and(|(_, method, path_template)| {
+                            method == &Method::POST && path_template == target_path
+                        })
             })
-            .unwrap_or_else(|| panic!("missing OpenAPI-derived governance tool for {path}"));
+            .unwrap_or_else(|| panic!("missing OpenAPI-derived governance tool for {target_path}"));
         let schema = sanitize_tool_input_schema(&tool.input_schema);
         let required = schema
             .get("required")
@@ -2559,7 +2618,7 @@ fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
             .expect("OpenAPI-derived governance required fields");
         assert!(
             required.iter().any(|field| field.as_str() == Some("body")),
-            "{path} must require the inspected JSON body"
+            "{target_path} must require the inspected JSON body"
         );
         let properties = schema
             .get("properties")
@@ -2567,7 +2626,7 @@ fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
             .expect("OpenAPI-derived governance properties");
         assert!(
             !properties.contains_key("body_base64"),
-            "{path} must not advertise an opaque body bypass"
+            "{target_path} must not advertise an opaque body bypass"
         );
         assert_eq!(
             properties
@@ -2593,10 +2652,10 @@ fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
                 });
         assert!(
             body_is_closed,
-            "{path} must preserve its closed typed body schema"
+            "{target_path} must preserve its closed typed body schema"
         );
     }
-    for path in [
+    for target_path in [
         "/v1/gov/ballots/zk-v1",
         "/v1/gov/ballots/zk-v1/ballot-proof",
         "/v1/gov/ballots/plain",
@@ -2604,10 +2663,13 @@ fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
         assert!(
             tools.iter().all(|tool| {
                 !(tool.name.starts_with("torii.")
-                    && tool.method == Method::POST
-                    && tool.path_template == path)
+                    && tool
+                        .route_backing()
+                        .is_some_and(|(_, method, path_template)| {
+                            method == &Method::POST && path_template == target_path
+                        }))
             }),
-            "purpose-built governance tool must not have a generated alias for {path}"
+            "purpose-built governance tool must not have a generated alias for {target_path}"
         );
     }
     for retired_path in [
@@ -2616,7 +2678,10 @@ fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
         "/v1/gov/enact",
     ] {
         assert!(
-            tools.iter().all(|tool| tool.path_template != retired_path),
+            tools.iter().all(|tool| match tool.route_backing() {
+                Some((_, _, path_template)) => path_template != retired_path,
+                None => true,
+            }),
             "retired proposal-backed governance route remains exposed through MCP: {retired_path}"
         );
     }

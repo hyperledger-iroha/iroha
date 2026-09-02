@@ -17,13 +17,24 @@ class ContractLifecycleWirePayloadEncoderParityTest {
     @Test
     fun `all lifecycle instructions preserve their revision and match Rust`() {
         val fixture = FixtureGeneratorRunner.run("contract-lifecycle")
-        assertEquals(7, fixture.size)
-        val contractAddress = fixture[5]
-        val accountId = fixture[6]
+        assertEquals(10, fixture.size)
+        val contractAddress = fixture[7]
+        val accountId = fixture[8]
+        val codeHashHex = fixture[9]
         val chainDiscriminant = requireNotNull(
             AccountAddress.detectI105Discriminant(accountId),
         )
 
+        val deactivate = ContractLifecycleWirePayloadEncoder.encodeDeactivateContractInstance(
+            contractAddress,
+            BigInteger.valueOf(5),
+            "planned rotation",
+        )
+        val activate = ContractLifecycleWirePayloadEncoder.encodeActivateContractInstance(
+            contractAddress,
+            BigInteger.valueOf(6),
+            codeHashHex,
+        )
         val set = ContractLifecycleWirePayloadEncoder.encodeSetContractParliamentDelegation(
             contractAddress,
             BigInteger.valueOf(7),
@@ -48,7 +59,15 @@ class ContractLifecycleWirePayloadEncoderParityTest {
             contractAddress,
             BigInteger.valueOf(11),
         )
-        val instructions = listOf(set, offerAccount, offerParliament, accept, cancel)
+        val instructions = listOf(
+            deactivate,
+            activate,
+            set,
+            offerAccount,
+            offerParliament,
+            accept,
+            cancel,
+        )
 
         assertEquals(
             ContractLifecycleWirePayloadEncoder.WIRE_NAMES,
@@ -61,6 +80,22 @@ class ContractLifecycleWirePayloadEncoderParityTest {
                 "contract lifecycle payload $index must match Rust",
             )
         }
+
+        val decodedDeactivation =
+            ContractLifecycleWirePayloadEncoder.decodeDeactivateContractInstance(
+                wirePayload(deactivate),
+            )
+        assertEquals(contractAddress, decodedDeactivation.contractAddress)
+        assertEquals(BigInteger.valueOf(5), decodedDeactivation.expectedRevision)
+        assertEquals("planned rotation", decodedDeactivation.reason)
+
+        val decodedActivation =
+            ContractLifecycleWirePayloadEncoder.decodeActivateContractInstance(
+                wirePayload(activate),
+            )
+        assertEquals(contractAddress, decodedActivation.contractAddress)
+        assertEquals(BigInteger.valueOf(6), decodedActivation.expectedRevision)
+        assertEquals(codeHashHex, decodedActivation.codeHashHex)
 
         val decodedSet =
             ContractLifecycleWirePayloadEncoder.decodeSetContractParliamentDelegation(
@@ -103,6 +138,40 @@ class ContractLifecycleWirePayloadEncoderParityTest {
         val contractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         assertFailsWith<IllegalArgumentException> {
+            ContractLifecycleWirePayloadEncoder.encodeDeactivateContractInstance(
+                contractAddress,
+                BigInteger.ZERO,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ContractLifecycleWirePayloadEncoder.encodeActivateContractInstance(
+                contractAddress,
+                BigInteger.ONE,
+                "00",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ContractLifecycleWirePayloadEncoder.encodeActivateContractInstance(
+                contractAddress,
+                BigInteger.ONE,
+                "ab".repeat(31) + "aa",
+            )
+        }
+        val invalidDecodedHash = wirePayload(
+            ContractLifecycleWirePayloadEncoder.encodeActivateContractInstance(
+                contractAddress,
+                BigInteger.ONE,
+                "ab".repeat(32),
+            ),
+        )
+        invalidDecodedHash[invalidDecodedHash.lastIndex] =
+            (invalidDecodedHash.last().toInt() and 0xfe).toByte()
+        assertFailsWith<IllegalArgumentException> {
+            ContractLifecycleWirePayloadEncoder.decodeActivateContractInstance(
+                invalidDecodedHash,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
             ContractLifecycleWirePayloadEncoder.encodeAcceptContractOwnership(
                 contractAddress,
                 BigInteger.ZERO,
@@ -128,6 +197,11 @@ class ContractLifecycleWirePayloadEncoderParityTest {
         )
         assertFailsWith<IllegalArgumentException> {
             ContractLifecycleWirePayloadEncoder.decodeCancelContractOwnershipOffer(
+                wirePayload(accept),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ContractLifecycleWirePayloadEncoder.decodeDeactivateContractInstance(
                 wirePayload(accept),
             )
         }

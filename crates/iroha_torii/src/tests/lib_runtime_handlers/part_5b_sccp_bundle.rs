@@ -156,7 +156,7 @@ fn app_with_indexed_sccp_message_for_test(
         proposal_round: round,
         phase: GlobalPhase::Commit,
         subject,
-        execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
             Hash::new(b"Torii SCCP exact-v2 parent state"),
             Hash::new(b"Torii SCCP exact-v2 post state"),
             Hash::new(b"Torii SCCP exact-v2 ordinary writes"),

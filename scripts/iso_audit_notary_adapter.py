@@ -45,7 +45,7 @@ ANCHOR_DIGEST_FIELD = "anchor_sha256"
 ANCHOR_DIR = "anchors"
 ANCHOR_VERSION = 1
 PERSISTED_RECORD_DIGEST_FIELD = "record_sha256"
-PERSISTED_RECORD_VERSION = 2
+PERSISTED_RECORD_VERSION = 3
 RECORDS_DIR = "messages"
 MAX_BEARER_TOKEN_BYTES = 8192
 MAX_HTTP_URL_CHARS = 2048
@@ -101,7 +101,7 @@ DEFAULT_RESPONSE_LIMIT_BYTES = 64 * 1024
 MAX_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024
 INDEX_DIGEST_FIELD = "index_sha256"
 INDEX_FILE = "messages.index.json"
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 LATEST_ANCHOR_FILE = "latest.notary.json"
 RECEIPT_DIGEST_FIELD = "receipt_sha256"
 RECEIPT_VERSION = 1
@@ -180,6 +180,7 @@ PERSISTED_PARTIES_KEYS = {
     "counterparty_financial_id",
     "pinned_profile_id",
     "pinned_signature_policy",
+    "pinned_profile_policy_sha256",
 }
 PERSISTED_SIGNATURE_POLICIES = {
     "record_only",
@@ -1749,6 +1750,15 @@ def _verify_persisted_parties(
     profile_id = metadata.get("profile_id")
     if profile_id is not None and value.get("pinned_profile_id") != profile_id:
         raise AdapterError(f"{label}.pinned_profile_id does not match metadata.profile_id")
+    policy_sha256 = value.get("pinned_profile_policy_sha256")
+    if not _is_lower_hex_sha256(policy_sha256):
+        raise AdapterError(
+            f"{label}.pinned_profile_policy_sha256 must be a canonical SHA-256"
+        )
+    _reject_all_zero_sha256(
+        policy_sha256,
+        f"{label}.pinned_profile_policy_sha256",
+    )
 
 
 def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str, int]:

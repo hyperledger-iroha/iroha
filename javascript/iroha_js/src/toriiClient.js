@@ -211,9 +211,8 @@ const VERIFYING_KEY_CLIENT_URL = new URL(
   import.meta.url,
 ).href;
 const PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES = 256 * 1024;
-const KAGEMUSHA_READINESS_JSON_MAX_BYTES = 4 * 1024;
-const KAGEMUSHA_OPERATION_REFERENCE_JSON_MAX_BYTES = 4 * 1024;
-const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES = 16 * 1024 * 1024;
+const OFFLINE_CASH_READINESS_JSON_MAX_BYTES_V1 = 4 * 1024;
+const OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1 = 16 * 1024 * 1024;
 const FEE_QUOTE_JSON_MAX_BYTES = 64 * 1024;
 const FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES = 64 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
@@ -361,6 +360,10 @@ const DEFAULT_ISO_POLL_ATTEMPTS = 12;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+const SUMERAGI_EVIDENCE_COUNT_JSON_RESPONSE_MAX_BYTES = 1024;
+// The maximum 1,000-record fixed evidence envelope remains below this ceiling,
+// including full-width u64 integers and terminal penalty details.
+const SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES = 1024 * 1024;
 const SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES =
   SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024;
@@ -524,27 +527,27 @@ const HEADER_SORA_NAME = "sora-name";
 const HEADER_SORA_PROOF_STATUS = "sora-proof-status";
 const HEADER_SORA_PDP_COMMITMENT = "sora-pdp-commitment";
 
-const EVIDENCE_KIND_VALUES = new Set([
-  "DoublePrepare",
-  "DoubleCommit",
-  "InvalidQc",
-  "InvalidProposal",
-  "Censorship",
-  "SumeragiV2Equivocation",
-]);
-
-const EVIDENCE_PHASE_VALUES = new Set(["Prepare", "Commit", "NewView"]);
+const EVIDENCE_KIND = "SumeragiV2Equivocation";
 const EVIDENCE_EQUIVOCATION_CLASS_VALUES = new Set([
   "proposal",
   "phase_vote",
   "timeout_vote",
 ]);
-const EVIDENCE_BASE_FIELDS = Object.freeze([
+const EVIDENCE_RECORD_FIELDS = Object.freeze([
   "kind",
+  "class",
+  "height",
+  "view",
+  "epoch",
+  "signer",
+  "context_id",
+  "artifact_hash_1",
+  "artifact_hash_2",
   "recorded_height",
   "recorded_view",
   "recorded_ms",
   "consensus_admitted_height",
+  "penalty_status",
 ]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
@@ -1775,135 +1778,90 @@ export class ToriiClient {
     });
     await this._expectStatus(response, [200]);
     const {
-      normalizeOfflineStatus,
-      requireKagemushaJsonContentType,
+      normalizeOfflineCashReadinessV1,
+      requireOfflineCashJsonContentTypeV1,
     } = await optionalModulePromise;
-    requireKagemushaJsonContentType(
+    requireOfflineCashJsonContentTypeV1(
       this._getHeader(response, "content-type"),
       "Offline capability response",
     );
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      KAGEMUSHA_READINESS_JSON_MAX_BYTES,
+      OFFLINE_CASH_READINESS_JSON_MAX_BYTES_V1,
       "Offline capability response",
       { signal },
     );
-    return normalizeOfflineStatus(payload);
+    return normalizeOfflineCashReadinessV1(payload);
   }
 
-  /** Submit an externally produced manifest-V4 top-up Norito archive. */
-  submitKagemushaTopUpV4(request, options = {}) {
-    return this._submitKagemushaCommandV4(
-      "/v1/offline/top-up",
-      "top_up",
-      request,
-      options,
-      "submitKagemushaTopUpV4",
-    );
+  /** Submit one canonical Offline Cash V1 top-up intent. */
+  async submitOfflineCashTopUp(request, options = {}) {
+    return this._submitOfflineCashOperationV1("/v1/offline/top-up", "top_up", request, options);
   }
 
-  /** Submit an externally produced manifest-V4 redemption Norito archive. */
-  submitKagemushaRedeemV4(request, options = {}) {
-    return this._submitKagemushaCommandV4(
-      "/v1/offline/redeem",
-      "redeem",
-      request,
-      options,
-      "submitKagemushaRedeemV4",
-    );
+  /** Submit one canonical Offline Cash V1 full or partial redemption intent. */
+  async submitOfflineCashRedemption(request, options = {}) {
+    return this._submitOfflineCashOperationV1("/v1/offline/redeem", "redemption", request, options);
   }
 
-  /** Poll the operation identified by an accepted Kagemusha operation reference. */
-  async getKagemushaOperationStatus(operationReference, options = {}) {
-    const {
-      _normalizeKagemushaOperationStatusWithNativeValidation,
-      normalizeKagemushaOperationReference,
-      requireKagemushaJsonContentType,
-    } = await loadToriiOptionalModule();
-    const accepted = normalizeKagemushaOperationReference(operationReference);
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
-      options,
-      "getKagemushaOperationStatus",
-    );
-    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaOperationStatus options");
-    const response = await this._request(
-      "GET",
-      accepted.status_uri,
-      { headers: JSON_ACCEPT_HEADERS, signal, redirect: "error" },
-    );
-    await this._expectStatus(response, [200]);
-    requireKagemushaJsonContentType(
-      this._getHeader(response, "content-type"),
-      "Kagemusha operation status response",
-    );
-    const { payload, sourceBytes } = await this._readBoundedLosslessIntegerJson(
-      response,
-      KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES,
-      "Kagemusha operation status response",
-      { signal, includeSourceBytes: true },
-    );
-    const needsNativeValidation =
-      payload !== null &&
-      typeof payload === "object" &&
-      payload.state === "applied" &&
-      payload.value !== null &&
-      typeof payload.value === "object" &&
-      payload.value.result !== null &&
-      typeof payload.value.result === "object" &&
-      payload.value.result.kind === "top_up";
-    const nativeBinding = needsNativeValidation
-      ? resolveNativeRuntimeBinding(this._nativeRuntime)
-      : null;
-    return _normalizeKagemushaOperationStatusWithNativeValidation(
-      payload,
-      accepted,
-      sourceBytes,
-      nativeBinding,
-    );
-  }
-
-  async _submitKagemushaCommandV4(path, kind, request, options, context) {
-    const {
-      normalizeKagemushaOperationReference,
-      normalizeKagemushaRedeemRequestV4,
-      normalizeKagemushaTopUpRequestV4,
-      requireKagemushaJsonContentType,
-    } = await loadToriiOptionalModule();
-    const normalizeRequest = kind === "top_up"
-      ? normalizeKagemushaTopUpRequestV4
-      : normalizeKagemushaRedeemRequestV4;
-    const normalized = normalizeRequest(request, `${context} request`);
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, context);
-    assertSupportedOptionKeys(rest, new Set([]), `${context} options`);
-    const response = await this._request("POST", path, {
-      headers: {
-        Accept: APPLICATION_JSON,
-        "Content-Type": "application/x-norito",
-        "Idempotency-Key": normalized.identity.operation_id,
-      },
-      body: Buffer.from(normalized.norito),
-      disableRetries: true,
+  /** Read one Offline Cash V1 operation without exposing an unverified monetary result. */
+  async getOfflineCashOperation(operationId, options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "getOfflineCashOperation");
+    assertSupportedOptionKeys(rest, new Set([]), "getOfflineCashOperation options");
+    const optional = await loadToriiOptionalModule();
+    const operationIdHex = optional.offlineCashOperationIdHexV1(operationId);
+    const response = await this._request("GET", `/v1/offline/operations/${operationIdHex}`, {
+      headers: JSON_ACCEPT_HEADERS,
       signal,
       redirect: "error",
     });
-    await this._expectStatus(response, [202]);
-    requireKagemushaJsonContentType(
-      this._getHeader(response, "content-type"),
-      "Kagemusha operation reference response",
-    );
-    const location = this._getHeader(response, "location");
-    const retryAfter = this._getHeader(response, "retry-after");
+    await this._expectStatus(response, [200]);
+    optional.requireOfflineCashJsonContentTypeV1(this._getHeader(response, "content-type"), "Offline Cash operation response");
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      KAGEMUSHA_OPERATION_REFERENCE_JSON_MAX_BYTES,
-      "Kagemusha operation reference response",
+      OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+      "Offline Cash operation response",
       { signal },
     );
-    return normalizeKagemushaOperationReference(payload, {
-      expectedIdentity: normalized.identity,
-      location,
-      retryAfter,
+    const status = optional.normalizeUnverifiedOfflineCashOperationStatusV1(payload);
+    if (optional.offlineCashOperationIdHexV1(status.operationId) !== operationIdHex) {
+      throw new TypeError("Offline Cash operation response ID does not match the requested resource");
+    }
+    return status;
+  }
+
+  async _submitOfflineCashOperationV1(path, kind, request, options) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "submitOfflineCashOperation");
+    assertSupportedOptionKeys(rest, new Set([]), "submitOfflineCashOperation options");
+    const optional = await loadToriiOptionalModule();
+    const requestBody = kind === "top_up"
+      ? optional.OfflineCashV1.encodeTopUpRequest(request)
+      : optional.OfflineCashV1.encodeRedemptionRequest(request);
+    const operationIdHex = optional.offlineCashOperationIdHexV1(request.operationId);
+    const response = await this._request("POST", path, {
+      headers: {
+        "Content-Type": APPLICATION_NORITO,
+        Accept: APPLICATION_JSON,
+        "Idempotency-Key": operationIdHex,
+      },
+      body: requestBody,
+      signal,
+      redirect: "error",
+      disableRetries: true,
     });
+    await this._expectStatus(response, [200, 202]);
+    optional.requireOfflineCashJsonContentTypeV1(this._getHeader(response, "content-type"), "Offline Cash operation response");
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+      "Offline Cash operation response",
+      { signal },
+    );
+    const status = optional.normalizeUnverifiedOfflineCashOperationStatusV1(payload);
+    if (optional.offlineCashOperationIdHexV1(status.operationId) !== operationIdHex || status.kind !== kind) {
+      throw new TypeError("Offline Cash operation response does not match the submitted request");
+    }
+    return status;
   }
   /**
    * List accounts (`GET /v1/accounts`).
@@ -8359,7 +8317,7 @@ export class ToriiClient {
   }
 
   /**
-   * List recorded consensus evidence (`GET /v1/sumeragi/evidence`).
+   * List committed consensus evidence (`GET /v1/sumeragi/evidence`).
    * @param {SumeragiEvidenceListOptions} [options]
    * @returns {Promise<SumeragiEvidenceListResponse>}
     */
@@ -8388,14 +8346,15 @@ export class ToriiClient {
       const offset = ToriiClient._normalizeUnsignedInteger(resolvedOptions.offset, "offset", {
         allowZero: true,
       });
+      if (offset > 10000) {
+        throw new RangeError("offset must be <= 10000");
+      }
       params.offset = offset;
     }
     if (resolvedOptions.kind !== undefined && resolvedOptions.kind !== null) {
-      const kind = String(resolvedOptions.kind);
-      if (!EVIDENCE_KIND_VALUES.has(kind)) {
-        throw new RangeError(
-          `kind must be one of ${Array.from(EVIDENCE_KIND_VALUES).join(", ")}`,
-        );
+      const kind = requireExactNonEmptyString(resolvedOptions.kind, "kind");
+      if (kind !== EVIDENCE_KIND) {
+        throw new RangeError(`kind must be ${EVIDENCE_KIND}`);
       }
       params.kind = kind;
     }
@@ -8409,7 +8368,17 @@ export class ToriiClient {
       ),
     });
     await this._expectStatus(response, [200]);
-    return normalizeSumeragiEvidenceListResponse(await this._maybeJson(response));
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES,
+      "Sumeragi evidence list response",
+      { signal },
+    );
+    return normalizeSumeragiEvidenceListResponse(
+      payload,
+      params.limit ?? 50,
+      params.offset ?? 0,
+    );
   }
 
   /**
@@ -8423,14 +8392,24 @@ export class ToriiClient {
     });
     await this._expectStatus(response, [200]);
     const payload = ensureRecord(
-      await this._maybeJson(response),
+      await this._readBoundedLosslessIntegerJson(
+        response,
+        SUMERAGI_EVIDENCE_COUNT_JSON_RESPONSE_MAX_BYTES,
+        "Sumeragi evidence count response",
+      ),
       "sumeragi evidence count response",
     );
-    const count = Number(payload.count ?? 0);
-    if (!Number.isFinite(count) || count < 0) {
-      throw new TypeError("sumeragi evidence count response.count must be a non-negative number");
-    }
-    return { count };
+    assertExactSumeragiEvidenceFields(
+      payload,
+      "sumeragi evidence count response",
+      ["count"],
+    );
+    return {
+      count: requireSumeragiEvidenceUnsigned(
+        payload.count,
+        "sumeragi evidence count response.count",
+      ),
+    };
   }
 
   /**
@@ -14363,6 +14342,86 @@ function normalizeIsoSubmissionResponse(payload, context, options = {}) {
       `${context}.asset_definition_id`,
     ),
     asset_id: normalizeIsoOptionalString(record.asset_id, `${context}.asset_id`),
+    settlement_amount: normalizeIsoOptionalString(
+      record.settlement_amount,
+      `${context}.settlement_amount`,
+    ),
+    settlement_currency: normalizeIsoOptionalString(
+      record.settlement_currency,
+      `${context}.settlement_currency`,
+    ),
+    settlement_date: normalizeIsoOptionalString(
+      record.settlement_date,
+      `${context}.settlement_date`,
+    ),
+    settlement_quantity: normalizeIsoOptionalString(
+      record.settlement_quantity,
+      `${context}.settlement_quantity`,
+    ),
+    settlement_movement_type: normalizeIsoOptionalString(
+      record.settlement_movement_type,
+      `${context}.settlement_movement_type`,
+    ),
+    settlement_payment_type: normalizeIsoOptionalString(
+      record.settlement_payment_type,
+      `${context}.settlement_payment_type`,
+    ),
+    security_instrument_id: normalizeIsoOptionalString(
+      record.security_instrument_id,
+      `${context}.security_instrument_id`,
+    ),
+    collateral_obligation_id: normalizeIsoOptionalString(
+      record.collateral_obligation_id,
+      `${context}.collateral_obligation_id`,
+    ),
+    collateral_original_amount: normalizeIsoOptionalString(
+      record.collateral_original_amount,
+      `${context}.collateral_original_amount`,
+    ),
+    collateral_original_currency: normalizeIsoOptionalString(
+      record.collateral_original_currency,
+      `${context}.collateral_original_currency`,
+    ),
+    collateral_original_instrument_id: normalizeIsoOptionalString(
+      record.collateral_original_instrument_id,
+      `${context}.collateral_original_instrument_id`,
+    ),
+    collateral_substitute_amount: normalizeIsoOptionalString(
+      record.collateral_substitute_amount,
+      `${context}.collateral_substitute_amount`,
+    ),
+    collateral_substitute_currency: normalizeIsoOptionalString(
+      record.collateral_substitute_currency,
+      `${context}.collateral_substitute_currency`,
+    ),
+    collateral_substitute_instrument_id: normalizeIsoOptionalString(
+      record.collateral_substitute_instrument_id,
+      `${context}.collateral_substitute_instrument_id`,
+    ),
+    collateral_effective_date: normalizeIsoOptionalString(
+      record.collateral_effective_date,
+      `${context}.collateral_effective_date`,
+    ),
+    collateral_substitution_type: normalizeIsoOptionalString(
+      record.collateral_substitution_type,
+      `${context}.collateral_substitution_type`,
+    ),
+    collateral_haircut: normalizeIsoOptionalString(
+      record.collateral_haircut,
+      `${context}.collateral_haircut`,
+    ),
+    collateral_reason_code: normalizeIsoOptionalString(
+      record.collateral_reason_code,
+      `${context}.collateral_reason_code`,
+    ),
+    plan_execution_order: normalizeIsoOptionalString(
+      record.plan_execution_order,
+      `${context}.plan_execution_order`,
+    ),
+    plan_atomicity: normalizeIsoOptionalString(
+      record.plan_atomicity,
+      `${context}.plan_atomicity`,
+    ),
   };
 
   if (options.includeStatusFields) {
@@ -19948,16 +20007,6 @@ function requireNonNegativeIntegerLike(value, context) {
     throw new RangeError(`${context} must be >= 0`);
   }
   return numeric;
-}
-
-function requireEvidencePhase(value, context) {
-  const phase = requireExactNonEmptyString(value, context);
-  if (!EVIDENCE_PHASE_VALUES.has(phase)) {
-    throw new RangeError(
-      `${context} must be one of ${Array.from(EVIDENCE_PHASE_VALUES).join(", ")}`,
-    );
-  }
-  return phase;
 }
 
 function requireSorafsNativeBinding(nativeRuntime) {
@@ -32606,7 +32655,7 @@ const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
   "halo2/pasta/kaigi-roster-v1",
   "halo2/pasta/kaigi-usage-v1",
   "halo2/pasta/ivm-execution-v1",
-  "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+  "halo2/pasta/offline-cash-v1-mint-fold-merkle16-axiom-poseidon-v1",
   "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -32819,8 +32868,12 @@ function normalizeProverReportRecord(value, context) {
   };
 }
 
-function normalizeSumeragiEvidenceListResponse(payload) {
+function normalizeSumeragiEvidenceListResponse(payload, limit, offset) {
   const record = ensureRecord(payload, "sumeragi evidence response");
+  assertExactSumeragiEvidenceFields(record, "sumeragi evidence response", [
+    "total",
+    "items",
+  ]);
   const rawItems = record.items;
   if (!Array.isArray(rawItems)) {
     throw new TypeError("sumeragi evidence response.items must be an array");
@@ -32828,29 +32881,38 @@ function normalizeSumeragiEvidenceListResponse(payload) {
   const items = rawItems.map((item, index) =>
     normalizeSumeragiEvidenceRecord(item, `sumeragi evidence response.items[${index}]`),
   );
-  const totalValue = record.total;
-  const total =
-    totalValue === undefined || totalValue === null
-      ? items.length
-      : requireNonNegativeIntegerLike(
-          totalValue,
-          "sumeragi evidence response.total",
-        );
+  if (items.length > limit) {
+    throw new RangeError(
+      `sumeragi evidence response.items must contain at most ${limit} records`,
+    );
+  }
+  const total = requireSumeragiEvidenceUnsigned(
+    record.total,
+    "sumeragi evidence response.total",
+  );
+  const totalInteger = BigInt(total);
+  if (totalInteger < BigInt(items.length)) {
+    throw new RangeError(
+      "sumeragi evidence response.total must cover the returned items",
+    );
+  }
+  if (
+    items.length > 0
+    && totalInteger < BigInt(offset) + BigInt(items.length)
+  ) {
+    throw new RangeError(
+      "sumeragi evidence response.total must cover offset plus returned items",
+    );
+  }
   return { total, items };
 }
 
-function assertExactSumeragiEvidenceFields(
-  record,
-  context,
-  requiredVariantFields,
-  optionalVariantFields = [],
-) {
-  const required = new Set([...EVIDENCE_BASE_FIELDS, ...requiredVariantFields]);
-  const allowed = new Set([...required, ...optionalVariantFields]);
-  const missing = Array.from(required).filter(
+function assertExactSumeragiEvidenceFields(record, context, fields) {
+  const required = new Set(fields);
+  const missing = fields.filter(
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
   );
-  const unexpected = Object.keys(record).filter((field) => !allowed.has(field));
+  const unexpected = Object.keys(record).filter((field) => !required.has(field));
   if (missing.length > 0 || unexpected.length > 0) {
     const details = [];
     if (missing.length > 0) details.push(`missing ${missing.join(", ")}`);
@@ -32859,248 +32921,64 @@ function assertExactSumeragiEvidenceFields(
   }
 }
 
-function requireSumeragiEvidenceUnsigned(value, context, maximum = Number.MAX_SAFE_INTEGER) {
+function requireSumeragiEvidenceUnsigned(value, context, maximum = MAX_UINT64_BIGINT) {
+  let integer;
   if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value < 0 ||
-    value > maximum
+    typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value >= 0
+    && !Object.is(value, -0)
   ) {
-    throw new TypeError(`${context} must be a non-negative JSON safe integer`);
+    integer = BigInt(value);
+  } else if (typeof value === "bigint" && value >= 0n) {
+    integer = value;
+  } else {
+    throw new TypeError(`${context} must be an unsigned JSON integer`);
   }
-  return value;
+  const maximumInteger = typeof maximum === "bigint" ? maximum : BigInt(maximum);
+  if (integer > maximumInteger) {
+    throw new RangeError(`${context} must be at most ${maximumInteger}`);
+  }
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
 }
 
 function requireSumeragiEvidenceHash(value, context) {
   return requireExactLowerHex32String(value, context);
 }
 
+function normalizeSumeragiEvidencePenaltyStatus(value, context) {
+  const record = ensureRecord(value, context);
+  assertExactSumeragiEvidenceFields(record, context, ["status", "details"]);
+  const status = requireExactNonEmptyString(record.status, `${context}.status`);
+  if (status === "pending") {
+    if (record.details !== null) {
+      throw new TypeError(`${context}.details must be null when status is pending`);
+    }
+    return { status, details: null };
+  }
+  if (status !== "applied" && status !== "cancelled") {
+    throw new RangeError(`${context}.status must be pending, applied, or cancelled`);
+  }
+  const details = ensureRecord(record.details, `${context}.details`);
+  assertExactSumeragiEvidenceFields(details, `${context}.details`, ["height"]);
+  return {
+    status,
+    details: {
+      height: requireSumeragiEvidenceUnsigned(
+        details.height,
+        `${context}.details.height`,
+      ),
+    },
+  };
+}
+
 function normalizeSumeragiEvidenceRecord(value, context) {
   const record = ensureRecord(value, context);
+  assertExactSumeragiEvidenceFields(record, context, EVIDENCE_RECORD_FIELDS);
   const kind = requireExactNonEmptyString(record.kind, `${context}.kind`);
-  if (!EVIDENCE_KIND_VALUES.has(kind)) {
-    throw new RangeError(
-      `${context}.kind must be one of ${Array.from(EVIDENCE_KIND_VALUES).join(", ")}`,
-    );
+  if (kind !== EVIDENCE_KIND) {
+    throw new RangeError(`${context}.kind must be ${EVIDENCE_KIND}`);
   }
-  const consensusAdmittedHeight = record.consensus_admitted_height;
-  const base = {
-    kind,
-    recorded_height: requireSumeragiEvidenceUnsigned(
-      record.recorded_height,
-      `${context}.recorded_height`,
-    ),
-    recorded_view: requireSumeragiEvidenceUnsigned(
-      record.recorded_view,
-      `${context}.recorded_view`,
-    ),
-    recorded_ms: requireSumeragiEvidenceUnsigned(
-      record.recorded_ms,
-      `${context}.recorded_ms`,
-    ),
-    consensus_admitted_height:
-      consensusAdmittedHeight === null
-        ? null
-        : requireSumeragiEvidenceUnsigned(
-            consensusAdmittedHeight,
-            `${context}.consensus_admitted_height`,
-          ),
-  };
-  if (
-    kind === "DoublePrepare" ||
-    kind === "DoubleCommit"
-  ) {
-    assertExactSumeragiEvidenceFields(record, context, [
-      "phase",
-      "height",
-      "view",
-      "epoch",
-      "signer",
-      "block_hash_1",
-      "block_hash_2",
-    ]);
-    const phase = requireEvidencePhase(
-      record.phase,
-      `${context}.phase`,
-    );
-    const blockHash1 = requireSumeragiEvidenceHash(
-      record.block_hash_1,
-      `${context}.block_hash_1`,
-    );
-    const blockHash2 = requireSumeragiEvidenceHash(
-      record.block_hash_2,
-      `${context}.block_hash_2`,
-    );
-    if (blockHash1 === blockHash2) {
-      throw new RangeError(`${context} block hashes must identify distinct blocks`);
-    }
-    return {
-      ...base,
-      phase,
-      height: requireSumeragiEvidenceUnsigned(
-        record.height,
-        `${context}.height`,
-      ),
-      view: requireSumeragiEvidenceUnsigned(
-        record.view,
-        `${context}.view`,
-      ),
-      epoch: requireSumeragiEvidenceUnsigned(
-        record.epoch,
-        `${context}.epoch`,
-      ),
-      signer: requireSumeragiEvidenceUnsigned(
-        record.signer,
-        `${context}.signer`,
-        0xffffffff,
-      ),
-      block_hash_1: blockHash1,
-      block_hash_2: blockHash2,
-    };
-  }
-  if (kind === "InvalidQc") {
-    assertExactSumeragiEvidenceFields(record, context, [
-      "height",
-      "view",
-      "epoch",
-      "subject_block_hash",
-      "phase",
-      "reason",
-    ]);
-    return {
-      ...base,
-      height: requireSumeragiEvidenceUnsigned(
-        record.height,
-        `${context}.height`,
-      ),
-      view: requireSumeragiEvidenceUnsigned(
-        record.view,
-        `${context}.view`,
-      ),
-      epoch: requireSumeragiEvidenceUnsigned(
-        record.epoch,
-        `${context}.epoch`,
-      ),
-      subject_block_hash: requireSumeragiEvidenceHash(
-        record.subject_block_hash,
-        `${context}.subject_block_hash`,
-      ),
-      phase: requireEvidencePhase(
-        record.phase,
-        `${context}.phase`,
-      ),
-      reason: requireExactNonEmptyString(
-        record.reason,
-        `${context}.reason`,
-      ),
-    };
-  }
-  if (kind === "InvalidProposal") {
-    assertExactSumeragiEvidenceFields(record, context, [
-      "height",
-      "view",
-      "epoch",
-      "subject_block_hash",
-      "payload_hash",
-      "reason",
-    ]);
-    return {
-      ...base,
-      height: requireSumeragiEvidenceUnsigned(
-        record.height,
-        `${context}.height`,
-      ),
-      view: requireSumeragiEvidenceUnsigned(
-        record.view,
-        `${context}.view`,
-      ),
-      epoch: requireSumeragiEvidenceUnsigned(
-        record.epoch,
-        `${context}.epoch`,
-      ),
-      subject_block_hash: requireSumeragiEvidenceHash(
-        record.subject_block_hash,
-        `${context}.subject_block_hash`,
-      ),
-      payload_hash: requireSumeragiEvidenceHash(
-        record.payload_hash,
-        `${context}.payload_hash`,
-      ),
-      reason: requireExactNonEmptyString(
-        record.reason,
-        `${context}.reason`,
-      ),
-    };
-  }
-  if (kind === "Censorship") {
-    assertExactSumeragiEvidenceFields(
-      record,
-      context,
-      ["tx_hash", "receipt_count", "signers"],
-      ["submitted_at_height_min", "submitted_at_height_max"],
-    );
-    const receiptCount = requireSumeragiEvidenceUnsigned(
-      record.receipt_count,
-      `${context}.receipt_count`,
-    );
-    const signers = requireStringArray(record.signers, `${context}.signers`).map(
-      (signer, index) => requireExactNonEmptyString(signer, `${context}.signers[${index}]`),
-    );
-    if (signers.length !== receiptCount) {
-      throw new RangeError(`${context}.receipt_count must equal signers.length`);
-    }
-    const hasMin = Object.prototype.hasOwnProperty.call(
-      record,
-      "submitted_at_height_min",
-    );
-    const hasMax = Object.prototype.hasOwnProperty.call(
-      record,
-      "submitted_at_height_max",
-    );
-    if (hasMin !== hasMax || (receiptCount > 0 && !hasMin) || (receiptCount === 0 && hasMin)) {
-      throw new TypeError(
-        `${context} must include both submitted_at_height bounds exactly when receipts are present`,
-      );
-    }
-    const result = {
-      ...base,
-      tx_hash: requireSumeragiEvidenceHash(
-        record.tx_hash,
-        `${context}.tx_hash`,
-      ),
-      receipt_count: receiptCount,
-      signers,
-    };
-    if (!hasMin) return result;
-    const submittedAtHeightMin = requireSumeragiEvidenceUnsigned(
-      record.submitted_at_height_min,
-      `${context}.submitted_at_height_min`,
-    );
-    const submittedAtHeightMax = requireSumeragiEvidenceUnsigned(
-      record.submitted_at_height_max,
-      `${context}.submitted_at_height_max`,
-    );
-    if (submittedAtHeightMin > submittedAtHeightMax) {
-      throw new RangeError(
-        `${context}.submitted_at_height_min must be <= submitted_at_height_max`,
-      );
-    }
-    return {
-      ...result,
-      submitted_at_height_min: submittedAtHeightMin,
-      submitted_at_height_max: submittedAtHeightMax,
-    };
-  }
-  assertExactSumeragiEvidenceFields(record, context, [
-    "class",
-    "height",
-    "view",
-    "epoch",
-    "signer",
-    "context_id",
-    "artifact_hash_1",
-    "artifact_hash_2",
-  ]);
   const evidenceClass = requireExactNonEmptyString(record.class, `${context}.class`);
   if (!EVIDENCE_EQUIVOCATION_CLASS_VALUES.has(evidenceClass)) {
     throw new RangeError(
@@ -33119,7 +32997,7 @@ function normalizeSumeragiEvidenceRecord(value, context) {
     throw new RangeError(`${context} artifact hashes must identify distinct artifacts`);
   }
   return {
-    ...base,
+    kind,
     class: evidenceClass,
     height: requireSumeragiEvidenceUnsigned(record.height, `${context}.height`),
     view: requireSumeragiEvidenceUnsigned(record.view, `${context}.view`),
@@ -33132,6 +33010,26 @@ function normalizeSumeragiEvidenceRecord(value, context) {
     context_id: requireSumeragiEvidenceHash(record.context_id, `${context}.context_id`),
     artifact_hash_1: artifactHash1,
     artifact_hash_2: artifactHash2,
+    recorded_height: requireSumeragiEvidenceUnsigned(
+      record.recorded_height,
+      `${context}.recorded_height`,
+    ),
+    recorded_view: requireSumeragiEvidenceUnsigned(
+      record.recorded_view,
+      `${context}.recorded_view`,
+    ),
+    recorded_ms: requireSumeragiEvidenceUnsigned(
+      record.recorded_ms,
+      `${context}.recorded_ms`,
+    ),
+    consensus_admitted_height: requireSumeragiEvidenceUnsigned(
+      record.consensus_admitted_height,
+      `${context}.consensus_admitted_height`,
+    ),
+    penalty_status: normalizeSumeragiEvidencePenaltyStatus(
+      record.penalty_status,
+      `${context}.penalty_status`,
+    ),
   };
 }
 

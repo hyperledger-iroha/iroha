@@ -6,6 +6,8 @@
 //! sidecar. Restart may observe Kura/WSV already at the decided height while
 //! the sidecar is absent; that state is completed without re-applying the
 //! block or validating it against a later state.
+use mv::storage::StorageReadOnly as _;
+
 use super::{
     message::CanonicalExecutedBlockNeedV1,
     network_topology::Topology,
@@ -4022,13 +4024,6 @@ impl V2ApplyService {
             && self.network_id == context.network_id
             && self.validator_set_pops == validator_set_pops
     }
-    /// Recheck the committed Kagemusha runtime lock immediately before signing.
-    pub(crate) fn require_committed_kagemusha_runtime_effective_config(
-        &self,
-    ) -> Result<(), String> {
-        self.state
-            .require_committed_kagemusha_runtime_effective_config()
-    }
     /// Apply one exact CommitQC task or complete its interrupted sidecar write.
     pub(crate) fn execute(
         &self,
@@ -4111,6 +4106,221 @@ impl V2ApplyService {
             },
         ))
     }
+
+    /// Prove every finalized top-up and advance every installed release across a roster boundary.
+    ///
+    /// This runs only after both the finality artifact and receipt sidecar are durable. Every
+    /// write is immutable and idempotent, so restart resumes at the first missing outbox or
+    /// authority checkpoint without changing bytes that were already exposed to Torii.
+    fn publish_offline_cash_mint_outbox_v1(
+        &self,
+        artifact: &wire::finality::V2FinalityArtifact,
+    ) -> Result<(), V2ApplyError> {
+        let operation_ids = self
+            .kura
+            .offline_cash_top_up_operation_ids_v1(artifact.height)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Offline Cash V1 finalized top-up inventory",
+                    &error,
+                )
+            })?;
+        let records = {
+            let view = self.state.view();
+            operation_ids
+                .iter()
+                .map(|operation_id| {
+                    match view.world.offline_cash_reserve_operations.get(operation_id) {
+                        Some(
+                            crate::smartcontracts::isi::offline::OfflineCashReserveOperationRecordV1::TopUp(
+                                record,
+                            ),
+                        ) if record.reserve_receipt.operation_id == *operation_id => {
+                            Ok(record.clone())
+                        }
+                        _ => Err(V2ApplyError::committed_recovery_required(
+                            "Offline Cash V1 finalized top-up state",
+                            &format!(
+                                "canonical top-up {} has no matching committed reserve record",
+                                hex::encode(operation_id)
+                            ),
+                        )),
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let finalities = records
+            .iter()
+            .map(|record| {
+                self.kura
+                    .offline_cash_operation_finality_v1(artifact.height, record.operation_id)
+                    .map_err(|error| {
+                        V2ApplyError::committed_recovery_required(
+                            "Offline Cash V1 canonical operation finality",
+                            &error,
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        V2ApplyError::committed_recovery_required(
+                            "Offline Cash V1 canonical operation finality",
+                            &"finalized top-up has no canonical operation proof",
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let runtime = Arc::clone(&self.state.offline_cash_v1_runtime_verifier);
+        let current_head = artifact.height_context.offline_cash_mint_finality_epoch_id;
+        let load_checkpoint = |release_id| {
+            if let Some(checkpoint) = self
+                .kura
+                .offline_cash_mint_authority_checkpoint_v1(release_id, current_head)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Offline Cash V1 mint-authority checkpoint read",
+                        &error,
+                    )
+                })?
+            {
+                return Ok(checkpoint);
+            }
+            let checkpoint = runtime
+                .prove_mint_authority_bootstrap(
+                    release_id,
+                    &artifact
+                        .height_context
+                        .offline_cash_mint_finality_epoch_roster,
+                )
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Offline Cash V1 mint-authority bootstrap proof",
+                        &error,
+                    )
+                })?;
+            if checkpoint.authority_head != current_head {
+                return Err(V2ApplyError::committed_recovery_required(
+                    "Offline Cash V1 mint-authority lineage",
+                    &"no recursively authenticated checkpoint exists for the current roster",
+                ));
+            }
+            self.kura
+                .store_offline_cash_mint_authority_checkpoint_v1(&checkpoint)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Offline Cash V1 bootstrap mint-authority publication",
+                        &error,
+                    )
+                })?;
+            Ok(checkpoint)
+        };
+
+        for (record, finality) in records.iter().zip(finalities.iter()) {
+            if self
+                .kura
+                .offline_cash_mint_outbox_entry_v1(record.operation_id)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Offline Cash V1 mint outbox recovery",
+                        &error,
+                    )
+                })?
+                .is_some()
+            {
+                continue;
+            }
+            let checkpoint = load_checkpoint(record.release_id)?;
+            let result = runtime
+                .prove_finalized_top_up(record, finality.clone(), &checkpoint)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Offline Cash V1 finalized mint proof",
+                        &error,
+                    )
+                })?;
+            self.kura
+                .store_offline_cash_mint_outbox_entry_v1(&result)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Offline Cash V1 immutable mint outbox publication",
+                        &error,
+                    )
+                })?;
+        }
+
+        let next_head = artifact
+            .commit_qc
+            .offline_cash_finality_seal_payload()
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Offline Cash V1 boundary seal envelope",
+                    &error,
+                )
+            })?
+            .map(crate::zk::offline_cash_v1_recursion::decode_offline_cash_mint_finality_seal_bundle_v1)
+            .transpose()
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Offline Cash V1 boundary seal bundle",
+                    &error,
+                )
+            })?
+            .and_then(|bundle| bundle.message.next_finality_epoch_id);
+        if artifact.height_context.next_epoch_snapshot.is_some() && next_head.is_none() {
+            return Err(V2ApplyError::committed_recovery_required(
+                "Offline Cash V1 mint-authority rotation",
+                &"epoch boundary finality does not carry a next-roster certificate",
+            ));
+        }
+        if let Some(next_head) = next_head {
+            let membership = finalities
+                .first()
+                .and_then(|finality| finality.top_up_membership_witness.clone());
+            for release_id in runtime.mint_release_ids() {
+                if self
+                    .kura
+                    .offline_cash_mint_authority_checkpoint_v1(release_id, next_head)
+                    .map_err(|error| {
+                        V2ApplyError::committed_recovery_required(
+                            "Offline Cash V1 successor mint-authority checkpoint read",
+                            &error,
+                        )
+                    })?
+                    .is_some()
+                {
+                    continue;
+                }
+                let checkpoint = load_checkpoint(release_id)?;
+                let successor = runtime
+                    .prove_mint_authority_rotation(
+                        release_id,
+                        artifact,
+                        membership.clone(),
+                        &checkpoint,
+                    )
+                    .map_err(|error| {
+                        V2ApplyError::committed_recovery_required(
+                            "Offline Cash V1 recursive mint-authority rotation",
+                            &error,
+                        )
+                    })?;
+                if successor.authority_head != next_head {
+                    return Err(V2ApplyError::committed_recovery_required(
+                        "Offline Cash V1 recursive mint-authority rotation",
+                        &"rotation proof exposed a different successor roster",
+                    ));
+                }
+                self.kura
+                    .store_offline_cash_mint_authority_checkpoint_v1(&successor)
+                    .map_err(|error| {
+                        V2ApplyError::committed_recovery_required(
+                            "Offline Cash V1 successor mint-authority publication",
+                            &error,
+                        )
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
     fn execute_exact_apply(
         &self,
         context: &wire::HeightContext,
@@ -4357,13 +4567,14 @@ impl V2ApplyService {
             })?;
         self.publish_committed_block_merge_entry(committed_block.as_ref())?;
         self.kura
-            .promote_kagemusha_topup_finality_sidecar(artifact, &receipt)
+            .promote_offline_cash_finality_sidecar(artifact, &receipt)
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required(
-                    "Kagemusha finality sidecar promotion",
+                    "Offline Cash V1 finality sidecar promotion",
                     &error,
                 )
             })?;
+        self.publish_offline_cash_mint_outbox_v1(artifact)?;
         // Queue ownership is the final durable boundary after Kura, WSV, and
         // every post-carrier evidence repair. An exact retry reaches this point
         // even when State already crossed its commit boundary, so a crash
@@ -4605,9 +4816,6 @@ impl V2ApplyService {
             )
         })?;
         self.validate_prospective_autoscale_retirement_queue(valid.as_ref(), &state_block)?;
-        self.state
-            .require_kagemusha_runtime_effective_config_for_world(state_block.world())
-            .map_err(V2ApplyError::Validation)?;
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
@@ -4737,9 +4945,6 @@ impl V2ApplyService {
                 )
             })?;
         self.validate_prospective_autoscale_retirement_queue(valid_block.as_ref(), &state_block)?;
-        self.state
-            .require_kagemusha_runtime_effective_config_for_world(state_block.world())
-            .map_err(V2ApplyError::Validation)?;
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
@@ -4779,7 +4984,7 @@ impl V2ApplyService {
         // deferred until Kura has durably persisted the exact finality
         // artifact; a crash at any intermediate point leaves an idempotent
         // stage that restart can complete without replaying committed state.
-        self.kura.stage_kagemusha_topup_finality_sidecar(
+        self.kura.stage_offline_cash_finality_sidecar(
             context.height,
             block_hash,
             &witness,
@@ -5258,6 +5463,5 @@ mod tests;
 pub(crate) use tests::install_historical_autonomous_lane_recovery;
 #[cfg(all(test, feature = "bls"))]
 pub(in crate::sumeragi) use tests::{
-    ProductionKagemushaRuntimeGateFixtureV1, ProductionRecoveredDecisionApplyFixtureV1,
-    production_kagemusha_runtime_gate_fixture_v1, production_recovered_decision_apply_fixture_v1,
+    ProductionRecoveredDecisionApplyFixtureV1, production_recovered_decision_apply_fixture_v1,
 };

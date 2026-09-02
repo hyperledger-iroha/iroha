@@ -8,8 +8,9 @@ root-custodied executable, and pin its SHA-256 in the release-controller trust
 record. A checkout path or an unreviewed locally rebuilt binary is not a
 production trust root.
 
-The production execution surface is `run-v1`. The Kagemusha readiness gate is
-its sole current caller and emits the exact admitted option set.
+The isolated execution surface is `run-v1`. No first-release production
+protocol grants monetary or consensus authority through this controller;
+Offline Cash V1 relies exclusively on its hardware `GuardBundle` contract.
 `qualify-host-v1` accepts no arguments and runs the controller's built-in
 hostile host suite. Its internal adversarial payload, `qualification-probe-v1`,
 must not be granted as a standalone privileged sudo command. Unknown, duplicate,
@@ -19,8 +20,8 @@ separate stdout/stderr byte streams are forwarded exactly. Tool stdin is
 always a fresh `/dev/null`, never an inherited caller data channel.
 
 The request protocol intentionally does not carry an expected tool digest.
-The trusted caller must authenticate the digest and provide a private snapshot,
-as the current Kagemusha readiness gate does. The controller then validates the
+The trusted caller must authenticate the digest and provide a private snapshot.
+The controller then validates the
 complete runtime/root-custodied parent chain and proves that snapshot's identity
 and SHA-256 remain unchanged across execution. This divides trust without
 letting an untrusted request choose its own supposedly expected digest.
@@ -97,12 +98,9 @@ The caller remains responsible for validating the results and performing any
 authenticated atomic publication after the controller returns. No current
 first-release production caller uses this writable-output mode.
 
-The current Kagemusha readiness caller instead denies all writes and grants its
-one pinned policy, the exact fixed release inventory, and the exact release
-directory entry only; a digest-pinned but compromised verifier cannot read root
-SSH or signing secrets and reflect them through stdout. Kagemusha's macOS memory
-guard uses native `sysctlbyname` and `proc_pid_rusage` queries so the verifier
-does not need a helper process.
+There is no current first-release production caller. Any future caller must
+define an exact read/write policy and independently authenticate and publish its
+result; controller success by itself confers no protocol authority.
 
 ## Linux backend
 
@@ -130,32 +128,8 @@ create-new signer semantics; network, spawn, fork, `setsid`, ambient write, unli
 rename, hard-link, symlink and FIFO denial; output and wall-time bounds; and watchdog cleanup
 after forced controller death. They also force both the cumulative writable-file
 quota and the complete live write-root quota past their limits and require an
-exact status-`124` refusal. The protected Kagemusha qualification job
-authenticates the source-built image, installs that exact byte string as root
-mode `0555`, verifies its post-install identity/digest/byte equality, and runs
-`qualify-host-v1` on the actual protected kernel before readiness validation.
-Read access is intentional: the readiness gate must hash and copy the root-owned
-image into its owner-private execution snapshot. A non-root identity cannot
-modify the installed image or its parent chain.
-
-`.github/workflows/promote_kagemusha_v4.yml` is the repository-owned protected
-readiness verifier; it is not yet a publisher or activation workflow. Its
-untrusted job builds an inert controller image. Its separately protected macOS
-job checks out the exact GitHub workflow SHA, binds that SHA and canonical
-workflow identity to the root-custodied reviewed-source checkout, checks the
-image against the independent digest pin, and installs it only at
-`/Library/SORA/Kagemusha/bin/iroha_authenticated_tool_controller`. It then
-qualifies the image, authenticates the root-custodied readiness gate and Python
-interpreter/runtime tree, and invokes the gate in strict `promotion`-validation
-mode under `env -i` with every policy, catalog, Kagami, source-authority,
-sealed-build-report, and physical-iOS trust pin. Missing identities, paths,
-pins, exact sudo grants, or host capabilities stop the workflow. Verification
-of a pre-existing promotion record does not publish a release, qualify a
-validator catalog, submit an activation, or create operator trust records.
-The workflow derives a domain-separated promotion id from the immutable GitHub
-repository, workflow ref/SHA, run id, and run attempt, and admits the current
-catalog revalidation receipt only at
-`/Library/SORA/Kagemusha/catalog-revalidation/<promotion-id>.json`. An
-independent authority must create that root-custodied receipt after dispatch
-and before protected-environment approval; authority signing material and
-DeviceCheck credentials never enter this verification workflow.
+exact status-`124` refusal. Production provisioning, if introduced, must
+authenticate the source-built image, install that exact byte string as a
+root-custodied mode-`0555` executable, verify post-install identity and byte
+equality, and run `qualify-host-v1` on the protected kernel. A non-root identity
+must not be able to modify the executable or any parent directory in its chain.

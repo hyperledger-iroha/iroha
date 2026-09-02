@@ -721,8 +721,17 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
     let mut boundary_context = adapter.context.clone();
     boundary_context.epoch = current_epoch;
     boundary_context.epoch_end_height = boundary_context.height;
+    let next_epoch = current_epoch.checked_add(1).expect("successor epoch");
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            boundary_context.network_id,
+            next_epoch,
+            &successor_roster,
+        );
     boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
-        epoch: current_epoch.checked_add(1).expect("successor epoch"),
+        epoch: next_epoch,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         epoch_end_height: boundary_context
             .height
             .checked_add(epoch_length.get())

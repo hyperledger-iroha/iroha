@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import itertools
 import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -68,6 +70,8 @@ ANDROID_HERMETIC_RUNNER = Path("scripts/run_mobile_hermetic_command.py")
 APPLE_DEVELOPMENT_BRIDGE_LINK = Path("IrohaSwift/NoritoBridge.xcframework")
 APPLE_DEVELOPMENT_BRIDGE_TARGET = "../dist/NoritoBridge.xcframework"
 RELEASE_BUNDLE_SCRIPT = Path("scripts/build_release_bundle.sh")
+RELEASE_IMAGE_SCRIPT = Path("scripts/build_release_image.sh")
+ISOLATED_RELEASE_RUNNER = Path("scripts/run_isolated_release_tool.py")
 CANONICAL_RELEASE_PIPELINE = Path("scripts/run_release_pipeline.py")
 NIX_RELEASE_OWNER = Path("flake.nix")
 NIX_RELEASE_OWNER_PATHS = (NIX_RELEASE_OWNER, Path("flake.lock"))
@@ -90,6 +94,12 @@ DOTNET_NUGET_CONFIG_PATHSPEC = ":(top,icase)NuGet.Config"
 # Enumerate them separately without excludes so a local override cannot sit
 # outside the reviewed release-source seal.
 AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
+    # Python places a launched script's directory on sys.path before the
+    # standard library unless isolated safe-path mode is used. Seal ignored
+    # top-level modules too so legacy helper invocations cannot hide a stdlib
+    # or site-customization shadow outside the reviewed inventory.
+    ":(top,glob)scripts/*.py",
+    ":(top,glob)scripts/**/*.py",
     ":(top,literal).cargo/config",
     ":(top,literal).cargo/config.toml",
     ":(top,glob,icase)csharp/**/Directory.Build.props",
@@ -102,7 +112,20 @@ AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
     ":(top,icase)csharp/NuGet.Config",
 )
 TRUSTED_RELEASE_SURFACE_SHA256 = (
-    "0000000000000000000000000000000000000000000000000000000000000000"
+    "531534aba7569eab8cfac6804bf6528b0fee7ff3823009a8e9cd3571a80ee6e9"
+)
+HOSTILE_CARGO_ENVIRONMENT = frozenset(
+    {
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_ENCODED_RUSTDOCFLAGS",
+        "CARGO_HOME",
+        "RUSTC",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTDOC",
+        "RUSTDOCFLAGS",
+        "RUSTFLAGS",
+    }
 )
 FORBIDDEN_FEATURES = (
     'iroha feature "test-fixtures"',
@@ -299,9 +322,15 @@ def _git_release_paths(
     if completed.returncode != 0:
         detail = completed.stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(f"unable to enumerate trusted release sources: {detail}")
-    return {
+    candidates = {
         Path(raw.decode("utf-8")) for raw in completed.stdout.split(b"\0") if raw
     }
+    # ``git ls-files --cached`` also reports tracked files deleted by the
+    # current first-release hard cut. Model the source tree that a clean commit
+    # will actually ship; commit validation separately rejects dirty trees.
+    # ``lexists`` intentionally retains broken links so the stable-reader path
+    # can reject them instead of silently excluding them from the seal.
+    return {path for path in candidates if os.path.lexists(repo / path)}
 
 
 def _custom_build_package_paths(repo: Path, manifests: set[Path]) -> set[Path]:
@@ -447,28 +476,243 @@ def _release_surface_contents(relative: Path, contents: bytes) -> bytes:
 
     if relative != Path("scripts/check_release_feature_graph.py"):
         return contents
+    try:
+        source = contents.decode("utf-8")
+        tree = ast.parse(source, filename=relative.as_posix())
+    except (UnicodeDecodeError, SyntaxError) as error:
+        raise RuntimeError(
+            "trusted release source surface drifted: release guard must be "
+            f"valid UTF-8 Python: {error}"
+        ) from error
+
+    stored_names = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Store)
+        and node.id == "TRUSTED_RELEASE_SURFACE_SHA256"
+    ]
+    imported_names = [
+        alias
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+        if (alias.asname or alias.name.rsplit(".", 1)[-1])
+        == "TRUSTED_RELEASE_SURFACE_SHA256"
+    ]
+    named_definitions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and node.name == "TRUSTED_RELEASE_SURFACE_SHA256"
+    ]
+
+    def module_namespace(call: ast.AST) -> bool:
+        return (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id in {"globals", "vars"}
+            and not call.args
+            and not call.keywords
+        )
+
+    namespace_mutations: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.ctx, ast.Store)
+            and module_namespace(node.value)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == "TRUSTED_RELEASE_SURFACE_SHA256"
+        ):
+            namespace_mutations.append(node)
+        if not isinstance(node, ast.Call):
+            continue
+        if (
+            isinstance(node.func, ast.Attribute)
+            and module_namespace(node.func.value)
+            and node.func.attr in {"__setitem__", "setdefault", "update"}
+            and any(
+                isinstance(argument, ast.Constant)
+                and argument.value == "TRUSTED_RELEASE_SURFACE_SHA256"
+                for argument in node.args
+            )
+        ):
+            namespace_mutations.append(node)
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "setattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "TRUSTED_RELEASE_SURFACE_SHA256"
+        ):
+            namespace_mutations.append(node)
+    literal_declarations = [
+        statement
+        for statement in tree.body
+        if isinstance(statement, ast.Assign)
+        and len(statement.targets) == 1
+        and isinstance(statement.targets[0], ast.Name)
+        and statement.targets[0].id == "TRUSTED_RELEASE_SURFACE_SHA256"
+        and isinstance(statement.value, ast.Constant)
+        and isinstance(statement.value.value, str)
+        and re.fullmatch(r"[0-9a-f]{64}", statement.value.value) is not None
+    ]
+    if (
+        len(stored_names) != 1
+        or len(literal_declarations) != 1
+        or imported_names
+        or named_definitions
+        or namespace_mutations
+    ):
+        raise RuntimeError(
+            "trusted release source surface drifted: embedded seal must have "
+            "exactly one top-level literal assignment"
+        )
     pattern = re.compile(
         rb'(?P<prefix>TRUSTED_RELEASE_SURFACE_SHA256\s*=\s*\(\s*")'
-        rb"[0-9a-f]{64}"
+        rb"(?P<digest>[0-9a-f]{64})"
         rb'(?P<suffix>"\s*\))'
     )
-    normalized, count = pattern.subn(
-        lambda match: match.group("prefix") + (b"0" * 64) + match.group("suffix"),
-        contents,
-    )
-    if count != 1:
+    matches = list(pattern.finditer(contents))
+    declaration = literal_declarations[0]
+    encoded_lines = source.encode("utf-8").splitlines(keepends=True)
+    start = sum(len(line) for line in encoded_lines[: declaration.lineno - 1])
+    start += declaration.col_offset
+    end = sum(len(line) for line in encoded_lines[: declaration.end_lineno - 1])
+    end += declaration.end_col_offset
+    if (
+        len(matches) != 1
+        or matches[0].start() != start
+        or matches[0].end() != end
+        or pattern.fullmatch(contents[start:end]) is None
+    ):
         raise RuntimeError(
             "trusted release source surface drifted: embedded seal declaration "
             "must occur exactly once"
         )
-    return normalized
+    match = matches[0]
+    return (
+        contents[: match.start("digest")]
+        + (b"0" * 64)
+        + contents[match.end("digest") :]
+    )
+
+
+def _embedded_release_surface_sha256() -> str:
+    """Read the reviewed literal from this source, independent of global rebinding."""
+
+    relative = Path("scripts/check_release_feature_graph.py")
+    contents = Path(__file__).read_bytes()
+    _release_surface_contents(relative, contents)
+    match = re.search(
+        rb'TRUSTED_RELEASE_SURFACE_SHA256\s*=\s*\(\s*"(?P<digest>[0-9a-f]{64})"\s*\)',
+        contents,
+    )
+    if match is None:  # pragma: no cover - validated above
+        raise RuntimeError("trusted release source surface seal literal is missing")
+    return match.group("digest").decode("ascii")
+
+
+def _stable_release_surface_read(path: Path) -> bytes:
+    """Read one unchanged, singly linked, non-shared-writable regular file."""
+
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    before_path = path.lstat()
+    descriptor = os.open(path, flags)
+    try:
+        before = os.fstat(descriptor)
+        stable_fields = (
+            "st_dev",
+            "st_ino",
+            "st_mode",
+            "st_nlink",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+        if not stat.S_ISREG(before.st_mode) or any(
+            getattr(before, field) != getattr(before_path, field)
+            for field in stable_fields
+        ):
+            raise RuntimeError(
+                f"trusted release source is not one pinned regular file: {path}"
+            )
+        if before.st_nlink != 1:
+            raise RuntimeError(
+                f"trusted release source must have exactly one hard link: {path}"
+            )
+        if before.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise RuntimeError(
+                "trusted release source must not be group- or world-writable: "
+                f"{path}"
+            )
+        payload = bytearray()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            payload.extend(chunk)
+        after = os.fstat(descriptor)
+        after_path = path.lstat()
+    finally:
+        os.close(descriptor)
+    if len(payload) != before.st_size or any(
+        getattr(before, field) != getattr(after, field)
+        or getattr(before, field) != getattr(after_path, field)
+        for field in stable_fields
+    ):
+        raise RuntimeError(f"trusted release source changed while being read: {path}")
+    return bytes(payload)
+
+
+def _release_surface_directory_identities(
+    repo: Path, paths: tuple[Path, ...]
+) -> dict[Path, tuple[int, int, int]]:
+    """Pin every in-repository parent directory for the reviewed surface."""
+
+    directories = {repo}
+    for relative in paths:
+        parent = relative.parent
+        while parent != Path("."):
+            directories.add(repo / parent)
+            parent = parent.parent
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+    identities: dict[Path, tuple[int, int, int]] = {}
+    for directory in sorted(directories, key=lambda path: (len(path.parts), path)):
+        before_path = directory.lstat()
+        descriptor = os.open(directory, flags)
+        try:
+            opened = os.fstat(descriptor)
+            after_path = directory.lstat()
+        finally:
+            os.close(descriptor)
+        identity = lambda info: (info.st_dev, info.st_ino, info.st_mode)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or identity(before_path) != identity(opened)
+            or identity(opened) != identity(after_path)
+        ):
+            raise RuntimeError(
+                "trusted release source parent is not one pinned directory: "
+                f"{directory}"
+            )
+        if opened.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise RuntimeError(
+                "trusted release source parent must not be group- or "
+                f"world-writable: {directory}"
+            )
+        identities[directory] = identity(opened)
+    return identities
 
 
 def trusted_release_surface_digest(repo: Path) -> str:
     """Hash paths and bytes for the closed release-analysis source surface."""
 
+    paths = trusted_release_surface_paths(repo)
+    directory_identities = _release_surface_directory_identities(repo, paths)
     digest = hashlib.sha256()
-    for relative in trusted_release_surface_paths(repo):
+    for relative in paths:
         path = repo / relative
         if path.is_symlink():
             if relative != APPLE_DEVELOPMENT_BRIDGE_LINK:
@@ -489,21 +733,27 @@ def trusted_release_surface_digest(repo: Path) -> str:
                 f"regular file: {relative}"
             )
         else:
-            contents = path.read_bytes()
+            contents = _stable_release_surface_read(path)
         relative_bytes = relative.as_posix().encode("utf-8")
         contents = _release_surface_contents(relative, contents)
         digest.update(len(relative_bytes).to_bytes(8, "big"))
         digest.update(relative_bytes)
         digest.update(len(contents).to_bytes(8, "big"))
         digest.update(contents)
+    if _release_surface_directory_identities(repo, paths) != directory_identities:
+        raise RuntimeError(
+            "trusted release source parent directories changed while hashing"
+        )
     return digest.hexdigest()
 
 
 def validate_trusted_release_surface(
-    repo: Path, expected_digest: str = TRUSTED_RELEASE_SURFACE_SHA256
+    repo: Path, expected_digest: str | None = None
 ) -> None:
     """Reject unreviewed workflow, Dockerfile, or release-support drift."""
 
+    if expected_digest is None:
+        expected_digest = _embedded_release_surface_sha256()
     observed = trusted_release_surface_digest(repo)
     if observed != expected_digest:
         raise RuntimeError(
@@ -511,6 +761,86 @@ def validate_trusted_release_surface(
             "update TRUSTED_RELEASE_SURFACE_SHA256 "
             f"(expected {expected_digest}, observed {observed})"
         )
+
+
+def validate_trusted_release_surface_commit(
+    repo: Path, source_commit: str, expected_digest: str | None = None
+) -> str:
+    """Bind the reviewed release surface to one clean checked-out Git commit."""
+
+    if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", source_commit) is None:
+        raise RuntimeError("trusted release source commit must be one full lowercase id")
+    reviewed_digest = (
+        _embedded_release_surface_sha256()
+        if expected_digest is None
+        else expected_digest
+    )
+    validate_trusted_release_surface(repo, reviewed_digest)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if head.returncode != 0 or head.stdout.strip() != source_commit:
+        raise RuntimeError("trusted release source commit does not match repository HEAD")
+    dirty = subprocess.run(
+        ["git", "diff", "--quiet", "--no-ext-diff", source_commit, "--"],
+        cwd=repo,
+        check=False,
+    )
+    if dirty.returncode == 1:
+        raise RuntimeError("trusted release source commit has tracked working-tree drift")
+    if dirty.returncode != 0:
+        raise RuntimeError("unable to compare trusted release source commit")
+    tracked_result = subprocess.run(
+        ["git", "ls-files", "--cached", "-z"],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+    )
+    if tracked_result.returncode != 0:
+        raise RuntimeError("unable to enumerate tracked release sources")
+    tracked = {
+        Path(raw.decode("utf-8"))
+        for raw in tracked_result.stdout.split(b"\0")
+        if raw
+    }
+    uncommitted = set(trusted_release_surface_paths(repo)).difference(tracked)
+    if uncommitted:
+        rendered = ", ".join(path.as_posix() for path in sorted(uncommitted)[:8])
+        raise RuntimeError(
+            "trusted release surface contains uncommitted or ignored inputs: "
+            + rendered
+        )
+    final_digest = trusted_release_surface_digest(repo)
+    if final_digest != reviewed_digest:
+        raise RuntimeError(
+            "trusted release source surface changed during commit validation "
+            f"(expected {reviewed_digest}, observed {final_digest})"
+        )
+    return final_digest
+
+
+def _hostile_cargo_environment_name(name: str) -> bool:
+    """Return whether one inherited variable can alter Cargo compilation."""
+
+    if name in HOSTILE_CARGO_ENVIRONMENT or name.startswith("CARGO_BUILD_"):
+        return True
+    return name.startswith("CARGO_TARGET_") and name.endswith(
+        ("_LINKER", "_RUNNER", "_RUSTFLAGS", "_RUSTDOCFLAGS")
+    )
+
+
+def _cargo_subprocess_environment() -> dict[str, str]:
+    """Return a Cargo graph-query environment without caller compile hooks."""
+
+    environment = os.environ.copy()
+    for name in tuple(environment):
+        if _hostile_cargo_environment_name(name):
+            environment.pop(name, None)
+    return environment
 
 
 def workspace_catalog(repo: Path) -> WorkspaceCatalog:
@@ -529,6 +859,7 @@ def workspace_catalog(repo: Path) -> WorkspaceCatalog:
         check=False,
         capture_output=True,
         text=True,
+        env=_cargo_subprocess_environment(),
     )
     if completed.returncode != 0:
         raise RuntimeError(
@@ -2084,8 +2415,10 @@ def android_native_artifact_targets(
         raise RuntimeError(
             "mobile SDK workflow must invoke :client-android:buildNativeLibs once"
         )
-    if '-PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED"' not in workflow:
-        raise RuntimeError("mobile SDK workflow must bind the Android privacy profile")
+    if "-PprivacyProductionEnabled" in workflow:
+        raise RuntimeError(
+            "mobile SDK workflow must use the sole default Android native profile"
+        )
 
     source = (repo / ANDROID_NATIVE_BUILD_OWNER).read_text(encoding="utf-8")
     command_marker = "val command = buildList {"
@@ -2158,75 +2491,269 @@ def android_native_artifact_targets(
         raise RuntimeError(
             f"{ANDROID_NATIVE_BUILD_OWNER}: unknown {package} feature {feature}"
         )
-    return tuple(
+    return (
         ShippingTarget(
             package=package,
             binary="<native-library>",
-            features=features,
+            features=(),
             default_features=True,
             source=str(ANDROID_NATIVE_BUILD_OWNER),
-        )
-        for features in ((), (feature,))
+        ),
     )
 
 
 def canonical_release_bundle_policy(repo: Path) -> str:
-    """Require the official bundle/image corridor to build reviewed sources.
-
-    Arbitrary prebuilt directories are not feature provenance. They remain
-    rejected until the corridor authenticates a manifest binding every binary
-    digest to the exact source commit, Cargo.lock, target, package, default
-    feature mode, and selected feature set.
-    """
+    """Require authenticated provenance for the mandatory prebuilt corridor."""
 
     bundle_source = (repo / RELEASE_BUNDLE_SCRIPT).read_text(encoding="utf-8")
     if 'case "$1" in' not in bundle_source or "--features)" not in bundle_source:
         raise RuntimeError(
             f"{RELEASE_BUNDLE_SCRIPT}: standalone feature input contract changed"
         )
-    pipeline = (repo / CANONICAL_RELEASE_PIPELINE).read_text(encoding="utf-8")
-    marker = 'REPO_ROOT / "scripts" / "build_release_bundle.sh"'
-    if pipeline.count(marker) != 1:
-        raise RuntimeError(
-            f"{CANONICAL_RELEASE_PIPELINE}: canonical bundle invocation is ambiguous"
-        )
-    unauthenticated_prebuilt_controls = tuple(
-        option
-        for option in (
-            "--bundle-prebuilt-bin-dir",
-            "--image-prebuilt-bin-dir",
-            "--prebuilt-bin-dir",
-        )
-        if option in pipeline
+    image_source = (repo / RELEASE_IMAGE_SCRIPT).read_text(encoding="utf-8")
+    runner_source = (repo / ISOLATED_RELEASE_RUNNER).read_text(encoding="utf-8")
+    runner_markers = (
+        "ALLOWED_TOOLS = frozenset(",
+        '"generate_release_manifest.py"',
+        '"write_release_sha256sums.py"',
+        '"fastpq/rollout_manifest_summary.py"',
+        '"verify_release_prebuilt_provenance.py"',
+        "RELEASE_ARTIFACT_CONTRACT_SHA256",
+        "REVIEWED_TOOL_SHA256",
+        "hashlib.sha256(payload).hexdigest()",
+        "os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW",
+        "directory_flags = file_flags | os.O_DIRECTORY",
+        "before.st_nlink != 1",
+        "stat.S_IWGRP | stat.S_IWOTH",
+        'os.open(name, file_flags, dir_fd=directory_descriptor)',
+        "identity(before) != identity(after)",
+        'exec(compile(payload, str(path), "exec"), module.__dict__)',
+        'exec(compile(payload, str(path), "exec"), namespace)',
+        "contract.stable_read_relative(",
+        "_load_fastpq_summary_dependencies()",
     )
-    if unauthenticated_prebuilt_controls:
+    if any(marker not in runner_source for marker in runner_markers) or any(
+        marker in runner_source
+        for marker in ("sys.path.insert", "runpy.run_path", "exec_module")
+    ):
         raise RuntimeError(
-            f"{CANONICAL_RELEASE_PIPELINE}: arbitrary prebuilt release inputs are "
-            "unauthenticated and forbidden; require a provenance manifest binding "
-            "source commit, Cargo.lock, target, package, default-feature mode, "
-            "selected features, and binary SHA-256 (found "
-            f"{', '.join(unauthenticated_prebuilt_controls)})"
+            f"{ISOLATED_RELEASE_RUNNER}: isolated release helper trust boundary changed"
         )
-    start = pipeline.index(marker)
-    invocation_tail = pipeline[start:]
-    invocation_end = invocation_tail.find("\n                ]")
-    if invocation_end < 0:
+    provenance_marker = "verify_release_prebuilt_provenance.py"
+    required_provenance_controls = (
+        "--trusted-manifest-sha256",
+        "--source-commit",
+        "--cargo-lock",
+        "--target",
+        "--cargo-profile",
+        "--features",
+        '"${provenance_binaries[@]}"',
+        "--output-directory",
+    )
+    for script, source in (
+        (RELEASE_BUNDLE_SCRIPT, bundle_source),
+        (RELEASE_IMAGE_SCRIPT, image_source),
+    ):
+        environment_markers = (
+            "#!/usr/bin/env -S -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS "
+            "-u PS4 -u BASH_XTRACEFD -u CDPATH -u GLOBIGNORE bash -p\n",
+            "set -euo pipefail\n",
+            "CARGO_ENCODED_RUSTFLAGS CARGO_ENCODED_RUSTDOCFLAGS CARGO_HOME",
+            "RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTDOC RUSTDOCFLAGS RUSTFLAGS",
+            "for release_environment_name in ${!CARGO_BUILD_@}; do",
+            "for release_environment_name in ${!CARGO_TARGET_@}; do",
+            "*_LINKER|*_RUNNER|*_RUSTFLAGS|*_RUSTDOCFLAGS)",
+        )
+        if any(marker not in source for marker in environment_markers):
+            raise RuntimeError(
+                f"{script}: hostile shell/Python/Rust environment scrub changed"
+            )
+        if source.count(
+            'release_python=(python3 -I -S "$repo_root/scripts/'
+            'run_isolated_release_tool.py")'
+        ) != 1:
+            raise RuntimeError(
+                f"{script}: isolated release helper launcher changed"
+            )
+        if len(re.findall(r"(?m)^validate_release_source$", source)) != 2:
+            raise RuntimeError(
+                f"{script}: clean source-commit preflight/recheck changed"
+            )
+        if re.search(r'python3[ \t]+"\$repo_root/scripts/', source):
+            raise RuntimeError(
+                f"{script}: release Python helper bypasses isolated launcher"
+            )
+        if source.count(provenance_marker) != 1:
+            raise RuntimeError(
+                f"{script}: prebuilt provenance verifier contract changed"
+            )
+        if source.count(
+            '"${release_python[@]}" "$repo_root/scripts/'
+            'verify_release_prebuilt_provenance.py"'
+        ) != 1:
+            raise RuntimeError(
+                f"{script}: prebuilt provenance verifier must run through the "
+                "reviewed isolated loader"
+            )
+        provenance_start = source.index(provenance_marker)
+        provenance_end = source.find("--output-directory", provenance_start)
+        if provenance_end < 0:
+            raise RuntimeError(
+                f"{script}: prebuilt provenance verifier invocation is unbounded"
+            )
+        provenance_invocation = source[
+            provenance_start : provenance_end + len("--output-directory") + 128
+        ]
+        if any(
+            provenance_invocation.count(control) != 1
+            for control in required_provenance_controls
+        ):
+            raise RuntimeError(
+                f"{script}: prebuilt provenance verifier contract changed"
+            )
+
+    bundle_binary_root_assignments = tuple(
+        match.group(1).strip()
+        for match in re.finditer(r"(?m)^\s*binary_root=(.+)$", bundle_source)
+    )
+    if (
+        bundle_binary_root_assignments
+        != ('""', '"$stage_parent/prebuilt-bin"')
+        or bundle_source.count(
+        'stage_release_file "$binary_root/'
+        )
+        != 7
+        or bundle_source.count(
+            "--prebuilt-bin-dir is required for deterministic release bundles"
+        )
+        != 1
+        or re.search(r"(?m)^\s*cargo(?:_command)?=.*\bbuild\b", bundle_source)
+    ):
         raise RuntimeError(
-            f"{CANONICAL_RELEASE_PIPELINE}: canonical bundle invocation is unbounded"
+            f"{RELEASE_BUNDLE_SCRIPT}: verified private prebuilt snapshot consumption changed"
         )
-    invocation = invocation_tail[:invocation_end]
-    if '"--features"' in invocation:
+    image_prebuilt_assignments = tuple(
+        match.group(1).strip()
+        for match in re.finditer(r"(?m)^\s*prebuilt_bin_dir=(.+)$", image_source)
+    )
+    if image_prebuilt_assignments != (
+        '""',
+        '"$2"',
+        '"$prebuilt_snapshot"',
+    ) or image_source.count(
+        '--source "$prebuilt_bin_dir/$binary"'
+    ) != 1:
         raise RuntimeError(
-            f"{CANONICAL_RELEASE_PIPELINE}: official bundle may not accept a dynamic "
-            "feature override"
+            f"{RELEASE_IMAGE_SCRIPT}: verified private prebuilt snapshot consumption changed"
         )
-    return "source-built-reviewed-profile"
+    pipeline = (repo / CANONICAL_RELEASE_PIPELINE).read_text(encoding="utf-8")
+    bootstrap_markers = (
+        "_BOOTSTRAP_RELEASE_MODULE_SHA256",
+        "_stable_bootstrap_sources()",
+        "os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW",
+        "before.st_nlink != 1",
+        "stat.S_IWGRP | stat.S_IWOTH",
+        "_normalized_bootstrap_payload(name, bytes(payload))",
+        "hashlib.sha256(normalized).hexdigest()",
+        'exec(compile(payload, str(path), "exec"), module.__dict__)',
+    )
+    if any(marker not in pipeline for marker in bootstrap_markers) or any(
+        marker in pipeline for marker in ("importlib.util", "exec_module")
+    ):
+        raise RuntimeError(
+            f"{CANONICAL_RELEASE_PIPELINE}: bootstrap helper authentication changed"
+        )
+    release_source_markers = (
+        "def validate_release_source(commit: str, action: str) -> None:",
+        "validate_trusted_release_surface_commit(REPO_ROOT, commit)",
+        'validate_release_source(commit, "Release source preflight failed")',
+        "Android Maven publication refused changed release source",
+        "lambda: run(publish_cmd, env=release_env)",
+        "Aggregate manifest signing refused changed release source",
+        "Release source changed during pipeline execution",
+    )
+    if any(marker not in pipeline for marker in release_source_markers):
+        raise RuntimeError(
+            f"{CANONICAL_RELEASE_PIPELINE}: reviewed source-commit preflight/recheck changed"
+        )
+    for hostile_environment in (
+        "BASH_ENV",
+        "BASHOPTS",
+        "BASH_XTRACEFD",
+        "CDPATH",
+        "ENV",
+        "GLOBIGNORE",
+        "PS4",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_ENCODED_RUSTDOCFLAGS",
+        "CARGO_HOME",
+        "RUSTC",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTDOC",
+        "RUSTDOCFLAGS",
+        "RUSTFLAGS",
+        "SHELLOPTS",
+    ):
+        if f'"{hostile_environment}"' not in pipeline:
+            raise RuntimeError(
+                f"{CANONICAL_RELEASE_PIPELINE}: hostile subprocess environment scrub changed"
+            )
+    if (
+        '"BASH_FUNC_", "CARGO_BUILD_"' not in pipeline
+        or 'name.startswith("CARGO_TARGET_")' not in pipeline
+        or '"_LINKER", "_RUNNER", "_RUSTFLAGS", "_RUSTDOCFLAGS"' not in pipeline
+        or 'run_isolated_release_tool.py"),' not in pipeline
+        or "executable.resolve().is_relative_to(_SCRIPT_DIRECTORY)" not in pipeline
+    ):
+        raise RuntimeError(
+            f"{CANONICAL_RELEASE_PIPELINE}: child execution isolation changed"
+        )
+    if pipeline.count('rpartition(\n            "@sha256:"\n        )') != 1:
+        raise RuntimeError(
+            f"{CANONICAL_RELEASE_PIPELINE}: prebuilt path and reviewed provenance "
+            "digest are not parsed as one authenticated identity"
+        )
+    invocations: dict[str, str] = {}
+    for label, marker in (
+        ("bundle", 'REPO_ROOT / "scripts" / "build_release_bundle.sh"'),
+        ("image", 'REPO_ROOT / "scripts" / "build_release_image.sh"'),
+    ):
+        if pipeline.count(marker) != 1:
+            raise RuntimeError(
+                f"{CANONICAL_RELEASE_PIPELINE}: canonical {label} invocation is ambiguous"
+            )
+        start = pipeline.index(marker)
+        invocation_tail = pipeline[start:]
+        invocation_end = invocation_tail.find("\n                ]")
+        if invocation_end < 0:
+            raise RuntimeError(
+                f"{CANONICAL_RELEASE_PIPELINE}: canonical {label} invocation is unbounded"
+            )
+        invocation = invocation_tail[:invocation_end]
+        if invocation.count('"--prebuilt-bin-dir"') != 1 or invocation.count(
+            '"--trusted-prebuilt-provenance-sha256"'
+        ) != 1:
+            raise RuntimeError(
+                f"{CANONICAL_RELEASE_PIPELINE}: canonical {label} prebuilt "
+                "provenance handoff changed"
+            )
+        invocations[label] = invocation
+    for label, invocation in invocations.items():
+        if '"--features"' in invocation:
+            raise RuntimeError(
+                f"{CANONICAL_RELEASE_PIPELINE}: official {label} may not accept a "
+                "dynamic feature override"
+            )
+    return "authenticated-prebuilt-reviewed-profile"
 
 
 def release_bundle_targets(
     repo: Path, catalog: WorkspaceCatalog | None = None
 ) -> tuple[ShippingTarget, ...]:
-    """Resolve the standalone bundle script's default direct-build roots."""
+    """Resolve the standalone bundle's authenticated prebuilt package roots."""
 
     catalog = catalog or workspace_catalog(repo)
     source = (repo / RELEASE_BUNDLE_SCRIPT).read_text(encoding="utf-8")
@@ -2394,6 +2921,7 @@ def feature_graph(
         check=False,
         capture_output=True,
         text=True,
+        env=_cargo_subprocess_environment(),
     )
     if completed.returncode != 0:
         raise RuntimeError(
@@ -2434,8 +2962,18 @@ def main() -> int:
         dest="packages",
         help="shipping package to inspect (repeatable)",
     )
+    parser.add_argument(
+        "--validate-source-commit",
+        help="validate only the sealed clean release surface at this full commit",
+    )
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
+    if args.validate_source_commit:
+        validate_trusted_release_surface_commit(
+            repo, args.validate_source_commit
+        )
+        print("trusted release source commit and surface passed")
+        return 0
     profiles = shipping_profiles(repo)
     if args.packages:
         selected: list[ShippingProfile] = []

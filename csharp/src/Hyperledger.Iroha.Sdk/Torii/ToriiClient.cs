@@ -1529,18 +1529,24 @@ public sealed partial class ToriiClient : IDisposable
         return response.DecodeBytes();
     }
 
-    public async Task<ToriiContractInstancesResponse> GetContractInstancesAsync(
-        string namespaceId,
-        ToriiContractInstancesQuery? query = null,
+    public async Task<ToriiGovernedContractResponse> GetGovernedContractAsync(
+        string contractAddress,
         CancellationToken cancellationToken = default)
     {
-        var normalizedNamespaceId = NormalizeExactValue(namespaceId, nameof(namespaceId));
+        var normalizedContractAddress = NormalizeExactValue(contractAddress, nameof(contractAddress));
+        if (!ContractAddressV1.IsCanonical(normalizedContractAddress))
+        {
+            throw new ArgumentException(
+                "Contract address must be a canonical V1 `irohac` Bech32m literal.",
+                nameof(contractAddress));
+        }
+        var route = $"/v1/gov/contracts/{EncodePathSegment(normalizedContractAddress)}";
+        RequireCanonicalRequestCredentials(route);
 
-        var response = await GetAsync<ToriiContractInstancesResponse>(
-            $"/v1/contracts/instances/{EncodePathSegment(normalizedNamespaceId)}",
-            BuildContractInstancesQuery(query),
-            cancellationToken);
-        ValidateContractInstancesResponse(response, "contract instances response");
+        var response = await GetAsync<ToriiGovernedContractResponse>(
+            route,
+            cancellationToken: cancellationToken);
+        ValidateGovernedContractResponse(response, "governed contract response");
         return response;
     }
 
@@ -2527,6 +2533,10 @@ public sealed partial class ToriiClient : IDisposable
         // even when the client also carries credentials for visibility-sensitive reads.
         return string.Equals(path, "/v1/health", StringComparison.Ordinal)
             || string.Equals(path, "/v1/version", StringComparison.Ordinal)
+            || string.Equals(path, "/v1/offline/readiness", StringComparison.Ordinal)
+            || string.Equals(path, "/v1/offline/top-up", StringComparison.Ordinal)
+            || string.Equals(path, "/v1/offline/redeem", StringComparison.Ordinal)
+            || path.StartsWith("/v1/offline/operations/", StringComparison.Ordinal)
             || string.Equals(path, "/v1/explorer/health", StringComparison.Ordinal)
             || string.Equals(path, "/.well-known/sorafs/manifest", StringComparison.Ordinal)
             || string.Equals(path, "/v1/sorafs/cid", StringComparison.Ordinal)
@@ -5715,11 +5725,11 @@ public sealed partial class ToriiClient : IDisposable
         ToriiContractMetadataJson.ValidateContractCodeRecord(response, context);
     }
 
-    private static void ValidateContractInstancesResponse(
-        ToriiContractInstancesResponse response,
+    private static void ValidateGovernedContractResponse(
+        ToriiGovernedContractResponse response,
         string context)
     {
-        ToriiContractInstancesJson.ValidateContractInstancesResponse(response, context);
+        ToriiGovernedContractJson.ValidateResponse(response, context);
     }
 
     private static void ValidateContractCodeView(ToriiContractCodeView response, string context)
@@ -8313,25 +8323,6 @@ public sealed partial class ToriiClient : IDisposable
             new KeyValuePair<string, string?>(
                 "count_mode",
                 query.CountMode is null ? null : FormatUaidManifestCountMode(query.CountMode.Value)),
-        ]);
-    }
-
-    private static string? BuildContractInstancesQuery(ToriiContractInstancesQuery? query)
-    {
-        if (query is null)
-        {
-            return null;
-        }
-
-        return BuildQueryString(
-        [
-            new KeyValuePair<string, string?>("contains", NormalizeOptionalExactValue(query.Contains, nameof(query.Contains))),
-            new KeyValuePair<string, string?>("hash_prefix", NormalizeOptionalExactHexPrefix(query.HashPrefix, nameof(query.HashPrefix))),
-            new KeyValuePair<string, string?>("offset", query.Offset?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>(
-                "limit",
-                NormalizeOptionalPositiveUInt64(query.Limit, nameof(query.Limit))?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("order", NormalizeOptionalExactValue(query.Order, nameof(query.Order))),
         ]);
     }
 

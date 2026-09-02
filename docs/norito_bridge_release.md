@@ -205,7 +205,7 @@ and both same-version specs are published in dependency order and a clean public
 
 ## CI considerations
 
-- The Kagemusha PR workflow alone may invoke the restricted CI producer modes.
+- The Offline Cash V1 artifact workflow alone may invoke the restricted CI producer modes.
   Five isolated `--ci-apple-slice <target>` jobs each perform one fresh,
   offline, single-job Cargo build and emit a digest-bound source/tool
   attestation. The `swift` job supplies all five independent archive digests to

@@ -151,14 +151,30 @@ sized for your preset (`peer_count` peers → `peer_count` ports per transport).
 readiness. If startup reaches `serve.log` output such as `failed while
 validating local MCP`, confirm:
 
-- the active peer accepts `initialize` on `POST <torii>/v1/mcp` and returns the
-  negotiated MCP protocol version;
-- later MCP POSTs carry that exact version in `MCP-Protocol-Version`;
+- the active peer accepts native `server/discover` on the existing
+  `POST <torii>/v1/mcp` Torii endpoint and advertises `2026-07-28` in
+  `supportedVersions`;
+- every MCP POST carries `2026-07-28` in both `MCP-Protocol-Version` and
+  `params._meta["io.modelcontextprotocol/protocolVersion"]`, includes
+  required request-scoped client capabilities, preferably includes client name
+  and version, and mirrors the JSON-RPC method in `Mcp-Method` (named operations
+  such as `tools/call` also mirror their name in `Mcp-Name`; non-ASCII or
+  otherwise header-unsafe names use canonical padded standard Base64 wrapped as
+  `=?base64?<encoded>?=`);
+- the client advertises both `application/json` and `text/event-stream` in
+  `Accept`;
 - `tools/list` exposes curated `iroha.*` tools such as
   `iroha.health`, `iroha.node.capabilities`,
   `iroha.transactions.submit`, and
   `iroha.transactions.submit_and_wait`; and
 - raw `torii.*` tools are not leaking through the local curated surface.
+
+Mochi uses Torii's existing `POST /v1/mcp` route as the only MCP server,
+process, and listener. This probe does not start or depend on a gateway,
+sidecar, proxy server, second listener, or separate deployment unit. Dispatch
+stays inside Torii's authoritative router. Native MCP does not use an
+`initialize`/`notifications/initialized` session lifecycle, and the local probe
+does not infer a legacy downgrade from a failed modern request.
 
 The helper script will not mark the sandbox ready until both `ready` and
 `mcp_ready` are `true` in `session.json`.

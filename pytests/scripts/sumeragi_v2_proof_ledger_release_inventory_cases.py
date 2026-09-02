@@ -718,10 +718,10 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "G-UNIT leg g-unit-iroha-core must append the exact",
         ),
         (
-            "  zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin\n"
-            "  block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round\n",
             "  block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round\n"
-            "  zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin\n",
+            "  block::consensus_v2::tests::offline_cash_consensus_signature_envelope_roundtrips_and_rejects_drift\n",
+            "  block::consensus_v2::tests::offline_cash_consensus_signature_envelope_roundtrips_and_rejects_drift\n"
+            "  block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round\n",
             "canonical module/test inventory SHA-256",
         ),
         (

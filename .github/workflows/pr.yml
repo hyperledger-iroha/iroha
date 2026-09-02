@@ -192,7 +192,9 @@ jobs:
           python3 -m pytest -q pytests/scripts/rust_ci_test.py
           python3 -m pytest -q \
             pytests/scripts/check_cargo_feature_hygiene_test.py \
+            scripts/tests/panic_recovery_boundaries_test.py \
             scripts/tests/release_feature_graph_test.py \
+            scripts/tests/release_prebuilt_provenance_test.py \
             pytests/scripts/check_workspace_target_inventory_test.py \
             scripts/tests/cargo_fast_test.py \
             scripts/tests/profile_cargo_build_test.py \
@@ -208,7 +210,8 @@ jobs:
             pytests/scripts/iso_xsd_fixture_verify_test.py \
             pytests/scripts/iso_xsd_profile_catalog_include_test.py
           python3 scripts/check_cargo_feature_hygiene.py
-          python3 scripts/check_release_feature_graph.py
+          python3 -I -S scripts/check_panic_recovery_boundaries.py
+          python3 -I -S scripts/check_release_feature_graph.py
           python3 scripts/check_workspace_target_inventory.py
           python3 scripts/check_compile_time_table_assets.py
           python3 -I -S scripts/check_jni_sdk_android_pairs.py

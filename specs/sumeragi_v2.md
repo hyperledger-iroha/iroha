@@ -35,11 +35,23 @@ The typed `SumeragiV2EquivocationEvidence` JSON object is closed and requires
 all three of its fields; its nested current consensus types retain their
 explicit nullable slots. `Evidence` itself remains a binary-only wrapper.
 
-The persisted `EvidenceRecord` wrapper is exact as well: its penalty flags,
-nullable penalty heights, and nullable consensus-admission height are all part
-of the first-release binary layout, and a shortened prefix receives no defaults.
-It is also binary-only; Torii constructs the bounded audit JSON projection
-explicitly instead of exposing a second full-evidence object schema.
+The persisted `EvidenceRecord` wrapper is exact as well: it stores commit
+height, commit view, commit time, and one closed `EvidencePenaltyStatus` value.
+The status is either pending, applied at one canonical height, or cancelled at
+one canonical height. Shortened records and the retired boolean/nullable
+penalty layout receive no defaults and fail decode. `EvidenceRecord` is
+binary-only; Torii constructs the bounded audit JSON projection explicitly and
+adds the non-null committed admission height instead of exposing a second
+full-evidence object schema.
+
+Committed evidence has two independent first-release bounds: 124 records
+(four maximum validator rosters) and 16 MiB of canonical proof payloads.
+Candidate validation, post-execution insertion, restored-state authentication,
+and proposer selection use the same checked accounting after deterministic
+stale-terminal pruning. The operator count response is capped at 1 KiB; the
+closed JSON list projection is capped at 1 MiB, and the complete Norito list is
+capped at 17 MiB including its record and frame envelope. Encoding is
+count-first, so no response body is allocated until its exact size is accepted.
 
 The protocol has one executable decision authority, the package-local
 `iroha_core::sumeragi::v2_core::Reducer`. Networking,
@@ -68,6 +80,14 @@ non-`3f + 1` context is structurally invalid before consensus opens.
 The context for height `h` is derived only from the finalized state at `h - 1`. A reconfiguration
 committed at `h` may activate at `h + 1`; certificates from the old context cannot act in the new
 one.
+
+Height `u64::MAX` is the terminal wire height. Once its exact context, proofs of
+possession, finality artifact, Kura receipt, State tip, live Kura identity, and
+canonical Kura block have all authenticated, the runner closes consensus
+ingress and remains inert until operator shutdown. It never wraps, saturates,
+or fabricates an H+1 context, lifecycle store, or activation authority. The
+same rule applies both to startup from an already complete terminal tip and to
+ordinary or pending-Kura execution that finalizes the terminal height live.
 
 The next context and its view-zero proposal bind the parent CommitQC by semantic finality identity:
 parent context, height, immutable proposal-origin round, Commit phase, block subject, and execution

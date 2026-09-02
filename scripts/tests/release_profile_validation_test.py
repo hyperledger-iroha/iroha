@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -27,6 +28,7 @@ RELEASE_SCRIPTS = (
 RELEASE_MANIFEST_SIGNING_HELPER = (
     REPO_ROOT / "scripts" / "release_manifest_signing.py"
 )
+ISOLATED_RELEASE_TOOL = REPO_ROOT / "scripts" / "run_isolated_release_tool.py"
 RELEASE_DOCUMENT_FAMILIES = (
     REPO_ROOT / "specs" / "release_automation_plan.md",
     REPO_ROOT / "specs" / "release_runbook.md",
@@ -63,6 +65,12 @@ STALE_RELEASE_SIGNING_CLAIMS = (
     "ci/release_metrics_check.sh",
     "--publish-bucket",
 )
+PIPELINE_BOOTSTRAP_HELPERS = (
+    "release_artifact_contract.py",
+    "release_manifest_signing.py",
+    "publish_plan.py",
+    "check_release_feature_graph.py",
+)
 
 
 def _heredoc_program(source: str, delimiter: str) -> str:
@@ -80,6 +88,124 @@ def _fake_tool(directory: Path, name: str) -> None:
         encoding="utf-8",
     )
     tool.chmod(0o700)
+
+
+@pytest.mark.parametrize("helper", PIPELINE_BOOTSTRAP_HELPERS)
+@pytest.mark.parametrize("attack", ("content", "hardlink", "mode", "symlink"))
+def test_release_pipeline_rejects_bootstrap_helper_before_side_effects(
+    tmp_path: Path, helper: str, attack: str
+) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for name in ("run_release_pipeline.py", *PIPELINE_BOOTSTRAP_HELPERS):
+        shutil.copyfile(REPO_ROOT / "scripts" / name, scripts / name)
+    marker = tmp_path / f"{helper}-{attack}-executed"
+    malicious = (
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n"
+    ).encode()
+    victim = scripts / helper
+    if attack == "content":
+        victim.write_bytes(malicious)
+    elif attack == "hardlink":
+        victim.unlink()
+        backing = tmp_path / f"{helper}.backing"
+        backing.write_bytes(malicious)
+        os.link(backing, victim)
+    elif attack == "mode":
+        victim.write_bytes(malicious)
+        victim.chmod(0o664)
+    else:
+        victim.unlink()
+        backing = tmp_path / f"{helper}.backing"
+        backing.write_bytes(malicious)
+        victim.symlink_to(backing)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(scripts / "run_release_pipeline.py"),
+            "--help",
+        ],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("helper", PIPELINE_BOOTSTRAP_HELPERS)
+def test_release_pipeline_rejects_concurrent_bootstrap_helper_swap(
+    tmp_path: Path, monkeypatch, helper: str
+) -> None:
+    scripts_dir = REPO_ROOT / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        import run_release_pipeline as pipeline
+    finally:
+        sys.path.pop(0)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for name in PIPELINE_BOOTSTRAP_HELPERS:
+        shutil.copyfile(scripts_dir / name, scripts / name)
+    marker = tmp_path / "concurrent-bootstrap-swap-executed"
+    target = scripts / helper
+    real_open = pipeline.os.open
+    swapped = False
+
+    def open_then_swap(path, flags, *args, **kwargs):
+        nonlocal swapped
+        descriptor = real_open(path, flags, *args, **kwargs)
+        if not swapped and path == helper:
+            swapped = True
+            target.rename(scripts / f"{helper}.reviewed")
+            target.write_text(
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+        return descriptor
+
+    monkeypatch.setattr(pipeline, "_SCRIPT_DIRECTORY", scripts)
+    monkeypatch.setattr(pipeline.os, "open", open_then_swap)
+    with pytest.raises(RuntimeError, match="bootstrap helper (?:must be|changed while read)"):
+        pipeline._stable_bootstrap_sources()
+    assert swapped
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("unsafe_component", ("repository", "scripts"))
+def test_release_pipeline_rejects_shared_writable_bootstrap_directory(
+    tmp_path: Path, unsafe_component: str
+) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for name in ("run_release_pipeline.py", *PIPELINE_BOOTSTRAP_HELPERS):
+        shutil.copyfile(REPO_ROOT / "scripts" / name, scripts / name)
+    unsafe = tmp_path if unsafe_component == "repository" else scripts
+    unsafe.chmod(0o777)
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                str(scripts / "run_release_pipeline.py"),
+                "--help",
+            ],
+            cwd=tmp_path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        unsafe.chmod(0o755 if unsafe_component == "scripts" else 0o700)
+    assert completed.returncode != 0
+    assert "non-shared-writable directory" in completed.stderr
 
 
 @pytest.mark.parametrize("script", RELEASE_SCRIPTS, ids=lambda path: path.stem)
@@ -155,6 +281,7 @@ def test_release_manifest_values_are_passed_as_data(tmp_path: Path, script: Path
             str(tmp_path / "archive.tar.zst"),
             hashlib.sha256(b"archive").hexdigest(),
             "bb" * 32,
+            "cc" * 32,
             "software-key-qualified",
         ]
         (tmp_path / "archive.tar.zst").write_bytes(b"archive")
@@ -175,6 +302,7 @@ def test_release_manifest_values_are_passed_as_data(tmp_path: Path, script: Path
             "linux/amd64",
             unusual,
             "iroha3d iroha kagami",
+            "aa" * 32,
             "closed-prebuilt",
             json.dumps({"file_count": 1, "sha256": "b" * 64}),
             f"registry.example/builder@sha256:{'c' * 64}",
@@ -198,7 +326,14 @@ def test_release_manifest_values_are_passed_as_data(tmp_path: Path, script: Path
             ]
 
     result = subprocess.run(
-        [sys.executable, "-", *arguments],
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(ISOLATED_RELEASE_TOOL),
+            "--stdin",
+            *arguments,
+        ],
         input=program,
         text=True,
         capture_output=True,
@@ -242,7 +377,14 @@ def test_bundle_profile_values_are_toml_escaped(tmp_path: Path) -> None:
         ]
 
     result = subprocess.run(
-        [sys.executable, "-", *arguments],
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(ISOLATED_RELEASE_TOOL),
+            "--stdin",
+            *arguments,
+        ],
         input=program,
         text=True,
         capture_output=True,
@@ -381,8 +523,17 @@ def test_release_pipeline_signs_final_manifest_before_publish_plan() -> None:
     close_evidence = main_source.index("build_evidence_artifacts(")
     generate_manifest = main_source.index("generate_release_manifest.py")
     sign_manifest = main_source.index("sign_release_manifest(")
+    sign_source_validation = main_source.index(
+        "Aggregate manifest signing refused changed release source"
+    )
+    android_source_validation = main_source.index(
+        "Android Maven publication refused changed release source"
+    )
+    android_publish = main_source.index("lambda: run(publish_cmd, env=release_env)")
     build_plan = main_source.index("build_publish_plan(")
-    assert close_evidence < generate_manifest < sign_manifest < build_plan
+    assert close_evidence < generate_manifest < sign_source_validation < sign_manifest
+    assert android_source_validation < android_publish
+    assert sign_manifest < build_plan
     assert "update_release_manifest_evidence(" not in main_source
     assert "--source-date-epoch" in main_source
     assert '["git", "rev-parse", "HEAD"]' in main_source
@@ -403,6 +554,114 @@ def test_release_pipeline_signs_final_manifest_before_publish_plan() -> None:
     assert "host_target_triple" not in source
     assert "detect_os_tag" not in source
     assert '"taira"' not in source
+
+
+def test_release_pipeline_refuses_trusted_action_before_it_starts(
+    monkeypatch,
+) -> None:
+    scripts_dir = REPO_ROOT / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        import run_release_pipeline as pipeline
+    finally:
+        sys.path.pop(0)
+    started: list[bool] = []
+
+    def reject_source(_repo: Path, _commit: str) -> str:
+        raise RuntimeError("late reviewed-source drift")
+
+    monkeypatch.setattr(
+        pipeline, "validate_trusted_release_surface_commit", reject_source
+    )
+    with pytest.raises(pipeline.PipelineError, match="late reviewed-source drift"):
+        pipeline.run_trusted_release_action(
+            "a" * 40,
+            "remote publication refused",
+            lambda: started.append(True),
+        )
+    assert not started
+
+
+@pytest.mark.parametrize(
+    "helper",
+    ("copy_release_file.py", "generate_release_manifest.py"),
+)
+def test_release_pipeline_isolates_repo_python_and_scrubs_every_child(
+    monkeypatch, helper: str
+) -> None:
+    scripts_dir = REPO_ROOT / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        import run_release_pipeline as pipeline
+    finally:
+        sys.path.pop(0)
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def capture(command, **kwargs):
+        calls.append((command, kwargs["env"]))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(pipeline.subprocess, "run", capture)
+    hostile = {
+        "BASH_ENV": "/tmp/unreviewed-hook",
+        "BASHOPTS": "extdebug",
+        "BASH_XTRACEFD": "9",
+        "CDPATH": "/tmp/unreviewed",
+        "ENV": "/tmp/unreviewed-hook",
+        "GLOBIGNORE": "*",
+        "PS4": "$(unreviewed-command)",
+        "PYTHONHOME": "/tmp/unreviewed-python",
+        "PYTHONPATH": "/tmp/unreviewed-modules",
+        "CARGO_ENCODED_RUSTFLAGS": '--cfg\x1ffeature="test-fixtures"',
+        "CARGO_ENCODED_RUSTDOCFLAGS": "--cfg\x1funreviewed",
+        "CARGO_HOME": "/tmp/unreviewed-cargo-home",
+        "RUSTC": "/tmp/unreviewed-rustc",
+        "RUSTC_WRAPPER": "/tmp/unreviewed-wrapper",
+        "RUSTC_WORKSPACE_WRAPPER": "/tmp/unreviewed-workspace-wrapper",
+        "RUSTDOC": "/tmp/unreviewed-rustdoc",
+        "RUSTDOCFLAGS": "--cfg unreviewed",
+        "RUSTFLAGS": '--cfg feature="test-fixtures"',
+        "CARGO_BUILD_RUSTC": "/tmp/unreviewed-build-rustc",
+        "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/tmp/unreviewed-linker",
+        "SHELLOPTS": "xtrace",
+        "BASH_FUNC_git%%": "() { unreviewed-command; }",
+    }
+    pipeline.run([str(scripts_dir / helper), "--help"], env=hostile)
+    command, environment = calls.pop()
+    assert command[:4] == [
+        sys.executable,
+        "-I",
+        "-S",
+        str(scripts_dir / "run_isolated_release_tool.py"),
+    ]
+    assert command[4] == str(scripts_dir / helper)
+    assert not set(hostile).intersection(environment)
+    assert environment["PYTHONNOUSERSITE"] == "1"
+
+
+def test_release_pipeline_hostile_shell_hooks_cannot_execute(
+    tmp_path: Path,
+) -> None:
+    scripts_dir = REPO_ROOT / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        import run_release_pipeline as pipeline
+    finally:
+        sys.path.pop(0)
+    marker = tmp_path / "hostile-child-environment-executed"
+    hook = tmp_path / "bash-env-hook"
+    hook.write_text(f"touch {str(marker)!r}\n", encoding="utf-8")
+    pipeline.run(
+        ["bash", "-c", "true"],
+        env={
+            "BASH_ENV": str(hook),
+            "SHELLOPTS": "xtrace",
+            "PS4": f"$(touch {str(marker)!r})",
+            "PYTHONPATH": str(tmp_path),
+            "BASH_FUNC_true%%": f"() {{ touch {str(marker)!r}; }}",
+        },
+    )
+    assert not marker.exists()
 
 
 def test_jenkins_has_no_competing_promotable_release_path() -> None:
@@ -954,6 +1213,27 @@ def test_release_pipeline_requires_explicit_image_contract_before_outputs(
     assert not output_dir.exists()
 
 
+def test_release_pipeline_prebuilt_matrix_requires_reviewed_manifest_digest() -> None:
+    scripts_dir = REPO_ROOT / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        import run_release_pipeline as pipeline
+    finally:
+        sys.path.pop(0)
+
+    target = "x86_64-unknown-linux-gnu"
+    assert pipeline.parse_bundle_prebuilt_dirs(
+        [f"{target}=/reviewed/binaries@sha256:{'a' * 64}"]
+    ) == {target: ("/reviewed/binaries", "a" * 64)}
+    for unauthenticated in (
+        f"{target}=/reviewed/binaries",
+        f"{target}=/reviewed/binaries@sha256:{'A' * 64}",
+        f"{target}=/reviewed/binaries@sha256:{'a' * 63}",
+    ):
+        with pytest.raises(pipeline.PipelineError, match="Invalid"):
+            pipeline.parse_bundle_prebuilt_dirs([unauthenticated])
+
+
 def test_release_pipeline_dry_run_uses_closed_oci_image_contract(
     tmp_path: Path,
 ) -> None:
@@ -1006,9 +1286,9 @@ def test_release_pipeline_dry_run_uses_closed_oci_image_contract(
             "--trusted-buildx-builder-inspect-sha256",
             "f" * 64,
             "--image-prebuilt-bin-dir",
-            "linux/amd64=/reviewed/iroha3-amd64-bin",
+            f"linux/amd64=/reviewed/iroha3-amd64-bin@sha256:{'1' * 64}",
             "--image-prebuilt-bin-dir",
-            "linux/arm64=/reviewed/iroha3-arm64-bin",
+            f"linux/arm64=/reviewed/iroha3-arm64-bin@sha256:{'2' * 64}",
             "--skip-privacy-dp",
             "--skip-nexus-lane-smoke",
             "--skip-nexus-cross-dataspace-proof",
@@ -1081,7 +1361,7 @@ def test_release_pipeline_dry_run_uses_complete_bundle_target_matrix(
         command.extend(
             [
                 "--bundle-prebuilt-bin-dir",
-                f"{target}=/reviewed/iroha3/{target}",
+                f"{target}=/reviewed/iroha3/{target}@sha256:{'c' * 64}",
             ]
         )
     result = subprocess.run(
@@ -1453,3 +1733,9 @@ def test_sorafs_release_gate_runs_generic_release_signing_guard() -> None:
     assert "scripts/tests/publish_plan_test.py" in gate
     assert "scripts/build_release_bundle.sh" in gate
     assert "scripts/build_release_image.sh" in gate
+    live_guard = "python3 -I -S scripts/check_release_feature_graph.py"
+    assert gate.count(live_guard) == 1
+    assert "scripts/tests/release_feature_graph_test.py" in gate
+    assert gate.index(live_guard) < gate.index(
+        'echo "[sorafs-release] release helper adversarial tests"'
+    )

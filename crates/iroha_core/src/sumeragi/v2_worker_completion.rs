@@ -1195,6 +1195,9 @@ impl V2IoHandle {
         context: wire::HeightContext,
         key_pair: KeyPair,
         local_validator: Option<wire::ValidatorIndex>,
+        offline_cash_mint_finality_authority: Option<
+            Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
+        >,
         auxiliary_queue_capacity: usize,
         consensus_queue_capacity: usize,
         observer_serve_capacity: usize,
@@ -1289,15 +1292,13 @@ impl V2IoHandle {
                                         task,
                                         restore_outbound_payload,
                                     } => {
-                                        apply_service
-                                            .require_committed_kagemusha_runtime_effective_config(
-                                            )?;
-                                        sign_consensus_task(
+                                        sign_consensus_task_with_offline_cash_authority(
                                             body_store
                                                 .as_ref()
                                                 .expect("body store remains live before Retire"),
                                             &context,
                                             &key_pair,
+                                            offline_cash_mint_finality_authority.as_deref(),
                                             task,
                                             restore_outbound_payload,
                                         )
@@ -1417,15 +1418,13 @@ impl V2IoHandle {
                                             }
                                         }),
                                     V2IoCommand::RecoveredLifecycleSign(task) => {
-                                        apply_service
-                                            .require_committed_kagemusha_runtime_effective_config(
-                                            )?;
-                                        sign_recovered_lifecycle_task(
+                                        sign_recovered_lifecycle_task_with_offline_cash_authority(
                                             body_store
                                                 .as_ref()
                                                 .expect("body store remains live before Retire"),
                                             &context,
                                             &key_pair,
+                                            offline_cash_mint_finality_authority.as_deref(),
                                             task,
                                         )
                                         .map(|result| {
